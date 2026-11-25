@@ -126,6 +126,7 @@ class DownloadedVideoView extends StatelessWidget {
     final state = cubit.state;
     final progress = state.downloadProgresses[video.videoId];
     final paused = state.pausedVideoIds.contains(video.videoId);
+    final waitingForWifi = state.waitingForWifiFor(video);
     final pending = !video.downloadComplete && !video.downloadFailed;
     Widget label(String text) =>
         Text(text, style: Theme.of(context).textTheme.bodySmall);
@@ -143,7 +144,7 @@ class DownloadedVideoView extends StatelessWidget {
             ? locals.downloadPaused
             : locals.downloadResumeAfter(waitUntil)),
       );
-    } else if (state.waitingForWifi) {
+    } else if (waitingForWifi) {
       status = label(locals.downloadsWaitingForWifi);
     } else if (progress?.retryAt != null) {
       status = label(locals.downloadRetryWaiting);
@@ -185,7 +186,7 @@ class DownloadedVideoView extends StatelessWidget {
                 progress != null &&
                 progress.retryAt == null &&
                 !paused &&
-                !state.waitingForWifi)
+                !waitingForWifi)
               SizedBox(
                   width: 20,
                   height: 20,

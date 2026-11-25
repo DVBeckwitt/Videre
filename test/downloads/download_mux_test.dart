@@ -1,6 +1,7 @@
 import 'package:clipious/downloads/models/download_formats.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/downloads/models/music_download_format.dart';
+import 'package:clipious/downloads/models/music_offline_policy.dart';
 import 'package:clipious/downloads/services/download_mux.dart';
 import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:dio/dio.dart';
@@ -96,6 +97,31 @@ void main() {
     );
     expect(args,
         containsAllInOrder(['-c:a', 'libmp3lame', '-q:a', '0', '-f', 'mp3']));
+  });
+
+  test('smaller offline files get the chosen bitrate even for matching codecs',
+      () {
+    for (final (format, codec, encoder) in [
+      (MusicDownloadFormat.mp3, 'mp3', 'libmp3lame'),
+      (MusicDownloadFormat.opus, 'opus', 'libopus'),
+      (MusicDownloadFormat.m4a, 'aac', 'aac'),
+    ]) {
+      for (final (quality, bitrate) in [
+        (MusicOfflineQuality.balanced, '128000'),
+        (MusicOfflineQuality.dataSaver, '64000'),
+      ]) {
+        final args = musicMuxArguments(
+            input: '/tmp/input',
+            output: '/tmp/song.${format.extension}',
+            inputFormat: format,
+            sourceCodec: codec,
+            video: download.copyWith(
+              musicFormat: format,
+              musicPolicy: MusicOfflinePolicy(quality: quality),
+            ));
+        expect(args, containsAllInOrder(['-c:a', encoder, '-b:a', bitrate]));
+      }
+    }
   });
 
   test('AAC and Vorbis can be converted to Opus', () {

@@ -5,6 +5,7 @@ import 'dart:io';
 
 import 'package:clipious/downloads/models/download_formats.dart';
 import 'package:clipious/downloads/models/music_download_format.dart';
+import 'package:clipious/downloads/models/music_offline_policy.dart';
 import 'package:clipious/downloads/models/download_playback_provenance.dart';
 import 'package:clipious/music/models/song_artwork.dart';
 import 'package:clipious/utils/models/image_object.dart';
@@ -121,6 +122,18 @@ class _MusicCopyConverter
   Map<String, dynamic>? toJson(ExportedMusicCopy? copy) => copy?.toJson();
 }
 
+class _MusicOfflinePolicyConverter
+    implements JsonConverter<MusicOfflinePolicy?, Object?> {
+  const _MusicOfflinePolicyConverter();
+
+  @override
+  MusicOfflinePolicy? fromJson(Object? json) =>
+      json == null ? null : MusicOfflinePolicy.fromJson(json);
+
+  @override
+  Object? toJson(MusicOfflinePolicy? policy) => policy?.toJson();
+}
+
 @freezed
 sealed class DownloadedVideo with _$DownloadedVideo implements IdedVideo {
   @Implements<IdedVideo>()
@@ -153,6 +166,7 @@ sealed class DownloadedVideo with _$DownloadedVideo implements IdedVideo {
       DownloadPlaybackProvenance? playbackProvenance,
       @Default(false) bool audioOnly,
       MusicDownloadFormat? musicFormat,
+      @_MusicOfflinePolicyConverter() MusicOfflinePolicy? musicPolicy,
       @_MusicCopyConverter() ExportedMusicCopy? exportedMusic,
       DownloadContainer? container,
       String? audioTrackId,

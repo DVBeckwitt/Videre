@@ -1677,7 +1677,7 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                       ? locals.videoFailedDownloadRetry
                       : paused
                           ? locals.downloadPaused
-                          : state.waitingForWifi
+                          : state.waitingForWifiFor(video)
                               ? locals.downloadsWaitingForWifi
                               : locals.downloadQueued;
       return Column(key: rowKey(video), children: [

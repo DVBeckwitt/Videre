@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:clipious/downloads/states/download_manager.dart';
 import 'package:clipious/downloads/models/download_formats.dart';
+import 'package:clipious/downloads/models/music_offline_policy.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/player/states/player.dart';
@@ -29,6 +30,7 @@ class _PausedBatchDownloads extends DownloadManagerCubit {
   Future<bool> addDownload(String videoId,
       {String quality = '720p',
       bool audioOnly = false,
+      MusicOfflinePolicy? musicPolicy,
       Video? video,
       DownloadContainer? container,
       String? audioTrackId,
@@ -36,6 +38,7 @@ class _PausedBatchDownloads extends DownloadManagerCubit {
     final added = await super.addDownload(videoId,
         quality: quality,
         audioOnly: audioOnly,
+        musicPolicy: musicPolicy,
         video: video,
         container: container,
         audioTrackId: audioTrackId,

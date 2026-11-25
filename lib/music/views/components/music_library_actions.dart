@@ -6,6 +6,7 @@ import 'package:clipious/content_filter/community_models.dart'
     show normalizeChannelId;
 import 'package:clipious/downloads/states/download_manager.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
+import 'package:clipious/downloads/models/music_offline_policy.dart';
 import 'package:clipious/downloads/services/explicit_music_download.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
@@ -172,7 +173,9 @@ class MusicLibrarySession {
   }
 
   Future<int> download(DownloadManagerCubit manager, List<Video> videos,
-      {DownloadContainer? container, bool Function()? canStart}) async {
+      {DownloadContainer? container,
+      MusicOfflinePolicy policy = const MusicOfflinePolicy(),
+      bool Function()? canStart}) async {
     _requireCurrent();
     if (isTv) return 0;
     final songs = _unique(videos);
@@ -187,6 +190,7 @@ class MusicLibrarySession {
       if (await manager.addDownload(video.videoId,
           audioOnly: true,
           quality: highestAudioDownloadQuality,
+          musicPolicy: policy,
           container: container,
           video: video)) {
         added++;
@@ -991,7 +995,9 @@ class MusicLibraryActions extends StatefulWidget {
       }
       final count = await session.download(
           context.read<DownloadManagerCubit>(), videos,
-          container: options.container, canStart: canDownload);
+          container: options.container,
+          policy: options.musicPolicy,
+          canStart: canDownload);
       if (context.mounted &&
           session.isCurrent &&
           canDownload?.call() != false) {

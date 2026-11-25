@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/downloads/states/download_manager.dart';
 import 'package:clipious/downloads/models/download_formats.dart';
+import 'package:clipious/downloads/models/music_offline_policy.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
@@ -111,6 +112,7 @@ class _Downloads extends Cubit<DownloadManagerState>
   Future<int> addDownloads(Iterable<String> videoIds,
       {String quality = '720p',
       bool audioOnly = false,
+      MusicOfflinePolicy? musicPolicy,
       DownloadContainer? container,
       String? audioTrackId,
       String? captionLabel,

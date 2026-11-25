@@ -42,6 +42,8 @@ mixin _$DownloadedVideo {
   DownloadPlaybackProvenance? get playbackProvenance;
   bool get audioOnly;
   MusicDownloadFormat? get musicFormat;
+  @_MusicOfflinePolicyConverter()
+  MusicOfflinePolicy? get musicPolicy;
   @_MusicCopyConverter()
   ExportedMusicCopy? get exportedMusic;
   DownloadContainer? get container;
@@ -101,6 +103,8 @@ mixin _$DownloadedVideo {
                 other.audioOnly == audioOnly) &&
             (identical(other.musicFormat, musicFormat) ||
                 other.musicFormat == musicFormat) &&
+            (identical(other.musicPolicy, musicPolicy) ||
+                other.musicPolicy == musicPolicy) &&
             (identical(other.exportedMusic, exportedMusic) ||
                 other.exportedMusic == exportedMusic) &&
             (identical(other.container, container) ||
@@ -137,6 +141,7 @@ mixin _$DownloadedVideo {
         playbackProvenance,
         audioOnly,
         musicFormat,
+        musicPolicy,
         exportedMusic,
         container,
         audioTrackId,
@@ -147,7 +152,7 @@ mixin _$DownloadedVideo {
 
   @override
   String toString() {
-    return 'DownloadedVideo(videoId: $videoId, queueEntryId: $queueEntryId, explicitMusicDownload: $explicitMusicDownload, title: $title, profileId: $profileId, accountId: $accountId, author: $author, authorUrl: $authorUrl, musicMetadata: $musicMetadata, sponsorSegments: $sponsorSegments, downloadComplete: $downloadComplete, downloadFailed: $downloadFailed, authenticationRequired: $authenticationRequired, storageFailed: $storageFailed, folderUri: $folderUri, storageUri: $storageUri, playbackProvenance: $playbackProvenance, audioOnly: $audioOnly, musicFormat: $musicFormat, exportedMusic: $exportedMusic, container: $container, audioTrackId: $audioTrackId, captionLabel: $captionLabel, lengthSeconds: $lengthSeconds, quality: $quality)';
+    return 'DownloadedVideo(videoId: $videoId, queueEntryId: $queueEntryId, explicitMusicDownload: $explicitMusicDownload, title: $title, profileId: $profileId, accountId: $accountId, author: $author, authorUrl: $authorUrl, musicMetadata: $musicMetadata, sponsorSegments: $sponsorSegments, downloadComplete: $downloadComplete, downloadFailed: $downloadFailed, authenticationRequired: $authenticationRequired, storageFailed: $storageFailed, folderUri: $folderUri, storageUri: $storageUri, playbackProvenance: $playbackProvenance, audioOnly: $audioOnly, musicFormat: $musicFormat, musicPolicy: $musicPolicy, exportedMusic: $exportedMusic, container: $container, audioTrackId: $audioTrackId, captionLabel: $captionLabel, lengthSeconds: $lengthSeconds, quality: $quality)';
   }
 }
 
@@ -180,6 +185,7 @@ abstract mixin class $DownloadedVideoCopyWith<$Res> {
       DownloadPlaybackProvenance? playbackProvenance,
       bool audioOnly,
       MusicDownloadFormat? musicFormat,
+      @_MusicOfflinePolicyConverter() MusicOfflinePolicy? musicPolicy,
       @_MusicCopyConverter() ExportedMusicCopy? exportedMusic,
       DownloadContainer? container,
       String? audioTrackId,
@@ -220,6 +226,7 @@ class _$DownloadedVideoCopyWithImpl<$Res>
     Object? playbackProvenance = freezed,
     Object? audioOnly = null,
     Object? musicFormat = freezed,
+    Object? musicPolicy = freezed,
     Object? exportedMusic = freezed,
     Object? container = freezed,
     Object? audioTrackId = freezed,
@@ -304,6 +311,10 @@ class _$DownloadedVideoCopyWithImpl<$Res>
           ? _self.musicFormat
           : musicFormat // ignore: cast_nullable_to_non_nullable
               as MusicDownloadFormat?,
+      musicPolicy: freezed == musicPolicy
+          ? _self.musicPolicy
+          : musicPolicy // ignore: cast_nullable_to_non_nullable
+              as MusicOfflinePolicy?,
       exportedMusic: freezed == exportedMusic
           ? _self.exportedMusic
           : exportedMusic // ignore: cast_nullable_to_non_nullable
@@ -357,6 +368,7 @@ class _DownloadedVideo extends DownloadedVideo implements IdedVideo {
       @_PlaybackProvenanceConverter() this.playbackProvenance,
       this.audioOnly = false,
       this.musicFormat,
+      @_MusicOfflinePolicyConverter() this.musicPolicy,
       @_MusicCopyConverter() this.exportedMusic,
       this.container,
       this.audioTrackId,
@@ -429,6 +441,9 @@ class _DownloadedVideo extends DownloadedVideo implements IdedVideo {
   @override
   final MusicDownloadFormat? musicFormat;
   @override
+  @_MusicOfflinePolicyConverter()
+  final MusicOfflinePolicy? musicPolicy;
+  @override
   @_MusicCopyConverter()
   final ExportedMusicCopy? exportedMusic;
   @override
@@ -497,6 +512,8 @@ class _DownloadedVideo extends DownloadedVideo implements IdedVideo {
                 other.audioOnly == audioOnly) &&
             (identical(other.musicFormat, musicFormat) ||
                 other.musicFormat == musicFormat) &&
+            (identical(other.musicPolicy, musicPolicy) ||
+                other.musicPolicy == musicPolicy) &&
             (identical(other.exportedMusic, exportedMusic) ||
                 other.exportedMusic == exportedMusic) &&
             (identical(other.container, container) ||
@@ -533,6 +550,7 @@ class _DownloadedVideo extends DownloadedVideo implements IdedVideo {
         playbackProvenance,
         audioOnly,
         musicFormat,
+        musicPolicy,
         exportedMusic,
         container,
         audioTrackId,
@@ -543,7 +561,7 @@ class _DownloadedVideo extends DownloadedVideo implements IdedVideo {
 
   @override
   String toString() {
-    return 'DownloadedVideo(videoId: $videoId, queueEntryId: $queueEntryId, explicitMusicDownload: $explicitMusicDownload, title: $title, profileId: $profileId, accountId: $accountId, author: $author, authorUrl: $authorUrl, musicMetadata: $musicMetadata, sponsorSegments: $sponsorSegments, downloadComplete: $downloadComplete, downloadFailed: $downloadFailed, authenticationRequired: $authenticationRequired, storageFailed: $storageFailed, folderUri: $folderUri, storageUri: $storageUri, playbackProvenance: $playbackProvenance, audioOnly: $audioOnly, musicFormat: $musicFormat, exportedMusic: $exportedMusic, container: $container, audioTrackId: $audioTrackId, captionLabel: $captionLabel, lengthSeconds: $lengthSeconds, quality: $quality)';
+    return 'DownloadedVideo(videoId: $videoId, queueEntryId: $queueEntryId, explicitMusicDownload: $explicitMusicDownload, title: $title, profileId: $profileId, accountId: $accountId, author: $author, authorUrl: $authorUrl, musicMetadata: $musicMetadata, sponsorSegments: $sponsorSegments, downloadComplete: $downloadComplete, downloadFailed: $downloadFailed, authenticationRequired: $authenticationRequired, storageFailed: $storageFailed, folderUri: $folderUri, storageUri: $storageUri, playbackProvenance: $playbackProvenance, audioOnly: $audioOnly, musicFormat: $musicFormat, musicPolicy: $musicPolicy, exportedMusic: $exportedMusic, container: $container, audioTrackId: $audioTrackId, captionLabel: $captionLabel, lengthSeconds: $lengthSeconds, quality: $quality)';
   }
 }
 
@@ -578,6 +596,7 @@ abstract mixin class _$DownloadedVideoCopyWith<$Res>
       DownloadPlaybackProvenance? playbackProvenance,
       bool audioOnly,
       MusicDownloadFormat? musicFormat,
+      @_MusicOfflinePolicyConverter() MusicOfflinePolicy? musicPolicy,
       @_MusicCopyConverter() ExportedMusicCopy? exportedMusic,
       DownloadContainer? container,
       String? audioTrackId,
@@ -618,6 +637,7 @@ class __$DownloadedVideoCopyWithImpl<$Res>
     Object? playbackProvenance = freezed,
     Object? audioOnly = null,
     Object? musicFormat = freezed,
+    Object? musicPolicy = freezed,
     Object? exportedMusic = freezed,
     Object? container = freezed,
     Object? audioTrackId = freezed,
@@ -702,6 +722,10 @@ class __$DownloadedVideoCopyWithImpl<$Res>
           ? _self.musicFormat
           : musicFormat // ignore: cast_nullable_to_non_nullable
               as MusicDownloadFormat?,
+      musicPolicy: freezed == musicPolicy
+          ? _self.musicPolicy
+          : musicPolicy // ignore: cast_nullable_to_non_nullable
+              as MusicOfflinePolicy?,
       exportedMusic: freezed == exportedMusic
           ? _self.exportedMusic
           : exportedMusic // ignore: cast_nullable_to_non_nullable

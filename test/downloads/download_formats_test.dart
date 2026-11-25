@@ -1,6 +1,7 @@
 import 'package:clipious/downloads/models/download_formats.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/downloads/models/music_download_format.dart';
+import 'package:clipious/downloads/models/music_offline_policy.dart';
 import 'package:clipious/videos/models/adaptive_format.dart';
 import 'package:clipious/videos/models/caption.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -78,17 +79,40 @@ void main() {
     final aac = _audio('en', bitrate: '128000', mp4: true);
     final other = _audio('es', mp4: true, bitrate: '320000');
     final formats = [aac, other, english];
-    expect(DownloadFormats(formats).highestBitrateAudioContainer,
+    expect(DownloadFormats(formats).preferredBitrateAudioContainer,
         DownloadContainer.webm);
     expect(
         DownloadFormats(formats, audioTrackId: 'es')
-            .highestBitrateAudioContainer,
+            .preferredBitrateAudioContainer,
         DownloadContainer.mp4);
     aac.bitrate = '';
     english.bitrate = null;
-    expect(DownloadFormats(formats).highestBitrateAudioContainer,
+    expect(DownloadFormats(formats).preferredBitrateAudioContainer,
         DownloadContainer.webm);
-    expect(DownloadFormats(null).highestBitrateAudioContainer, isNull);
+    expect(DownloadFormats(null).preferredBitrateAudioContainer, isNull);
+  });
+
+  test('Music quality ranks only available renditions of the selected track',
+      () {
+    final opusLow = _audio('en', bitrate: '48000', isDefault: true);
+    final opusHigh = _audio('en', bitrate: '152000');
+    final aac = _audio('en', bitrate: '117000', mp4: true);
+    final other = _audio('es', bitrate: '64000', mp4: true);
+    final candidates = [opusHigh, aac, other, opusLow];
+
+    final balanced =
+        DownloadFormats(candidates, musicQuality: MusicOfflineQuality.balanced);
+    expect(balanced.preferredBitrateAudioContainer, DownloadContainer.mp4);
+    expect(balanced.audioFor(DownloadContainer.webm), same(opusLow));
+
+    final saver = DownloadFormats(candidates,
+        musicQuality: MusicOfflineQuality.dataSaver);
+    expect(saver.preferredBitrateAudioContainer, DownloadContainer.webm);
+    expect(saver.audioFor(DownloadContainer.webm), same(opusLow));
+
+    final aboveTarget = DownloadFormats([opusHigh, aac],
+        musicQuality: MusicOfflineQuality.dataSaver);
+    expect(aboveTarget.preferredBitrateAudioContainer, DownloadContainer.mp4);
   });
 
   test('DASH discovery preserves the original untagged default audio', () {

@@ -18,7 +18,7 @@ String _inputDemuxer(DownloadedVideo video, MusicDownloadFormat? inputFormat) =>
       null => video.container == DownloadContainer.mp4 ? 'mov' : 'matroska',
     };
 
-/// Preserves audio packets when the source already uses the chosen codec.
+/// Preserves audio packets at highest quality when the codecs already match.
 List<String> musicMuxArguments({
   required String input,
   required String output,
@@ -38,15 +38,35 @@ List<String> musicMuxArguments({
         'mov' => 'aac',
         _ => null,
       };
-  final options = switch (format) {
-    MusicDownloadFormat.mp3 when codec == 'mp3' => ['copy'],
-    MusicDownloadFormat.mp3 => ['libmp3lame', '-q:a', '0'],
-    MusicDownloadFormat.opus when codec == 'opus' => ['copy'],
-    MusicDownloadFormat.opus => ['libopus', '-b:a', '256k', '-vbr', 'on'],
-    MusicDownloadFormat.m4a
+  final target = video.musicPolicy?.quality.targetBitrate;
+  final options = switch ((format, target)) {
+    (MusicDownloadFormat.mp3, final int rate) => [
+        'libmp3lame',
+        '-b:a',
+        '$rate'
+      ],
+    (MusicDownloadFormat.opus, final int rate) => [
+        'libopus',
+        '-b:a',
+        '$rate',
+        '-vbr',
+        'on'
+      ],
+    (MusicDownloadFormat.m4a, final int rate) => ['aac', '-b:a', '$rate'],
+    (MusicDownloadFormat.mp3, null) when codec == 'mp3' => ['copy'],
+    (MusicDownloadFormat.mp3, null) => ['libmp3lame', '-q:a', '0'],
+    (MusicDownloadFormat.opus, null) when codec == 'opus' => ['copy'],
+    (MusicDownloadFormat.opus, null) => [
+        'libopus',
+        '-b:a',
+        '256k',
+        '-vbr',
+        'on'
+      ],
+    (MusicDownloadFormat.m4a, null)
         when codec == 'aac' || (codec?.startsWith('mp4a') ?? false) =>
       ['copy'],
-    MusicDownloadFormat.m4a => ['aac', '-b:a', '320k'],
+    (MusicDownloadFormat.m4a, null) => ['aac', '-b:a', '320k'],
   };
   final metadata = video.musicMetadata;
   String usable(String? value) => value?.replaceAll('\x00', '').trim() ?? '';
@@ -98,6 +118,7 @@ Future<void> runMusicDownloadMux({
 }) async {
   if (token.isCancelled) throw token.cancelError!;
   if (video.musicFormat == MusicDownloadFormat.opus &&
+      video.musicPolicy?.quality.targetBitrate == null &&
       _inputDemuxer(video, inputFormat) == 'matroska' &&
       (sourceCodec == null || sourceCodec.trim().isEmpty)) {
     final session = await FFprobeKit.getMediaInformationFromCommandArguments([

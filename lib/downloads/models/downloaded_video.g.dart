@@ -54,6 +54,8 @@ _DownloadedVideo _$DownloadedVideoFromJson(Map<String, dynamic> json) =>
       audioOnly: json['audioOnly'] as bool? ?? false,
       musicFormat: $enumDecodeNullable(
           _$MusicDownloadFormatEnumMap, json['musicFormat']),
+      musicPolicy:
+          const _MusicOfflinePolicyConverter().fromJson(json['musicPolicy']),
       exportedMusic: const _MusicCopyConverter()
           .fromJson(json['exportedMusic'] as Map<String, dynamic>?),
       container:
@@ -87,6 +89,8 @@ Map<String, dynamic> _$DownloadedVideoToJson(_DownloadedVideo instance) =>
           .toJson(instance.playbackProvenance),
       'audioOnly': instance.audioOnly,
       'musicFormat': _$MusicDownloadFormatEnumMap[instance.musicFormat],
+      'musicPolicy':
+          const _MusicOfflinePolicyConverter().toJson(instance.musicPolicy),
       'exportedMusic':
           const _MusicCopyConverter().toJson(instance.exportedMusic),
       'container': _$DownloadContainerEnumMap[instance.container],

@@ -196,7 +196,9 @@ class VideoCubit extends Cubit<VideoState> {
     emit(state.copyWith(
         downloadedVideo: video,
         downloading: progress != null &&
-            !downloads.waitingForWifi &&
+            !(video == null
+                ? downloads.waitingForWifi
+                : downloads.waitingForWifiFor(video)) &&
             !downloads.pausedVideoIds.contains(state.videoId),
         downloadProgress: video?.downloadComplete == true
             ? 1

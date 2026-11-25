@@ -3,6 +3,8 @@ import 'package:clipious/player/models/video_quality.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/videos/models/adaptive_format.dart';
 
+import 'music_offline_policy.dart';
+
 /// Stored in the download job's quality field for Music's audio-only action.
 const highestAudioDownloadQuality = 'highest-audio';
 
@@ -59,9 +61,12 @@ enum DownloadContainer {
 class DownloadFormats {
   final List<AdaptiveFormat> _formats;
   final _audio = <DownloadContainer, AdaptiveFormat>{};
+  final int? _targetAudioBitrate;
 
-  DownloadFormats(List<AdaptiveFormat>? formats, {String? audioTrackId})
-      : _formats = formats ?? const [] {
+  DownloadFormats(List<AdaptiveFormat>? formats,
+      {String? audioTrackId, MusicOfflineQuality? musicQuality})
+      : _formats = formats ?? const [],
+        _targetAudioBitrate = musicQuality?.targetBitrate {
     final tracks = audioTracks;
     final selected = audioTrackId ??
         (_formats.any((format) =>
@@ -74,7 +79,7 @@ class DownloadFormats {
       final container = DownloadContainer.forAudio(format);
       if (container == null || format.audioTrack?.id != selected) continue;
       final current = _audio[container];
-      if (current == null || _bitrate(format) > _bitrate(current)) {
+      if (current == null || _prefersAudio(format, current)) {
         _audio[container] = format;
       }
     }
@@ -94,12 +99,24 @@ class DownloadFormats {
   DownloadContainer? get audioContainer =>
       DownloadContainer.values.where(_audio.containsKey).firstOrNull;
 
-  DownloadContainer? get highestBitrateAudioContainer {
+  DownloadContainer? get preferredBitrateAudioContainer {
     final available = DownloadContainer.values.where(_audio.containsKey);
     if (available.isEmpty) return null;
     // Keep the existing container preference when the rates are equal or unknown.
     return available.reduce((best, next) =>
-        _bitrate(_audio[next]!) > _bitrate(_audio[best]!) ? next : best);
+        _prefersAudio(_audio[next]!, _audio[best]!) ? next : best);
+  }
+
+  bool _prefersAudio(AdaptiveFormat candidate, AdaptiveFormat current) {
+    final bitrate = _bitrate(candidate);
+    final currentBitrate = _bitrate(current);
+    final target = _targetAudioBitrate;
+    if (target == null) return bitrate > currentBitrate;
+    if (bitrate <= 0 || currentBitrate <= 0) return bitrate > currentBitrate;
+    if (bitrate <= target) {
+      return currentBitrate > target || bitrate > currentBitrate;
+    }
+    return currentBitrate > target && bitrate < currentBitrate;
   }
 
   AdaptiveFormat? audioFor(DownloadContainer? container) => _audio[container];

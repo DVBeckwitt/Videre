@@ -8,6 +8,7 @@ import 'package:clipious/downloads/states/download_manager.dart';
 import 'package:clipious/downloads/models/download_formats.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/downloads/models/music_download_format.dart';
+import 'package:clipious/downloads/models/music_offline_policy.dart';
 import 'package:clipious/downloads/views/components/downloaded_video.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
@@ -93,6 +94,7 @@ class _Downloads implements DownloadManagerCubit {
     String id,
     bool audioOnly,
     String quality,
+    MusicOfflinePolicy? musicPolicy,
     DownloadContainer? container,
     Video? video
   })>[];
@@ -104,6 +106,7 @@ class _Downloads implements DownloadManagerCubit {
   Future<bool> addDownload(String videoId,
       {String quality = '720p',
       bool audioOnly = false,
+      MusicOfflinePolicy? musicPolicy,
       Video? video,
       DownloadContainer? container,
       String? audioTrackId,
@@ -112,6 +115,7 @@ class _Downloads implements DownloadManagerCubit {
       id: videoId,
       audioOnly: audioOnly,
       quality: quality,
+      musicPolicy: musicPolicy,
       container: container,
       video: video
     ));
@@ -286,8 +290,10 @@ void main() {
       'collection downloads retain track order and metadata as unique audio jobs',
       () async {
     final downloads = _Downloads();
+    const policy = MusicOfflinePolicy(
+        quality: MusicOfflineQuality.balanced, wifiOnly: true);
     final count = await MusicLibrarySession(app)
-        .download(downloads, [first, second, first]);
+        .download(downloads, [first, second, first], policy: policy);
     expect(count, 2);
     expect(downloads.destinationRequests, 1);
     expect(downloads.calls.map((call) => call.id),
@@ -295,6 +301,8 @@ void main() {
     expect(downloads.calls.every((call) => call.audioOnly), isTrue);
     expect(downloads.calls.map((call) => call.quality),
         everyElement(highestAudioDownloadQuality));
+    expect(
+        downloads.calls.map((call) => call.musicPolicy), everyElement(policy));
     expect(downloads.calls.map((call) => call.container), everyElement(isNull));
     expect(downloads.calls.map((call) => call.video), [first, second]);
   });
@@ -1128,10 +1136,13 @@ void main() {
           await tester.tap(find.text('Watch Later'));
         }
         if (action == 'Download audio') {
-          expect(find.text('Highest quality available').hitTestable(),
-              findsOneWidget);
-          await tester
-              .tap(find.text('Highest quality available').hitTestable());
+          await tester.tap(find.byType(DropdownButton<MusicOfflineQuality>));
+          await tester.pumpAndSettle();
+          await tester.tap(find.text('Data saver').hitTestable().last);
+          await tester.pumpAndSettle();
+          await tester.tap(find.text('Download on Wi-Fi only'));
+          await tester.pumpAndSettle();
+          await tester.tap(find.byType(DropdownButton<int>));
           await tester.pumpAndSettle();
           await tester.tap(find.text('M4A (AAC)').hitTestable().last);
           await tester.pumpAndSettle();
@@ -1163,6 +1174,10 @@ void main() {
         expect(downloads.calls.map((call) => call.id), [first.videoId]);
         expect(downloads.calls.single.container, DownloadContainer.mp4);
         expect(downloads.calls.single.quality, highestAudioDownloadQuality);
+        expect(
+            downloads.calls.single.musicPolicy,
+            const MusicOfflinePolicy(
+                quality: MusicOfflineQuality.dataSaver, wifiOnly: true));
       }
     });
   }
@@ -1285,7 +1300,7 @@ void main() {
       await tester.pumpAndSettle();
       final options = action == 'Save to playlist'
           ? find.text('Watch Later')
-          : find.text('Highest quality available');
+          : find.byType(DropdownButton<int>);
       expect(options.hitTestable(), findsOneWidget);
       Future<void> back() async {
         await tester.binding.defaultBinaryMessenger.handlePlatformMessage(

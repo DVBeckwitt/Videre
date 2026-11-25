@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:clipious/downloads/models/download_formats.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/downloads/models/music_download_format.dart';
+import 'package:clipious/downloads/models/music_offline_policy.dart';
 import 'package:clipious/downloads/services/download_mux.dart';
 import 'package:clipious/downloads/states/download_manager.dart';
 import 'package:clipious/downloads/services/download_rename.dart';
@@ -211,6 +212,23 @@ void main() {
     await manager.addDownloads([]); // Wait for saved preferences to load.
   }
 
+  Future<void> reopenWifiManager(Stream<bool> changes) async {
+    await manager.close();
+    manager = DownloadManagerCubit(const DownloadManagerState(), _Player(),
+        wifiConnected: () async => false,
+        wifiChanges: changes,
+        encodeMusic: (
+            {required input,
+            required output,
+            required video,
+            required token,
+            inputFormat,
+            sourceCodec}) async {
+          await File(input).copy(output);
+        });
+    await manager.addDownloads([]);
+  }
+
   Future<void> openAndroidStorageManager(
       {List<MusicDownloadFormat>? encodings}) async {
     await manager.close();
@@ -349,6 +367,76 @@ void main() {
     expect(manager.state.waitingForWifi, true);
     expect(manager.state.downloadProgresses, isEmpty);
     expect(manager.state.totalProgress, 0);
+  });
+
+  test('a Wi-Fi-only Music job leaves an unrestricted download runnable',
+      () async {
+    const restrictedId = 'a-wifi-only-song';
+    const unrestrictedId = 'b-unrestricted';
+    final metadataRequests = <String>[];
+    final remote = await audioVideo(unrestrictedId);
+    service = _DownloadService((id) async {
+      metadataRequests.add(id);
+      return remote.copyWith(videoId: id);
+    });
+    await db.deleteDownload(video);
+    await reopenWifiManager(const Stream.empty());
+    expect(
+        await manager.addDownload(restrictedId,
+            audioOnly: true,
+            quality: highestAudioDownloadQuality,
+            musicPolicy: const MusicOfflinePolicy(wifiOnly: true)),
+        isTrue);
+    expect(await manager.addDownload(unrestrictedId, audioOnly: true), isTrue);
+    expect(manager.state.videos.map((job) => job.videoId),
+        [restrictedId, unrestrictedId]);
+    expect(metadataRequests, isEmpty);
+
+    await manager.setWifiOnly(false);
+    await waitFor((state) => state.videos
+        .any((job) => job.videoId == unrestrictedId && job.downloadComplete));
+
+    final restricted = db.getDownloadByVideoId(restrictedId)!;
+    expect(manager.state.waitingForWifi, isFalse);
+    expect(manager.state.waitingForWifiFor(restricted), isTrue);
+    expect(restricted.downloadComplete, isFalse);
+    expect(restricted.downloadFailed, isFalse);
+    expect(manager.state.pausedVideoIds, isEmpty);
+    expect(metadataRequests, [unrestrictedId]);
+  });
+
+  test('retry after restart preserves Music quality and waits for Wi-Fi',
+      () async {
+    const policy = MusicOfflinePolicy(
+        quality: MusicOfflineQuality.dataSaver, wifiOnly: true);
+    await db.deleteDownload(video);
+    expect(
+        await manager.addDownload(video.videoId,
+            audioOnly: true,
+            quality: highestAudioDownloadQuality,
+            musicPolicy: policy),
+        isTrue);
+    final queued = db.getDownloadByVideoId(video.videoId)!;
+    await db.upsertDownload(queued.copyWith(downloadFailed: true));
+    await db.saveSetting(SettingsValue('downloads-wifi-only', 'false'));
+    final metadataRequests = <String>[];
+    service = _DownloadService((id) async {
+      metadataRequests.add(id);
+      return Video(videoId: id);
+    });
+    await reopenWifiManager(const Stream.empty());
+    expect(manager.state.videos.single.downloadFailed, isTrue);
+
+    await manager.retryDownload(queued);
+
+    final retried = db.getDownloadByVideoId(video.videoId)!;
+    expect(retried.musicPolicy?.quality, policy.quality);
+    expect(retried.musicPolicy?.wifiOnly, isTrue);
+    expect(retried.downloadFailed, isFalse);
+    expect(manager.state.waitingForWifiFor(retried), isTrue);
+    expect(manager.state.downloadProgresses, isEmpty);
+    expect(manager.state.pausedVideoIds, isEmpty);
+    expect(metadataRequests, isEmpty);
   });
 
   test(
@@ -1714,6 +1802,7 @@ void main() {
     });
     expect(legacy.storageUri, isNull);
     expect(legacy.folderUri, isNull);
+    expect(legacy.musicPolicy, isNull);
     expect(legacy.toJson()['sponsorSegments'], isEmpty);
     expect(await legacy.effectivePath, endsWith('${video.videoId}.mp4'));
     await File(await legacy.downloadPath).writeAsBytes([1]);
@@ -3317,6 +3406,73 @@ void main() {
     expect(ranges, [null, 'bytes=3-']);
     expect(await File(await video.downloadPath).readAsBytes(), originalBytes);
     expect(await File(await other.downloadPath).readAsBytes(), otherBytes);
+  });
+
+  test('losing Wi-Fi cancels and later resumes a partial Music transfer',
+      () async {
+    const bytes = [0, 1, 2, 3, 4, 5, 6, 7];
+    final changes = StreamController<bool>.broadcast();
+    final releaseFirstResponse = Completer<void>();
+    addTearDown(() async {
+      if (!releaseFirstResponse.isCompleted) releaseFirstResponse.complete();
+      await changes.close();
+    });
+    final ranges = <String?>[];
+    mediaServer!.listen((request) async {
+      try {
+        ranges.add(request.headers.value(HttpHeaders.rangeHeader));
+        if (ranges.length == 1) {
+          request.response.bufferOutput = false;
+          request.response.add(bytes.take(3).toList());
+          await request.response.flush();
+          await releaseFirstResponse.future;
+        } else {
+          request.response.statusCode = HttpStatus.partialContent;
+          request.response.headers
+              .set(HttpHeaders.contentRangeHeader, 'bytes 3-7/8');
+        }
+        request.response.add(bytes.skip(3).toList());
+        await request.response.close();
+      } on IOException {
+        // Losing Wi-Fi intentionally closes the first response early.
+      }
+    });
+    final owner = await db.getCurrentlySelectedServer();
+    service = _DownloadService((id) async => downloadRendition(id, owner));
+    await db.deleteDownload(video);
+    await db.saveSetting(SettingsValue('downloads-wifi-only', 'false'));
+    await reopenWifiManager(changes.stream);
+    expect(
+        await manager.addDownload(video.videoId,
+            audioOnly: true,
+            quality: highestAudioDownloadQuality,
+            musicPolicy: const MusicOfflinePolicy(wifiOnly: true)),
+        isTrue);
+    final queued = manager.state.videos.single;
+    expect(manager.state.waitingForWifiFor(queued), isTrue);
+    expect(ranges, isEmpty);
+
+    changes.add(true);
+    await waitFor((state) => state.totalProgress > 0);
+    final token = manager.state.downloadProgresses[queued.videoId]!.cancelToken;
+    changes.add(false);
+    await waitFor((state) =>
+        state.waitingForWifiFor(queued) && state.downloadProgresses.isEmpty);
+
+    expect(token.isCancelled, isTrue);
+    expect(manager.state.pausedVideoIds, isEmpty);
+    expect(manager.state.videos.single.downloadFailed, isFalse);
+    final partial = File('${await queued.stagingPath}.audio.part');
+    expect(await partial.readAsBytes(), bytes.take(3).toList());
+    releaseFirstResponse.complete();
+
+    changes.add(true);
+    await waitFor((state) => state.videos.single.downloadComplete);
+
+    final saved = manager.state.videos.single;
+    expect(ranges, [null, 'bytes=3-']);
+    expect(await File(await saved.downloadPath).readAsBytes(), bytes);
+    expect(saved.musicPolicy?.wifiOnly, isTrue);
   });
 
   test('malformed image error bodies cannot fail the media download', () async {

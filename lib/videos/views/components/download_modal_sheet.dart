@@ -1,6 +1,7 @@
 import 'package:clipious/player/views/components/player_modal_back_handler.dart';
 import 'package:clipious/downloads/models/download_formats.dart';
 import 'package:clipious/downloads/models/music_download_format.dart';
+import 'package:clipious/downloads/models/music_offline_policy.dart';
 import 'package:clipious/downloads/states/download_manager.dart';
 import 'package:clipious/downloads/views/components/download_retry_time.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
@@ -18,9 +19,13 @@ class PlaylistDownloadOptions {
   final bool audioOnly;
   final String quality;
   final DownloadContainer? container;
+  final MusicOfflinePolicy musicPolicy;
 
   const PlaylistDownloadOptions(
-      {this.audioOnly = false, this.quality = '720p', this.container});
+      {this.audioOnly = false,
+      this.quality = '720p',
+      this.container,
+      this.musicPolicy = const MusicOfflinePolicy()});
 }
 
 class DownloadModalSheet extends StatelessWidget {
@@ -55,7 +60,9 @@ class DownloadModalSheet extends StatelessWidget {
   static Future<PlaylistDownloadOptions?> showPlaylistOptions(
       BuildContext context,
       {bool musicAudioOnly = false,
-      bool inPlayer = false}) async {
+      bool inPlayer = false,
+      MusicOfflinePolicy initialMusicPolicy =
+          const MusicOfflinePolicy()}) async {
     final source = db;
     final profileId = db.profileId;
     final accounts = source.getServers();
@@ -65,7 +72,9 @@ class DownloadModalSheet extends StatelessWidget {
         context: context,
         builder: (_) {
           final sheet = _PlaylistDownloadSheet(
-              musicAudioOnly: musicAudioOnly, inPlayer: inPlayer);
+              musicAudioOnly: musicAudioOnly,
+              inPlayer: inPlayer,
+              initialMusicPolicy: initialMusicPolicy);
           return inPlayer
               ? PlayerModalBackHandler(priority: 5, child: sheet)
               : sheet;
@@ -272,6 +281,69 @@ class _Choice<T> extends StatelessWidget {
       );
 }
 
+Widget _downloadOptionLabel(BuildContext context, Widget child,
+    {required bool inPlayer}) {
+  if (!inPlayer) return child;
+  final sheetRoute = ModalRoute.of(context);
+  // DropdownButton renders the label in both routes. Back closes the popup
+  // first, even when the sheet was opened from the player queue.
+  return Builder(
+      builder: (itemContext) => ModalRoute.of(itemContext) == sheetRoute
+          ? child
+          : PlayerModalBackHandler(priority: 6, child: child));
+}
+
+class MusicOfflinePolicyFields extends StatelessWidget {
+  final MusicOfflinePolicy policy;
+  final ValueChanged<MusicOfflinePolicy> onChanged;
+  final bool inPlayer;
+
+  const MusicOfflinePolicyFields(
+      {super.key,
+      required this.policy,
+      required this.onChanged,
+      this.inPlayer = false});
+
+  @override
+  Widget build(BuildContext context) {
+    final locals = AppLocalizations.of(context)!;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _Choice<MusicOfflineQuality>(
+            label: locals.musicOfflineQuality,
+            value: policy.quality,
+            onChanged: (quality) {
+              if (quality == null) return;
+              onChanged(MusicOfflinePolicy(
+                  quality: quality, wifiOnly: policy.wifiOnly));
+            },
+            items: [
+              DropdownMenuItem(
+                  value: MusicOfflineQuality.highest,
+                  child: _downloadOptionLabel(
+                      context, Text(locals.musicDownloadHighestQuality),
+                      inPlayer: inPlayer)),
+              DropdownMenuItem(
+                  value: MusicOfflineQuality.balanced,
+                  child: Text(locals.musicOfflineQualityBalanced)),
+              DropdownMenuItem(
+                  value: MusicOfflineQuality.dataSaver,
+                  child: Text(locals.musicAudioQualityDataSaver)),
+            ]),
+        SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: Text(locals.downloadsWifiOnly),
+            subtitle: Text(locals.musicOfflineWifiHelp),
+            value: policy.wifiOnly,
+            onChanged: (wifiOnly) => onChanged(MusicOfflinePolicy(
+                quality: policy.quality, wifiOnly: wifiOnly))),
+      ],
+    );
+  }
+}
+
 class _ContainerChoice extends StatelessWidget {
   final DownloadContainer? value;
   final bool audioOnly;
@@ -291,13 +363,9 @@ class _ContainerChoice extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final locals = AppLocalizations.of(context)!;
-    final automatic = Text(musicAudioOnly
-        ? locals.musicDownloadHighestQuality
-        : locals.downloadAutomatic);
-    final sheetRoute = ModalRoute.of(context);
     return _Choice<int>(
         label: musicAudioOnly
-            ? locals.musicAudioQuality
+            ? locals.musicDownloadSourceFormat
             : locals.downloadFileFormat,
         value: value?.index ?? -1,
         onChanged: (index) => onChanged(index == null || index < 0
@@ -306,16 +374,9 @@ class _ContainerChoice extends StatelessWidget {
         items: [
           DropdownMenuItem(
               value: -1,
-              // DropdownButton renders this label on both the sheet and its
-              // popup route. Only the popup owns the first Back press.
-              child: inPlayer
-                  ? Builder(
-                      builder: (itemContext) =>
-                          ModalRoute.of(itemContext) == sheetRoute
-                              ? automatic
-                              : PlayerModalBackHandler(
-                                  priority: 6, child: automatic))
-                  : automatic),
+              child: _downloadOptionLabel(
+                  context, Text(locals.downloadAutomatic),
+                  inPlayer: inPlayer)),
           for (final container in containers)
             DropdownMenuItem(
                 value: container.index,
@@ -333,9 +394,12 @@ class _ContainerChoice extends StatelessWidget {
 class _PlaylistDownloadSheet extends StatefulWidget {
   final bool musicAudioOnly;
   final bool inPlayer;
+  final MusicOfflinePolicy initialMusicPolicy;
 
   const _PlaylistDownloadSheet(
-      {required this.musicAudioOnly, required this.inPlayer});
+      {required this.musicAudioOnly,
+      required this.inPlayer,
+      required this.initialMusicPolicy});
 
   @override
   State<_PlaylistDownloadSheet> createState() => _PlaylistDownloadSheetState();
@@ -345,6 +409,7 @@ class _PlaylistDownloadSheetState extends State<_PlaylistDownloadSheet> {
   late bool _audioOnly = widget.musicAudioOnly;
   String _quality = '720p';
   DownloadContainer? _container;
+  late MusicOfflinePolicy _musicPolicy = widget.initialMusicPolicy;
 
   @override
   Widget build(BuildContext context) {
@@ -355,10 +420,14 @@ class _PlaylistDownloadSheetState extends State<_PlaylistDownloadSheet> {
               ? locals.musicDownloadAudio
               : locals.downloadPlaylist,
           style: Theme.of(context).textTheme.titleLarge),
-      if (widget.musicAudioOnly)
+      if (widget.musicAudioOnly) ...[
         Text(locals
-            .musicDownloadOutput(MusicDownloadFormat.forDatabase(db).label))
-      else
+            .musicDownloadOutput(MusicDownloadFormat.forDatabase(db).label)),
+        MusicOfflinePolicyFields(
+            policy: _musicPolicy,
+            onChanged: (policy) => setState(() => _musicPolicy = policy),
+            inPlayer: widget.inPlayer),
+      ] else
         SwitchListTile(
             contentPadding: EdgeInsets.zero,
             title: Text(locals.videoDownloadAudioOnly),
@@ -395,7 +464,10 @@ class _PlaylistDownloadSheetState extends State<_PlaylistDownloadSheet> {
       const SizedBox(height: 16),
       FilledButton.icon(
           onPressed: () => Navigator.of(context).pop(PlaylistDownloadOptions(
-              audioOnly: _audioOnly, quality: _quality, container: _container)),
+              audioOnly: _audioOnly,
+              quality: _quality,
+              container: _container,
+              musicPolicy: _musicPolicy)),
           icon: const Icon(Icons.download),
           label: Text(locals.download)),
     ]);

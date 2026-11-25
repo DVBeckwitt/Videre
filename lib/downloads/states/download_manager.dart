@@ -11,6 +11,7 @@ import 'package:flutter/services.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
 import 'package:clipious/downloads/models/download_formats.dart';
 import 'package:clipious/downloads/models/music_download_format.dart';
+import 'package:clipious/downloads/models/music_offline_policy.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/downloads/models/download_playback_provenance.dart';
 import 'package:clipious/globals.dart';
@@ -85,6 +86,8 @@ class MusicDownloadDeletionApproval {
 class DownloadManagerCubit extends Cubit<DownloadManagerState> {
   final PlayerCubit player;
   final DownloadStorage storage;
+  final Future<bool> Function()? _readWifi;
+  final Stream<bool>? _wifiChanges;
   final Future<void> Function(
       {required String input,
       required String output,
@@ -94,7 +97,7 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
       MusicDownloadFormat? inputFormat}) encodeMusic;
   late final Future<void> _ready;
   late IDbClient _library;
-  StreamSubscription<dynamic>? _networkSubscription;
+  StreamSubscription<bool>? _networkSubscription;
   late final StreamSubscription<({IDbClient database, Set<String> profiles})>
       _renames;
   final Set<Future<void>> _mutations = {};
@@ -115,8 +118,15 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
   Completer<void>? _drainFinished;
 
   DownloadManagerCubit(super.initialState, this.player,
-      {DownloadStorage? storage, this.encodeMusic = runMusicDownloadMux})
-      : storage = storage ?? DownloadStorage() {
+      {DownloadStorage? storage,
+      this.encodeMusic = runMusicDownloadMux,
+      Future<bool> Function()? wifiConnected,
+      Stream<bool>? wifiChanges})
+      : storage = storage ?? DownloadStorage(),
+        _readWifi =
+            wifiConnected ?? (Platform.isAndroid ? isWifiConnected : null),
+        _wifiChanges = wifiChanges ??
+            (Platform.isAndroid ? wifiConnectivityChanges : null) {
     _library = db.forProfile(db.profileId);
     _renames = localMusicDownloadRenames.listen((change) {
       if (identical(change.database, db) &&
@@ -216,12 +226,17 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
 
   Future<void> onReady() async {
     _loadLibrary();
-    if (Platform.isAndroid) {
-      _networkSubscription = wifiConnectivityChanges.listen(_networkChanged,
-          onError: (Object error) => _networkChanged(false));
-      _wifiConnected = await isWifiConnected();
+    var receivedEvent = false;
+    void networkEvent(bool connected) {
+      receivedEvent = true;
+      _networkChanged(connected);
     }
-    _networkChanged(_wifiConnected);
+
+    _networkSubscription = _wifiChanges?.listen(networkEvent,
+        onError: (Object error) => networkEvent(false));
+    final readWifi = _readWifi;
+    final connected = readWifi == null ? false : await readWifi();
+    if (!receivedEvent) _networkChanged(connected);
   }
 
   void _loadLibrary() {
@@ -242,19 +257,20 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
         videos: _library.getAllDownloads())));
   }
 
-  bool get _networkAllowed => !state.wifiOnly || _wifiConnected;
-
   void _networkChanged(bool connected) {
-    if (!_current) return;
     _wifiConnected = connected;
-    emit(state.copyWith(waitingForWifi: !_networkAllowed));
-    if (!_networkAllowed) {
-      for (final progress in state.downloadProgresses.values) {
-        progress.cancelToken.cancel();
+    if (!_current) return;
+    emit(state.copyWith(
+        wifiConnected: connected,
+        waitingForWifi: state.wifiOnly && !connected));
+    if (_activeId case final id?) {
+      final active = _library.getDownloadByVideoId(id);
+      if (state.waitingForWifi ||
+          (active != null && state.waitingForWifiFor(active))) {
+        state.downloadProgresses[id]?.cancelToken.cancel();
       }
-    } else {
-      unawaited(_drain());
     }
+    unawaited(_drain());
   }
 
   Future<void> setWifiOnly(bool value) => _mutate(() async {
@@ -405,6 +421,7 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
   Future<bool> addDownload(String videoId,
           {String quality = '720p',
           bool audioOnly = false,
+          MusicOfflinePolicy? musicPolicy,
           DownloadContainer? container,
           String? audioTrackId,
           String? captionLabel,
@@ -447,6 +464,7 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
               quality: quality,
               folderUri: folder,
               musicFormat: format,
+              musicPolicy: isMusic ? musicPolicy : null,
               container: container,
               audioTrackId: audioTrackId,
               captionLabel: audioOnly ? null : captionLabel,
@@ -462,6 +480,7 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
   Future<int> addDownloads(Iterable<String> videoIds,
       {String quality = '720p',
       bool audioOnly = false,
+      MusicOfflinePolicy? musicPolicy,
       DownloadContainer? container,
       String? audioTrackId,
       String? captionLabel,
@@ -473,6 +492,7 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
       if (await addDownload(id,
           quality: quality,
           audioOnly: audioOnly,
+          musicPolicy: musicPolicy,
           container: container,
           audioTrackId: audioTrackId,
           captionLabel: captionLabel,
@@ -484,19 +504,20 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
   }
 
   Future<void> _drain() async {
-    if (_processing || !_current || _switchingProfile || !_networkAllowed) {
+    if (_processing || !_current || _switchingProfile || state.waitingForWifi) {
       return;
     }
     _processing = true;
     final finished = _drainFinished = Completer<void>();
     try {
-      while (_current && !_switchingProfile && _networkAllowed) {
+      while (_current && !_switchingProfile && !state.waitingForWifi) {
         final next = _library
             .getAllDownloads()
             .where((v) =>
                 !v.downloadComplete &&
                 !v.downloadFailed &&
                 !v.authenticationRequired &&
+                !state.waitingForWifiFor(v) &&
                 !state.pausedVideoIds.contains(v.videoId) &&
                 !_deleting.contains(v.videoId))
             .firstOrNull;
@@ -559,6 +580,7 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
       if (account == null || account.profileId != library.profileId) {
         throw StateError('The download account is no longer available');
       }
+      if (token.isCancelled) throw token.cancelError!;
       final recovery =
           await DownloadRecovery.start(service, library, account, token);
       await recovery.run<void>((route) async {
@@ -597,7 +619,8 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
             if (url != null) mediaUrls[format] = url;
           }
           final formats = DownloadFormats(mediaUrls.keys.toList(),
-              audioTrackId: video.audioTrackId);
+              audioTrackId: video.audioTrackId,
+              musicQuality: video.musicPolicy?.quality);
           // A saved document already has a container. Old jobs saved WebM.
           final savedContainer = video.container ??
               (video.storageUri == null ? null : DownloadContainer.webm);
@@ -606,7 +629,7 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
               : formats.videoFor(video.quality, container: savedContainer);
           final automaticAudio =
               video.audioOnly && video.quality == highestAudioDownloadQuality
-                  ? formats.highestBitrateAudioContainer
+                  ? formats.preferredBitrateAudioContainer
                   : formats.audioContainer;
           final container = savedContainer ??
               (selectedVideo == null
@@ -1380,9 +1403,13 @@ sealed class DownloadManagerState with _$DownloadManagerState {
     @Default({}) Set<String> pausedVideoIds,
     @Default(false) bool wifiOnly,
     @Default(false) bool waitingForWifi,
+    @Default(false) bool wifiConnected,
   }) = _DownloadManagerState;
 
   const DownloadManagerState._();
+
+  bool waitingForWifiFor(DownloadedVideo video) =>
+      waitingForWifi || (!wifiConnected && video.musicPolicy?.wifiOnly == true);
 
   double get totalProgress {
     var downloaded = 0, total = 0;
