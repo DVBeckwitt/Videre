@@ -26,6 +26,7 @@ import 'package:clipious/music/views/components/music_song_selection_bar.dart';
 import 'package:clipious/music/views/components/music_status_title.dart';
 import 'package:clipious/music/views/components/takeout_import_dialog.dart';
 import 'package:clipious/music/views/screens/music.dart';
+import 'package:clipious/music/views/screens/music_history.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/podcasts/views/podcast_library.dart';
 import 'package:clipious/playlists/models/playlist.dart';
@@ -36,8 +37,6 @@ import 'package:clipious/utils/models/image_object.dart';
 import 'package:clipious/utils/views/components/thumbnail.dart';
 import 'package:clipious/utils/views/components/channel_avatar.dart';
 import 'package:clipious/videos/models/video.dart';
-import 'package:clipious/videos/views/components/history.dart';
-import 'package:clipious/videos/views/tv/screens/history.dart';
 import 'package:clipious/videos/views/components/video_watch_progress.dart';
 import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
@@ -2105,16 +2104,8 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                                       ? null
                                       : () => Navigator.of(context).push<void>(
                                           MaterialPageRoute(
-                                              builder: (context) => isTv
-                                                  ? const TvHistoryScreen(
-                                                      music: true)
-                                                  : Scaffold(
-                                                      appBar: AppBar(
-                                                          title: Text(locals
-                                                              .musicPlaybackHistory)),
-                                                      body: const HistoryView(
-                                                          music: true),
-                                                    ))),
+                                              builder: (_) =>
+                                                  const MusicHistoryScreen())),
                                 ),
                                 IconButton(
                                     tooltip: locals.takeoutImport,

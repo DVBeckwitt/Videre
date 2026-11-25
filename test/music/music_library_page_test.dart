@@ -733,7 +733,9 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Song title'), findsOneWidget);
     expect(find.text('Video title'), findsNothing);
-    await tester.tap(find.byType(FloatingActionButton));
+    await tester.tap(find.byKey(const ValueKey('music-history-more')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Clear history ?'));
     await tester.pumpAndSettle();
     await tester.tap(find.widgetWithText(TextButton, 'OK'));
     for (var i = 0; i < 6; i++) {
