@@ -23,6 +23,7 @@ import 'package:clipious/music/views/components/music_library_actions.dart';
 import 'package:clipious/music/views/components/local_music_folder.dart';
 import 'package:clipious/music/views/components/music_playlist_resume.dart';
 import 'package:clipious/music/views/components/music_song_selection_bar.dart';
+import 'package:clipious/music/views/components/music_status_title.dart';
 import 'package:clipious/music/views/components/takeout_import_dialog.dart';
 import 'package:clipious/music/views/screens/music.dart';
 import 'package:clipious/player/states/player.dart';
@@ -456,6 +457,14 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
         onPlay: onOpen);
   }
 
+  Widget _bookmarkTitle(MusicLibraryEntry? entry, Widget title) {
+    if (entry == null) return title;
+    return entry.kind == MusicLibraryKind.song
+        ? MusicStatusTitle.song(video: entry.toVideo(), child: title)
+        : MusicStatusTitle.bookmark(
+            kind: entry.kind, id: entry.id, child: title);
+  }
+
   Widget _bookmark(MusicLibraryEntry entry, Future<void> Function() onOpen) {
     final selected = _savedSongsSelection?.contains(entry.id);
     return ListTile(
@@ -472,7 +481,8 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                 dimension: 52,
                 child:
                     _bookmarkArtwork(entry, _artwork(entry.displayThumbnails))),
-        title: Text(entry.title, maxLines: 2, overflow: TextOverflow.ellipsis),
+        title: _bookmarkTitle(entry,
+            Text(entry.title, maxLines: 2, overflow: TextOverflow.ellipsis)),
         subtitle: entry.subtitle.isEmpty
             ? null
             : Text(entry.subtitle,
@@ -871,7 +881,8 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                                 VideoWatchProgress(videoId: song.videoId),
                               ]),
                             ),
-                            title: Text(music.title),
+                            title: MusicStatusTitle.song(
+                                video: song, child: Text(music.title)),
                             subtitle: Text(music.artist),
                             trailing: _playlistSelecting
                                 ? ExcludeSemantics(
@@ -1352,6 +1363,7 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
     return _gridCard(
       key: _itemKey(item),
       title: _itemTitle(item),
+      bookmark: entry,
       subtitle: entry?.subtitle ?? AppLocalizations.of(context)!.onDevice,
       artworkRadius: artist ? 300 : 7,
       artwork: _bookmarkArtwork(
@@ -1390,6 +1402,7 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
     required VoidCallback onOpen,
     VoidCallback? onLongPress,
     String subtitle = '',
+    MusicLibraryEntry? bookmark,
     Widget? action,
     bool plays = false,
     bool? selected,
@@ -1452,11 +1465,13 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                     ]),
                   ),
                   const SizedBox(height: 6),
-                  Text(title,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: theme.textTheme.titleMedium
-                          ?.copyWith(fontWeight: FontWeight.w600)),
+                  _bookmarkTitle(
+                      bookmark,
+                      Text(title,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.titleMedium
+                              ?.copyWith(fontWeight: FontWeight.w600))),
                   if (subtitle.isNotEmpty)
                     Text(subtitle,
                         maxLines: 1,
@@ -1670,8 +1685,10 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
         ListTile(
             key: ValueKey('music-download-${video.videoId}'),
             selected: selected ?? false,
-            leading: Icon(ready ? Icons.offline_pin : Icons.downloading),
-            title: Text(video.musicMetadata!.title),
+            leading:
+                Icon(ready ? Icons.audio_file_outlined : Icons.downloading),
+            title: MusicStatusTitle.download(
+                file: video, child: Text(video.musicMetadata!.title)),
             subtitle: Text(status),
             onLongPress: selected == null
                 ? () => _startLibrarySelection(

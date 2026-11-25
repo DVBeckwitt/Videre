@@ -1936,6 +1936,8 @@
   "musicSoundSessionChanged": "Playback changed. Close this panel and open Sound again.",
   "musicHomeSubtitle": "Your music, through Invidious.",
   "musicSavedSongs": "Saved songs",
+  "musicStatusSaved": "Saved",
+  "musicStatusPlayableOffline": "Playable offline",
   "musicDiscover": "Discover music",
   "musicDiscoverHint": "Videos categorized as Music by your instance.",
   "musicDiscoverByArtist": "Explore by saved artist",

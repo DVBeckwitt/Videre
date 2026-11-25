@@ -33,6 +33,7 @@ import 'package:clipious/music/views/components/music_selection_feedback.dart';
 import 'package:clipious/music/views/components/music_playlist_resume.dart';
 import 'package:clipious/music/views/components/music_sponsor_notice.dart';
 import 'package:clipious/music/views/components/music_sound_sheet.dart';
+import 'package:clipious/music/views/components/music_status_title.dart';
 import 'package:clipious/music/views/components/music_track_results.dart';
 import 'package:clipious/network/content_link.dart';
 import 'package:clipious/network/network_proxy.dart';
@@ -1456,6 +1457,7 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
       String? queueTitle,
       List<CommunityMatch> matches = const []}) {
     final track = queue[index];
+    final video = track.toVideo();
     final row = numbered ? '$index' : 'search-$index';
     Future<void> play() => _play(queue,
         reference: reference, queueTitle: queueTitle, startIndex: index);
@@ -1476,7 +1478,10 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
                 Center(child: Text('${index + 1}')),
                 VideoWatchProgress(videoId: track.videoId),
               ])),
-      title: Text(track.title, maxLines: 2, overflow: TextOverflow.ellipsis),
+      title: MusicStatusTitle.song(
+          video: video,
+          child:
+              Text(track.title, maxLines: 2, overflow: TextOverflow.ellipsis)),
       subtitle: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1487,10 +1492,9 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
           if (matches.isNotEmpty) CommunityMatchLabels(matches: matches),
         ],
       ),
-      trailing: MusicLibraryActions(videos: [track.toVideo()], onPlay: play),
-      onLongPress: () => MusicLibraryActions.showSongMenu(
-          context, track.toVideo(),
-          onPlay: play),
+      trailing: MusicLibraryActions(videos: [video], onPlay: play),
+      onLongPress: () =>
+          MusicLibraryActions.showSongMenu(context, video, onPlay: play),
       onTap: play,
     );
   }
@@ -1706,14 +1710,20 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
                     images: artist.thumbnails,
                     size: 56,
                     instanceOnly: true),
-                title: Text(artist.name),
+                title: MusicStatusTitle.bookmark(
+                    kind: MusicLibraryKind.artist,
+                    id: artist.id,
+                    child: Text(artist.name)),
                 trailing: const Icon(Icons.chevron_right),
                 onTap: () => _openArtist(artist.id));
           case MusicCatalogPlaylistHit(:final playlist):
             return ListTile(
                 key: listing.paginated ? ValueKey(hit.key) : null,
                 leading: _artwork(playlist.thumbnails),
-                title: Text(playlist.title),
+                title: MusicStatusTitle.bookmark(
+                    kind: MusicLibraryKind.playlist,
+                    id: playlist.id,
+                    child: Text(playlist.title)),
                 subtitle:
                     playlist.author == null ? null : Text(playlist.author!),
                 trailing: const Icon(Icons.chevron_right),

@@ -14,10 +14,12 @@ import '../../../playlists/models/playlist_reference.dart';
 import '../../../settings/models/db/server.dart';
 import '../../../utils/interfaces/db.dart';
 import '../../models/music_library_entry.dart';
+import '../../models/on_device_music_entry.dart';
 import '../../services/music_library_search.dart';
 import '../../services/music_library_service.dart';
 import '../screens/music.dart';
 import '../screens/music_library.dart';
+import 'music_status_title.dart';
 
 typedef _SearchOwner = ({
   IDbClient database,
@@ -305,10 +307,26 @@ class _MusicLibrarySearchResultsState extends State<MusicLibrarySearchResults>
         ),
     };
     final subtitle = hit.subtitle?.trim();
+    final titleLabel = Text(title);
     return ListTile(
       key: ValueKey(('music-library-search-hit', hit.key)),
       leading: Icon(icon),
-      title: Text(title),
+      title: switch (hit) {
+        MusicLibrarySearchBookmark(:final entry)
+            when entry.kind == MusicLibraryKind.song =>
+          MusicStatusTitle.song(video: entry.toVideo(), child: titleLabel),
+        MusicLibrarySearchBookmark(:final entry) => MusicStatusTitle.bookmark(
+            kind: entry.kind, id: entry.id, child: titleLabel),
+        MusicLibrarySearchFile(
+          entry: OnDeviceMusicEntry(
+            download: final file?,
+            :final downloadFileProof
+          )
+        ) =>
+          MusicStatusTitle.download(
+              file: file, fileProof: downloadFileProof, child: titleLabel),
+        _ => titleLabel,
+      },
       subtitle: Text(
           subtitle == null || subtitle.isEmpty ? kind : '$kind · $subtitle'),
       trailing: Icon(plays ? Icons.play_arrow : Icons.chevron_right),

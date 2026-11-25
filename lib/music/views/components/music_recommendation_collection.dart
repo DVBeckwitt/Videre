@@ -8,6 +8,7 @@ import '../screens/music.dart';
 import 'community_music_artwork.dart';
 import 'music_collection_panes.dart';
 import 'music_library_actions.dart';
+import 'music_status_title.dart';
 
 /// A recommendation shelf opens as a playable collection, following Muzza's
 /// LocalPlaylistScreen queue behavior. Tracks form a normal Videre queue and
@@ -146,22 +147,25 @@ class _MusicRecommendationCollectionState
                   itemCount: tracks.length,
                   itemBuilder: (context, index) {
                     final song = tracks[index];
+                    final video = song.toVideo();
                     final artists = song.artists.join(', ');
                     return ListTile(
                       key: ValueKey('music-collection-${song.videoId}'),
                       onTap: () => _play(from: song.videoId),
                       onLongPress: () => MusicLibraryActions.showSongMenu(
-                          context, song.toVideo(),
+                          context, video,
                           onPlay: () => _play(from: song.videoId)),
                       leading: _art(song, size: 48, songRow: true),
-                      title: Text(song.title,
-                          maxLines: 1, overflow: TextOverflow.ellipsis),
+                      title: MusicStatusTitle.song(
+                          video: video,
+                          child: Text(song.title,
+                              maxLines: 1, overflow: TextOverflow.ellipsis)),
                       subtitle: artists.isEmpty
                           ? null
                           : Text(artists,
                               maxLines: 1, overflow: TextOverflow.ellipsis),
                       trailing: MusicLibraryActions(
-                          videos: [song.toVideo()],
+                          videos: [video],
                           onPlay: () => _play(from: song.videoId)),
                     );
                   },
