@@ -130,6 +130,9 @@ class MainActivity : AudioServiceActivity() {
         if (!flutterEngine.plugins.has(LocalMusicPlugin::class.java)) {
             flutterEngine.plugins.add(LocalMusicPlugin())
         }
+        if (!flutterEngine.plugins.has(MusicVoiceSearchPlugin::class.java)) {
+            flutterEngine.plugins.add(MusicVoiceSearchPlugin())
+        }
         if (!flutterEngine.plugins.has(IncomingLinksPlugin::class.java)) {
             flutterEngine.plugins.add(IncomingLinksPlugin())
         }

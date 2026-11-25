@@ -32,6 +32,9 @@
     <queries>
         <!-- Resolve Tor Browser's public launcher when external links are disabled. -->
         <package android:name="org.torproject.torbrowser" />
+        <intent>
+            <action android:name="android.speech.action.RECOGNIZE_SPEECH" />
+        </intent>
     </queries>
 
     <application

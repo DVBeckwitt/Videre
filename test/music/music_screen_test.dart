@@ -700,6 +700,173 @@ void main() {
     });
   });
 
+  group('Music voice search', () {
+    const channel = MethodChannel('videre/music_voice_search');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    final mic = find.byKey(const ValueKey('music-voice-search'));
+    final field = find.byKey(const ValueKey('music-search'));
+
+    void mockProvider(Future<String?> Function(MethodCall) recognize,
+        {bool available = true}) {
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        if (call.method == 'isAvailable') return available;
+        expect(call.method, 'recognize');
+        return recognize(call);
+      });
+    }
+
+    Future<void> openConsent(WidgetTester tester) async {
+      await tester.tap(mic);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(find.textContaining('may send your audio'), findsOneWidget);
+    }
+
+    Future<void> confirm(WidgetTester tester) async {
+      await tester.tap(find.text('Use microphone'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+    }
+
+    String draft(WidgetTester tester) =>
+        tester.widget<TextField>(field).controller!.text;
+
+    tearDown(() => messenger.setMockMethodCallHandler(channel, null));
+
+    testWidgets('recognition uses the app locale and fills an editable draft',
+        (tester) async {
+      await tester.runAsync(() async {
+        await settings.saveSetting(SettingsValue(localeSettingName, 'pt_BR'));
+      });
+      var launches = 0;
+      mockProvider((call) async {
+        launches++;
+        expect(call.arguments, {'languageTag': 'pt-BR'});
+        return '  João Gilberto  ';
+      });
+      await show(tester, screen: const MusicScreen(embedded: true));
+      await tester.pumpAndSettle();
+      await openConsent(tester);
+      expect(launches, 0);
+      await confirm(tester);
+      expect(launches, 1);
+      expect(draft(tester), 'João Gilberto');
+      expect(catalog.searches, isEmpty);
+      await tester.tap(field);
+      await tester.pump(const Duration(milliseconds: 500));
+      expect(catalog.suggestionRequests, isEmpty);
+
+      await tester.enterText(field, 'João Gilberto bossa nova');
+      await tester.pump(const Duration(milliseconds: 500));
+      expect(catalog.suggestionRequests, isEmpty);
+      await tester.tap(find.widgetWithText(ChoiceChip, 'Playlists'));
+      await tester.pumpAndSettle();
+      expect(catalog.searches, isEmpty);
+      await tester.tap(find.widgetWithText(ChoiceChip, 'Songs'));
+      await tester.pumpAndSettle();
+      expect(catalog.searches, isEmpty);
+
+      await search(tester, 'João Gilberto bossa nova');
+      expect(catalog.searches, ['João Gilberto bossa nova']);
+      expect(catalog.suggestionRequests, isEmpty);
+      await tester.enterText(field, 'night jazz');
+      await tester.pump(const Duration(milliseconds: 500));
+      final suggestion = catalog.suggestionRequests.single;
+      expect(suggestion.query, 'night jazz');
+      suggestion.response.complete([]);
+      await tester.pump();
+    });
+
+    testWidgets('unavailable recognition leaves typed search available',
+        (tester) async {
+      mockProvider((_) async => fail('Recognizer should stay closed'),
+          available: false);
+      await show(tester);
+      await tester.pumpAndSettle();
+      expect(mic, findsNothing);
+      await search(tester, 'typed query');
+      expect(catalog.searches, ['typed query']);
+    });
+
+    testWidgets('canceling or failing recognition preserves the typed draft',
+        (tester) async {
+      var launches = 0;
+      mockProvider((call) async {
+        expect(call.arguments, isEmpty);
+        if (launches++ == 0) return null;
+        throw PlatformException(code: 'VOICE_SEARCH_FAILED');
+      });
+      await show(tester);
+      await tester.pumpAndSettle();
+      await tester.enterText(field, 'typed draft');
+
+      await openConsent(tester);
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+      expect(launches, 0);
+      expect(draft(tester), 'typed draft');
+
+      await openConsent(tester);
+      await confirm(tester);
+      expect(launches, 1);
+      expect(draft(tester), 'typed draft');
+
+      await openConsent(tester);
+      await confirm(tester);
+      expect(launches, 2);
+      expect(find.textContaining('Voice input failed'), findsOneWidget);
+      expect(draft(tester), 'typed draft');
+      expect(catalog.searches, isEmpty);
+    });
+
+    testWidgets('a delayed transcript cannot replace either source draft',
+        (tester) async {
+      final result = Completer<String?>();
+      mockProvider((_) => result.future);
+      await show(tester, screen: const MusicScreen(embedded: true));
+      await tester.pumpAndSettle();
+      await tester.enterText(field, 'online draft');
+      await openConsent(tester);
+      await confirm(tester);
+      expect(tester.widget<IconButton>(mic).onPressed, isNull);
+
+      await tester
+          .tap(find.byKey(const ValueKey('music-search-source-library')));
+      await tester.pump();
+      await tester.enterText(field, 'library draft');
+      result.complete('unwanted transcript');
+      await tester.pump();
+      expect(draft(tester), 'library draft');
+
+      await tester
+          .tap(find.byKey(const ValueKey('music-search-source-online')));
+      await tester.pumpAndSettle();
+      expect(draft(tester), 'online draft');
+      expect(catalog.searches, isEmpty);
+    });
+
+    testWidgets('Library voice input only fills the Library draft',
+        (tester) async {
+      mockProvider((_) async => 'rehearsal');
+      await show(tester, screen: const MusicScreen(embedded: true));
+      await tester.pumpAndSettle();
+      await tester.enterText(field, 'online draft');
+      await tester
+          .tap(find.byKey(const ValueKey('music-search-source-library')));
+      await tester.pump();
+      await openConsent(tester);
+      await confirm(tester);
+      expect(draft(tester), 'rehearsal');
+
+      await tester
+          .tap(find.byKey(const ValueKey('music-search-source-online')));
+      await tester.pumpAndSettle();
+      expect(draft(tester), 'online draft');
+      expect(catalog.searches, isEmpty);
+    });
+  });
+
   testWidgets('only explicit music search submissions produce learning signals',
       (tester) async {
     final events = <Map>[];

@@ -8,6 +8,7 @@ import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/downloads/services/download_playback_source.dart';
 import 'package:clipious/downloads/services/explicit_music_download.dart';
 import 'package:clipious/globals.dart';
+import 'package:clipious/l10n/app_languages.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' show isTv;
 import 'package:clipious/music/models/local_music_track.dart';
@@ -72,7 +73,8 @@ import 'package:clipious/videos/models/video.dart';
 import 'package:clipious/videos/views/components/offline_video_thumbnail.dart';
 import 'package:clipious/videos/views/components/video_watch_progress.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart' show defaultTargetPlatform, listEquals;
+import 'package:flutter/foundation.dart'
+    show defaultTargetPlatform, kIsWeb, listEquals;
 import 'package:flutter/semantics.dart' show CustomSemanticsAction;
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -432,6 +434,7 @@ class MusicScreen extends StatefulWidget {
 }
 
 class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
+  static const _voiceSearchChannel = MethodChannel('videre/music_voice_search');
   final _onlineSearch = TextEditingController();
   final _librarySearch = TextEditingController();
   final _queryFocus = FocusNode();
@@ -439,6 +442,9 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
   final _searchScrollScope = Object();
   _MusicSearchSource _searchSource = _MusicSearchSource.online;
   bool _visitedLibrarySearch = false;
+  bool _voiceSearchAvailable = false;
+  bool _voiceSearchPending = false;
+  bool _onlineVoiceDraftPending = false;
   int _searchIntentRevision = 0;
   int _searchSessionRevision = 0;
   int _onlineResultRevision = 0;
@@ -521,6 +527,7 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
       MusicOnlineRecentsButton(onUse: (query) {
         if (!_canUseOnlineRecents) return;
         _searchIntentRevision++;
+        _onlineVoiceDraftPending = false;
         _fillOnlineQuery(query);
         _queryFocus.requestFocus();
       }),
@@ -531,6 +538,7 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
     if (_searchingLibrary) {
       _queryFocus.unfocus();
     } else {
+      _onlineVoiceDraftPending = false;
       unawaited(_submit(learn: true));
     }
   }
@@ -542,9 +550,10 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
       _onlineListing?.pending = null;
     });
     // A pasted address needs a submission before changing result types can
-    // search its text.
+    // search its text. The user also needs to submit a dictated draft.
     final query = _onlineSearch.text.trim();
-    if (query.isNotEmpty &&
+    if (!_onlineVoiceDraftPending &&
+        query.isNotEmpty &&
         (query == _onlineListing?.query ||
             ContentLink.completeWebAddress(query) == null)) {
       unawaited(_submit());
@@ -559,7 +568,10 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
     });
   }
 
-  void _searchInputChanged(String _) {
+  void _searchInputChanged(String input) {
+    if (!_searchingLibrary && input.trim().isEmpty) {
+      _onlineVoiceDraftPending = false;
+    }
     if (_searchingLibrary &&
         _librarySearchScroll.hasClients &&
         _librarySearchScroll.offset != 0) {
@@ -569,6 +581,7 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
 
   bool get _canSuggestOnline =>
       _foreground &&
+      !_onlineVoiceDraftPending &&
       !_searchingLibrary &&
       !_hasBrowsePage &&
       !(_browseRequest && (_loading || _failure != null)) &&
@@ -659,6 +672,92 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
     );
   }
 
+  Future<void> _checkVoiceSearchAvailability() async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
+    try {
+      final available =
+          await _voiceSearchChannel.invokeMethod<bool>('isAvailable');
+      if (mounted && available == true) {
+        setState(() => _voiceSearchAvailable = true);
+      }
+    } on MissingPluginException {
+      // Builds without an Android recognizer use the regular search field.
+    } on PlatformException {
+      // Typed search is available if the device cannot check for a provider.
+    }
+  }
+
+  Future<void> _startVoiceSearch() async {
+    if (_voiceSearchPending) return;
+    final locals = AppLocalizations.of(context)!;
+    final session = context.read<AppCubit>().state;
+    final languageTag =
+        parseSavedLocale(context.read<SettingsCubit>().state.locale)
+            ?.toLanguageTag();
+    final generation = _generation;
+    final intent = _searchIntentRevision;
+    final controller = _search;
+    final draft = controller.text;
+    bool current() =>
+        _active(generation, session) &&
+        intent == _searchIntentRevision &&
+        controller.text == draft &&
+        TickerMode.of(context) &&
+        ModalRoute.of(context)?.isCurrent != false;
+
+    void showFailure() {
+      if (!current()) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(locals.musicVoiceSearchFailed)),
+      );
+    }
+
+    setState(() => _voiceSearchPending = true);
+    try {
+      final consent = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text(locals.musicVoiceSearch),
+          content: Text(locals.musicVoiceSearchPrivacy),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: Text(locals.cancel),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: Text(locals.musicVoiceSearchStart),
+            ),
+          ],
+        ),
+      );
+      if (consent != true || !current()) return;
+      _queryFocus.unfocus();
+      final transcript = (await _voiceSearchChannel.invokeMethod<String>(
+        'recognize',
+        {if (languageTag != null) 'languageTag': languageTag},
+      ))
+          ?.trim();
+      if (transcript == null || transcript.isEmpty || !current()) return;
+      if (_searchingLibrary) {
+        controller.value = TextEditingValue(
+          text: transcript,
+          selection: TextSelection.collapsed(offset: transcript.length),
+        );
+        _searchInputChanged(transcript);
+      } else {
+        _onlineVoiceDraftPending = true;
+        _fillOnlineQuery(transcript);
+      }
+    } on MissingPluginException {
+      showFailure();
+    } on PlatformException {
+      showFailure();
+    } finally {
+      if (mounted) setState(() => _voiceSearchPending = false);
+    }
+  }
+
   void focusSearch({VoidCallback? onBack}) {
     if (onBack != null) setState(() => _shortcutBack = onBack);
     if (_hasBrowsePage || _browseRequest) {
@@ -697,6 +796,7 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
+    unawaited(_checkVoiceSearchAvailability());
     final lifecycle = WidgetsBinding.instance.lifecycleState;
     _foreground = lifecycle == null || lifecycle == AppLifecycleState.resumed;
     WidgetsBinding.instance.addObserver(this);
@@ -787,8 +887,11 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
     _generation++;
     _searchIntentRevision++;
     _searchSessionRevision++;
-    if (_canSwitchSearchSource) {
+    if (_onlineVoiceDraftPending || _canSwitchSearchSource) {
       _onlineSearch.clear();
+    }
+    _onlineVoiceDraftPending = false;
+    if (_canSwitchSearchSource) {
       _librarySearch.clear();
       _type = MusicCatalogSearchType.songs;
       _libraryType = MusicLibrarySearchType.all;
@@ -822,6 +925,7 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
     } else if (widget.initialQuery?.trim().isNotEmpty == true) {
       _searchIntentRevision++;
       _searchSource = _MusicSearchSource.online;
+      _onlineVoiceDraftPending = false;
       _fillOnlineQuery(widget.initialQuery!.trim());
       _type = MusicCatalogSearchType.songs;
       await _submit();
@@ -2279,6 +2383,16 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
                               borderSide: BorderSide(color: colors.primary)),
                           contentPadding: const EdgeInsets.symmetric(
                               horizontal: 20, vertical: 14),
+                          prefixIcon: _voiceSearchAvailable
+                              ? IconButton(
+                                  key: const ValueKey('music-voice-search'),
+                                  tooltip: locals.musicVoiceSearch,
+                                  onPressed: _voiceSearchPending
+                                      ? null
+                                      : _startVoiceSearch,
+                                  icon: const Icon(Icons.mic),
+                                )
+                              : null,
                           suffixIcon: IconButton(
                               autofocus: isTv,
                               tooltip: locals.search,
