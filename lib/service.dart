@@ -14,6 +14,7 @@ import 'package:clipious/channels/models/channel_sort_by.dart';
 import 'package:clipious/extensions.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/playlists/models/playlist.dart';
+import 'package:clipious/playlists/models/playlist_reference.dart';
 import 'package:clipious/search/models/search_date.dart';
 import 'package:clipious/search/models/search_duration.dart';
 import 'package:clipious/search/models/search_results.dart';
@@ -2030,6 +2031,58 @@ class Service {
           enrichResults: false,
           beforeRequest: beforeRequest);
 
+  /// Music paging uses wire order and counts unsupported rows as page progress.
+  Future<List<Object?>> searchMusicPage(
+    String query,
+    SearchType type,
+    int page, {
+    required Server server,
+    required Future<void> Function() beforeRequest,
+  }) async {
+    final owner = db;
+    final revision = _sessionRevision;
+    final region = owner.getSettings(browsingCountry)?.value ?? 'US';
+    Future<void> check() async {
+      await beforeRequest();
+      if (revision != _sessionRevision ||
+          !identical(db, owner) ||
+          (owner.getSettings(browsingCountry)?.value ?? 'US') != region) {
+        throw StateError('The music search connection changed.');
+      }
+    }
+
+    await check();
+    final request = await _searchRequest(query,
+        type: type, page: page, region: region, serverOverride: server);
+    final response = await _get(request, cache: true, beforeRequest: check);
+    await check();
+    final data = handleResponse(response);
+    if (data is! List<Object?>) {
+      throw const FormatException('Invalid music search results.');
+    }
+    // A mixed page may contain malformed rows the Music adapter skips.
+    // Keep those responses out of the shared typed browse cache.
+    return data;
+  }
+
+  Future<ServerRequest> _searchRequest(String query,
+          {SearchType? type,
+          int? page,
+          SearchSortBy? sortBy,
+          SearchDate date = SearchDate.any,
+          SearchDuration duration = SearchDuration.any,
+          Server? serverOverride,
+          required String region}) =>
+      buildRequest(urlSearch, serverOverride: serverOverride, query: {
+        'q': query,
+        'type': type?.name,
+        'page': page?.toString() ?? '1',
+        'sort': sortBy?.name,
+        'region': region,
+        'date': date != SearchDate.any ? date.name : null,
+        'duration': duration != SearchDuration.any ? duration.name : null,
+      });
+
   Future<SearchResults> _search(String query,
       {SearchType? type,
       int? page,
@@ -2040,17 +2093,14 @@ class Service {
       required bool enrichResults,
       Future<void> Function()? beforeRequest}) async {
     final revision = _sessionRevision;
-    String countryCode = db.getSettings(browsingCountry)?.value ?? 'US';
-    final req =
-        await buildRequest(urlSearch, serverOverride: serverOverride, query: {
-      'q': query,
-      'type': type?.name,
-      'page': page?.toString() ?? '1',
-      'sort': sortBy?.name,
-      'region': countryCode,
-      'date': date != SearchDate.any ? date.name : null,
-      'duration': duration != SearchDuration.any ? duration.name : null,
-    });
+    final req = await _searchRequest(query,
+        type: type,
+        page: page,
+        sortBy: sortBy,
+        date: date,
+        duration: duration,
+        serverOverride: serverOverride,
+        region: db.getSettings(browsingCountry)?.value ?? 'US');
     final response = await _get(req, cache: true, beforeRequest: beforeRequest);
     Iterable i = handleResponse(response);
     // only getting videos for now
@@ -2784,14 +2834,14 @@ class Service {
     return playlists;
   }
 
-  Future<void> _updateLocalPlaylists(void Function(List<Playlist>) update,
+  Future<void> _updateLocalPlaylists(bool Function(List<Playlist>) update,
       {IDbClient? database}) {
     final owner = database ?? db.forProfile(db.profileId);
     // Serialize saves so two quick additions cannot overwrite each other.
     return _localPlaylistWrite =
         _localPlaylistWrite.catchError((_) {}).then((_) async {
       final playlists = getLocalPlaylists(database: owner);
-      update(playlists);
+      if (!update(playlists)) return;
       await owner.saveSetting(SettingsValue(localPlaylistsSetting,
           jsonEncode(playlists.map((p) => p.toJson()).toList())));
     });
@@ -2817,12 +2867,15 @@ class Service {
     if (name.isEmpty) throw ArgumentError('Enter a playlist name');
     if (type == 'local') {
       final id = 'local:${const Uuid().v4()}';
-      await _updateLocalPlaylists((playlists) => playlists.add(Playlist(
-          title: name,
-          playlistId: id,
-          author: '',
-          videoCount: 0,
-          updated: DateTime.now().millisecondsSinceEpoch ~/ 1000)));
+      await _updateLocalPlaylists((playlists) {
+        playlists.add(Playlist(
+            title: name,
+            playlistId: id,
+            author: '',
+            videoCount: 0,
+            updated: DateTime.now().millisecondsSinceEpoch ~/ 1000));
+        return true;
+      });
       return id;
     }
     return createServerPlaylist(
@@ -2862,13 +2915,15 @@ class Service {
         final index = playlists.indexWhere((p) => p.playlistId == playListId);
         if (index < 0) throw StateError('Playlist no longer exists');
         final playlist = playlists[index];
-        if (playlist.videos.any((v) => v.videoId == videoId)) return;
+        if (playlist.videos.any((v) => v.videoId == videoId)) return true;
         // Keep display metadata; playback URLs expire and are fetched when needed.
         final videos = [
           ...playlist.videos,
           Video(
             videoId: videoId,
-            indexId: videoId,
+            // A saved playback queue must distinguish this membership from
+            // an earlier membership removed and later added again.
+            indexId: const Uuid().v4(),
             title: savedVideo.title,
             author: savedVideo.author,
             authorId: savedVideo.authorId,
@@ -2882,6 +2937,7 @@ class Service {
             videos: videos,
             videoCount: videos.length,
             updated: DateTime.now().millisecondsSinceEpoch ~/ 1000);
+        return true;
       }, database: owner);
       return;
     }
@@ -2911,10 +2967,10 @@ class Service {
     final owner = database ?? db.forProfile(db.profileId);
     if (playListId.startsWith('local:')) {
       if (playListId == localWatchLaterId) return;
-      await _updateLocalPlaylists(
-          (playlists) =>
-              playlists.removeWhere((p) => p.playlistId == playListId),
-          database: owner);
+      await _updateLocalPlaylists((playlists) {
+        playlists.removeWhere((p) => p.playlistId == playListId);
+        return true;
+      }, database: owner);
       return;
     }
     var req = await buildRequest(urlDeleteUserPlaylist,
@@ -2935,13 +2991,14 @@ class Service {
     if (playListId.startsWith('local:')) {
       await _updateLocalPlaylists((playlists) {
         final index = playlists.indexWhere((p) => p.playlistId == playListId);
-        if (index < 0) return;
+        if (index < 0) return true;
         final videos =
             playlists[index].videos.where((v) => v.videoId != indexId).toList();
         playlists[index] = playlists[index].copyWith(
             videos: videos,
             videoCount: videos.length,
             updated: DateTime.now().millisecondsSinceEpoch ~/ 1000);
+        return true;
       }, database: owner);
       return;
     }
@@ -2955,6 +3012,61 @@ class Service {
     final response =
         await _instanceHttpClient.delete(req.uri, headers: req.headers);
     handleResponse(response);
+  }
+
+  /// The stored local playlist must contain exactly this source occurrence.
+  Playlist? getLocalPlaylistWithUniqueEntry(
+      PlaylistReference source, Video entry) {
+    if (source.kind != PlaylistSourceKind.local || !source.matchesOwner(db)) {
+      return null;
+    }
+    return _localPlaylistWithUniqueEntry(
+        getLocalPlaylists(database: db.forProfile(source.profileId)),
+        source.playlistId,
+        entry);
+  }
+
+  static Playlist? _localPlaylistWithUniqueEntry(
+      List<Playlist> playlists, String id, Video entry) {
+    final candidates = playlists
+        .where((playlist) => playlist.isLocal && playlist.playlistId == id);
+    final playlist = candidates.singleOrNull;
+    if (playlist == null) return null;
+    final saved = playlist.videos
+        .where((video) => video.videoId == entry.videoId)
+        .singleOrNull;
+    if (saved == null) return null;
+    // For a unique upload, the fallback playlist ID uses occurrence zero
+    // regardless of its position amongst other videos.
+    final assigned = assignPlaylistEntryIds([saved]).single;
+    return assigned.queueEntryId == entry.queueEntryId ? playlist : null;
+  }
+
+  /// Keeps the final membership and player checks inside the playlist write.
+  Future<bool> removeUniqueLocalPlaylistEntry(
+      PlaylistReference source, Video entry, String expectedTitle,
+      {required bool Function() isCurrent}) async {
+    if (source.kind != PlaylistSourceKind.local || !source.matchesOwner(db)) {
+      return false;
+    }
+    final owner = db.forProfile(source.profileId);
+    var removed = false;
+    await _updateLocalPlaylists((playlists) {
+      if (!source.matchesOwner(db) || !isCurrent()) return false;
+      final playlist =
+          _localPlaylistWithUniqueEntry(playlists, source.playlistId, entry);
+      if (playlist == null || playlist.title != expectedTitle) return false;
+      final videos = playlist.videos
+          .where((video) => video.videoId != entry.videoId)
+          .toList();
+      playlists[playlists.indexOf(playlist)] = playlist.copyWith(
+          videos: videos,
+          videoCount: videos.length,
+          updated: DateTime.now().millisecondsSinceEpoch ~/ 1000);
+      removed = true;
+      return true;
+    }, database: owner);
+    return removed;
   }
 
   Future<List<String>> getUserHistory(int page, int maxResults) async {

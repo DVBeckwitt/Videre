@@ -469,6 +469,7 @@ class RecommendationCandidates {
       uploaderChannelId: video.authorId,
       uploaderChannelUrl: video.authorUrl,
       albumTitle: metadata?.album,
+      albumPlaylistId: metadata?.albumPlaylistId,
       durationSeconds: video.lengthSeconds,
       isArtTrack: metadata?.isArtTrack ?? false,
       thumbnails: savedCovers ?? covers,

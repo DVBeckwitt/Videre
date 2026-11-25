@@ -32,8 +32,11 @@ const double tabletMiniPlayerFraction = 0.25;
 
 class Player extends StatefulWidget {
   final double maxHeight;
+  final double navigationInset;
+  final bool suppressMini;
 
-  const Player(this.maxHeight, {super.key});
+  const Player(this.maxHeight,
+      {super.key, this.navigationInset = 0, this.suppressMini = false});
 
   @override
   State<Player> createState() => _PlayerState();
@@ -132,6 +135,7 @@ class _PlayerState extends State<Player> {
             (PlayerCubit value) => value.state.isPip ? 0.0 : value.state.top);
         final bool isMini =
             context.select((PlayerCubit value) => value.state.isMini) && !isPip;
+        final suppressMini = isMini && widget.suppressMini;
         final bool isHidden =
             context.select((PlayerCubit value) => value.state.isHidden);
         final bool isAudio =
@@ -260,16 +264,25 @@ class _PlayerState extends State<Player> {
         final keyboardInset = isMini && !isFullScreen
             ? MediaQuery.viewInsetsOf(context).bottom
             : 0.0;
-        final maxTop =
-            max(0.0, maxHeight - keyboardInset - padding.bottom - targetHeight);
+        final navigationInset = widget.navigationInset;
+        final dockedMini = isMini && !isFullScreen && navigationInset > 0;
+        final miniBottom =
+            keyboardInset + (dockedMini ? navigationInset + padding.bottom : 0);
+        final maxTop = max(
+            0.0,
+            maxHeight -
+                keyboardInset -
+                padding.bottom -
+                navigationInset -
+                targetHeight);
         final musicMiniViewport =
-            (viewport, padding, keyboardInset, isDragging);
+            (viewport, padding, keyboardInset, navigationInset, isDragging);
         // SafeArea applies new insets immediately. Move a compact Music bar in
         // the same frame so its fixed-height controls are never squeezed by an
         // old position during keyboard, viewport or mini-drag changes.
         final miniViewportChanged = _musicMiniViewport != null &&
             _musicMiniViewport != musicMiniViewport;
-        _musicMiniViewport = isMusic && isMini && showPlayer && !isHidden
+        _musicMiniViewport = isMini && showPlayer && !isHidden && !floating
             ? musicMiniViewport
             : null;
         final top = isFullScreen
@@ -299,7 +312,10 @@ class _PlayerState extends State<Player> {
         final safeBottom = max(
             0.0,
             maxHeight -
-                max(keyboardInset, padding.bottom + navigationBarHeight));
+                max(
+                    keyboardInset,
+                    padding.bottom +
+                        max(navigationBarHeight, navigationInset)));
         final rail = isTablet &&
                 MediaQuery.orientationOf(context) == Orientation.landscape
             ? 80.0
@@ -375,12 +391,12 @@ class _PlayerState extends State<Player> {
               : dragOffset != null
                   ? -dragOffset
                   : isClosing
-                      ? -targetHeight
+                      ? (dockedMini ? miniBottom : 0) - targetHeight
                       : isFullScreen
                           ? 0
                           : isMini && isDragging && top != null
                               ? maxHeight - top - targetHeight
-                              : cubit.getBottom + keyboardInset,
+                              : cubit.getBottom + miniBottom,
           duration: dragOffset != null ||
                   isDragging ||
                   (isMini && miniViewportChanged) ||
@@ -389,8 +405,9 @@ class _PlayerState extends State<Player> {
               : surfaceMotion,
           curve: Curves.easeOutCubic,
           child: AnimatedOpacity(
-            duration: AppMotion.fadeDuration(context),
-            opacity: isClosing ? 0 : 1,
+            duration:
+                suppressMini ? Duration.zero : AppMotion.fadeDuration(context),
+            opacity: isClosing || suppressMini ? 0 : 1,
             child: AnimatedScale(
               scale: (isMini && isDragging) ? 0.8 : 1,
               duration: AppMotion.duration(context),
@@ -410,12 +427,19 @@ class _PlayerState extends State<Player> {
                             canDragMusic ? cubit.videoDragStarted : null,
                         onVerticalDragUpdate:
                             canDragMusic ? cubit.videoDragged : null,
-                        onVerticalDragEnd:
-                            canDragMusic ? cubit.videoDraggedEnd : null,
+                        onVerticalDragEnd: canDragMusic
+                            ? (details) => cubit.videoDraggedEnd(
+                                  details,
+                                  compactMusic: true,
+                                )
+                            : null,
                         onVerticalDragCancel:
                             canDragMusic ? cubit.videoDragCancelled : null,
                         child: SafeArea(
-                          bottom: !isFullScreen && !isDragging && !floating,
+                          bottom: !isFullScreen &&
+                              !isDragging &&
+                              !floating &&
+                              !dockedMini,
                           top: flowWatch && !isMini && !isFullScreen,
                           left: !isFullScreen && !floating,
                           right: !isFullScreen && !floating,
@@ -698,12 +722,14 @@ class _PlayerState extends State<Player> {
                                                                                 ConditionalWrap(
                                                                                     wrapIf: !isMini,
                                                                                     wrapper: (child) => Expanded(child: child),
-                                                                                    child: flowWatch
-                                                                                        ? ExpandedPlayer(
-                                                                                            watchLayout: wideWatch && !showWatchPane ? FlowWatchLayout.medium : watchLayout,
-                                                                                            onOpenPanel: showWatchPane ? openWatchPanel : null,
-                                                                                          )
-                                                                                        : DeviceWidget(orientation: orientation, portraitTabletAsPhone: true, tablet: const TabletExpandedPlayer(), phone: const ExpandedPlayer()))
+                                                                                    child: isMusic && !isMini
+                                                                                        ? const MusicPlayer()
+                                                                                        : flowWatch
+                                                                                            ? ExpandedPlayer(
+                                                                                                watchLayout: wideWatch && !showWatchPane ? FlowWatchLayout.medium : watchLayout,
+                                                                                                onOpenPanel: showWatchPane ? openWatchPanel : null,
+                                                                                              )
+                                                                                            : DeviceWidget(orientation: orientation, portraitTabletAsPhone: true, tablet: const TabletExpandedPlayer(), phone: const ExpandedPlayer()))
                                                                             ],
                                                                           );
                                                                         })))),
@@ -842,23 +868,37 @@ class _PlayerState extends State<Player> {
                 children: [
                   Positioned.fill(
                       child: ExcludeFocus(
-                          excluding: showOpeningSong,
-                          child: Stack(children: [surface]))),
+                          excluding: showOpeningSong || suppressMini,
+                          child: IgnorePointer(
+                            ignoring: suppressMini,
+                            child: Listener(
+                              // Flutter can call onEnd for an accepted gesture
+                              // that the platform cancels mid-pull.
+                              onPointerCancel: canDragMusic
+                                  ? (_) => cubit.videoDragCancelled()
+                                  : null,
+                              child: Stack(children: [surface]),
+                            ),
+                          ))),
                   if (showOpeningSong)
                     Positioned.fill(
                       child: BlockSemantics(
                         child: MusicPlayerOpening(
                           onBack: cubit.showMiniPlayer,
                           backFocus: _minimizeMusicFocus,
-                          child:
-                              Column(mainAxisSize: MainAxisSize.min, children: [
-                            Text(openingSong,
-                                textAlign: TextAlign.center,
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis),
-                            const SizedBox(height: 16),
-                            const CircularProgressIndicator(),
-                          ]),
+                          child: SingleChildScrollView(
+                            child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Semantics(
+                                    header: true,
+                                    child: Text(openingSong,
+                                        textAlign: TextAlign.center),
+                                  ),
+                                  const SizedBox(height: 16),
+                                  const CircularProgressIndicator(),
+                                ]),
+                          ),
                         ),
                       ),
                     ),

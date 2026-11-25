@@ -1,19 +1,30 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
+import 'package:clipious/music/models/music_artwork_cache.dart';
+import 'package:clipious/music/services/music_artwork_cache.dart';
+import 'package:clipious/music/services/music_catalog_artwork_cache.dart';
+import 'package:clipious/music/services/music_community_cover_cache.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/app_logs.dart';
 import 'package:clipious/settings/models/db/server.dart';
+import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/utils/file_db.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
+import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
+import 'package:path/path.dart' as p;
 
 class _TestApp extends AppCubit {
-  _TestApp(super.initialState, {super.backgroundDatabase});
+  _TestApp(super.initialState, {super.backgroundDatabase, super.artworkCache});
 
   @override
   void onReady() {
@@ -194,6 +205,170 @@ void main() {
     expect((await db.getProfiles()).single.id, second.profileId);
     await expectSelected(second);
   });
+
+  for (final failingStore in ['catalog', 'Community']) {
+    test('a $failingStore artwork failure leaves the profile usable for retry',
+        () async {
+      const videoId = 'ABCDEFGHIJK';
+      const pendingVideoId = 'BCDEFGHIJKL';
+      const coverUrl = 'https://example.test/catalog.png';
+      const pendingUrl = '$coverUrl?pending';
+      const track = MusicMetadata(title: 'Song', artist: 'Artist');
+      const pendingTrack = MusicMetadata(title: 'Older song', artist: 'Artist');
+      final coverBytes = base64Decode(
+          'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=');
+      final catalogStarted = Completer<void>();
+      final communityStarted = Completer<void>();
+      final releaseResponses = Completer<void>();
+      final fileService =
+          HttpFileService(httpClient: MockClient((request) async {
+        if (request.url.toString() == pendingUrl &&
+            !catalogStarted.isCompleted) {
+          catalogStarted.complete();
+          await releaseResponses.future;
+          return http.Response.bytes([1, 2, 3], 200,
+              headers: {'content-type': 'image/png'});
+        }
+        return http.Response.bytes(coverBytes, 200,
+            headers: {'content-type': 'image/png'});
+      }));
+      final communityCache = MusicCommunityCoverCache(
+        supportDirectory: () async => documents,
+        loader: (track, _, {required isCurrent}) async {
+          if (track == pendingTrack) {
+            communityStarted.complete();
+            await releaseResponses.future;
+          }
+          return coverBytes;
+        },
+      );
+      final catalogs = <MusicCatalogArtworkCache>[];
+      final cache = MusicArtworkCache(
+        community: communityCache,
+        catalog: (profile, onStored) {
+          final catalog = MusicCatalogArtworkCache(profile,
+              onStored: onStored,
+              configFactory: (name) => Config(name,
+                  repo: JsonCacheInfoRepository.withFile(
+                      File(p.join(documents.path, name, 'index.json'))),
+                  fileService: fileService));
+          catalogs.add(catalog);
+          return catalog;
+        },
+        database: db.forProfile,
+      );
+      addTearDown(() async {
+        if (!releaseResponses.isCompleted) releaseResponses.complete();
+        for (final catalog in catalogs) {
+          await catalog.dispose();
+        }
+      });
+      await app.close();
+      app = _TestApp(AppState(0, first, HomeLayout()),
+          backgroundDatabase: mirror, artworkCache: cache);
+      await app.initState();
+
+      final profileId = second.profileId;
+      final owner = db.forProfile(profileId);
+      final other = db.forProfile(first.profileId);
+      final manager = cache.catalogManager(owner.profileId);
+      final original = await manager.putFile(coverUrl, coverBytes);
+      final community = (await communityCache
+          .load(owner.profileId, videoId, track, 180, isCurrent: () => true))!;
+      final otherCatalog = await cache
+          .catalogManager(other.profileId)
+          .putFile(coverUrl, coverBytes);
+      final otherCommunity = (await communityCache
+          .load(other.profileId, videoId, track, 180, isCurrent: () => true))!;
+      await owner
+          .saveSetting(SettingsValue(musicArtworkCacheLimitSettingName, '16'));
+      expect(await cache.read(owner), (
+        usedBytes: 2 * coverBytes.length,
+        limitMiB: 16,
+        hasTransfers: false,
+      ));
+      await app.switchProfile(owner.profileId);
+      await expectSelected(second);
+
+      final oldCatalog = expectLater(
+          manager.getSingleFile(pendingUrl), throwsA(isA<HttpException>()));
+      final oldCommunity = communityCache.load(
+          owner.profileId, pendingVideoId, pendingTrack, 180,
+          isCurrent: () => true);
+      await Future.wait([catalogStarted.future, communityStarted.future]);
+
+      // A conflicting filesystem entry makes the store fail at its real I/O boundary.
+      final obstruction =
+          failingStore == 'catalog' ? original.path : community.parent.path;
+      if (failingStore == 'catalog') {
+        await original.rename('$obstruction.saved');
+        final directory = await Directory(obstruction).create();
+        await File(p.join(directory.path, 'obstruction')).create();
+      } else {
+        await community.parent.rename('$obstruction.saved');
+        await File(obstruction).create();
+      }
+
+      await expectLater(app.deleteProfile(owner.profileId),
+          throwsA(isA<FileSystemException>()));
+      await oldCatalog;
+      if (failingStore == 'catalog') {
+        await Directory(obstruction).delete(recursive: true);
+        await File('$obstruction.saved').rename(obstruction);
+      } else {
+        await File(obstruction).delete();
+        await Directory('$obstruction.saved').rename(obstruction);
+      }
+      expect((await db.getProfiles()).map((p) => p.id),
+          unorderedEquals([owner.profileId, other.profileId]));
+      await expectSelected(first);
+      expect((await cache.read(owner)).limitMiB, 16);
+      expect(sessionService.revokedAccounts, isEmpty);
+      expect((await owner.getCurrentlySelectedServer()).authToken,
+          second.authToken);
+      expect(
+          (await mirror
+                  .forProfile(owner.profileId)
+                  .getCurrentlySelectedServer())
+              .authToken,
+          second.authToken);
+
+      await app.switchProfile(owner.profileId);
+      await expectSelected(second);
+      final freshManager = cache.catalogManager(owner.profileId);
+      final replacement = await freshManager.getSingleFile(pendingUrl);
+      expect(await replacement.readAsBytes(), coverBytes);
+      final freshCommunity = await communityCache.load(
+          owner.profileId, videoId, track, 180,
+          isCurrent: () => db.profileId == owner.profileId);
+      expect(await freshCommunity!.readAsBytes(), coverBytes);
+      expect((await cache.configure(owner, 32)).limitMiB, 32);
+
+      releaseResponses.complete();
+      expect(await oldCommunity, isNull);
+      expect((await freshManager.getFileFromCache(pendingUrl))?.file.path,
+          replacement.path);
+      expect(
+          await communityCache.read(owner.profileId, pendingVideoId,
+              isCurrent: () => true),
+          isNull);
+
+      await app.deleteProfile(owner.profileId);
+      expect((await db.getProfiles()).single.id, other.profileId);
+      expect(() => db.forProfile(profileId), throwsStateError);
+      expect(sessionService.revokedAccounts,
+          ['${second.profileId}/${second.accountId}']);
+      await expectLater(
+          mirror.forProfile(profileId).getCurrentlySelectedServer(),
+          throwsStateError);
+      expect(await replacement.exists(), isFalse);
+      expect(await original.exists(), isFalse);
+      expect(await community.parent.exists(), isFalse);
+      expect(await otherCatalog.readAsBytes(), coverBytes);
+      expect(await otherCommunity.readAsBytes(), coverBytes);
+      await expectSelected(first);
+    });
+  }
 
   test('queued switching cannot reopen a profile while it is being deleted',
       () async {

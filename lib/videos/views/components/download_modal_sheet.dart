@@ -54,7 +54,8 @@ class DownloadModalSheet extends StatelessWidget {
 
   static Future<PlaylistDownloadOptions?> showPlaylistOptions(
       BuildContext context,
-      {bool musicAudioOnly = false}) async {
+      {bool musicAudioOnly = false,
+      bool inPlayer = false}) async {
     final source = db;
     final profileId = db.profileId;
     final accounts = source.getServers();
@@ -62,7 +63,13 @@ class DownloadModalSheet extends StatelessWidget {
         isScrollControlled: true,
         showDragHandle: true,
         context: context,
-        builder: (_) => _PlaylistDownloadSheet(musicAudioOnly: musicAudioOnly));
+        builder: (_) {
+          final sheet = _PlaylistDownloadSheet(
+              musicAudioOnly: musicAudioOnly, inPlayer: inPlayer);
+          return inPlayer
+              ? PlayerModalBackHandler(priority: 5, child: sheet)
+              : sheet;
+        });
     if (options == null ||
         !identical(source, db) ||
         profileId != db.profileId) {
@@ -269,6 +276,7 @@ class _ContainerChoice extends StatelessWidget {
   final DownloadContainer? value;
   final bool audioOnly;
   final bool musicAudioOnly;
+  final bool inPlayer;
   final List<DownloadContainer> containers;
   final ValueChanged<DownloadContainer?> onChanged;
 
@@ -276,12 +284,17 @@ class _ContainerChoice extends StatelessWidget {
       {required this.value,
       required this.audioOnly,
       this.musicAudioOnly = false,
+      this.inPlayer = false,
       required this.containers,
       required this.onChanged});
 
   @override
   Widget build(BuildContext context) {
     final locals = AppLocalizations.of(context)!;
+    final automatic = Text(musicAudioOnly
+        ? locals.musicDownloadHighestQuality
+        : locals.downloadAutomatic);
+    final sheetRoute = ModalRoute.of(context);
     return _Choice<int>(
         label: musicAudioOnly
             ? locals.musicAudioQuality
@@ -293,9 +306,16 @@ class _ContainerChoice extends StatelessWidget {
         items: [
           DropdownMenuItem(
               value: -1,
-              child: Text(musicAudioOnly
-                  ? locals.musicDownloadHighestQuality
-                  : locals.downloadAutomatic)),
+              // DropdownButton renders this label on both the sheet and its
+              // popup route. Only the popup owns the first Back press.
+              child: inPlayer
+                  ? Builder(
+                      builder: (itemContext) =>
+                          ModalRoute.of(itemContext) == sheetRoute
+                              ? automatic
+                              : PlayerModalBackHandler(
+                                  priority: 6, child: automatic))
+                  : automatic),
           for (final container in containers)
             DropdownMenuItem(
                 value: container.index,
@@ -312,8 +332,10 @@ class _ContainerChoice extends StatelessWidget {
 
 class _PlaylistDownloadSheet extends StatefulWidget {
   final bool musicAudioOnly;
+  final bool inPlayer;
 
-  const _PlaylistDownloadSheet({required this.musicAudioOnly});
+  const _PlaylistDownloadSheet(
+      {required this.musicAudioOnly, required this.inPlayer});
 
   @override
   State<_PlaylistDownloadSheet> createState() => _PlaylistDownloadSheetState();
@@ -346,6 +368,7 @@ class _PlaylistDownloadSheetState extends State<_PlaylistDownloadSheet> {
           value: _container,
           audioOnly: _audioOnly,
           musicAudioOnly: widget.musicAudioOnly,
+          inPlayer: widget.inPlayer,
           containers: DownloadContainer.values,
           onChanged: (value) => setState(() => _container = value)),
       if (!_audioOnly)

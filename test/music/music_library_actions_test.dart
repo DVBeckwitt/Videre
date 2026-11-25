@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:collection';
 import 'dart:io';
 
+import 'package:back_button_interceptor/back_button_interceptor.dart';
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/downloads/states/download_manager.dart';
 import 'package:clipious/downloads/models/download_formats.dart';
@@ -71,14 +72,17 @@ class _PausedLibrary extends Service {
 class _Downloads implements DownloadManagerCubit {
   _Downloads(
       {this.state = const DownloadManagerState(),
+      this.destinationPicker,
       this.destinationReady = true});
 
+  final Future<bool>? destinationPicker;
   final bool destinationReady;
   int destinationRequests = 0;
 
   @override
   Future<bool> prepareMusicDownloads() async {
     destinationRequests++;
+    if (destinationPicker case final picker?) return picker;
     return destinationReady;
   }
 
@@ -123,6 +127,17 @@ class _PlaybackPlayer extends TestPlayerCubit {
 
   final calls = <({List<Video> videos, bool? audio, int? startIndex})>[];
   final offlineCalls = <List<DownloadedVideo>>[];
+  int queueReplacements = 0;
+  Zone? enqueueZone;
+
+  @override
+  int get playlistGeneration => super.playlistGeneration + queueReplacements;
+
+  @override
+  Future<bool> enqueueMusicSongs(List<Video> selection,
+          {required bool next, List<DownloadedVideo>? downloads}) =>
+      (enqueueZone ?? Zone.current).run(() =>
+          super.enqueueMusicSongs(selection, next: next, downloads: downloads));
 
   @override
   Future<void> playVideo(List<Video> videos,
@@ -130,6 +145,7 @@ class _PlaybackPlayer extends TestPlayerCubit {
       Duration? startAt,
       bool? playing,
       int? startIndex,
+      String? queueTitle,
       bool fromMusic = false}) async {
     calls.add((videos: List.of(videos), audio: audio, startIndex: startIndex));
   }
@@ -292,6 +308,21 @@ void main() {
     expect(downloads.calls, isEmpty);
   });
 
+  test('a single selected download rechecks its source after folder access',
+      () async {
+    final picker = Completer<bool>();
+    final downloads = _Downloads(destinationPicker: picker.future);
+    var current = true;
+    final result = MusicLibrarySession(app)
+        .download(downloads, [first], canStart: () => current);
+    expect(downloads.destinationRequests, 1);
+    expect(downloads.calls, isEmpty);
+    current = false;
+    picker.complete(true);
+    expect(await result, 0);
+    expect(downloads.calls, isEmpty);
+  });
+
   test('profile switch stops a collection save before touching another library',
       () async {
     final originalProfile = db.profileId;
@@ -361,6 +392,109 @@ void main() {
   Future<void> openSongMenu(WidgetTester tester) async {
     await tester.longPress(find.byKey(const ValueKey('song-long-press-row')));
     await tester.pumpAndSettle();
+  }
+
+  PlayerState playingPlaylist() => PlayerState.init(null).copyWith(
+        isAudio: true,
+        isHidden: false,
+        isPlaying: true,
+        currentlyPlaying: first,
+        videos: [first, second],
+        playQueue: ListQueue.of([second.videoId]),
+        position: const Duration(seconds: 37),
+      );
+
+  testWidgets('playlist selection Play next inserts every occurrence in order',
+      (tester) async {
+    var completed = 0;
+    final current = await showSongActions(tester,
+        initial: playingPlaylist(),
+        body: (_) => MusicPlaylistSelectionActions(
+            videos: const [second, first, second],
+            onPlay: (_) async => fail('Play next must retain the decoder'),
+            onCompleted: () => completed++,
+            isCurrent: () => true));
+    // Let the real queue checkpoint finish on the database's clock.
+    current.enqueueZone = await tester.runAsync(() async => Zone.current);
+    await tester.tap(find.byTooltip('Actions for selected songs'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Play next'));
+    await tester.pumpAndSettle();
+    // The enqueue result also returns from that zone to the popup callback.
+    await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+    await tester.pumpAndSettle();
+
+    final state = current.state;
+    expect(completed, 1);
+    expect(state.currentlyPlaying, same(first));
+    expect(state.position, const Duration(seconds: 37));
+    expect(state.isPlaying, isTrue);
+    expect(current.calls, isEmpty);
+    expect(state.videos.map((song) => song.videoId), [
+      first.videoId,
+      second.videoId,
+      first.videoId,
+      second.videoId,
+      second.videoId,
+    ]);
+    expect(state.videos.map(playbackQueueId).toSet(), hasLength(5));
+    expect(state.playQueue.toList(), [
+      ...state.videos.skip(1).take(3).map(playbackQueueId),
+      second.videoId,
+    ]);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  for (final change in [
+    'source selection',
+    'queue generation',
+    'player owner'
+  ]) {
+    testWidgets('open playlist Play next rejects a changed $change',
+        (tester) async {
+      var valid = true;
+      var completed = 0;
+      final replaced = ValueNotifier(false);
+      addTearDown(replaced.dispose);
+      late _PlaybackPlayer replacement;
+      final current = await showSongActions(tester, initial: playingPlaylist(),
+          body: (original) {
+        replacement = _PlaybackPlayer(playingPlaylist(), settings!);
+        addTearDown(replacement.close);
+        return ValueListenableBuilder<bool>(
+            valueListenable: replaced,
+            builder: (_, switched, child) => BlocProvider<PlayerCubit>.value(
+                value: switched ? replacement : original, child: child!),
+            child: MusicPlaylistSelectionActions(
+                videos: const [second],
+                onPlay: (_) async => fail('A stale menu cannot start playback'),
+                onCompleted: () => completed++,
+                isCurrent: () => valid));
+      });
+      await tester.tap(find.byTooltip('Actions for selected songs'));
+      await tester.pumpAndSettle();
+      switch (change) {
+        case 'source selection':
+          valid = false;
+        case 'queue generation':
+          // A new queue may contain exactly the same songs and position.
+          current.queueReplacements++;
+        case 'player owner':
+          replaced.value = true;
+      }
+      await tester.pump();
+      await tester.tap(find.text('Play next'));
+      await tester.pumpAndSettle();
+      expect(completed, 0);
+      for (final destination in [current, replacement]) {
+        expect(destination.state.videos, [first, second]);
+        expect(destination.state.playQueue.toList(), [second.videoId]);
+        expect(destination.state.currentlyPlaying, same(first));
+        expect(destination.state.position, const Duration(seconds: 37));
+        expect(destination.calls, isEmpty);
+      }
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
   }
 
   Future<_PlaybackPlayer> showDownloadedSong(
@@ -618,6 +752,89 @@ void main() {
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox.shrink());
     });
+  }
+
+  for (final next in [true, false]) {
+    for (final active in [false, true]) {
+      final label = next ? 'Play next' : 'Add to queue';
+      testWidgets(
+          'download $label resolves a removed or replaced file with ${active ? 'an offline queue' : 'an idle player'}',
+          (tester) async {
+        final saved = DownloadedVideo(
+            videoId: first.videoId,
+            title: 'Saved file',
+            profileId: db.profileId,
+            lengthSeconds: 60,
+            quality: 'best',
+            downloadComplete: true,
+            audioOnly: true,
+            musicMetadata: first.musicMetadata,
+            storageUri: 'content://music/original');
+        final replacement = saved.copyWith(storageUri: 'content://music/new');
+        final playing = saved.copyWith(videoId: second.videoId);
+        final tail = saved.copyWith(videoId: 'later-file');
+        await tester.runAsync(() => db.upsertDownload(saved));
+        final initial = PlayerState.init(null);
+        final current = await showSongActions(tester,
+            initial: active
+                ? initial.copyWith(
+                    isAudio: true,
+                    isHidden: false,
+                    isPlaying: true,
+                    offlineCurrentlyPlaying: playing,
+                    offlineVideos: [playing, tail],
+                    playQueue: ListQueue.of([tail.videoId]),
+                    position: const Duration(seconds: 21))
+                : initial,
+            body: (_) => Builder(builder: (context) {
+                  return TextButton(
+                      onPressed: () => MusicLibraryActions.showSongMenu(
+                          context, first,
+                          downloads: [saved],
+                          resolveDownload: () =>
+                              db.getDownloadByVideoId(first.videoId)),
+                      child: const Text('Song actions'));
+                }));
+        if (active) {
+          current.enqueueZone = await tester.runAsync(() async => Zone.current);
+        }
+        Future<void> open() async {
+          await tester.tap(find.text('Song actions'));
+          await tester.pumpAndSettle();
+        }
+
+        await open();
+        await tester.runAsync(() => db.deleteDownload(saved));
+        await tester.tap(find.text(label));
+        await tester.pumpAndSettle();
+        expect(current.offlineCalls, isEmpty);
+        expect(current.state.offlineVideos, active ? [playing, tail] : isEmpty);
+
+        await tester.runAsync(() => db.upsertDownload(saved));
+        await open();
+        await tester.runAsync(() => db.upsertDownload(replacement));
+        await tester.tap(find.text(label));
+        await tester.pumpAndSettle();
+        expect(current.calls, isEmpty);
+        if (active) {
+          expect(current.offlineCalls, isEmpty);
+          final offline = current.state.offlineVideos;
+          expect(
+              offline.map((v) => v.videoId),
+              next
+                  ? [playing.videoId, replacement.videoId, tail.videoId]
+                  : [playing.videoId, tail.videoId, replacement.videoId]);
+          expect(offline[next ? 1 : 2].storageUri, replacement.storageUri);
+          expect(current.state.offlineCurrentlyPlaying, same(playing));
+          expect(current.state.position, const Duration(seconds: 21));
+        } else {
+          final selected = current.offlineCalls.single.single;
+          expect(selected.videoId, replacement.videoId);
+          expect(selected.storageUri, replacement.storageUri);
+        }
+        await tester.pumpWidget(const SizedBox.shrink());
+      });
+    }
   }
 
   for (final dismissal in ['Back', 'outside']) {
@@ -1044,6 +1261,60 @@ void main() {
     expect(service.getLocalPlaylists(), hasLength(1));
     expect(service.getLocalPlaylists().first.videos, isEmpty);
   });
+
+  for (final action in ['Save to playlist', 'Download audio']) {
+    testWidgets('Android Back cancels $action before the player queue',
+        (tester) async {
+      final downloads = _Downloads();
+      await show(tester,
+          body: BlocProvider<DownloadManagerCubit>.value(
+            value: downloads,
+            child: const MusicLibraryActions(
+                videos: [first, second], compact: false, inPlayer: true),
+          ));
+      var queueBacks = 0;
+      bool queueBack(bool stopped, RouteInfo info) {
+        queueBacks++;
+        return true;
+      }
+
+      BackButtonInterceptor.add(queueBack,
+          zIndex: 4, ifNotYetIntercepted: true);
+      addTearDown(() => BackButtonInterceptor.remove(queueBack));
+      await tester.tap(find.text(action));
+      await tester.pumpAndSettle();
+      final options = action == 'Save to playlist'
+          ? find.text('Watch Later')
+          : find.text('Highest quality available');
+      expect(options.hitTestable(), findsOneWidget);
+      Future<void> back() async {
+        await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+          SystemChannels.navigation.name,
+          SystemChannels.navigation.codec
+              .encodeMethodCall(const MethodCall('popRoute')),
+          null,
+        );
+        await tester.pumpAndSettle();
+      }
+
+      if (action == 'Download audio') {
+        await tester.tap(options.hitTestable());
+        await tester.pumpAndSettle();
+        final format = find.text('M4A (AAC)').hitTestable();
+        expect(format, findsOneWidget);
+        await back();
+        expect(format, findsNothing);
+        expect(options.hitTestable(), findsOneWidget);
+        expect(queueBacks, 0);
+      }
+      await back();
+      expect(options, findsNothing);
+      expect(find.text(action).hitTestable(), findsOneWidget);
+      expect(queueBacks, 0);
+      expect(service.getLocalPlaylists().first.videos, isEmpty);
+      expect(downloads.calls, isEmpty);
+    });
+  }
 
   testWidgets(
       'TV hides audio downloads and does not require a download manager',

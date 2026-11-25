@@ -1,3 +1,5 @@
+// ignore_for_file: invalid_annotation_target
+
 import 'dart:convert';
 import 'dart:io';
 
@@ -18,7 +20,34 @@ part 'downloaded_video.freezed.dart';
 
 part 'downloaded_video.g.dart';
 
-const String _downloadFolder = 'downloads';
+/// The default profile keeps the original, unscoped download directory.
+List<String> privateDownloadFolderSegments(String profileId) {
+  if (!DownloadedVideo.isSafeFileId(profileId)) {
+    throw const FormatException('Invalid download profile ID');
+  }
+  return [
+    'downloads',
+    if (profileId != 'default') ...['profiles', profileId]
+  ];
+}
+
+/// Relative to the historical `<videoId>.webm` staging prefix.
+const downloadStagingSuffixes = [
+  '.audio.part',
+  '.audio.part.identity',
+  '.video.part',
+  '.video.part.identity',
+  '.caption.vtt',
+  '.mux.webm',
+  '.mux.mp4',
+  '.mux.m4a',
+  '.mux.mp3',
+  '.mux.ogg',
+  '.export-input.part',
+  '.export.mp3',
+  '.export.ogg',
+  '.export.m4a',
+];
 
 class _PlaybackProvenanceConverter
     implements JsonConverter<DownloadPlaybackProvenance?, Object?> {
@@ -97,6 +126,14 @@ sealed class DownloadedVideo with _$DownloadedVideo implements IdedVideo {
   @Implements<IdedVideo>()
   const factory DownloadedVideo(
       {required String videoId,
+      // Identifies a playback occurrence only. Database records and file paths
+      // always use the original videoId.
+      @JsonKey(includeFromJson: false, includeToJson: false)
+      String? queueEntryId,
+      // An explicit collection action pins this occurrence to a rendition.
+      // Only the playback session stores this fingerprint.
+      @JsonKey(includeFromJson: false, includeToJson: false)
+      String? explicitMusicDownload,
       required String title,
       @Default('default') String profileId,
       String? accountId,
@@ -242,15 +279,9 @@ sealed class DownloadedVideo with _$DownloadedVideo implements IdedVideo {
   Future<String> get subtitlePath => _privatePath('vtt');
 
   Future<Directory> _getDownloadFolder() async {
-    Directory dir = await getApplicationDocumentsDirectory();
-    if (!isSafeFileId(profileId)) {
-      throw const FormatException('Invalid download profile ID');
-    }
-    // The original person's files retain their historical locations. Other
-    // people get private staging and media paths even for the same video ID.
-    dir = Directory(profileId == 'default'
-        ? p.join(dir.path, _downloadFolder)
-        : p.join(dir.path, _downloadFolder, 'profiles', profileId));
+    final documents = await getApplicationDocumentsDirectory();
+    final dir = Directory(p.joinAll(
+        [documents.path, ...privateDownloadFolderSegments(profileId)]));
     if (!(await dir.exists())) {
       await dir.create(recursive: true);
     }

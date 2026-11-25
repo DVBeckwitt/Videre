@@ -19,6 +19,7 @@ import java.util.concurrent.atomic.AtomicInteger
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertThrows
 import org.junit.Before
 import org.junit.Test
@@ -129,6 +130,40 @@ class DownloadedRenditionDeviceTest {
         assertEquals(1, rendition.verificationCount)
     }
 
+    @Test fun storageIdentityDistinguishesByteIdenticalCopiesAndRejectsMissingOrWrongOwner() {
+        val uri = Uri.fromFile(media).toString()
+        val before = DownloadDocumentIntegrity.probe(context, uri, null, profile, content)
+        assertEquals(before, DownloadDocumentIntegrity.probe(context, uri, null, profile, content))
+        assertEquals(bytes.size.toLong(), before.byteLength)
+        assertThrows(LocalDownloadUnavailable::class.java) {
+            DownloadDocumentIntegrity.probe(context, uri, null, "other-profile", content)
+        }
+        val copyId = "another-media"
+        val copy = File(owner, "$copyId.webm").also { it.writeBytes(bytes) }
+        val separate = DownloadDocumentIntegrity.probe(context, Uri.fromFile(copy).toString(), null, profile, copyId)
+        assertNotEquals(before.identity, separate.identity)
+        check(media.delete())
+        assertThrows(LocalDownloadUnavailable::class.java) {
+            DownloadDocumentIntegrity.probe(context, uri, null, profile, content)
+        }
+        check(copy.renameTo(media))
+        val replacement = DownloadDocumentIntegrity.probe(context, uri, null, profile, content)
+        assertEquals(before.byteLength, replacement.byteLength)
+        assertNotEquals(before.identity, replacement.identity)
+    }
+
+    @Test fun playbackAdmissionRejectsACompletedFileChangedBeforeTheMetadataProbe() {
+        val uri = Uri.fromFile(media).toString()
+        assertEquals(bytes.size.toLong(),
+            DownloadDocumentIntegrity.probe(context, uri, null, profile, content, digest).byteLength)
+        media.writeBytes(bytes.reversedArray())
+        assertEquals(bytes.size.toLong(),
+            DownloadDocumentIntegrity.probe(context, uri, null, profile, content).byteLength)
+        assertThrows(LocalDownloadUnavailable::class.java) {
+            DownloadDocumentIntegrity.probe(context, uri, null, profile, content, digest)
+        }
+    }
+
     @Test fun wrongDigestOrOwnerRejectsWithoutNetworkFallbackOrByteAliasing() {
         val uri = Uri.fromFile(media).toString()
         val upstream = ForbiddenUpstream()
@@ -202,6 +237,10 @@ class DownloadedRenditionDeviceTest {
         val proof = DownloadDocumentIntegrity.inspect(context, uri.toString(), tree.toString())
         assertEquals(bytes.size.toLong(), proof["byteLength"])
         assertEquals(digest, proof["sha256"])
+        val stamp = DownloadDocumentIntegrity.probe(context, uri.toString(), tree.toString(), profile, content)
+        assertEquals(bytes.size.toLong(), stamp.byteLength)
+        val alias = DownloadDocumentIntegrity.probeIndexedDocument(context, uri, android.os.CancellationSignal())
+        assertEquals(stamp, alias)
         val upstream = ForbiddenUpstream()
         val factory = PlaybackMediaCache.factory(context, upstream, uri.toString(), identity() +
             ("download" to (descriptor(uri.toString(), folder = tree.toString()) - "remoteUri")))
@@ -210,6 +249,9 @@ class DownloadedRenditionDeviceTest {
         active.open(DataSpec.Builder().setUri(uri).build())
         try {
             context.contentResolver.releasePersistableUriPermission(tree, flags)
+            assertThrows(LocalDownloadUnavailable::class.java) {
+                DownloadDocumentIntegrity.probe(context, uri.toString(), tree.toString(), profile, content)
+            }
             assertThrows(LocalDownloadUnavailable::class.java) { active.read(ByteArray(32), 0, 32) }
             assertThrows(LocalDownloadUnavailable::class.java) { read(factory, uri.toString()) }
             assertEquals(0, upstream.opens.get())

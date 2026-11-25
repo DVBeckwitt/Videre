@@ -62,7 +62,8 @@ class PlayerControls extends StatelessWidget {
       {required List<String> tracks,
       required int selected,
       required Function(int index) onSelected,
-      String? help}) async {
+      String? help,
+      bool announceSelection = false}) async {
     final widgets = <Widget>[
       if (help != null)
         Padding(
@@ -73,6 +74,7 @@ class PlayerControls extends StatelessWidget {
 
     for (int i = 0; i < tracks.length; i++) {
       widgets.add(ListTile(
+          selected: announceSelection && selected == i,
           onTap: () {
             Navigator.of(context).pop();
             onSelected(i);
@@ -115,12 +117,33 @@ class PlayerControls extends StatelessWidget {
     final subtitles = List<String>.of(pc.getSubtitles());
     final queueId = player.state.currentQueueId;
     final generation = player.backendPlaybackGeneration;
+    final modeGeneration = player.playbackPositionGeneration;
+    final source = player.state.currentlyPlaying;
+    final profile = db.profileId;
+    final watchAudioPlayer = pc is AudioPlayerCubit &&
+            player.state.isAudio &&
+            source != null &&
+            source.musicMetadata == null
+        ? pc
+        : null;
+    final watchAudioTracks =
+        List.of(watchAudioPlayer?.watchAudioTracks ?? const []);
     var preparingQuality = false;
     bool current() =>
         !pc.isClosed &&
         !player.isClosed &&
         player.state.currentQueueId == queueId &&
         player.backendPlaybackGeneration == generation;
+    bool watchAudioCurrent() =>
+        context.mounted &&
+        current() &&
+        modeGeneration == player.playbackPositionGeneration &&
+        db.profileId == profile &&
+        player.state.isAudio &&
+        !player.state.isClosing &&
+        !player.state.isHidden &&
+        player.state.currentlyPlaying?.videoId == source?.videoId &&
+        player.state.currentlyPlaying?.musicMetadata == null;
     void qualityFailure() {
       if (context.mounted && current()) {
         ScaffoldMessenger.of(context)
@@ -237,7 +260,59 @@ class PlayerControls extends StatelessWidget {
                   leading: const Icon(Icons.hd),
                   title: Text(locals.quality),
                 ),
-              if (audioTracks.isNotEmpty)
+              if (watchAudioPlayer != null && watchAudioTracks.length > 1)
+                ListTile(
+                  key: const ValueKey('player-audio-track-open'),
+                  leading: const Icon(Icons.music_note),
+                  title: Text(locals.playbackAudioTrack),
+                  onTap: () {
+                    Navigator.of(ctx).pop();
+                    if (!watchAudioCurrent() ||
+                        !listEquals(watchAudioTracks,
+                            watchAudioPlayer.watchAudioTracks)) {
+                      return;
+                    }
+                    final labels = [
+                      for (final track in watchAudioTracks)
+                        track.label.trim().isEmpty
+                            ? locals.audio
+                            : track.label.trim(),
+                    ];
+                    showPlayerTrackSelection(
+                      context,
+                      controls,
+                      tracks: [
+                        for (final (index, label) in labels.indexed)
+                          labels.indexOf(label) == labels.lastIndexOf(label)
+                              ? label
+                              : '$label (${watchAudioTracks[index].id})',
+                      ],
+                      selected: watchAudioTracks.indexWhere((track) =>
+                          track.id ==
+                          watchAudioPlayer.selectedWatchAudioTrackId),
+                      announceSelection: true,
+                      onSelected: (index) async {
+                        final track = watchAudioTracks[index];
+                        if (!watchAudioCurrent() ||
+                            !watchAudioPlayer.watchAudioTracks
+                                .contains(track)) {
+                          return;
+                        }
+                        final changed = await watchAudioPlayer
+                            .selectWatchAudioTrack(track.id);
+                        if (!changed &&
+                            context.mounted &&
+                            watchAudioCurrent()) {
+                          ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+                              SnackBar(
+                                  content: Text(
+                                      locals.playbackAudioTrackSwitchFailed)));
+                        }
+                      },
+                    );
+                  },
+                ),
+              if (pc is! AudioPlayerCubit && audioTracks.isNotEmpty)
                 ListTile(
                   onTap: () {
                     Navigator.of(context).pop();
@@ -352,6 +427,9 @@ class PlayerControls extends StatelessWidget {
                 context.select((PlayerCubit cubit) => cubit.state.isPlaying);
             Video? currentlyPlaying = context
                 .select((PlayerCubit cubit) => cubit.state.currentlyPlaying);
+            final watchAudio = mediaPlayerCubit is AudioPlayerCubit &&
+                currentlyPlaying != null &&
+                currentlyPlaying.musicMetadata == null;
             final flowWatch = !isTv &&
                 currentlyPlaying != null &&
                 !context.select((PlayerCubit cubit) => cubit.state.isAudio) &&
@@ -736,6 +814,11 @@ class PlayerControls extends StatelessWidget {
                                                   icon: const Icon(Icons
                                                       .picture_in_picture)),
                                               IconButton(
+                                                  tooltip: watchAudio
+                                                      ? MaterialLocalizations
+                                                              .of(context)
+                                                          .showMenuTooltip
+                                                      : null,
                                                   onPressed: () =>
                                                       showOptionMenu(
                                                           context, playerState),

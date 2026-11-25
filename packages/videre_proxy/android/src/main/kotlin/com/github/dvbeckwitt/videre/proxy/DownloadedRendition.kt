@@ -3,6 +3,8 @@ package com.github.dvbeckwitt.videre.proxy
 import android.content.Context
 import android.net.Uri
 import android.os.Build
+import android.os.CancellationSignal
+import android.os.OperationCanceledException
 import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
 import android.system.Os
@@ -15,6 +17,7 @@ import androidx.media3.datasource.DataSpec
 import java.io.File
 import java.io.FileInputStream
 import java.io.IOException
+import java.math.BigInteger
 import java.nio.ByteBuffer
 import java.security.MessageDigest
 
@@ -69,7 +72,8 @@ internal class DownloadedRendition(
             if (dataSpec.uri.toString() != descriptor.uri || dataSpec.httpMethod != DataSpec.HTTP_METHOD_GET ||
                 dataSpec.position < 0 || dataSpec.position > descriptor.byteLength) throw LocalDownloadUnavailable()
             transferInitializing(dataSpec)
-            val handle = openDownload(context, descriptor, identity.profileId, identity.contentId)
+            val handle = openDownload(context, descriptor.uri, descriptor.folderUri,
+                identity.profileId, identity.contentId)
             try {
                 synchronized(this@DownloadedRendition) {
                     val initial = handle.stamp()
@@ -136,7 +140,17 @@ private data class DownloadFileStamp(
     val changedNanos: Long,
     val offset: Long,
     val length: Long,
-)
+) {
+    fun identity(): LocalStorageFileIdentity {
+        if (inode == 0L || length <= 0L) throw LocalDownloadUnavailable()
+        val fields = ByteBuffer.allocate(9 * Long.SIZE_BYTES)
+            .putLong(device).putLong(inode).putLong(size)
+            .putLong(modifiedSeconds).putLong(modifiedNanos)
+            .putLong(changedSeconds).putLong(changedNanos).putLong(offset).putLong(length)
+        val digest = MessageDigest.getInstance("SHA-256").digest(fields.array())
+        return LocalStorageFileIdentity(BigInteger(1, digest).toString(16).padStart(64, '0'), length)
+    }
+}
 
 private fun stamp(stat: StructStat, offset: Long, length: Long): DownloadFileStamp {
     if (!OsConstants.S_ISREG(stat.st_mode) || stat.st_nlink <= 0) throw LocalDownloadUnavailable()
@@ -161,6 +175,11 @@ private class OpenDownload(
         if (stamp() != initial) throw LocalDownloadUnavailable()
     }
 
+    fun identity(): LocalStorageFileIdentity {
+        checkCurrent()
+        return initial.identity()
+    }
+
     fun read(bytes: ByteArray, start: Int, count: Int, position: Long): Int = localStorage {
         input.channel.read(ByteBuffer.wrap(bytes, start, count), offset + position)
     }
@@ -172,17 +191,19 @@ private inline fun <T> localStorage(action: () -> T): T = try {
     action()
 } catch (error: LocalDownloadUnavailable) {
     throw error
+} catch (cancelled: OperationCanceledException) {
+    throw cancelled
 } catch (_: Exception) {
     // File/provider exceptions can contain local paths and account identifiers.
     throw LocalDownloadUnavailable()
 }
 
-private fun openDownload(context: Context, descriptor: DownloadedRenditionDescriptor,
+private fun openDownload(context: Context, value: String, folderUri: String?,
                          profileId: String, contentId: String): OpenDownload = localStorage {
-    val uri = Uri.parse(descriptor.uri)
+    val uri = Uri.parse(value)
     when (uri.scheme) {
         "file" -> {
-            if (descriptor.folderUri != null || !Regex("[A-Za-z0-9_-]{1,128}").matches(profileId) ||
+            if (folderUri != null || !Regex("[A-Za-z0-9_-]{1,128}").matches(profileId) ||
                 !Regex("[A-Za-z0-9_-]{1,128}").matches(contentId) || !uri.authority.isNullOrEmpty() ||
                 uri.query != null || uri.fragment != null) throw LocalDownloadUnavailable()
             val downloads = File(File(context.applicationInfo.dataDir).canonicalFile, "app_flutter/downloads")
@@ -202,7 +223,7 @@ private fun openDownload(context: Context, descriptor: DownloadedRenditionDescri
                 }
             } catch (error: Exception) { input.close(); throw error }
         }
-        "content" -> openDocument(context, uri, descriptor.folderUri ?: throw LocalDownloadUnavailable())
+        "content" -> openDocument(context, uri, folderUri ?: throw LocalDownloadUnavailable())
         else -> throw LocalDownloadUnavailable()
     }
 }
@@ -223,15 +244,22 @@ private fun requireDocumentGrant(context: Context, uri: Uri, folderValue: String
         throw LocalDownloadUnavailable()
 }
 
-private fun openDocument(context: Context, uri: Uri, folder: String): OpenDownload = localStorage {
-    requireDocumentGrant(context, uri, folder)
-    val asset = context.contentResolver.openAssetFileDescriptor(uri, "r") ?: throw LocalDownloadUnavailable()
+private fun openDocument(
+    context: Context, uri: Uri, folder: String, signal: CancellationSignal? = null,
+): OpenDownload = openDocument(context, uri, signal) { requireDocumentGrant(context, uri, folder) }
+
+private fun openDocument(
+    context: Context, uri: Uri, signal: CancellationSignal?, checkLocation: () -> Unit,
+): OpenDownload = localStorage {
+    checkLocation()
+    val asset = context.contentResolver.openAssetFileDescriptor(uri, "r", signal)
+        ?: throw LocalDownloadUnavailable()
     val input = try { asset.createInputStream() } catch (error: Exception) { asset.close(); throw error }
     try {
         val length = if (asset.declaredLength >= 0) asset.declaredLength else Os.fstat(input.fd).st_size - asset.startOffset
         if (asset.startOffset < 0 || length <= 0 || asset.startOffset > Long.MAX_VALUE - length)
             throw LocalDownloadUnavailable()
-        OpenDownload(input, asset.startOffset, length) { requireDocumentGrant(context, uri, folder) }
+        OpenDownload(input, asset.startOffset, length, checkLocation)
     } catch (error: Exception) { input.close(); throw error }
 }
 
@@ -251,8 +279,38 @@ private fun hashDownload(handle: OpenDownload, admit: () -> Unit): String {
     return digest.digest().joinToString("") { "%02x".format(it) }
 }
 
+/** Opaque handle identity for local comparisons. Contains no file paths or account information. */
+data class LocalStorageFileIdentity(val identity: String, val byteLength: Long)
+
 /** Completion proof for an owned document or shared music file. */
 object DownloadDocumentIntegrity {
+    fun probe(
+        context: Context, uri: String, folderUri: String?, profileId: String, contentId: String,
+        expectedSha256: String? = null,
+    ): LocalStorageFileIdentity {
+        val handle = openDownload(context, uri, folderUri, profileId, contentId)
+        return try {
+            val identity = handle.identity()
+            if (expectedSha256 != null && hashDownload(handle) {} != expectedSha256) throw LocalDownloadUnavailable()
+            identity
+        } finally {
+            handle.close()
+        }
+    }
+
+    fun probeDocument(
+        context: Context, uri: Uri, folderUri: String, signal: CancellationSignal?,
+    ): LocalStorageFileIdentity {
+        val handle = openDocument(context, uri, folderUri, signal)
+        return try { handle.identity() } finally { handle.close() }
+    }
+
+    /** The caller must have verified this URI belongs to the approved current device scan. */
+    fun probeIndexedDocument(context: Context, uri: Uri, signal: CancellationSignal): LocalStorageFileIdentity {
+        val handle = openDocument(context, uri, signal) {}
+        return try { handle.identity() } finally { handle.close() }
+    }
+
     @JvmStatic
     fun inspect(context: Context, uri: String, folderUri: String): Map<String, Any> {
         val handle = openDocument(context, Uri.parse(uri), folderUri)

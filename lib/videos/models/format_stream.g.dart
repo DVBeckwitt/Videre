@@ -16,6 +16,7 @@ FormatStream _$FormatStreamFromJson(Map<String, dynamic> json) => FormatStream(
       json['qualityLabel'] as String?,
       json['resolution'] as String?,
       json['size'] as String?,
+      audioTrack: AudioTrack.fromJson(json['audioTrack']),
     );
 
 Map<String, dynamic> _$FormatStreamToJson(FormatStream instance) =>
@@ -29,4 +30,5 @@ Map<String, dynamic> _$FormatStreamToJson(FormatStream instance) =>
       'qualityLabel': instance.qualityLabel,
       'resolution': instance.resolution,
       'size': instance.size,
+      'audioTrack': instance.audioTrack?.toJson(),
     };

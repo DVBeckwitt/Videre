@@ -25,6 +25,7 @@ void main() {
       title: 'Saved song',
       subtitle: 'Artist',
       album: 'Album',
+      albumPlaylistId: 'OLAK5uy_release1',
       durationSeconds: 185);
 
   setUp(() async {
@@ -58,7 +59,66 @@ void main() {
             videoCount: 0)),
         isTrue);
     expect(saved.entries.single.toVideo().musicMetadata?.album, 'Album');
+    expect(saved.entries.single.toVideo().musicMetadata?.albumPlaylistId,
+        'OLAK5uy_release1');
     await store.close();
+  });
+
+  test('release metadata survives hydration and ignores unsafe or legacy IDs',
+      () {
+    const labels = MusicMetadata(
+        title: 'abcdefghijk',
+        artist: '',
+        album: 'Record',
+        albumPlaylistId: 'OLAK5uy_release1');
+    const song = Video(videoId: 'abcdefghijk', musicMetadata: labels);
+    const detail =
+        Video(videoId: 'abcdefghijk', title: 'Song', author: 'Artist');
+    final hydrated = detail.preservingMusicMetadataFrom(song);
+    final restored = Video.fromJson(
+        jsonDecode(jsonEncode(hydrated)) as Map<String, dynamic>);
+    expect(restored.musicMetadata!.title, 'Song');
+    expect(restored.musicMetadata!.withThumbnails([]).albumPlaylistId,
+        'OLAK5uy_release1');
+    final bookmark = MusicLibraryEntry.song(restored);
+    const fresh =
+        MusicMetadata(title: 'Fresh song title', artist: 'Fresh artist');
+    final withAlbum = fresh.withAlbumFrom(bookmark.toVideo().musicMetadata);
+    expect(withAlbum.title, fresh.title);
+    expect(withAlbum.artist, fresh.artist);
+    expect(withAlbum.album, 'Record');
+    expect(withAlbum.albumPlaylistId, 'OLAK5uy_release1');
+    expect(identical(withAlbum.withAlbumFrom(fresh), withAlbum), isTrue);
+    for (final invalid in [
+      null,
+      7,
+      'MPREalbum',
+      'RDmix',
+      'PLplaylist',
+      'OLAK5uy_',
+      'OLAK5uy_a\n',
+      'https://example.org/OLAK5uy_release',
+      'OLAK5uy_a/b',
+      'OLAK5uy_'.padRight(129, 'a')
+    ]) {
+      final decoded = MusicMetadata.fromJson(
+          {...labels.toJson(), 'albumPlaylistId': invalid});
+      expect(decoded.album, 'Record');
+      expect(decoded.albumPlaylistId, isNull);
+      expect(decoded.toJson().containsKey('albumPlaylistId'), isFalse);
+      final entry = MusicLibraryEntry.tryParse(
+          {...bookmark.toJson(), 'albumPlaylistId': invalid})!;
+      expect(entry.toVideo().musicMetadata!.albumPlaylistId, isNull);
+    }
+    expect(
+        MusicMetadata.fromJson({'title': 'Old', 'artist': ''}).albumPlaylistId,
+        isNull);
+    expect(
+        const MusicTrack(
+                videoId: 'abcdefghijk', title: 'Song', albumId: 'MPREalbum')
+            .musicMetadata
+            .albumPlaylistId,
+        isNull);
   });
 
   test('same-owner concurrent saves keep every bookmark and deduplicate IDs',

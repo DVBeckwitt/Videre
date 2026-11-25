@@ -86,6 +86,7 @@ class _Catalog extends MusicCatalogService {
   final genreFailures = <void Function(InvidiousServiceError)?>[];
   final genreResponses = <Completer<List<MusicTrack>>>[];
   final chartRequests = <String>[];
+  Completer<List<MusicTrack>>? chartResponse;
   List<MusicTrack> chartTracks = const [];
   Object? chartFailure;
   final artistReleaseRequests = <String>[];
@@ -96,6 +97,7 @@ class _Catalog extends MusicCatalogService {
       {bool Function()? isCurrent}) async {
     chartRequests.add(playlistId);
     if (chartFailure case final error?) throw error;
+    if (chartResponse case final pending?) return pending.future;
     return chartTracks;
   }
 
@@ -174,6 +176,7 @@ class _Player extends Cubit<PlayerState> implements PlayerCubit {
       Duration? startAt,
       bool? playing,
       int? startIndex,
+      String? queueTitle,
       bool fromMusic = false}) async {
     plays.add((
       ids: videos.map((video) => video.videoId).toList(),
@@ -875,49 +878,96 @@ void main() {
   ];
   final mix = find.byKey(const ValueKey('music-daily-mix-0'));
 
-  testWidgets('daily mix opens immediately with its prepared ranked songs',
-      (tester) async {
-    final requests = stubMixRanking();
-    await saveLearnedTracks(tester);
-    await show(tester);
-    expect(catalog.relatedSeeds, [
-      ['learnmusic1', 'learnmusic2', 'learnmusic3']
-    ]);
-    expect(mix, findsNothing);
-    final previousRanks =
-        requests.where((surface) => surface == 'quick_picks').length;
-    await tester.runAsync(() => db.recordPlaybackHistory(
-        PlaybackHistoryOrigin.music,
-        HistoryVideoCache('learnmusic1', 'Learned track 1', 'Artist 1', '',
-            musicMetadata: const MusicMetadata(
-                title: 'Learned track 1', artist: 'Artist 1'))));
-    playbackHistoryRevision.value++;
-    await tester.pumpAndSettle();
-    expect(requests.where((surface) => surface == 'quick_picks').length,
-        greaterThan(previousRanks));
-    catalog.relatedResponses.single.complete(mixTracks);
-    await tester.pumpAndSettle();
-    expect(mix, findsOneWidget);
-    expect(requests.where((surface) => surface == 'discover'), hasLength(1));
-    await tester.runAsync(() => db.recordPlaybackHistory(
-        PlaybackHistoryOrigin.music,
-        HistoryVideoCache('learnmusic2', 'Learned track 2', 'Artist 2', '',
-            musicMetadata: const MusicMetadata(
-                title: 'Learned track 2', artist: 'Artist 2'))));
-    playbackHistoryRevision.value++;
-    await tester.pumpAndSettle();
-    await tester.ensureVisible(mix);
-    await tester.tap(mix);
-    await tester.pumpAndSettle();
-    expect(find.text('Artist Mix'), findsOneWidget);
-    expect(find.byKey(const ValueKey('music-collection-load')), findsNothing);
-    expect(find.text('Related song 4'), findsOneWidget);
-    expect(catalog.relatedResponses, hasLength(1));
-    expect(requests.where((surface) => surface == 'discover'), hasLength(1));
-    await tester.tap(find.byKey(const ValueKey('music-collection-play')));
-    expect(player.plays.single.ids,
-        ['related0004', 'related0003', 'related0002', 'related0001']);
-  });
+  for (final tablet in [false, true]) {
+    testWidgets(
+        'daily mix opens immediately with its prepared ranked songs on ${tablet ? 'tablet' : 'phone'}',
+        (tester) async {
+      tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize =
+          tablet ? const Size(960, 640) : const Size(390, 844);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      addTearDown(tester.view.resetPhysicalSize);
+      final readyTracks = tablet
+          ? [
+              for (var index = 1; index <= 14; index++)
+                MusicTrack(
+                    videoId: 'related${index.toString().padLeft(4, '0')}',
+                    title: 'Related song $index'),
+            ]
+          : mixTracks;
+      final requests = stubMixRanking();
+      await saveLearnedTracks(tester);
+      await show(tester);
+      expect(catalog.relatedSeeds, [
+        ['learnmusic1', 'learnmusic2', 'learnmusic3']
+      ]);
+      expect(mix, findsNothing);
+      final previousRanks =
+          requests.where((surface) => surface == 'quick_picks').length;
+      await tester.runAsync(() => db.recordPlaybackHistory(
+          PlaybackHistoryOrigin.music,
+          HistoryVideoCache('learnmusic1', 'Learned track 1', 'Artist 1', '',
+              musicMetadata: const MusicMetadata(
+                  title: 'Learned track 1', artist: 'Artist 1'))));
+      playbackHistoryRevision.value++;
+      await tester.pumpAndSettle();
+      expect(requests.where((surface) => surface == 'quick_picks').length,
+          greaterThan(previousRanks));
+      catalog.relatedResponses.single.complete(readyTracks);
+      await tester.pumpAndSettle();
+      expect(mix, findsOneWidget);
+      expect(requests.where((surface) => surface == 'discover'), hasLength(1));
+      await tester.runAsync(() => db.recordPlaybackHistory(
+          PlaybackHistoryOrigin.music,
+          HistoryVideoCache('learnmusic2', 'Learned track 2', 'Artist 2', '',
+              musicMetadata: const MusicMetadata(
+                  title: 'Learned track 2', artist: 'Artist 2'))));
+      playbackHistoryRevision.value++;
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(mix);
+      await tester.tap(mix);
+      await tester.pumpAndSettle();
+      expect(find.text('Artist Mix'), findsOneWidget);
+      expect(find.byKey(const ValueKey('music-collection-load')), findsNothing);
+      final song = find.text(readyTracks.last.title);
+      final play = find.byKey(const ValueKey('music-collection-play'));
+      final details =
+          find.byKey(const ValueKey('music-collection-details-pane'));
+      expect(song, findsOneWidget);
+      if (tablet) {
+        expect(details, findsOneWidget);
+        expect(tester.getCenter(play).dx, lessThan(tester.getCenter(song).dx));
+      } else {
+        expect(details, findsNothing);
+        expect(tester.getCenter(play).dy, lessThan(tester.getCenter(song).dy));
+      }
+      expect(catalog.relatedResponses, hasLength(1));
+      expect(requests.where((surface) => surface == 'discover'), hasLength(1));
+      await tester.tap(play);
+      expect(player.plays.single.ids,
+          readyTracks.reversed.map((track) => track.videoId));
+      if (tablet) {
+        final scroller = find.descendant(
+            of: find.byKey(const ValueKey('music-collection-tracks-pane')),
+            matching: find.byType(Scrollable));
+        final state = tester.state<ScrollableState>(scroller);
+        await tester.drag(scroller, const Offset(0, -180));
+        await tester.pumpAndSettle();
+        final offset = state.position.pixels;
+        expect(offset, greaterThan(0));
+
+        tester.view.physicalSize = const Size(390, 844);
+        await tester.pumpAndSettle();
+        expect(details, findsNothing);
+        expect(tester.state<ScrollableState>(scroller), same(state));
+        expect(state.position.pixels, closeTo(offset, 1));
+      }
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(play, findsNothing);
+      expect(mix, findsOneWidget);
+    });
+  }
 
   for (final fails in [true, false]) {
     testWidgets(
@@ -1233,6 +1283,188 @@ void main() {
   Finder artistChip(String artist) => find.widgetWithText(ChoiceChip, artist);
   const artistSong =
       MusicTrack(videoId: 'artist00001', title: 'Prepared artist recording');
+
+  final homeScroll = find.byKey(const PageStorageKey('music-home'));
+
+  ScrollPosition homePosition(WidgetTester tester) =>
+      tester.widget<SingleChildScrollView>(homeScroll).controller!.position;
+
+  Future<void> pullHome(WidgetTester tester) async {
+    final home = tester.getRect(homeScroll);
+    await tester.dragFrom(
+        home.topCenter + const Offset(0, 16), const Offset(0, 340));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 250));
+    await tester.pump();
+  }
+
+  testWidgets('Home pull refreshes a short page and its remote shelves',
+      (tester) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(390, 900);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    catalog.holdDiscovery = true;
+    await show(tester, settle: false);
+    await finishDiscovery(tester, []);
+    await tester.pumpAndSettle();
+    expect(homePosition(tester).maxScrollExtent, 0);
+    final chartId = catalog.chartRequests.single;
+    final genres = List.of(catalog.genres);
+
+    await pullHome(tester);
+    expect(catalog.discoveryArtists, [null, null]);
+    expect(catalog.chartRequests, [chartId]);
+    catalog.chartTracks = const [
+      MusicTrack(videoId: 'newchart001', title: 'New chart song')
+    ];
+    await finishDiscovery(tester, [_discovered]);
+    await tester.pumpAndSettle();
+
+    expect(find.text(_discovered.title), findsOneWidget);
+    expect(find.text('New chart song'), findsOneWidget);
+    expect(catalog.chartRequests, [chartId, chartId]);
+    expect(catalog.genres, genres);
+    expect(catalog.relatedSeeds, isEmpty);
+    expect(catalog.artistReleaseRequests, isEmpty);
+    expect(catalog.searchCalls, 0);
+    expect(catalog.trendingCalls, 0);
+    expect(searches, 0);
+    expect(libraryVisits, 0);
+  });
+
+  testWidgets('Home pull waits for a different seed then refreshes its own',
+      (tester) async {
+    const refreshed = MusicTrack(
+        videoId: 'discover002', title: 'Refreshed general recording');
+    await tester.runAsync(() => library.save(_saved));
+    catalog.holdDiscovery = true;
+    await show(tester, settle: false);
+    await finishDiscovery(tester, [_discovered]);
+    expect(catalog.discoveryArtists, [null, 'Saved artist']);
+    final chartId = catalog.chartRequests.single;
+
+    await pullHome(tester);
+    expect(catalog.discoveryArtists, [null, 'Saved artist']);
+    expect(find.text(_discovered.title), findsOneWidget);
+    expect(catalog.chartRequests, [chartId]);
+
+    await finishDiscovery(tester, [artistSong]);
+    expect(catalog.discoveryArtists, [null, 'Saved artist', null]);
+    expect(find.text(_discovered.title), findsOneWidget);
+    expect(catalog.chartRequests, [chartId]);
+
+    await finishDiscovery(tester, [refreshed]);
+    await tester.pumpAndSettle();
+    final allMusic = artistChip('All music');
+    expect(tester.widget<ChoiceChip>(allMusic).selected, isTrue);
+    expect(find.text(refreshed.title), findsOneWidget);
+    expect(find.text(_discovered.title), findsNothing);
+    expect(catalog.chartRequests, [chartId, chartId]);
+  });
+
+  testWidgets('Home pull joins active work and keeps the selected artist',
+      (tester) async {
+    const refreshed =
+        MusicTrack(videoId: 'artist00002', title: 'Refreshed artist recording');
+    const oldRelease = MusicCollection(id: 'PLold', title: 'Old release');
+    const newRelease = MusicCollection(id: 'PLnew', title: 'New release');
+    final artistId = 'UC${'a' * 22}';
+    await tester.runAsync(() async {
+      await library.save(_saved);
+      await library.save(MusicLibraryEntry(
+          kind: MusicLibraryKind.artist, id: artistId, title: 'Saved artist'));
+    });
+    catalog.holdDiscovery = true;
+    catalog.chartTracks = List.generate(
+        10,
+        (index) =>
+            MusicTrack(videoId: 'chart00000$index', title: 'Chart $index'));
+    catalog.artistReleases[artistId] =
+        const MusicArtistReleases(releases: [oldRelease]);
+    await show(tester, settle: false);
+    await finishDiscovery(tester, [_discovered]);
+    await finishDiscovery(tester, [artistSong]);
+    await tester.pumpAndSettle();
+    final choice = artistChip('Saved artist');
+    await tester.ensureVisible(choice);
+    await tester.tap(choice);
+    await tester.pumpAndSettle();
+    expect(tester.widget<ChoiceChip>(choice).selected, isTrue);
+    expect(find.text(artistSong.title), findsOneWidget);
+    expect(catalog.discoveryArtists, [null, 'Saved artist']);
+    final chartId = catalog.chartRequests.single;
+
+    final chart = find.byKey(const ValueKey('music-home-chart'));
+    await tester.ensureVisible(chart);
+    await tester.drag(chart, const Offset(-240, 0));
+    await tester.pumpAndSettle();
+    expect(catalog.chartRequests, [chartId]);
+    expect(catalog.discoveryCalls, 2);
+
+    final chartRefresh = find.byKey(const ValueKey('music-home-fresh-refresh'));
+    final discoveryRefresh =
+        find.byKey(const ValueKey('music-discovery-refresh'));
+    final pendingChart = Completer<List<MusicTrack>>();
+    catalog.chartResponse = pendingChart;
+    await tester.ensureVisible(chartRefresh);
+    await tester.tap(chartRefresh);
+    await tester.pump();
+    await tester.ensureVisible(discoveryRefresh);
+    await tester.tap(discoveryRefresh);
+    await tester.pump();
+    homePosition(tester).jumpTo(0);
+    await tester.pump();
+    await pullHome(tester);
+    expect(catalog.discoveryArtists, [null, 'Saved artist', 'Saved artist']);
+    expect(catalog.chartRequests, [chartId, chartId]);
+    expect(find.text(artistSong.title), findsOneWidget);
+    expect(find.text(oldRelease.title), findsOneWidget);
+
+    // The chart can finish first. It still satisfies the Home refresh.
+    catalog.artistReleases[artistId] =
+        const MusicArtistReleases(releases: [newRelease]);
+    catalog.chartResponse = null;
+    pendingChart.complete(
+        const [MusicTrack(videoId: 'newchart001', title: 'New chart song')]);
+    await tester.pump();
+    await tester.pump();
+    expect(find.text(newRelease.title), findsOneWidget);
+    expect(find.text(artistSong.title), findsOneWidget);
+    await finishDiscovery(tester, [refreshed]);
+    await tester.pumpAndSettle();
+    expect(catalog.chartRequests, [chartId, chartId]);
+    expect(catalog.artistReleaseRequests, [artistId, artistId]);
+    expect(tester.widget<ChoiceChip>(choice).selected, isTrue);
+    expect(find.text(refreshed.title), findsOneWidget);
+    expect(find.text(artistSong.title), findsNothing);
+
+    await pullHome(tester);
+    expect(catalog.discoveryArtists,
+        [null, 'Saved artist', 'Saved artist', 'Saved artist']);
+    expect(find.text(refreshed.title), findsOneWidget);
+    catalog.discoveries.last.completeError(InvidiousServiceError(
+        'Too many requests',
+        statusCode: 429,
+        retryAfter: const Duration(minutes: 1)));
+    await tester.pumpAndSettle();
+    expect(find.text(refreshed.title), findsOneWidget);
+    expect(tester.widget<ChoiceChip>(choice).selected, isTrue);
+    expect(find.text('New chart song'), findsOneWidget);
+    expect(find.text(newRelease.title), findsOneWidget);
+    await pullHome(tester);
+    await tester.pumpAndSettle();
+    expect(catalog.discoveryCalls, 4);
+    expect(catalog.chartRequests, [chartId, chartId]);
+    expect(catalog.artistReleaseRequests, [artistId, artistId]);
+
+    final allMusic = artistChip('All music');
+    await tester.ensureVisible(allMusic);
+    await tester.tap(allMusic);
+    await tester.pumpAndSettle();
+    expect(find.text(_discovered.title), findsOneWidget);
+    expect(catalog.discoveryCalls, 4);
+  });
 
   testWidgets('Home prepares at most three distinct saved artists in sequence',
       (tester) async {

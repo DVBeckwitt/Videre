@@ -10,6 +10,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
 import androidx.media3.common.C;
+import androidx.media3.container.Mp4TimestampData;
 import androidx.media3.exoplayer.DefaultLivePlaybackSpeedControl;
 import androidx.media3.exoplayer.DefaultLoadControl;
 import androidx.media3.exoplayer.DefaultRenderersFactory;
@@ -33,6 +34,7 @@ import androidx.media3.exoplayer.RenderersFactory;
 import androidx.media3.extractor.DefaultExtractorsFactory;
 import androidx.media3.common.Metadata;
 import androidx.media3.exoplayer.metadata.MetadataOutput;
+import androidx.media3.extractor.metadata.id3.CommentFrame;
 import androidx.media3.extractor.metadata.icy.IcyHeaders;
 import androidx.media3.extractor.metadata.icy.IcyInfo;
 import androidx.media3.exoplayer.source.ClippingMediaSource; // Deprecated
@@ -451,6 +453,13 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
         // A diagnostic probe must not create or reactivate a decoder.
         if ("getPlaybackProgress".equals(call.method)) {
             result.success(player == null ? null : getPlaybackProgress());
+            return;
+        }
+        if ("getCurrentFileAdvisory".equals(call.method)) {
+            final Object sourceId = call.argument("audioSourceId");
+            result.success(sourceId instanceof String
+                    ? getCurrentFileAdvisory((String)sourceId)
+                    : null);
             return;
         }
         ensurePlayerInitialized();
@@ -1001,6 +1010,61 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
         progress.put("seekPending", seekResult != null || seekPos != null);
         progress.put("hasError", player.getPlayerError() != null || errorCode != null);
         return progress;
+    }
+
+    private Integer getCurrentFileAdvisory(String sourceId) {
+        if (player == null || player.getPlaybackState() != Player.STATE_READY
+                || player.getPlayerError() != null) return null;
+        final MediaItem item = player.getCurrentMediaItem();
+        final MediaItem.LocalConfiguration local = item == null ? null : item.localConfiguration;
+        if (local == null || !sourceId.equals(local.tag)) return null;
+        final String scheme = local.uri.getScheme();
+        if (!"file".equals(scheme) && !"content".equals(scheme)) return null;
+
+        Integer advisory = null;
+        for (Tracks.Group group : player.getCurrentTracks().getGroups()) {
+            if (group.getType() != C.TRACK_TYPE_AUDIO || !group.isSelected()) continue;
+            for (int i = 0; i < group.length; i++) {
+                if (!group.isTrackSelected(i)) continue;
+                final Integer rating = mp4FileAdvisory(group.getTrackFormat(i).metadata);
+                if (rating == null || (advisory != null && !advisory.equals(rating))) return null;
+                advisory = rating;
+            }
+        }
+        return advisory;
+    }
+
+    private static Integer mp4FileAdvisory(Metadata metadata) {
+        if (metadata == null) return null;
+        boolean hasMp4Header = false;
+        Integer advisory = null;
+        for (int i = 0; i < metadata.length(); i++) {
+            final Metadata.Entry entry = metadata.get(i);
+            if (entry instanceof Mp4TimestampData) {
+                hasMp4Header = true;
+            } else if (entry instanceof CommentFrame) {
+                // Media3 1.4 translates the iTunes rtng atom into this comment.
+                // Its MP4 header marker excludes ordinary ID3 comments.
+                final CommentFrame frame = (CommentFrame)entry;
+                if (!"ITUNESADVISORY".equals(frame.description)
+                        || !C.LANGUAGE_UNDETERMINED.equals(frame.language)) continue;
+                final int rating;
+                switch (frame.text) {
+                case "1":
+                case "4": // Also written by AtomicParsley's iTunes tagging mode.
+                    rating = 1;
+                    break;
+                case "2":
+                    rating = 2;
+                    break;
+                default:
+                    return null;
+                }
+                if (advisory != null && advisory != rating) return null;
+                advisory = rating;
+            }
+        }
+        return hasMp4Header ? advisory : null;
     }
 
     /// Creates an event based on the current state.

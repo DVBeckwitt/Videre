@@ -215,6 +215,7 @@ class MusicLibraryService {
           artistCredits:
               useDetailCredits ? detail.artistCredits : entry.artistCredits,
           album: album,
+          albumPlaylistId: entry.albumPlaylistId,
           durationSeconds: duration,
           isArtTrack: isArtTrack,
           thumbnails: artwork == null ? entry.thumbnails : [artwork],

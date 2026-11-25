@@ -15,6 +15,7 @@ class PlaylistReference {
   final String profileId;
   final String? accountId;
   final String? origin;
+  final String? _displayTitle;
 
   const PlaylistReference({
     required this.kind,
@@ -22,7 +23,16 @@ class PlaylistReference {
     required this.profileId,
     this.accountId,
     this.origin,
-  });
+    String? displayTitle,
+  }) : _displayTitle = displayTitle;
+
+  /// A human-readable snapshot. It is independent of playlist identity and access.
+  String? get displayTitle {
+    final title = _displayTitle;
+    if (title == null || title.length > 512 || !_identifier(title)) return null;
+    final trimmed = title.trim();
+    return trimmed.isEmpty || trimmed == playlistId ? null : trimmed;
+  }
 
   factory PlaylistReference.forPlaylist(Playlist playlist, IDbClient database,
       {Server? server}) {
@@ -42,6 +52,7 @@ class PlaylistReference {
       'kind': kind.name,
       'playlistId': id,
       'profileId': database.profileId,
+      'displayTitle': playlist.title,
       if (kind == PlaylistSourceKind.account) ...{
         'accountId': server!.accountId,
         'origin': _origin(server.url),
@@ -68,6 +79,7 @@ class PlaylistReference {
     }
     final account = value['accountId'];
     final origin = value['origin'];
+    final title = value['displayTitle'];
     if (kind == PlaylistSourceKind.local && !id.startsWith('local:')) {
       return null;
     }
@@ -84,11 +96,15 @@ class PlaylistReference {
           playlistId: id,
           profileId: profile as String,
           accountId: account as String,
-          origin: canonical);
+          origin: canonical,
+          displayTitle: title is String ? title : null);
     }
     if (account != null || origin != null) return null;
     return PlaylistReference(
-        kind: kind, playlistId: id, profileId: profile as String);
+        kind: kind,
+        playlistId: id,
+        profileId: profile as String,
+        displayTitle: title is String ? title : null);
   }
 
   static bool _identifier(Object? value) =>
@@ -132,6 +148,7 @@ class PlaylistReference {
         'kind': kind.name,
         'playlistId': playlistId,
         'profileId': profileId,
+        if (displayTitle case final title?) 'displayTitle': title,
         if (accountId != null) 'accountId': accountId,
         if (origin != null) 'origin': origin,
       };

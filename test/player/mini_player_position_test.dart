@@ -529,14 +529,14 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('cancelled Music artwork drag returns to the compact player',
+  testWidgets('cancelled Music drag beyond the threshold returns to mini',
       (tester) async {
     await pumpPlayer(tester);
     final gesture = await tester.startGesture(
         tester.getCenter(find.byKey(const ValueKey('music-mini-artwork'))));
     await gesture.moveBy(const Offset(0, -40));
     await tester.pump();
-    await gesture.moveBy(const Offset(0, -60));
+    await gesture.moveBy(const Offset(0, -180));
     await tester.pump();
     expect(player.state.isDragging, isTrue);
     await gesture.cancel();
@@ -547,5 +547,28 @@ void main() {
     expect(player.state.top, isNull);
     expect(find.byType(MusicMiniPlayer), findsOneWidget);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('a held mini-player pull cannot reopen a minimized player',
+      (tester) async {
+    final decoder = await pumpPlayer(tester);
+    final gesture = await tester.startGesture(
+        tester.getCenter(find.byKey(const ValueKey('music-mini-artwork'))));
+    await gesture.moveBy(const Offset(0, -40));
+    await tester.pump();
+    await gesture.moveBy(const Offset(0, -180));
+    await tester.pump();
+    expect(player.state.isMini, isFalse);
+    expect(player.state.isDragging, isTrue);
+
+    player.showMiniPlayer();
+    await tester.pump();
+    await gesture.moveBy(const Offset(0, -140));
+    await gesture.up();
+    await tester.pumpAndSettle();
+    expect(player.state.isMini, isTrue);
+    expect(player.state.isDragging, isFalse);
+    expect(
+        tester.element(audioBuilder).read<AudioPlayerCubit>(), same(decoder));
   });
 }

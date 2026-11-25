@@ -9,6 +9,8 @@ import 'package:clipious/main.dart' as app_main;
 import 'package:clipious/player/models/media_event.dart';
 import 'package:clipious/player/models/media_command.dart';
 import 'package:clipious/player/models/video_display_mode.dart';
+import 'package:clipious/player/models/watch_audio_track.dart';
+import 'package:clipious/player/states/audio_player.dart';
 import 'package:clipious/player/states/interfaces/media_player.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/player/states/player_controls.dart';
@@ -22,6 +24,7 @@ import 'package:clipious/player/views/tv/components/player_settings.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
+import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -95,6 +98,32 @@ class _SpeedBoostVideo extends VideoPlayerCubit {
   }
 }
 
+class _WatchTrackAudio extends AudioPlayerCubit {
+  _WatchTrackAudio(super.initialState, super.player, super.settings);
+
+  final selections = <String>[];
+  bool switchSucceeds = true;
+
+  @override
+  List<WatchAudioTrack> watchAudioTracks = const [
+    (id: 'en.original', label: 'English (original)'),
+    (id: 'es.dub', label: 'Spanish'),
+  ];
+
+  @override
+  String? selectedWatchAudioTrackId = 'en.original';
+
+  @override
+  void onInit() {}
+
+  @override
+  Future<bool> selectWatchAudioTrack(String trackId) async {
+    selections.add(trackId);
+    if (switchSucceeds) selectedWatchAudioTrackId = trackId;
+    return switchSucceeds;
+  }
+}
+
 void main() {
   late TestAppCubit app;
   late TestSettingsCubit settings;
@@ -160,6 +189,27 @@ void main() {
     );
     addTearDown(videoPlayer.close);
     return videoPlayer;
+  }
+
+  Future<_WatchTrackAudio> createPlayingAudio(WidgetTester tester,
+      {MusicMetadata? music}) async {
+    final video =
+        Video(videoId: 'watch-audio', lengthSeconds: 60, musicMetadata: music);
+    await tester.runAsync(player.close);
+    player = _ControlsTestPlayer(
+      PlayerState.init(null).copyWith(
+        isMini: false,
+        isHidden: false,
+        isPlaying: true,
+        isAudio: true,
+        currentlyPlaying: video,
+      ),
+      settings,
+    );
+    final audio =
+        _WatchTrackAudio(AudioPlayerState(video: video), player, settings);
+    addTearDown(audio.close);
+    return audio;
   }
 
   testWidgets('Flow watch time pill toggles and the idle timeline seeks',
@@ -913,6 +963,134 @@ void main() {
       await tester.pumpWidget(const SizedBox.shrink());
     });
   }
+
+  final watchAudioTrackMenu =
+      find.byKey(const ValueKey('player-audio-track-open'));
+
+  Future<void> openAudioOptions(
+      WidgetTester tester, _WatchTrackAudio audio) async {
+    await tester.pumpWidget(hostControls(SizedBox(
+      width: 320,
+      height: 220,
+      child: PlayerControls(mediaPlayerCubit: audio),
+    )));
+    await tester.pumpAndSettle();
+    if (audio.state.video?.musicMetadata == null) {
+      final tooltip =
+          MaterialLocalizations.of(tester.element(find.byType(PlayerControls)))
+              .showMenuTooltip;
+      expect(find.byTooltip(tooltip), findsOneWidget);
+    }
+    await tester.tap(find.byIcon(Icons.more_vert));
+    await tester.pumpAndSettle();
+  }
+
+  Future<void> openWatchTrackPicker(WidgetTester tester) async {
+    await tester.ensureVisible(watchAudioTrackMenu);
+    await tester.tap(watchAudioTrackMenu);
+    await tester.pumpAndSettle();
+  }
+
+  testWidgets('ordinary audio options announce and switch the exact track',
+      (tester) async {
+    final audio = await createPlayingAudio(tester);
+    await openAudioOptions(tester, audio);
+    await openWatchTrackPicker(tester);
+
+    final english = find.text('English (original)');
+    final spanish = find.text('Spanish');
+    expect(tester.getSemantics(english).flagsCollection.isSelected, true);
+    expect(
+        tester.getSemantics(spanish).flagsCollection.isSelected, isNot(true));
+    await tester.tap(spanish);
+    await tester.pumpAndSettle();
+
+    expect(audio.selections, ['es.dub']);
+    expect(audio.selectedWatchAudioTrackId, 'es.dub');
+    expect(player.state.isPlaying, isTrue);
+    expect(find.byType(BottomSheet), findsNothing);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  for (final music in [false, true]) {
+    testWidgets(
+        music
+            ? 'Music controls omit the ordinary audio track chooser'
+            : 'ordinary audio with a single track omits the chooser',
+        (tester) async {
+      final audio = await createPlayingAudio(tester,
+          music: music
+              ? const MusicMetadata(title: 'Music', artist: 'Artist')
+              : null);
+      if (!music) audio.watchAudioTracks = [audio.watchAudioTracks.first];
+      await openAudioOptions(tester, audio);
+      expect(watchAudioTrackMenu, findsNothing);
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+  }
+
+  for (final replaceOccurrence in [false, true]) {
+    testWidgets(
+        replaceOccurrence
+            ? 'ordinary audio chooser ignores a replaced queue occurrence'
+            : 'ordinary audio chooser ignores a replaced ID with the same label',
+        (tester) async {
+      final audio = await createPlayingAudio(tester);
+      await openAudioOptions(tester, audio);
+      await openWatchTrackPicker(tester);
+      if (replaceOccurrence) {
+        player.replaceOccurrence();
+      } else {
+        audio.watchAudioTracks = [
+          audio.watchAudioTracks.first,
+          (id: 'es.another', label: 'Spanish'),
+        ];
+      }
+
+      await tester.tap(find.text('Spanish'));
+      await tester.pumpAndSettle();
+      expect(audio.selections, isEmpty);
+      expect(find.byType(BottomSheet), findsNothing);
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+  }
+
+  testWidgets(
+      'ordinary audio announces a rejected switch with no selected track',
+      (tester) async {
+    final audio = (await createPlayingAudio(tester))
+      ..selectedWatchAudioTrackId = null
+      ..switchSucceeds = false;
+    await openAudioOptions(tester, audio);
+    await openWatchTrackPicker(tester);
+    final spanish = find.text('Spanish');
+    expect(
+        tester.getSemantics(spanish).flagsCollection.isSelected, isNot(true));
+
+    await tester.tap(spanish);
+    await tester.pumpAndSettle();
+    expect(audio.selections, ['es.dub']);
+    expect(audio.selectedWatchAudioTrackId, isNull);
+    expect(find.text('Could not switch audio tracks.'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets(
+      'ordinary audio distinguishes tracks with the same provider label',
+      (tester) async {
+    final audio = (await createPlayingAudio(tester))
+      ..watchAudioTracks = const [
+        (id: 'en.original', label: 'English'),
+        (id: 'en.alternate', label: 'English'),
+      ];
+    await openAudioOptions(tester, audio);
+    await openWatchTrackPicker(tester);
+    expect(find.text('English (en.original)'), findsOneWidget);
+    await tester.tap(find.text('English (en.alternate)'));
+    await tester.pumpAndSettle();
+    expect(audio.selections, ['en.alternate']);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
 
   for (final quality in [false, true]) {
     for (final fullscreen in [false, true]) {

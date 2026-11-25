@@ -41,11 +41,13 @@ class _ManualMusicDecoder {
     bool active() => !cancelled.isCompleted && inScope;
     final session = 'selection:${identityHashCode(this)}:'
         '${DateTime.now().microsecondsSinceEpoch}';
-    Future<AudioPlaybackSources?> resolve() => resolveAudioPlaybackSources(
-        video: entry is Video ? entry : null,
-        offlineVideo: offline,
-        sessionId: session,
-        isCurrent: active);
+    Future<AudioPlaybackSources?> resolve({bool verifyCompletion = true}) =>
+        resolveAudioPlaybackSources(
+            video: entry is Video ? entry : null,
+            offlineVideo: offline,
+            sessionId: session,
+            isCurrent: active,
+            verifyPinnedCompletion: verifyCompletion);
     try {
       final adjacent = await slot.ready;
       if (!active()) return false;
@@ -86,7 +88,7 @@ class _ManualMusicDecoder {
         if (!active() || !decoderReady) return false;
         // A grant, saved download, or selected instance may have changed
         // while the native decoder was fetching the first playable samples.
-        final confirmed = await resolve();
+        final confirmed = await resolve(verifyCompletion: false);
         if (confirmed == null ||
             !active() ||
             !decoderReady ||

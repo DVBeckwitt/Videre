@@ -1,11 +1,100 @@
 package com.github.dvbeckwitt.videre
 
+import android.database.Cursor
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class LocalMusicCatalogTest {
+    @Test fun onlyPositiveIntegerMediaStoreRecordingMetadataIsActionable() {
+        assertTrue(positiveRecordingFlag(Cursor.FIELD_TYPE_INTEGER, 1L))
+        assertTrue(positiveRecordingFlag(Cursor.FIELD_TYPE_INTEGER, 2L))
+        assertFalse(positiveRecordingFlag(Cursor.FIELD_TYPE_INTEGER, null))
+        assertFalse(positiveRecordingFlag(Cursor.FIELD_TYPE_INTEGER, 0L))
+        assertFalse(positiveRecordingFlag(Cursor.FIELD_TYPE_INTEGER, -1L))
+        assertFalse(positiveRecordingFlag(Cursor.FIELD_TYPE_STRING, 1L))
+        assertFalse(positiveRecordingFlag(Cursor.FIELD_TYPE_FLOAT, 1L))
+        assertFalse(positiveRecordingFlag(Cursor.FIELD_TYPE_NULL, null))
+    }
+
+    @Test fun mediaStoreFolderLocationsUseWholeSegmentsWithinTheReportedVolume() {
+        val volume = "external_primary"
+        val nested = mediaMusicFolderLocations(volume, "Music/Live/Jazz/")
+        assertEquals(listOf("Internal storage / Music", "Internal storage / Music / Live",
+            "Internal storage / Music / Live / Jazz"), nested.map { it.label })
+        assertEquals(nested.take(2), mediaMusicFolderLocations(volume, "Music/Live/"))
+        assertEquals(nested, mediaMusicFolderLocations(volume, "Music/Live/Jazz"))
+        assertFalse(nested[1].key == mediaMusicFolderLocations(volume, "Music/Live2/").last().key)
+        assertFalse(nested.last().key == mediaMusicFolderLocations("abcd-1234", "Music/Live/Jazz/").last().key)
+        assertFalse(nested.last().key == mediaMusicFolderLocations(volume, "Music/Studio/Jazz/").last().key)
+        assertTrue(nested.all { it.key.matches(Regex("[a-f0-9]{64}")) })
+    }
+
+    @Test fun malformedOrUnavailableStorageFolderMetadataHasNoExclusionKey() {
+        for (path in listOf(null, "", "/", "/Music", "Music/../Jazz", "Music/./Jazz", "Music//Jazz",
+            "Music/Jazz//", "Music\\Jazz", "Music/Hidden\n", "Music/<unknown>")) {
+            assertTrue(mediaMusicFolderLocations("external_primary", path).isEmpty())
+        }
+        assertTrue(mediaMusicFolderLocations("external", "Music/").isEmpty())
+        assertTrue(mediaMusicFolderLocations("internal", "Music/").isEmpty())
+        assertTrue(mediaMusicFolderLocations("bad/volume", "Music/").isEmpty())
+    }
+
+    @Test fun safFolderChoicesFollowTraversalAndTreatTheDocumentIdAsOpaque() {
+        val tree = "content://provider/tree/grant"
+        val root = safMusicFolderLocation(tree, "grant", "Selected folder", null)!!
+        val parents = listOf("opaque:left" to "Music", "opaque:right" to "Recordings").map { (id, label) ->
+            safMusicFolderLocation(tree, id, label, root)!!
+        }
+        val first = safMusicFolderLocation(tree, "doc:one/path", "Jazz", parents[0])!!
+        val second = safMusicFolderLocation(tree, "doc:two/path", "Jazz", parents[1])!!
+        assertEquals("Selected folder / Music / Jazz", first.label)
+        assertEquals("Selected folder / Recordings / Jazz", second.label)
+        assertFalse(first.key == second.key)
+        assertFalse(first.key == safMusicFolderLocation("$tree-other", "doc:one/path", "Jazz", parents[0])!!.key)
+        assertEquals(first.key, safMusicFolderLocation(tree, "doc:one/path", "New label", parents[0])!!.key)
+        assertEquals(null, safMusicFolderLocation(tree, "doc:bad", "Some/Folder", root))
+        assertEquals(null, safMusicFolderLocation(tree, "doc:bad", null, root))
+    }
+
+    @Test fun documentAlbumsRequireTheSameTreeParentAndActualAlbumArtist() {
+        val tree = "content://documents/tree/library"
+        val metadata = LocalMusicMetadata("One", "Guest", "Greatest Hits", 12, albumArtist = "Ensemble")
+        val first = track().copy(metadata = metadata)
+        val key = first.albumKey(tree)!!
+        assertTrue(key.matches(Regex("[0-9a-f]{64}")))
+        assertEquals(key, first.copy(metadata = metadata.copy(artist = "Another guest")).albumKey(tree))
+        assertFalse(key == first.copy(metadata = metadata.copy(albumArtist = "Solo")).albumKey(tree))
+        assertFalse(key == first.copy(metadata = metadata.copy(album = "Other release")).albumKey(tree))
+        assertFalse(key == first.copy(parentDocumentId = "edition two").albumKey(tree))
+        assertFalse(key == first.albumKey("content://documents/tree/elsewhere"))
+        assertEquals(null, first.copy(metadata = metadata.copy(albumArtist = null)).albumKey(tree))
+        assertEquals(null, first.copy(metadata = metadata.copy(album = "<unknown>")).albumKey(tree))
+        assertEquals(null, first.copy(parentDocumentId = null).albumKey(tree))
+    }
+
+    @Test fun systemAlbumsUseTheMediaStoreIdWithinItsVolume() {
+        val source = LocalMusicCatalog.SYSTEM_URI
+        val first = track().copy(uri = "content://media/vol_a/audio/media/7", mediaAlbumId = 5,
+            metadata = LocalMusicMetadata("Song", "Solo", "Collection", 12))
+        val key = first.albumKey(source)!!
+        assertEquals(key, first.copy(uri = "content://media/vol_a/audio/media/19").albumKey(source))
+        assertFalse(key == first.copy(uri = "content://media/vol_b/audio/media/7").albumKey(source))
+        assertFalse(key == first.copy(mediaAlbumId = 12).albumKey(source))
+        assertEquals(null, first.copy(mediaAlbumId = null).albumKey(source))
+        assertEquals(null, first.copy(mediaAlbumId = 0).albumKey(source))
+    }
+
+    @Test fun legacyTagRecordsRefreshOnceEvenWhenTheAlbumArtistTagIsAbsent() {
+        val tags = LocalMusicMetadata("Title", "Artist", "Album", 12)
+        val row = track().copy(metadata = tags)
+        assertTrue(row.needsTagRead(row.copy(metadata = tags.copy(albumArtistRead = false))))
+        assertFalse(row.needsTagRead(row))
+        assertTrue(row.copy(sizeBytes = 50L).needsTagRead(row))
+        assertTrue(row.copy(identityKey = "replacement").needsTagRead(row))
+    }
+
     @Test fun onlyAnUninterruptedFolderSelectionRetainsItsSessions() {
         fun choose(previous: String?, same: Boolean = true, readable: Boolean = true, lost: Boolean = false) =
             LocalMusicPlugin.selectionIdForPick(previous, same, readable, lost)
@@ -46,6 +135,92 @@ class LocalMusicCatalogTest {
         assertFalse(row.copy(modifiedMs = null).matchesRevision(row.copy(modifiedMs = null)))
         assertEquals(2000L, LocalMusicCatalog.mediaStoreTime(2L))
         assertEquals(null, LocalMusicCatalog.mediaStoreTime(0L))
+    }
+
+    @Test fun documentVisibilityRequiresAnAuthorizedRevision() {
+        fun proof(uri: String = "content://documents/tree/source/document/one",
+            modified: Long? = 123L, length: Long? = 12L) =
+            LocalMusicCatalog.documentVisibilityProof(uri, modified, length)
+        val initial = proof()!!
+        assertTrue(initial.matches(Regex("[0-9a-f]{64}")))
+        assertEquals(initial, proof())
+        assertFalse(initial == proof(uri = "content://documents/tree/source/document/two"))
+        assertFalse(initial == proof(uri = "content://documents/tree/other/document/one"))
+        assertFalse(initial == proof(modified = 124L))
+        assertFalse(initial == proof(length = 13L))
+        assertEquals(null, proof(modified = 0L))
+        assertEquals(null, proof(length = null))
+    }
+
+    @Test fun mediaVisibilityIncludesTheStoreVersionVolumeAndInsertion() {
+        fun proof(uri: String = "content://media/volume_a/audio/media/7", version: String? = "store",
+            generation: Long? = 3L, added: Long? = 100L, modified: Long? = 200L, size: Long? = 30L) =
+            LocalMusicCatalog.mediaVisibilityProof(uri, version, generation, added, modified, size)
+        val initial = proof()!!
+        assertTrue(initial.matches(Regex("[0-9a-f]{64}")))
+        assertEquals(initial, proof())
+        assertFalse(initial == proof(uri = "content://media/volume_b/audio/media/7"))
+        assertFalse(initial == proof(uri = "content://media/volume_a/audio/media/8"))
+        assertFalse(initial == proof(version = "replacement-store"))
+        assertFalse(initial == proof(generation = 7L))
+        assertFalse(initial == proof(modified = 201L))
+        assertEquals(null, proof(version = null))
+        val legacy = proof(generation = null)!!
+        assertFalse(legacy == proof(generation = null, added = 102L))
+        assertEquals(null, proof(generation = null, added = null))
+        assertEquals(null, proof(generation = null, modified = null))
+    }
+
+    @Test fun onlyAnUnchangedProofOrVerifiedRenameKeepsTheHiddenAlias() {
+        val original = track().copy(visibilityProof = "old-provider-proof")
+        val destination = track().copy(uri = "destination", visibilityProof = "destination-provider-proof")
+        assertEquals("old-provider-proof", original.visibilityKey)
+        assertEquals("destination-provider-proof", destination.inheritsVisibility(original).visibilityKey)
+
+        val renamed = destination.inheritsVisibility(original, confirmedRename = true)
+        assertEquals("old-provider-proof", renamed.visibilityKey)
+        assertEquals("old-provider-proof", destination.inheritsVisibility(renamed).visibilityKey)
+        assertEquals("replacement-proof",
+            destination.copy(visibilityProof = "replacement-proof").inheritsVisibility(renamed).visibilityKey)
+        assertEquals(null, destination.copy(visibilityProof = null)
+            .inheritsVisibility(renamed, confirmedRename = true).visibilityKey)
+    }
+
+    @Test fun reapprovalChecksOnlyArchivedProofsAndRejectsReusedFiles() {
+        val renamed = LocalMusicVisibilityAlias("original-proof", "renamed-proof", "same-file")
+        val archive = LocalMusicVisibilityAliases(listOf(renamed))
+        val unrelated = track().copy(visibilityProof = "unrelated-proof")
+        assertEquals("unrelated-proof", archive.resolve(unrelated) { error("Unexpected descriptor") }.visibilityKey)
+
+        val target = track().copy(visibilityProof = renamed.providerProof)
+        assertEquals(renamed.key, archive.resolve(target) { renamed.fileProof }.visibilityKey)
+        assertEquals(null, archive.resolve(target) { null }.visibilityKey)
+        val replacement = archive.resolve(target.copy(visibilityAlias = renamed.key)) { "replacement-file" }
+        assertFalse(replacement.visibilityKey == renamed.key)
+        assertEquals(replacement.visibilityKey, archive.resolve(target) { "replacement-file" }.visibilityKey)
+
+        val reusedOldUri = track().copy(visibilityProof = renamed.key)
+        assertEquals(null, archive.resolve(reusedOldUri) { null }.visibilityKey)
+        val otherFile = archive.resolve(reusedOldUri) { "another-file" }.visibilityKey
+        assertFalse(renamed.key == otherFile)
+        assertFalse(replacement.visibilityKey == otherFile)
+    }
+
+    @Test fun chainedRenameArchivesOnlyTheLatestTargetIncludingBackToItsOriginalUri() {
+        val first = LocalMusicVisibilityAlias("original-proof", "first-target", "first-ctime")
+        val journal = LocalMusicVisibilityAliases(listOf(first))
+        val second = first.copy(providerProof = "second-target", fileProof = "second-ctime")
+        val afterSecond = LocalMusicVisibilityAliases(journal.replacing(second))
+        val dismissed = track().copy(visibilityProof = first.providerProof)
+        assertEquals(first.providerProof, afterSecond.resolve(dismissed) { error("Old target still archived") }.visibilityKey)
+        val latest = track().copy(visibilityProof = second.providerProof)
+        assertEquals(second.key, afterSecond.resolve(latest) { second.fileProof }.visibilityKey)
+
+        val returned = second.copy(providerProof = second.key, fileProof = "third-ctime")
+        val afterReturn = LocalMusicVisibilityAliases(afterSecond.replacing(returned))
+        val original = track().copy(visibilityProof = returned.providerProof)
+        assertEquals(returned.key, afterReturn.resolve(original) { returned.fileProof }.visibilityKey)
+        assertFalse(returned.key == afterReturn.resolve(original) { "replacement-file" }.visibilityKey)
     }
 
     @Test fun chainedRenamesPreserveTheOriginalQueueIdentity() {

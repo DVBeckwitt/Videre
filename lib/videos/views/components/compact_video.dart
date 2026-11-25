@@ -33,6 +33,7 @@ class CompactVideo extends StatelessWidget {
   final VoidCallback? onLongPress;
   final bool showChannel;
   final bool showCommunityLabels;
+  final bool musicArtwork;
   final Video? video;
   final DownloadedVideo? offlineVideo;
   final bool? highlighted;
@@ -44,6 +45,7 @@ class CompactVideo extends StatelessWidget {
       this.onLongPress,
       this.showChannel = true,
       this.showCommunityLabels = false,
+      this.musicArtwork = false,
       this.video,
       this.trailing,
       this.highlighted,
@@ -127,6 +129,7 @@ class CompactVideo extends StatelessWidget {
                                   )
                                 : video != null
                                     ? VideoThumbnailView(
+                                        musicArtwork: musicArtwork,
                                         musicThumbnails:
                                             video!.musicMetadata?.thumbnails,
                                         images:

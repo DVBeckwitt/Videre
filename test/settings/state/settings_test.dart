@@ -17,6 +17,8 @@ import 'package:clipious/l10n/app_languages.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' as app;
 import 'package:clipious/music/models/music_cover_corners.dart';
+import 'package:clipious/music/models/music_download_order.dart';
+import 'package:clipious/music/models/music_mini_player_preferences.dart';
 import 'package:clipious/music/models/song_transition.dart';
 import 'package:clipious/music/services/music_community_cover_preferences.dart';
 import 'package:clipious/music/services/music_lyrics_preferences.dart';
@@ -610,6 +612,195 @@ Future<void> main() async {
     expect(MusicDownloadFormat.forDatabase(first), MusicDownloadFormat.m4a);
     expect(isLrclibEnabled(), isFalse);
     expect(isCommunityCoverArtEnabled(), isFalse);
+  });
+
+  test('artwork swipes default on and restore only an explicit boolean',
+      () async {
+    final original = db.forProfile(db.profileId);
+    expect(settingsCubit.state.musicArtworkSwipe, isTrue);
+    await settingsCubit.setMusicArtworkSwipe(false);
+    expect(settingsCubit.state.musicArtworkSwipe, isFalse);
+    final backup = UserBackup.parse((await db.exportBackup()).encode());
+
+    final other = await db.createProfile('Other');
+    await db.useProfile(other.id);
+    appCubit.advanceSession();
+    await settingsCubit.reloadForProfile();
+    expect(settingsCubit.state.musicArtworkSwipe, isTrue);
+    await db.restoreBackup(backup, replace: false);
+    await settingsCubit.reloadForProfile();
+    expect(settingsCubit.state.musicArtworkSwipe, isFalse);
+    final bad = SettingsValue(musicArtworkSwipeSettingName, 'off');
+    expect(UserBackup.validSetting(bad), isFalse);
+    await db.saveSetting(bad);
+    await settingsCubit.reloadForProfile();
+    expect(settingsCubit.state.musicArtworkSwipe, isTrue);
+    await settingsCubit.setMusicArtworkSwipe(true);
+    expect(db.getSettings(musicArtworkSwipeSettingName)?.value, 'true');
+    expect(original.getSettings(musicArtworkSwipeSettingName)?.value, 'false');
+  });
+
+  test('artwork double-tap seeking is opt-in and follows its profile',
+      () async {
+    final original = db.forProfile(db.profileId);
+    expect(settingsCubit.state.musicArtworkDoubleTapSeek, isFalse);
+    await settingsCubit.setMusicArtworkDoubleTapSeek(true);
+    expect(settingsCubit.state.musicArtworkDoubleTapSeek, isTrue);
+    final backup = UserBackup.parse((await db.exportBackup()).encode());
+
+    final other = await db.createProfile('Other');
+    await db.useProfile(other.id);
+    appCubit.advanceSession();
+    await settingsCubit.reloadForProfile();
+    expect(settingsCubit.state.musicArtworkDoubleTapSeek, isFalse);
+    await db.restoreBackup(backup, replace: false);
+    await settingsCubit.reloadForProfile();
+    expect(settingsCubit.state.musicArtworkDoubleTapSeek, isTrue);
+
+    final malformed =
+        SettingsValue(musicArtworkDoubleTapSeekSettingName, 'yes');
+    expect(UserBackup.validSetting(malformed), isFalse);
+    await db.saveSetting(malformed);
+    await settingsCubit.reloadForProfile();
+    expect(settingsCubit.state.musicArtworkDoubleTapSeek, isFalse);
+    await settingsCubit.setMusicArtworkDoubleTapSeek(false);
+    expect(
+        db.getSettings(musicArtworkDoubleTapSeekSettingName)?.value, 'false');
+    expect(original.getSettings(musicArtworkDoubleTapSeekSettingName)?.value,
+        'true');
+  });
+
+  test('mini-player settings follow the profile and round-trip through backup',
+      () async {
+    final original = db.forProfile(db.profileId);
+    await settingsCubit
+        .setMusicMiniPlayerLayout(MusicMiniPlayerLayout.transport);
+    await Future.wait([
+      settingsCubit.setMusicMiniPlayerShortcut(MusicMiniPlayerShortcut.repeat),
+      settingsCubit.setMusicMiniPlayerShortcut(MusicMiniPlayerShortcut.shuffle),
+    ]);
+    expect(settingsCubit.state.musicMiniPlayerLayout,
+        MusicMiniPlayerLayout.transport);
+    expect(settingsCubit.state.musicMiniPlayerShortcut,
+        MusicMiniPlayerShortcut.shuffle);
+    final backup = UserBackup.parse((await db.exportBackup()).encode());
+
+    final other = await db.createProfile('Other');
+    await db.useProfile(other.id);
+    appCubit.advanceSession();
+    await settingsCubit.reloadForProfile();
+    expect(settingsCubit.state.musicMiniPlayerLayout,
+        MusicMiniPlayerLayout.automatic);
+    expect(settingsCubit.state.musicMiniPlayerShortcut,
+        MusicMiniPlayerShortcut.automatic);
+    await db.restoreBackup(backup, replace: false);
+    await settingsCubit.reloadForProfile();
+    expect(settingsCubit.state.musicMiniPlayerLayout,
+        MusicMiniPlayerLayout.transport);
+    expect(settingsCubit.state.musicMiniPlayerShortcut,
+        MusicMiniPlayerShortcut.shuffle);
+
+    for (final key in [
+      musicMiniPlayerLayoutSettingName,
+      musicMiniPlayerShortcutSettingName
+    ]) {
+      final bad = SettingsValue(key, 'unknown');
+      expect(UserBackup.validSetting(bad), isFalse);
+      await db.saveSetting(bad);
+    }
+    await settingsCubit.reloadForProfile();
+    expect(settingsCubit.state.musicMiniPlayerLayout,
+        MusicMiniPlayerLayout.automatic);
+    expect(settingsCubit.state.musicMiniPlayerShortcut,
+        MusicMiniPlayerShortcut.automatic);
+    expect(original.getSettings(musicMiniPlayerShortcutSettingName)?.value,
+        'shuffle');
+  });
+
+  test('queued mini-player writes cannot update a replacement profile',
+      () async {
+    final database = db;
+    final original = database.forProfile(database.profileId);
+    final other = await database.createProfile('Other');
+    final pending = Completer<void>();
+    final started = Completer<void>();
+    db = _DelayedSettingsDb(original, pending, started);
+    final first =
+        settingsCubit.setMusicMiniPlayerLayout(MusicMiniPlayerLayout.compact);
+    await started.future;
+    final second =
+        settingsCubit.setMusicMiniPlayerLayout(MusicMiniPlayerLayout.transport);
+    db = database;
+    await database.useProfile(other.id);
+    appCubit.advanceSession();
+    pending.complete();
+    await Future.wait([first, second]);
+    expect(settingsCubit.state.musicMiniPlayerLayout,
+        MusicMiniPlayerLayout.automatic);
+    expect(database.getSettings(musicMiniPlayerLayoutSettingName), isNull);
+    expect(original.getSettings(musicMiniPlayerLayoutSettingName)?.value,
+        'compact');
+  });
+
+  test('Music Downloads order follows the profile and survives backup',
+      () async {
+    const initial = MusicDownloadOrder();
+    const byArtist = MusicDownloadOrder(
+        field: MusicDownloadSortField.artist, descending: true);
+    final original = db.forProfile(db.profileId);
+    expect(settingsCubit.state.musicDownloadOrder, initial);
+    expect(original.getSettings(musicDownloadOrderSettingName), isNull);
+    await Future.wait([
+      settingsCubit.updateMusicDownloadOrder(
+          field: MusicDownloadSortField.artist),
+      settingsCubit.updateMusicDownloadOrder(descending: true),
+    ]);
+    expect(settingsCubit.state.musicDownloadOrder, byArtist);
+    final backup = UserBackup.parse((await db.exportBackup()).encode());
+    final other = await db.createProfile('Other');
+    await db.useProfile(other.id);
+    appCubit.advanceSession();
+    await settingsCubit.reloadForProfile();
+    expect(settingsCubit.state.musicDownloadOrder, initial);
+    await db.restoreBackup(backup, replace: false);
+    await settingsCubit.reloadForProfile();
+    expect(settingsCubit.state.musicDownloadOrder, byArtist);
+
+    final malformed =
+        SettingsValue(musicDownloadOrderSettingName, 'artist:sideways');
+    final invalid = jsonDecode(backup.encode()) as Map<String, dynamic>;
+    invalid['settings'] = [malformed.toJson()];
+    expect(() => UserBackup.parse(jsonEncode(invalid)), throwsFormatException);
+    await db.saveSetting(malformed);
+    await settingsCubit.reloadForProfile();
+    expect(settingsCubit.state.musicDownloadOrder, initial);
+    expect(original.getSettings(musicDownloadOrderSettingName)?.value,
+        byArtist.encode());
+  });
+
+  test('queued Music Downloads order writes stay with their original profile',
+      () async {
+    const byAlbum = MusicDownloadOrder(field: MusicDownloadSortField.album);
+    const byDuration = MusicDownloadOrder(
+        field: MusicDownloadSortField.duration, descending: true);
+    final database = db;
+    final original = database.forProfile(database.profileId);
+    final other = await database.createProfile('Other');
+    final pending = Completer<void>();
+    final started = Completer<void>();
+    db = _DelayedSettingsDb(original, pending, started);
+    final first = settingsCubit.setMusicDownloadOrder(byAlbum);
+    await started.future;
+    final second = settingsCubit.setMusicDownloadOrder(byDuration);
+    db = database;
+    await database.useProfile(other.id);
+    appCubit.advanceSession();
+    pending.complete();
+    await Future.wait([first, second]);
+    expect(settingsCubit.state.musicDownloadOrder, const MusicDownloadOrder());
+    expect(database.getSettings(musicDownloadOrderSettingName), isNull);
+    expect(original.getSettings(musicDownloadOrderSettingName)?.value,
+        byAlbum.encode());
   });
 
   test('Music streaming quality belongs to the profile and survives backup',

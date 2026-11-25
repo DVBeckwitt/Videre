@@ -7,6 +7,7 @@
         <exclude domain="sharedpref" path="videre_gateway_sessions.xml" />
         <exclude domain="sharedpref" path="videre_nerdvpn_access.xml" />
         <exclude domain="sharedpref" path="videre_local_music.xml" />
+        <exclude domain="file" path="community-music-covers-v1/" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="root" path="app_webview_videre_verification/" />
@@ -14,5 +15,6 @@
         <exclude domain="sharedpref" path="videre_gateway_sessions.xml" />
         <exclude domain="sharedpref" path="videre_nerdvpn_access.xml" />
         <exclude domain="sharedpref" path="videre_local_music.xml" />
+        <exclude domain="file" path="community-music-covers-v1/" />
     </device-transfer>
 </data-extraction-rules>

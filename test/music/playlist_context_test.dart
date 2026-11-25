@@ -79,6 +79,7 @@ class _Player extends TestPlayerCubit {
       Duration? startAt,
       bool? playing,
       int? startIndex,
+      String? queueTitle,
       bool fromMusic = false}) async {
     standaloneCalls++;
   }

@@ -16,27 +16,34 @@ String? _occurrence(IdedVideo? entry) =>
 class MusicTrackSwipe extends StatelessWidget {
   final Widget child;
   final bool compact;
+  final Widget Function(IdedVideo)? buildPreview;
 
-  const MusicTrackSwipe({super.key, required this.child, this.compact = false});
+  const MusicTrackSwipe(
+      {super.key,
+      required this.child,
+      this.compact = false,
+      this.buildPreview});
 
   @override
   Widget build(BuildContext context) {
     final player = context.watch<PlayerCubit>();
-    context
-        .select((SettingsCubit? settings) => settings?.state.playerRepeatMode);
+    final (_, enabled) = context.select((SettingsCubit? settings) => (
+          settings?.state.playerRepeatMode,
+          compact || settings?.state.musicArtworkSwipe != false,
+        ));
     final session = context.watch<AppCubit>().state;
     final current =
         _occurrence(player.openingMusicEntry) ?? player.state.currentQueueId;
-    final previous = _occurrence(player.adjacentMusicEntry(previous: true));
-    final next = _occurrence(player.adjacentMusicEntry(previous: false));
+    final previous = player.adjacentMusicEntry(previous: true);
+    final next = player.adjacentMusicEntry(previous: false);
     return LayoutBuilder(
       builder: (context, constraints) => _TrackSwipeGesture(
         key: ValueKey((
           session.profileId,
           session.sessionRevision,
           current,
-          previous,
-          next,
+          _occurrence(previous),
+          _occurrence(next),
           constraints.maxWidth,
         )),
         profileId: session.profileId,
@@ -45,7 +52,9 @@ class MusicTrackSwipe extends StatelessWidget {
         previous: previous,
         next: next,
         width: constraints.maxWidth,
+        enabled: enabled,
         compact: compact,
+        buildPreview: buildPreview,
         child: child,
       ),
     );
@@ -56,10 +65,12 @@ class _TrackSwipeGesture extends StatefulWidget {
   final String? queueId;
   final String profileId;
   final int sessionRevision;
-  final String? previous;
-  final String? next;
+  final IdedVideo? previous;
+  final IdedVideo? next;
   final double width;
+  final bool enabled;
   final bool compact;
+  final Widget Function(IdedVideo)? buildPreview;
   final Widget child;
 
   const _TrackSwipeGesture(
@@ -70,6 +81,8 @@ class _TrackSwipeGesture extends StatefulWidget {
       required this.previous,
       required this.next,
       required this.width,
+      required this.enabled,
+      required this.buildPreview,
       required this.compact,
       required this.child});
 
@@ -81,6 +94,15 @@ class _TrackSwipeGestureState extends State<_TrackSwipeGesture> {
   double _distance = 0;
   bool _dragging = false;
 
+  @override
+  void didUpdateWidget(_TrackSwipeGesture oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.enabled && !widget.enabled) {
+      _distance = 0;
+      _dragging = false;
+    }
+  }
+
   void _reset() => setState(() {
         _distance = 0;
         _dragging = false;
@@ -89,8 +111,8 @@ class _TrackSwipeGestureState extends State<_TrackSwipeGesture> {
   bool _previous(double distance) =>
       (distance > 0) == (Directionality.of(context) == TextDirection.ltr);
 
-  bool _canMove(double distance) =>
-      (_previous(distance) ? widget.previous : widget.next) != null;
+  IdedVideo? _neighbor(double distance) =>
+      _previous(distance) ? widget.previous : widget.next;
 
   void _finish(DragEndDetails details) {
     final distance = _distance;
@@ -100,7 +122,7 @@ class _TrackSwipeGestureState extends State<_TrackSwipeGesture> {
         velocity.abs() >= 400 &&
         velocity.sign == distance.sign;
     if (!_dragging ||
-        !_canMove(distance) ||
+        _neighbor(distance) == null ||
         (!flick && distance.abs() < width * (widget.compact ? 0.15 : 0.25))) {
       _reset();
       return;
@@ -108,6 +130,9 @@ class _TrackSwipeGestureState extends State<_TrackSwipeGesture> {
     final player = context.read<PlayerCubit>();
     final session = context.read<AppCubit>().state;
     if (player.isClosed ||
+        player.state.isMini != widget.compact ||
+        (!widget.compact &&
+            context.read<SettingsCubit?>()?.state.musicArtworkSwipe == false) ||
         session.profileId != widget.profileId ||
         session.sessionRevision != widget.sessionRevision ||
         session.globalLoading ||
@@ -120,7 +145,7 @@ class _TrackSwipeGestureState extends State<_TrackSwipeGesture> {
       return;
     }
     final previous = _previous(distance);
-    final expected = previous ? widget.previous : widget.next;
+    final expected = _occurrence(_neighbor(distance));
     if (_occurrence(player.adjacentMusicEntry(previous: previous)) !=
         expected) {
       _reset();
@@ -143,11 +168,18 @@ class _TrackSwipeGestureState extends State<_TrackSwipeGesture> {
   @override
   Widget build(BuildContext context) {
     final width = widget.width.isFinite ? widget.width : 1.0;
-    final distance = _canMove(_distance) ? _distance.clamp(-width, width) : 0.0;
+    final distance = _neighbor(_distance) != null
+        ? _distance.clamp(-width, width).toDouble()
+        : widget.buildPreview == null
+            ? 0.0
+            : (_distance * 0.2).clamp(-width * 0.12, width * 0.12).toDouble();
     final showHint =
         distance.abs() * MediaQuery.devicePixelRatioOf(context) > 50;
-    final enabled = widget.next != null || widget.previous != null;
-    return GestureDetector(
+    final enabled = widget.enabled &&
+        (widget.next != null ||
+            widget.previous != null ||
+            widget.buildPreview != null);
+    final gesture = GestureDetector(
       behavior: HitTestBehavior.opaque,
       // Buttons and focus navigation remain the accessible alternatives.
       excludeFromSemantics: true,
@@ -164,29 +196,59 @@ class _TrackSwipeGestureState extends State<_TrackSwipeGesture> {
       onHorizontalDragEnd: !enabled ? null : _finish,
       onHorizontalDragCancel: enabled ? _reset : null,
       child: ClipRect(
-        child: Stack(alignment: Alignment.center, children: [
-          if (widget.compact && showHint)
-            Positioned(
-              left: distance > 0 ? 16 : null,
-              right: distance < 0 ? 16 : null,
-              child: ExcludeSemantics(
-                  child: Icon(
-                      _previous(distance)
-                          ? Icons.skip_previous_rounded
-                          : Icons.skip_next_rounded,
-                      color: const Color(0xfff0f0f0))),
-            ),
-          AnimatedSlide(
-            offset: Offset(width <= 0 ? 0 : distance / width, 0),
-            duration: _dragging
-                ? Duration.zero
-                : AppMotion.duration(
-                    context, const Duration(milliseconds: 300)),
-            curve: Curves.easeOutCubic,
-            child: widget.child,
-          ),
-        ]),
+        child: Stack(
+            fit: widget.compact ? StackFit.loose : StackFit.passthrough,
+            alignment: Alignment.center,
+            children: [
+              if (widget.compact && showHint)
+                Positioned(
+                  left: distance > 0 ? 16 : null,
+                  right: distance < 0 ? 16 : null,
+                  child: ExcludeSemantics(
+                      child: Icon(
+                          _previous(distance)
+                              ? Icons.skip_previous_rounded
+                              : Icons.skip_next_rounded,
+                          color: const Color(0xfff0f0f0))),
+                ),
+              TweenAnimationBuilder<double>(
+                tween: Tween(end: distance),
+                duration: _dragging || !widget.enabled
+                    ? Duration.zero
+                    : AppMotion.duration(
+                        context, const Duration(milliseconds: 300)),
+                curve: Curves.easeOutCubic,
+                child: widget.child,
+                builder: (context, offset, child) {
+                  final neighbor = _neighbor(offset);
+                  return Stack(fit: StackFit.passthrough, children: [
+                    if (offset != 0 &&
+                        neighbor != null &&
+                        widget.buildPreview != null)
+                      Positioned.fill(
+                        child: ExcludeSemantics(
+                            child: IgnorePointer(
+                          child: Transform.translate(
+                            offset:
+                                Offset(offset - offset.sign * (width + 12), 0),
+                            child: widget.buildPreview!(neighbor),
+                          ),
+                        )),
+                      ),
+                    Transform.translate(
+                        offset: Offset(offset, 0), child: child),
+                  ]);
+                },
+              ),
+            ]),
       ),
     );
+    // The pinned SDK signals the end of an accepted drag even when Android
+    // cancels the pointer. Retire it before that callback can commit a skip.
+    return Listener(
+        onPointerCancel: (_) {
+          if (_dragging) _reset();
+        },
+        child: gesture);
   }
 }

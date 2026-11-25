@@ -2,9 +2,12 @@ import 'dart:convert';
 import '../home/models/phone_navigation.dart';
 import '../home/models/home_tabs_layout.dart';
 import '../content_filter/community_filter.dart';
+import '../music/models/music_artwork_cache.dart';
 import '../music/models/music_cover_corners.dart';
+import '../music/models/music_download_order.dart';
 import '../music/models/music_library_entry.dart';
 import '../music/models/music_layout.dart';
+import '../music/models/music_mini_player_preferences.dart';
 import '../music/models/song_transition.dart';
 import '../player/models/music_audio_quality.dart';
 import '../player/models/playback_pitch.dart';
@@ -357,6 +360,8 @@ class UserBackup {
     }
     if (value.length > 2048) return false;
     const booleans = {
+      musicArtworkSwipeSettingName,
+      musicArtworkDoubleTapSeekSettingName,
       dynamicTheme,
       useDashSettingName,
       playerShuffle,
@@ -423,10 +428,18 @@ class UserBackup {
         SongTransitionMode.fromStorage(value) != null,
       musicStreamingQualitySettingName =>
         MusicStreamingQuality.fromStorage(value) != null,
+      musicMiniPlayerLayoutSettingName =>
+        MusicMiniPlayerLayout.fromStorage(value) != null,
+      musicMiniPlayerShortcutSettingName =>
+        MusicMiniPlayerShortcut.fromStorage(value) != null,
       musicCoverCornersSettingName =>
         MusicCoverCorners.fromStorage(value) != null,
       musicDownloadFormatSettingName =>
         const {'mp3', 'opus', 'm4a'}.contains(value),
+      musicDownloadOrderSettingName =>
+        MusicDownloadOrder.fromStorage(value)?.encode() == value,
+      musicArtworkCacheLimitSettingName =>
+        parseMusicArtworkCacheLimit(value) != null,
       'home-content-mode' => const ['videos', 'music'].contains(value),
       'home-experience' =>
         const ['videosAndMusic', 'videosOnly', 'musicOnly'].contains(value),

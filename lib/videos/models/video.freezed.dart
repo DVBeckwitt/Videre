@@ -81,7 +81,11 @@ mixin _$Video {
       get playbackSourceId; // A verified saved rendition can start before online metadata exists.
 // The source cubit fetches real metadata lazily if local opening fails.
   @JsonKey(includeFromJson: false, includeToJson: false)
-  bool get downloadPlaybackOnly;
+  bool
+      get downloadPlaybackOnly; // An explicit saved song remains local in a catalog-owned queue.
+// Only PlaybackSession persists the fingerprint.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  String? get explicitMusicDownload;
   String? get viewCountText;
 
   /// Create a copy of Video
@@ -183,6 +187,8 @@ mixin _$Video {
                 .equals(other.playbackSourceId, playbackSourceId) &&
             (identical(other.downloadPlaybackOnly, downloadPlaybackOnly) ||
                 other.downloadPlaybackOnly == downloadPlaybackOnly) &&
+            (identical(other.explicitMusicDownload, explicitMusicDownload) ||
+                other.explicitMusicDownload == explicitMusicDownload) &&
             (identical(other.viewCountText, viewCountText) ||
                 other.viewCountText == viewCountText));
   }
@@ -240,12 +246,13 @@ mixin _$Video {
         playbackConnection,
         const DeepCollectionEquality().hash(playbackSourceId),
         downloadPlaybackOnly,
+        explicitMusicDownload,
         viewCountText
       ]);
 
   @override
   String toString() {
-    return 'Video(videoId: $videoId, viewCount: $viewCount, published: $published, index: $index, indexId: $indexId, publishedText: $publishedText, isUpcoming: $isUpcoming, premiereTimestamp: $premiereTimestamp, dashUrl: $dashUrl, description: $description, descriptionHtml: $descriptionHtml, keywords: $keywords, likeCount: $likeCount, dislikeCount: $dislikeCount, paid: $paid, premium: $premium, isFamilyFriendly: $isFamilyFriendly, allowedRegions: $allowedRegions, genre: $genre, genreUrl: $genreUrl, authorThumbnails: $authorThumbnails, subCountText: $subCountText, allowRatings: $allowRatings, rating: $rating, isListed: $isListed, liveNow: $liveNow, hlsUrl: $hlsUrl, adaptiveFormats: $adaptiveFormats, formatStreams: $formatStreams, captions: $captions, storyboards: $storyboards, recommendedVideos: $recommendedVideos, title: $title, lengthSeconds: $lengthSeconds, author: $author, authorId: $authorId, authorUrl: $authorUrl, videoThumbnails: $videoThumbnails, musicMetadata: $musicMetadata, queueEntryId: $queueEntryId, filtered: $filtered, matchedFilters: $matchedFilters, filterHide: $filterHide, deArrowed: $deArrowed, deArrowThumbnailUrl: $deArrowThumbnailUrl, backendPlayback: $backendPlayback, playbackConnection: $playbackConnection, playbackSourceId: $playbackSourceId, downloadPlaybackOnly: $downloadPlaybackOnly, viewCountText: $viewCountText)';
+    return 'Video(videoId: $videoId, viewCount: $viewCount, published: $published, index: $index, indexId: $indexId, publishedText: $publishedText, isUpcoming: $isUpcoming, premiereTimestamp: $premiereTimestamp, dashUrl: $dashUrl, description: $description, descriptionHtml: $descriptionHtml, keywords: $keywords, likeCount: $likeCount, dislikeCount: $dislikeCount, paid: $paid, premium: $premium, isFamilyFriendly: $isFamilyFriendly, allowedRegions: $allowedRegions, genre: $genre, genreUrl: $genreUrl, authorThumbnails: $authorThumbnails, subCountText: $subCountText, allowRatings: $allowRatings, rating: $rating, isListed: $isListed, liveNow: $liveNow, hlsUrl: $hlsUrl, adaptiveFormats: $adaptiveFormats, formatStreams: $formatStreams, captions: $captions, storyboards: $storyboards, recommendedVideos: $recommendedVideos, title: $title, lengthSeconds: $lengthSeconds, author: $author, authorId: $authorId, authorUrl: $authorUrl, videoThumbnails: $videoThumbnails, musicMetadata: $musicMetadata, queueEntryId: $queueEntryId, filtered: $filtered, matchedFilters: $matchedFilters, filterHide: $filterHide, deArrowed: $deArrowed, deArrowThumbnailUrl: $deArrowThumbnailUrl, backendPlayback: $backendPlayback, playbackConnection: $playbackConnection, playbackSourceId: $playbackSourceId, downloadPlaybackOnly: $downloadPlaybackOnly, explicitMusicDownload: $explicitMusicDownload, viewCountText: $viewCountText)';
   }
 }
 
@@ -312,6 +319,8 @@ abstract mixin class $VideoCopyWith<$Res> {
       Object? playbackSourceId,
       @JsonKey(includeFromJson: false, includeToJson: false)
       bool downloadPlaybackOnly,
+      @JsonKey(includeFromJson: false, includeToJson: false)
+      String? explicitMusicDownload,
       String? viewCountText});
 }
 
@@ -376,6 +385,7 @@ class _$VideoCopyWithImpl<$Res> implements $VideoCopyWith<$Res> {
     Object? playbackConnection = freezed,
     Object? playbackSourceId = freezed,
     Object? downloadPlaybackOnly = null,
+    Object? explicitMusicDownload = freezed,
     Object? viewCountText = freezed,
   }) {
     return _then(_self.copyWith(
@@ -574,6 +584,10 @@ class _$VideoCopyWithImpl<$Res> implements $VideoCopyWith<$Res> {
           ? _self.downloadPlaybackOnly
           : downloadPlaybackOnly // ignore: cast_nullable_to_non_nullable
               as bool,
+      explicitMusicDownload: freezed == explicitMusicDownload
+          ? _self.explicitMusicDownload
+          : explicitMusicDownload // ignore: cast_nullable_to_non_nullable
+              as String?,
       viewCountText: freezed == viewCountText
           ? _self.viewCountText
           : viewCountText // ignore: cast_nullable_to_non_nullable
@@ -647,6 +661,8 @@ class _Video extends Video implements ShareLinks, IdedVideo {
       this.playbackSourceId,
       @JsonKey(includeFromJson: false, includeToJson: false)
       this.downloadPlaybackOnly = false,
+      @JsonKey(includeFromJson: false, includeToJson: false)
+      this.explicitMusicDownload,
       this.viewCountText})
       : _keywords = keywords,
         _allowedRegions = allowedRegions,
@@ -851,6 +867,11 @@ class _Video extends Video implements ShareLinks, IdedVideo {
   @override
   @JsonKey(includeFromJson: false, includeToJson: false)
   final bool downloadPlaybackOnly;
+// An explicit saved song remains local in a catalog-owned queue.
+// Only PlaybackSession persists the fingerprint.
+  @override
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  final String? explicitMusicDownload;
   @override
   final String? viewCountText;
 
@@ -958,6 +979,8 @@ class _Video extends Video implements ShareLinks, IdedVideo {
                 .equals(other.playbackSourceId, playbackSourceId) &&
             (identical(other.downloadPlaybackOnly, downloadPlaybackOnly) ||
                 other.downloadPlaybackOnly == downloadPlaybackOnly) &&
+            (identical(other.explicitMusicDownload, explicitMusicDownload) ||
+                other.explicitMusicDownload == explicitMusicDownload) &&
             (identical(other.viewCountText, viewCountText) ||
                 other.viewCountText == viewCountText));
   }
@@ -1015,12 +1038,13 @@ class _Video extends Video implements ShareLinks, IdedVideo {
         playbackConnection,
         const DeepCollectionEquality().hash(playbackSourceId),
         downloadPlaybackOnly,
+        explicitMusicDownload,
         viewCountText
       ]);
 
   @override
   String toString() {
-    return 'Video(videoId: $videoId, viewCount: $viewCount, published: $published, index: $index, indexId: $indexId, publishedText: $publishedText, isUpcoming: $isUpcoming, premiereTimestamp: $premiereTimestamp, dashUrl: $dashUrl, description: $description, descriptionHtml: $descriptionHtml, keywords: $keywords, likeCount: $likeCount, dislikeCount: $dislikeCount, paid: $paid, premium: $premium, isFamilyFriendly: $isFamilyFriendly, allowedRegions: $allowedRegions, genre: $genre, genreUrl: $genreUrl, authorThumbnails: $authorThumbnails, subCountText: $subCountText, allowRatings: $allowRatings, rating: $rating, isListed: $isListed, liveNow: $liveNow, hlsUrl: $hlsUrl, adaptiveFormats: $adaptiveFormats, formatStreams: $formatStreams, captions: $captions, storyboards: $storyboards, recommendedVideos: $recommendedVideos, title: $title, lengthSeconds: $lengthSeconds, author: $author, authorId: $authorId, authorUrl: $authorUrl, videoThumbnails: $videoThumbnails, musicMetadata: $musicMetadata, queueEntryId: $queueEntryId, filtered: $filtered, matchedFilters: $matchedFilters, filterHide: $filterHide, deArrowed: $deArrowed, deArrowThumbnailUrl: $deArrowThumbnailUrl, backendPlayback: $backendPlayback, playbackConnection: $playbackConnection, playbackSourceId: $playbackSourceId, downloadPlaybackOnly: $downloadPlaybackOnly, viewCountText: $viewCountText)';
+    return 'Video(videoId: $videoId, viewCount: $viewCount, published: $published, index: $index, indexId: $indexId, publishedText: $publishedText, isUpcoming: $isUpcoming, premiereTimestamp: $premiereTimestamp, dashUrl: $dashUrl, description: $description, descriptionHtml: $descriptionHtml, keywords: $keywords, likeCount: $likeCount, dislikeCount: $dislikeCount, paid: $paid, premium: $premium, isFamilyFriendly: $isFamilyFriendly, allowedRegions: $allowedRegions, genre: $genre, genreUrl: $genreUrl, authorThumbnails: $authorThumbnails, subCountText: $subCountText, allowRatings: $allowRatings, rating: $rating, isListed: $isListed, liveNow: $liveNow, hlsUrl: $hlsUrl, adaptiveFormats: $adaptiveFormats, formatStreams: $formatStreams, captions: $captions, storyboards: $storyboards, recommendedVideos: $recommendedVideos, title: $title, lengthSeconds: $lengthSeconds, author: $author, authorId: $authorId, authorUrl: $authorUrl, videoThumbnails: $videoThumbnails, musicMetadata: $musicMetadata, queueEntryId: $queueEntryId, filtered: $filtered, matchedFilters: $matchedFilters, filterHide: $filterHide, deArrowed: $deArrowed, deArrowThumbnailUrl: $deArrowThumbnailUrl, backendPlayback: $backendPlayback, playbackConnection: $playbackConnection, playbackSourceId: $playbackSourceId, downloadPlaybackOnly: $downloadPlaybackOnly, explicitMusicDownload: $explicitMusicDownload, viewCountText: $viewCountText)';
   }
 }
 
@@ -1088,6 +1112,8 @@ abstract mixin class _$VideoCopyWith<$Res> implements $VideoCopyWith<$Res> {
       Object? playbackSourceId,
       @JsonKey(includeFromJson: false, includeToJson: false)
       bool downloadPlaybackOnly,
+      @JsonKey(includeFromJson: false, includeToJson: false)
+      String? explicitMusicDownload,
       String? viewCountText});
 }
 
@@ -1152,6 +1178,7 @@ class __$VideoCopyWithImpl<$Res> implements _$VideoCopyWith<$Res> {
     Object? playbackConnection = freezed,
     Object? playbackSourceId = freezed,
     Object? downloadPlaybackOnly = null,
+    Object? explicitMusicDownload = freezed,
     Object? viewCountText = freezed,
   }) {
     return _then(_Video(
@@ -1350,6 +1377,10 @@ class __$VideoCopyWithImpl<$Res> implements _$VideoCopyWith<$Res> {
           ? _self.downloadPlaybackOnly
           : downloadPlaybackOnly // ignore: cast_nullable_to_non_nullable
               as bool,
+      explicitMusicDownload: freezed == explicitMusicDownload
+          ? _self.explicitMusicDownload
+          : explicitMusicDownload // ignore: cast_nullable_to_non_nullable
+              as String?,
       viewCountText: freezed == viewCountText
           ? _self.viewCountText
           : viewCountText // ignore: cast_nullable_to_non_nullable

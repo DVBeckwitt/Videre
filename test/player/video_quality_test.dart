@@ -86,6 +86,7 @@ void main() {
   late List<int?> initialDashHeights;
   late List<int> trackHeights;
   late Set<String> failedSources;
+  late Map<String, Completer<void>> heldSources;
   late Service previousService;
 
   setUp(() async {
@@ -108,6 +109,7 @@ void main() {
     initialDashHeights = [];
     trackHeights = [];
     failedSources = {};
+    heldSources = {};
     messenger.setMockMessageHandler(
         wakelock,
         (_) async =>
@@ -128,6 +130,7 @@ void main() {
         if (failedSources.contains(uri)) {
           throw PlatformException(code: 'VideoError');
         }
+        if (heldSources[uri] case final held?) await held.future;
         await messenger.handlePlatformMessage(
             events.name,
             const StandardMethodCodec().encodeSuccessEnvelope({
@@ -239,6 +242,95 @@ void main() {
     expect(preferredVideoQualityIndex([1080, 480], 1080), 0);
     expect(preferredVideoQualityIndex([0, null], 720), isNull);
     expect(preferredVideoQualityIndex([360, 1080], 0), isNull);
+  });
+
+  test(
+      'returning to Video keeps the requested track in progressive DASH fallback',
+      () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    const base = 'https://instance.example';
+    const dash = '$base/watch.dash';
+    const nativeDash = '$dash?local=true';
+    const original = AudioTrack(id: 'en.1', displayName: 'English');
+    const alternate = AudioTrack(id: 'fr.1', displayName: 'French');
+    FormatStream rendition(int height, AudioTrack track) => FormatStream(
+        '$base/${track.id}-$height.mp4',
+        '$height',
+        'video/mp4',
+        'medium',
+        'mp4',
+        'h264',
+        '${height}p',
+        '${height}p',
+        '1920x$height',
+        audioTrack: track);
+    final entry = Video(
+        videoId: 'watch',
+        lengthSeconds: 60,
+        queueEntryId: 'first',
+        dashUrl: dash,
+        formatStreams: [
+          rendition(480, alternate),
+          rendition(360, alternate),
+          rendition(480, original),
+          rendition(360, original),
+        ]);
+    await player.close();
+    player = TestPlayerCubit(
+        PlayerState.init([entry]).copyWith(
+            currentlyPlaying: entry,
+            position: const Duration(seconds: 12),
+            isHidden: false,
+            isMini: false),
+        settings);
+    await settings.setUseDash(true);
+    failedSources.add(nativeDash);
+    final before = create(entry);
+    try {
+      await before.playVideo(false, startAt: const Duration(seconds: 12));
+      expect(sources, [nativeDash, '$base/en.1-360.mp4']);
+      expect(player.watchAudioPreferenceFor(entry),
+          (trackId: 'en.1', progressiveUrl: '$base/en.1-360.mp4'));
+    } finally {
+      await before.close();
+    }
+
+    final queue = player.state.currentQueueId;
+    await player.onProgress(const Duration(seconds: 12));
+    player.switchAudio(true);
+    player.rememberWatchAudioTrack(entry, 'fr.1');
+    player.switchAudio(false);
+    final after = create(entry);
+    addTearDown(after.close);
+    await after.playVideo(false, startAt: player.state.startAt);
+    expect(sources.skip(2), [nativeDash, '$base/fr.1-360.mp4']);
+    expect(nativeSources.last['initialPositionMs'], 12000);
+    expect(player.state.currentQueueId, queue);
+    expect(settings.state.useDash, isTrue);
+    final quality = after.getVideoTracks();
+    await after.selectVideoTrack(quality.indexOf('480p'));
+    await _flush();
+    expect(sources.last, '$base/fr.1-480.mp4');
+    expect(player.watchAudioPreferenceFor(entry),
+        (trackId: 'fr.1', progressiveUrl: '$base/fr.1-480.mp4'));
+
+    // A pending old Video setup does not replace the last mounted fallback
+    // after a mode round trip, even if its native initialized event arrives.
+    final pendingSource = Completer<void>();
+    addTearDown(() {
+      if (!pendingSource.isCompleted) pendingSource.complete();
+    });
+    heldSources['$base/fr.1-360.mp4'] = pendingSource;
+    await after.selectVideoTrack(after.getVideoTracks().indexOf('360p'));
+    await _flush();
+    expect(sources.last, '$base/fr.1-360.mp4');
+    player.switchAudio(true);
+    player.switchAudio(false);
+    pendingSource.complete();
+    await _flush();
+    expect(player.watchAudioPreferenceFor(entry),
+        (trackId: 'fr.1', progressiveUrl: '$base/fr.1-480.mp4'));
   });
 
   test('only a classified native failure reports a separate media host',

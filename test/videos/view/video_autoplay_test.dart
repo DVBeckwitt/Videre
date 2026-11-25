@@ -173,6 +173,7 @@ class _Player extends Cubit<PlayerState> implements PlayerCubit {
       Duration? startAt,
       bool? playing,
       int? startIndex,
+      String? queueTitle,
       bool fromMusic = false}) async {
     playRequests.add(videos);
     startPositions.add(startAt);

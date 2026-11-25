@@ -140,6 +140,27 @@ void main() {
     expect(resource['key'], isNot(contains('sig')));
   });
 
+  test('different audio tracks in combined sources cannot reuse bytes', () {
+    const english =
+        'https://inv.example/videoplayback?itag=18&clen=900&lmt=123&sig=x';
+    const french =
+        'https://inv.example/videoplayback?itag=18&clen=900&lmt=123&sig=y';
+    final video = Video(videoId: 'song', formatStreams: [
+      FormatStream(
+          english, '18', 'video/mp4', 'medium', 'mp4', 'h264', null, null, null,
+          audioTrack: const AudioTrack(id: 'en', displayName: 'English')),
+      FormatStream(
+          french, '18', 'video/mp4', 'medium', 'mp4', 'h264', null, null, null,
+          audioTrack: const AudioTrack(id: 'fr', displayName: 'French')),
+    ]);
+    final identity = _identity(video: video, sourceUrl: english)!;
+    final first = _resource(identity, english);
+    final second = _resource(identity, french);
+    expect(first['persistent'], isTrue);
+    expect(second['persistent'], isTrue);
+    expect(first['key'], isNot(second['key']));
+  });
+
   test('duplicate and conflicting URL identity remains session-only', () {
     for (final query in [
       'itag=18&clen=900&clen=901&lmt=123',

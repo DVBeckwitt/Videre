@@ -73,6 +73,15 @@ class DownloadProgress {
   DownloadProgress(this.cancelToken, {this.retryAt});
 }
 
+/// The jobs present when a Music removal confirmation was opened.
+class MusicDownloadDeletionApproval {
+  final DownloadManagerCubit _manager;
+  final int _generation;
+  final List<({DownloadedVideo video, Object incarnation})> _jobs;
+
+  MusicDownloadDeletionApproval._(this._manager, this._generation, this._jobs);
+}
+
 class DownloadManagerCubit extends Cubit<DownloadManagerState> {
   final PlayerCubit player;
   final DownloadStorage storage;
@@ -91,6 +100,7 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
   final Set<Future<void>> _mutations = {};
   final Set<String> _deleting = {};
   final Set<String> _enqueuing = {};
+  final Map<String, Object> _musicDeletionIncarnations = {};
   final Map<String, ({CancelToken token, Future<bool> result})> _exports = {};
   DownloadFolderPreferences _folders = const DownloadFolderPreferences();
   Future<void> _folderWrite = Future.value();
@@ -173,6 +183,7 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
     _library = db.forProfile(db.profileId);
     _deleting.clear();
     _enqueuing.clear();
+    _musicDeletionIncarnations.clear();
     _loadLibrary();
     _switchingProfile = false;
     _networkChanged(_wifiConnected);
@@ -423,6 +434,7 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
           }
           final account = await _library.getCurrentlySelectedServer();
           if (!_current || _switchingProfile) return false;
+          _musicDeletionIncarnations.remove(videoId);
           await _library.upsertDownload(DownloadedVideo(
               videoId: videoId,
               title: video?.musicMetadata?.title ?? video?.title ?? videoId,
@@ -725,7 +737,7 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
             await encodeMusic(
                 input: audioPath,
                 output: output,
-                video: video,
+                video: outputVideo,
                 token: token,
                 sourceCodec: audio.encoding);
           } else if (video.audioOnly) {
@@ -1030,22 +1042,7 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
 
   Future<void> _deleteParts(DownloadedVideo video) async {
     final path = await video.stagingPath;
-    for (final suffix in [
-      '.audio.part',
-      '.audio.part.identity',
-      '.video.part',
-      '.video.part.identity',
-      '.caption.vtt',
-      '.mux.webm',
-      '.mux.mp4',
-      '.mux.m4a',
-      '.mux.mp3',
-      '.mux.ogg',
-      '.export-input.part',
-      '.export.mp3',
-      '.export.ogg',
-      '.export.m4a',
-    ]) {
+    for (final suffix in downloadStagingSuffixes) {
       final file = File('$path$suffix');
       if (await file.exists()) await file.delete();
     }
@@ -1065,21 +1062,112 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
     }
   }
 
-  Future<void> deleteVideo(DownloadedVideo video) => _mutate(() async {
+  // Titles, progress and retry state can change while the confirmation is open.
+  // The persisted owner, job options and output identify the confirmed target.
+  bool _sameMusicDownload(DownloadedVideo requested, DownloadedVideo saved) =>
+      requested.videoId == saved.videoId &&
+      requested.profileId == saved.profileId &&
+      requested.accountId == saved.accountId &&
+      requested.audioOnly &&
+      saved.audioOnly &&
+      requested.musicMetadata != null &&
+      saved.musicMetadata != null &&
+      requested.downloadComplete == saved.downloadComplete &&
+      requested.folderUri == saved.folderUri &&
+      requested.storageUri == saved.storageUri &&
+      requested.musicFormat == saved.musicFormat &&
+      requested.container == saved.container &&
+      requested.quality == saved.quality &&
+      requested.audioTrackId == saved.audioTrackId &&
+      requested.captionLabel == saved.captionLabel &&
+      requested.playbackProvenance == saved.playbackProvenance;
+
+  MusicDownloadDeletionApproval captureMusicDeletion(
+      List<DownloadedVideo> selection) {
+    final jobs = <({DownloadedVideo video, Object incarnation})>[];
+    final seen = <String>{};
+    if (_current && !_switchingProfile) {
+      for (final video in selection) {
+        if (video.profileId != _library.profileId ||
+            !DownloadedVideo.isSafeFileId(video.videoId) ||
+            _deleting.contains(video.videoId)) {
+          continue;
+        }
+        final saved = _library.getDownloadByVideoId(video.videoId);
+        if (saved == null ||
+            !_sameMusicDownload(video, saved) ||
+            !seen.add(video.videoId)) {
+          continue;
+        }
+        jobs.add((
+          video: saved,
+          incarnation:
+              _musicDeletionIncarnations.putIfAbsent(video.videoId, Object.new)
+        ));
+      }
+    }
+    return MusicDownloadDeletionApproval._(this, _generation, jobs);
+  }
+
+  /// Removes matching jobs one at a time. Missing, replaced or inaccessible
+  /// files do not prevent the other confirmed jobs from being removed.
+  Future<int> deleteMusicSelection(MusicDownloadDeletionApproval approval,
+      {required bool Function() isCurrent}) async {
+    bool current() =>
+        _current &&
+        !_switchingProfile &&
+        identical(approval._manager, this) &&
+        approval._generation == _generation &&
+        isCurrent();
+    var removed = 0;
+    for (final job in approval._jobs) {
+      if (!current()) break;
+      try {
+        if (await _deleteVideo(job.video,
+            selectionIsCurrent: () =>
+                current() &&
+                identical(_musicDeletionIncarnations[job.video.videoId],
+                    job.incarnation))) {
+          removed++;
+        }
+      } on Exception catch (error) {
+        if (error is! PlatformException && error is! FileSystemException) {
+          rethrow;
+        }
+        log.warning(
+            'Could not remove a selected Music download (${error.runtimeType})');
+      }
+    }
+    return removed;
+  }
+
+  Future<void> deleteVideo(DownloadedVideo video) async {
+    await _deleteVideo(video);
+  }
+
+  Future<bool> _deleteVideo(DownloadedVideo requested,
+          {bool Function()? selectionIsCurrent}) =>
+      _mutate(() async {
         await _ready;
-        if (!DownloadedVideo.isSafeFileId(video.videoId) ||
-            !DownloadedVideo.isSafeFileId(video.profileId)) {
+        if (!DownloadedVideo.isSafeFileId(requested.videoId) ||
+            !DownloadedVideo.isSafeFileId(requested.profileId)) {
           throw const FormatException('Invalid download identity');
         }
         if (!_current ||
             _switchingProfile ||
-            video.profileId != _library.profileId) {
-          return;
+            requested.profileId != _library.profileId ||
+            selectionIsCurrent?.call() == false) {
+          return false;
         }
-        final saved = _library.getDownloadByVideoId(video.videoId);
-        if (saved == null) return;
-        video = saved;
-        _deleting.add(video.videoId);
+        final saved = _library.getDownloadByVideoId(requested.videoId);
+        if (saved == null ||
+            (selectionIsCurrent != null &&
+                !_sameMusicDownload(requested, saved)) ||
+            !_deleting.add(requested.videoId)) {
+          return false;
+        }
+        var video = saved;
+        var resumeIfAbandoned = false;
         try {
           final export = _exports[video.videoId];
           if (export != null) {
@@ -1090,10 +1178,22 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
               // The writer is now detached from the file being removed.
             }
           }
-          state.downloadProgresses[video.videoId]?.cancelToken.cancel();
+          final token = state.downloadProgresses[video.videoId]?.cancelToken;
+          resumeIfAbandoned = selectionIsCurrent != null &&
+              _activeId == video.videoId &&
+              token != null &&
+              !token.isCancelled;
+          token?.cancel();
           if (_activeId == video.videoId) await _activeJob;
           // The active job may have created a document since this UI snapshot.
-          video = _library.getDownloadByVideoId(video.videoId) ?? video;
+          final latest = _library.getDownloadByVideoId(video.videoId);
+          if (selectionIsCurrent != null &&
+              (!selectionIsCurrent() ||
+                  latest == null ||
+                  !_sameMusicDownload(requested, latest))) {
+            return false;
+          }
+          video = latest ?? video;
           if (video.exportedMusic case final copy? when !copy.complete) {
             await storage.deleteDocument(copy.uri);
           }
@@ -1112,14 +1212,26 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
           }
           final covers = await video.songCoverDirectory;
           if (await covers.exists()) await covers.delete(recursive: true);
+          if (selectionIsCurrent != null) {
+            final remaining = _library.getDownloadByVideoId(video.videoId);
+            if (remaining == null ||
+                !_sameMusicDownload(requested, remaining)) {
+              return false;
+            }
+          }
           await _library.deleteDownload(video);
+          _musicDeletionIncarnations.remove(video.videoId);
+          resumeIfAbandoned = false;
           final paused = {...state.pausedVideoIds}..remove(video.videoId);
           await _library.saveSetting(
               SettingsValue(_pausedSetting, jsonEncode(paused.toList())));
           emit(state.copyWith(pausedVideoIds: paused));
           setVideos();
+          return true;
         } finally {
           _deleting.remove(video.videoId);
+          // The drain may have finished while this job was reserved for deletion.
+          if (resumeIfAbandoned) unawaited(_drain());
         }
       });
 

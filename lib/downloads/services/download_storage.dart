@@ -2,7 +2,12 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
+
+import '../models/downloaded_video.dart';
 
 const downloadFolderSetting = 'download-folder';
 
@@ -27,6 +32,12 @@ class DownloadFolder {
 }
 
 typedef DownloadDestination = ({DownloadFolder? folder, bool usePrivate});
+typedef MusicFileProbe = ({
+  DownloadedVideo download,
+  String uri,
+  String identity,
+  int byteLength,
+});
 
 const defaultDownloadDestination = (folder: null, usePrivate: false);
 const privateDownloadDestination = (folder: null, usePrivate: true);
@@ -97,6 +108,101 @@ class DownloadFolderPreferences {
 class DownloadStorage {
   static const _channel = MethodChannel('videre/download_storage');
   static int _nextWrite = 0;
+  static final _fileProof = RegExp(r'^[a-f0-9]{64}$');
+
+  Future<String?> musicFileProof(DownloadedVideo file,
+          {bool verifyCompletion = false}) async =>
+      (await _probeMusicFiles(file.profileId, [file],
+              expectedSha256:
+                  verifyCompletion ? file.playbackProvenance?.sha256 : null))
+          .firstOrNull
+          ?.identity;
+
+  /// Checks that completed owned files are still readable and captures an
+  /// opaque native descriptor identity without reading their audio bytes.
+  Future<List<MusicFileProbe>> probeMusicFiles(
+          String profileId, Iterable<DownloadedVideo> downloads) =>
+      _probeMusicFiles(profileId, downloads);
+
+  Future<List<MusicFileProbe>> _probeMusicFiles(
+      String profileId, Iterable<DownloadedVideo> downloads,
+      {String? expectedSha256}) async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return [];
+
+    final files = downloads
+        .where((file) =>
+            file.profileId == profileId &&
+            file.downloadComplete &&
+            !file.downloadFailed &&
+            !file.storageFailed &&
+            !file.authenticationRequired &&
+            file.audioOnly &&
+            file.musicMetadata?.title.trim().isNotEmpty == true &&
+            DownloadedVideo.isSafeFileId(file.videoId))
+        .toList(growable: false);
+    final result = <MusicFileProbe>[];
+    String? privateFolder;
+    for (var start = 0; start < files.length; start += 64) {
+      final batch = <String, ({DownloadedVideo file, String uri})>{};
+      for (final file in files.skip(start).take(64)) {
+        try {
+          var uri = file.storageUri;
+          if (uri == null) {
+            privateFolder ??= p.joinAll([
+              (await getApplicationDocumentsDirectory()).path,
+              ...privateDownloadFolderSegments(profileId),
+            ]);
+            uri = Uri.file(
+                    p.join(privateFolder, '${file.videoId}.${file.extension}'))
+                .toString();
+          } else if (file.folderUri == null) {
+            continue;
+          }
+          batch[file.videoId] = (file: file, uri: uri);
+        } on Exception {
+          // A missing private destination does not affect other downloads.
+        }
+      }
+      if (batch.isEmpty) continue;
+      try {
+        final available =
+            await _channel.invokeMapMethod<String, dynamic>('probeMusicFiles', {
+          'profileId': profileId,
+          'files': [
+            for (final entry in batch.entries)
+              {
+                'key': entry.key,
+                'videoId': entry.key,
+                'uri': entry.value.uri,
+                'folderUri': entry.value.file.folderUri,
+                if (expectedSha256 != null) 'expectedSha256': expectedSha256,
+              },
+          ],
+        });
+        for (final entry in batch.entries) {
+          final proof = available?[entry.key];
+          if (proof
+              case {'identity': final String id, 'byteLength': final int n}
+              when _fileProof.stringMatch(id) == id && n > 0) {
+            final expectedLength =
+                entry.value.file.playbackProvenance?.byteLength;
+            if (expectedLength != null && expectedLength != n) continue;
+            result.add((
+              download: entry.value.file,
+              uri: entry.value.uri,
+              identity: id,
+              byteLength: n,
+            ));
+          }
+        }
+      } on PlatformException {
+        // Storage or a provider may become unavailable between reads.
+      } on MissingPluginException {
+        return [];
+      }
+    }
+    return result;
+  }
 
   bool get supportsSharedMusic => Platform.isAndroid;
 
@@ -162,6 +268,14 @@ class DownloadStorage {
 
   Future<void> deleteDocument(String uri) =>
       _channel.invokeMethod<void>('deleteDocument', {'uri': uri});
+
+  /// Metadata only. Zero includes confirmed absence. An inaccessible document
+  /// or a provider without a size is unknown.
+  Future<int?> documentSize(String uri, String folderUri) async {
+    final size = await _channel.invokeMethod<Object?>(
+        'documentSize', {'uri': uri, 'folderUri': folderUri});
+    return size is int && size >= 0 ? size : null;
+  }
 
   /// False only when the exported file is confirmed absent from this destination.
   Future<bool> exportExists(String uri, String folderUri) async {

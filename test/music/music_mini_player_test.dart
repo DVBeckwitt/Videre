@@ -1,10 +1,14 @@
 import 'dart:async';
 import 'dart:collection';
 
+import 'package:back_button_interceptor/back_button_interceptor.dart';
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
+import 'package:clipious/music/models/music_library_entry.dart';
+import 'package:clipious/music/models/music_mini_player_preferences.dart';
+import 'package:clipious/music/services/music_library_service.dart';
 import 'package:clipious/music/views/components/music_mini_player.dart';
 import 'package:clipious/player/models/media_command.dart';
 import 'package:clipious/player/models/media_event.dart';
@@ -18,12 +22,20 @@ import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../test_app_cubit.dart';
 import '../test_player_cubit.dart';
 import '../test_settings_cubit.dart';
+
+class _App extends TestAppCubit {
+  _App(super.initialState);
+
+  void changeSession() =>
+      emit(state.copyWith(sessionRevision: state.sessionRevision + 1));
+}
 
 class _Player extends TestPlayerCubit {
   _Player(super.initialState, super.settings);
@@ -33,6 +45,10 @@ class _Player extends TestPlayerCubit {
   int expandCalls = 0;
   int closeCalls = 0;
   Duration? sought;
+  bool loadingMoreSongs = false;
+
+  @override
+  bool get playlistComplete => !loadingMoreSongs && super.playlistComplete;
 
   Future<void> seed(PlayerState next) async {
     await TestWidgetsFlutterBinding.instance.runAsync(() async => emit(next));
@@ -59,23 +75,23 @@ class _Player extends TestPlayerCubit {
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
-  late TestAppCubit app;
+  late _App app;
   late TestSettingsCubit settings;
   late _Player player;
   const song = Video(
-      videoId: 'song',
+      videoId: 'song0000001',
       title: 'Video title',
       lengthSeconds: 180,
       musicMetadata: MusicMetadata(title: 'Song', artist: 'Singer'));
   const next = Video(
-      videoId: 'next',
+      videoId: 'next0000001',
       title: 'Next',
       lengthSeconds: 180,
       musicMetadata: MusicMetadata(title: 'Next', artist: 'Singer'));
 
   setUp(() async {
     db = await SembastSqfDb.createInMemory();
-    app = TestAppCubit(AppState(0, null, HomeLayout()));
+    app = _App(AppState(0, null, HomeLayout()));
     await app.initState();
     app.intentDataStreamSubscription =
         const Stream<void>.empty().listen((_) {});
@@ -128,6 +144,132 @@ void main() {
 
   Finder key(String value) => find.byKey(ValueKey(value));
 
+  Future<void> tapBookmark(WidgetTester tester, Finder control, String id,
+      {required bool saved}) async {
+    final library = MusicLibraryService.forProfile(db, db.profileId);
+    await tester.runAsync(() async {
+      await tester.tap(control);
+      await Future.doWhile(() async {
+        await tester.pump();
+        if (library.contains(MusicLibraryKind.song, id) == saved) return false;
+        await Future<void>.delayed(const Duration(milliseconds: 1));
+        return true;
+      }).timeout(const Duration(seconds: 5));
+    });
+    await tester.pumpAndSettle();
+  }
+
+  Future<void> miniPreferences(WidgetTester tester,
+      MusicMiniPlayerLayout layout, MusicMiniPlayerShortcut shortcut) async {
+    await tester.runAsync(() async {
+      await settings.setMusicMiniPlayerLayout(layout);
+      await settings.setMusicMiniPlayerShortcut(shortcut);
+    });
+  }
+
+  testWidgets(
+      'Transport mini layout offers direct Previous and paged Next with Save in More',
+      (tester) async {
+    await miniPreferences(tester, MusicMiniPlayerLayout.transport,
+        MusicMiniPlayerShortcut.automatic);
+    await player.seed(player.state.copyWith(
+        currentlyPlaying: next,
+        playedVideos: [song.videoId],
+        playQueue: ListQueue<String>()));
+    player.loadingMoreSongs = true;
+    await pump(tester);
+    expect(key('music-mini-previous').hitTestable(), findsOneWidget);
+    final advance = key('music-mini-next');
+    expect(advance.hitTestable(), findsOneWidget);
+    await tester.tap(advance);
+    await tester.pump();
+    expect(player.nextCalls, 1);
+    expect(find.byTooltip('Save song'), findsNothing);
+    await tester.tap(key('music-mini-more'));
+    await tester.pumpAndSettle();
+    final bookmark = key('music-mini-bookmark-menu');
+    expect(bookmark.hitTestable(), findsOneWidget);
+    expect(key('music-mini-close').hitTestable(), findsOneWidget);
+    await tapBookmark(tester, bookmark, next.videoId, saved: true);
+    await tester.tap(key('music-mini-more'));
+    await tester.pumpAndSettle();
+    expect(find.text('Remove saved song'), findsOneWidget);
+    expect(player.expandCalls, 0);
+  });
+
+  testWidgets(
+      'Compact mini Repeat remains available for one song as Save moves into More',
+      (tester) async {
+    await miniPreferences(
+        tester, MusicMiniPlayerLayout.compact, MusicMiniPlayerShortcut.repeat);
+    await player.seed(
+        player.state.copyWith(videos: [song], playQueue: ListQueue<String>()));
+    await pump(tester, width: 360, scale: 2.5);
+    expect(find.byTooltip('Save song').hitTestable(), findsOneWidget);
+    final repeat = key('music-mini-repeat');
+    expect(repeat.hitTestable(), findsOneWidget);
+    expect(find.byTooltip('Repeat off'), findsOneWidget);
+    for (final (mode, label) in [
+      (PlayerRepeat.repeatAll, 'Repeat all'),
+      (PlayerRepeat.repeatOne, 'Repeat song'),
+      (PlayerRepeat.noRepeat, 'Repeat off'),
+    ]) {
+      await tester.runAsync(() async {
+        final changed = settings.stream
+            .firstWhere((state) => state.playerRepeatMode == mode);
+        await tester.tap(repeat);
+        await changed.timeout(const Duration(seconds: 5));
+      });
+      await tester.pumpAndSettle();
+      expect(find.byTooltip(label), findsOneWidget);
+    }
+
+    tester.view.physicalSize = const Size(240, 844);
+    await tester.pumpAndSettle();
+    expect(repeat.hitTestable(), findsOneWidget);
+    expect(key('music-mini-play').hitTestable(), findsOneWidget);
+    expect(find.byTooltip('Save song'), findsNothing);
+    await tester.tap(key('music-mini-more'));
+    await tester.pumpAndSettle();
+    final savedAction = key('music-mini-bookmark-menu');
+    expect(savedAction.hitTestable(), findsOneWidget);
+    await tester.tap(savedAction);
+    await player
+        .seed(player.state.copyWith(videos: [next], currentlyPlaying: next));
+    await tester.pumpAndSettle();
+    final library = MusicLibraryService.forProfile(db, db.profileId);
+    expect(library.contains(MusicLibraryKind.song, song.videoId), isFalse);
+    expect(library.contains(MusicLibraryKind.song, next.videoId), isFalse);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+      'mini Shuffle preserves the playing occurrence, position, and transport command',
+      (tester) async {
+    await miniPreferences(tester, MusicMiniPlayerLayout.transport,
+        MusicMiniPlayerShortcut.shuffle);
+    await pump(tester, width: 320, scale: 2.5);
+    final shuffle = key('music-mini-shuffle');
+    expect(shuffle.hitTestable(), findsOneWidget);
+    await tester.tap(key('music-mini-play'));
+    await tester.pump();
+    final before = player.state;
+    expect(before.mediaCommand?.type, MediaCommandType.play);
+    await tester.runAsync(() async {
+      final changed =
+          settings.stream.firstWhere((state) => state.playerShuffleMode);
+      await tester.tap(shuffle);
+      await changed.timeout(const Duration(seconds: 5));
+    });
+    await tester.pumpAndSettle();
+    expect(player.state.currentQueueId, before.currentQueueId);
+    expect(player.state.position, before.position);
+    expect(player.state.mediaCommand, same(before.mediaCommand));
+    expect(player.nextCalls, 0);
+    expect(player.sought, isNull);
+    expect(tester.takeException(), isNull);
+  });
+
   for (final (width, scale) in [
     (240.0, 2.5),
     (320.0, 1.0),
@@ -148,7 +290,14 @@ void main() {
         expect(find.text('Song'), findsOneWidget);
         expect(
             find.bySemanticsLabel('Now playing, Song, Singer'), findsOneWidget);
-        expect(find.byTooltip('Close'), findsOneWidget);
+        if (width >= 600) {
+          expect(find.byTooltip('Close'), findsOneWidget);
+          expect(key('music-mini-next'), findsOneWidget);
+          expect(find.byTooltip('Save song'), findsNothing);
+        } else {
+          expect(key('music-mini-more'), findsOneWidget);
+          expect(find.byTooltip('Save song'), findsOneWidget);
+        }
         expect(tester.getRect(key('music-mini-expand')).right,
             lessThanOrEqualTo(tester.getRect(key('music-mini-play')).left));
         expect(tester.takeException(), isNull);
@@ -171,13 +320,146 @@ void main() {
     await tester.tap(key('music-mini-play'));
     await tester.pump();
     expect(player.state.mediaCommand!.type, MediaCommandType.pause);
+    await tester.tap(key('music-mini-more'));
+    await tester.pumpAndSettle();
+    // The shared Previous command restarts the first song.
+    expect(tester.widget<MenuItemButton>(key('music-mini-previous')).onPressed,
+        isNotNull);
     await tester.tap(key('music-mini-next'));
+    await tester.pumpAndSettle();
     expect(player.nextCalls, 1);
+    await tester.tap(key('music-mini-more'));
+    await tester.pumpAndSettle();
     await tester.tap(key('music-mini-close'));
+    await tester.pumpAndSettle();
     expect(player.closeCalls, 1);
     expect(player.expandCalls, 0);
     await tester.tap(key('music-mini-expand'));
     expect(player.expandCalls, 1);
+  });
+
+  testWidgets('compact music can save and unsave the current online song',
+      (tester) async {
+    await pump(tester);
+    await tapBookmark(tester, find.byTooltip('Save song'), song.videoId,
+        saved: true);
+    expect(find.byTooltip('Remove saved song'), findsOneWidget);
+    await tapBookmark(tester, find.byTooltip('Remove saved song'), song.videoId,
+        saved: false);
+    expect(find.byTooltip('Save song'), findsOneWidget);
+    expect(player.expandCalls, 0);
+    expect(player.nextCalls, 0);
+  });
+
+  testWidgets('last song menu still returns to the previous track',
+      (tester) async {
+    await player.seed(player.state.copyWith(
+        currentlyPlaying: next,
+        playedVideos: [song.videoId],
+        playQueue: ListQueue<String>()));
+    await pump(tester);
+    await tester.tap(key('music-mini-more'));
+    await tester.pumpAndSettle();
+    expect(tester.widget<MenuItemButton>(key('music-mini-next')).onPressed,
+        isNull);
+    await tester.tap(key('music-mini-previous'));
+    await tester.pumpAndSettle();
+    expect(player.previousCalls, 1);
+    expect(player.nextCalls, 0);
+  });
+
+  testWidgets('Android Back closes the compact overflow before the page',
+      (tester) async {
+    await pump(tester);
+    var pageBacks = 0;
+    bool pageBack(bool stopped, RouteInfo info) {
+      pageBacks++;
+      return true;
+    }
+
+    BackButtonInterceptor.add(pageBack, zIndex: 1, ifNotYetIntercepted: true);
+    addTearDown(() => BackButtonInterceptor.remove(pageBack));
+    Future<void> back() async {
+      await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+        SystemChannels.navigation.name,
+        SystemChannels.navigation.codec
+            .encodeMethodCall(const MethodCall('popRoute')),
+        null,
+      );
+      await tester.pumpAndSettle();
+    }
+
+    await tester.tap(key('music-mini-more'));
+    await tester.pumpAndSettle();
+    expect(key('music-mini-next'), findsOneWidget);
+    await back();
+    expect(key('music-mini-next'), findsNothing);
+    expect(pageBacks, 0);
+    expect(
+        tester.widget<IconButton>(key('music-mini-more')).focusNode!.hasFocus,
+        isTrue);
+    await back();
+    expect(pageBacks, 1);
+    expect(player.closeCalls, 0);
+  });
+
+  testWidgets('dismissing the compact overflow cannot toggle playback',
+      (tester) async {
+    await pump(tester);
+    final command = player.state.mediaCommand;
+    await tester.tap(key('music-mini-more'));
+    await tester.pumpAndSettle();
+    await tester.tap(key('music-mini-play'));
+    await tester.pumpAndSettle();
+    expect(key('music-mini-next'), findsNothing);
+    expect(player.state.mediaCommand, command);
+  });
+
+  for (final replaceSession in [false, true]) {
+    testWidgets(
+        'deferred compact action preserves replacement '
+        '${replaceSession ? 'session' : 'song'}', (tester) async {
+      await pump(tester);
+      await tester.tap(key('music-mini-more'));
+      await tester.pumpAndSettle();
+      await tester.tap(key('music-mini-close'));
+      if (replaceSession) {
+        app.changeSession();
+      } else {
+        await player.seed(player.state.copyWith(currentlyPlaying: next));
+      }
+      await tester.pumpAndSettle();
+      expect(player.closeCalls, 0);
+    });
+  }
+
+  testWidgets('deferred Next does not skip after the queue changes',
+      (tester) async {
+    await pump(tester);
+    await tester.tap(key('music-mini-more'));
+    await tester.pumpAndSettle();
+    await tester.tap(key('music-mini-next'));
+    await player.seed(player.state.copyWith(playQueue: ListQueue<String>()));
+    await tester.pumpAndSettle();
+    expect(player.nextCalls, 0);
+  });
+
+  testWidgets('Next stays available at the end of a partially loaded playlist',
+      (tester) async {
+    player.loadingMoreSongs = true;
+    await player.seed(
+        player.state.copyWith(videos: [song], playQueue: ListQueue<String>()));
+    await pump(tester);
+    await tester.tap(key('music-mini-more'));
+    await tester.pumpAndSettle();
+    await tester.tap(key('music-mini-next'));
+    await tester.pumpAndSettle();
+    expect(player.nextCalls, 1);
+    player.loadingMoreSongs = false;
+    player.playlistLoadingRevision.value++;
+    await tester.pumpAndSettle();
+    expect(key('music-mini-more'), findsNothing);
+    expect(key('music-mini-close'), findsOneWidget);
   });
 
   testWidgets('mini player swipes change tracks without expanding or seeking',

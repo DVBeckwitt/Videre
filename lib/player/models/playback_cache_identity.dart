@@ -111,7 +111,8 @@ Map<String, Object?>? playbackCacheIdentity({
             itag: format.itag,
             clen: _single(query, 'clen'),
             lmt: _single(query, 'lmt'),
-            type: format.type));
+            type: format.type,
+            audioTrack: format.audioTrack?.id));
   }
   resources.putIfAbsent(admittedSource, () => sessionResource(admittedSource));
 

@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
+import android.database.Cursor
 import android.media.MediaScannerConnection
 import android.net.Uri
 import android.os.Build
@@ -12,6 +13,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.storage.StorageManager
 import android.provider.DocumentsContract
+import android.provider.DocumentsContract.Document
 import android.provider.MediaStore
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.embedding.engine.plugins.activity.ActivityAware
@@ -24,8 +26,12 @@ import java.io.FileNotFoundException
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
+import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import com.github.dvbeckwitt.videre.proxy.DownloadDocumentIntegrity
 import com.github.dvbeckwitt.videre.proxy.SharedMusicDownload
@@ -38,6 +44,11 @@ class DownloadStoragePlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activ
     private var pendingPicker: MethodChannel.Result? = null
     private val main = Handler(Looper.getMainLooper())
     private val worker = Executors.newSingleThreadExecutor()
+    private val sizeWorker = ThreadPoolExecutor(2, 2, 30L, TimeUnit.SECONDS, ArrayBlockingQueue(4)).apply {
+        allowCoreThreadTimeOut(true)
+    }
+    // Accessed only on the engine's main thread, including completion and detach.
+    private val pendingSizes = mutableSetOf<MethodChannel.Result>()
     private val writes = ConcurrentHashMap<String, AtomicBoolean>()
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
@@ -104,6 +115,8 @@ class DownloadStoragePlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activ
                 DownloadDocumentIntegrity.inspect(context, call.argument<String>("uri")!!,
                     call.argument<String>("folderUri")!!)
             }
+            "probeMusicFiles" -> probeMusicFiles(call, result)
+            "documentSize" -> measureDocument(call, result)
             "exportExists" -> run(result) {
                 val uri = Uri.parse(call.argument<String>("uri")!!)
                 val folderValue = call.argument<String>("folderUri")!!
@@ -212,6 +225,66 @@ class DownloadStoragePlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activ
         }
     }
 
+    private fun measureDocument(call: MethodCall, result: MethodChannel.Result) = runMetadataProbe(result) {
+        val value = call.argument<String>("uri")!!
+        val destination = call.argument<String>("folderUri")!!
+        if (destination == SharedMusicDownload.COLLECTION) {
+            SharedMusicDownload.documentSize(context, Uri.parse(value))
+        } else {
+            safDocumentSize(document(value, writable = false), Uri.parse(destination))
+        }
+    }
+
+    private fun probeMusicFiles(call: MethodCall, result: MethodChannel.Result) = runMetadataProbe(result) {
+        val profile = call.argument<String>("profileId") ?: return@runMetadataProbe null
+        val files = call.argument<List<*>>("files") ?: return@runMetadataProbe null
+        if (!downloadProfileId.matches(profile) || files.size > 64) return@runMetadataProbe null
+        buildMap {
+            for (value in files) {
+                val file = value as? Map<*, *> ?: continue
+                val key = file["key"] as? String ?: continue
+                val video = file["videoId"] as? String ?: continue
+                val uri = file["uri"] as? String ?: continue
+                val folder = file["folderUri"] as? String
+                val expected = file["expectedSha256"] as? String
+                if (key.length !in 1..128 || !downloadProfileId.matches(video) || uri.length !in 1..32768 ||
+                    (file["folderUri"] != null && (folder == null || folder.length !in 1..32768))) continue
+                if (file["expectedSha256"] != null &&
+                    (files.size != 1 || expected == null || !downloadContentHash.matches(expected))) continue
+                val resolved = Uri.parse(uri)
+                val destination = folder?.let(Uri::parse)
+                if (resolved.encodedQuery != null || resolved.encodedFragment != null ||
+                    destination?.encodedQuery != null || destination?.encodedFragment != null) continue
+                try {
+                    val stamp = DownloadDocumentIntegrity.probe(context, uri, folder, profile, video, expected)
+                    put(key, mapOf("identity" to stamp.identity, "byteLength" to stamp.byteLength))
+                } catch (_: Exception) {
+                    // One missing, unmounted or moved file should not suppress others.
+                }
+            }
+        }
+    }
+
+    private fun runMetadataProbe(result: MethodChannel.Result, action: () -> Any?) {
+        pendingSizes.add(result)
+        try {
+            sizeWorker.execute {
+                val value = try {
+                    action()
+                } catch (_: Exception) {
+                    null
+                }
+                main.post { if (pendingSizes.remove(result)) result.success(value) }
+            }
+        } catch (_: RejectedExecutionException) {
+            pendingSizes.remove(result)
+            result.success(null)
+        }
+    }
+
+    private val downloadProfileId = Regex("[A-Za-z0-9_-]{1,128}")
+    private val downloadContentHash = Regex("[0-9a-f]{64}")
+
     private fun transfer(call: MethodCall, result: MethodChannel.Result, action: (AtomicBoolean) -> Unit) {
         val id = call.argument<String>("id")
         val cancelled = AtomicBoolean(false)
@@ -254,6 +327,59 @@ class DownloadStoragePlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activ
         requireGrant(uri, writable)
         require(DocumentsContract.isDocumentUri(context, uri))
         return uri
+    }
+
+    private fun Cursor.completeListing() =
+        !extras.getBoolean(DocumentsContract.EXTRA_LOADING, false) && !extras.containsKey(DocumentsContract.EXTRA_ERROR)
+
+    private fun Cursor.fileSize(): Long? {
+        val mime = getColumnIndex(Document.COLUMN_MIME_TYPE)
+        val size = getColumnIndex(Document.COLUMN_SIZE)
+        if (mime < 0 || getString(mime).isNullOrEmpty() || getString(mime) == Document.MIME_TYPE_DIR ||
+            size < 0 || getType(size) != Cursor.FIELD_TYPE_INTEGER) return null
+        return getLong(size).takeIf { it >= 0L }
+    }
+
+    /** Videre creates its documents directly in the selected tree. A grant alone also covers descendants. */
+    private fun safDocumentSize(uri: Uri, tree: Uri): Long? {
+        val treeId = DocumentsContract.getTreeDocumentId(uri)
+        require(tree == DocumentsContract.buildTreeDocumentUri(uri.authority, treeId))
+        val documentId = DocumentsContract.getDocumentId(uri)
+        if (treeId == documentId) return null
+        val resolver = context.contentResolver
+        val columns = arrayOf(Document.COLUMN_DOCUMENT_ID, Document.COLUMN_MIME_TYPE, Document.COLUMN_SIZE)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val path = try {
+                DocumentsContract.findDocumentPath(resolver, uri)?.path
+            } catch (_: UnsupportedOperationException) {
+                null
+            } catch (_: FileNotFoundException) {
+                null
+            }
+            if (!path.isNullOrEmpty()) {
+                if (path.size < 2 || path.last() != documentId || path[path.lastIndex - 1] != treeId) return null
+                return resolver.query(uri, columns, null, null, null)?.use {
+                    if (it.completeListing() && it.moveToFirst() &&
+                        it.getString(it.getColumnIndexOrThrow(Document.COLUMN_DOCUMENT_ID)) == documentId) it.fileSize() else null
+                }
+            }
+        }
+
+        val children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, treeId)
+        resolver.query(children, columns, null, null, null)?.use {
+            if (!it.completeListing()) return null
+            val id = it.getColumnIndexOrThrow(Document.COLUMN_DOCUMENT_ID)
+            while (it.moveToNext()) {
+                if (it.isNull(id)) return null
+                if (it.getString(id) == documentId) return it.fileSize()
+            }
+        } ?: return null
+        // An unavailable folder can look empty. Confirm the directory itself is accessible.
+        val root = DocumentsContract.buildDocumentUriUsingTree(tree, treeId)
+        return resolver.query(root, arrayOf(Document.COLUMN_MIME_TYPE), null, null, null)?.use {
+            if (it.completeListing() && it.moveToFirst() && it.getString(0) == Document.MIME_TYPE_DIR) 0L else null
+        }
     }
 
     private fun folder(value: String): Uri {
@@ -360,6 +486,9 @@ class DownloadStoragePlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activ
         onDetachedFromActivity()
         writes.values.forEach { it.set(true) }
         worker.shutdownNow()
+        sizeWorker.shutdownNow()
+        pendingSizes.forEach { it.success(null) }
+        pendingSizes.clear()
         channel?.setMethodCallHandler(null)
         channel = null
     }

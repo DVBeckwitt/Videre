@@ -6,6 +6,7 @@ import '../../../utils/views/components/thumbnail.dart';
 import '../../models/music_track.dart';
 import '../screens/music.dart';
 import 'community_music_artwork.dart';
+import 'music_collection_panes.dart';
 import 'music_library_actions.dart';
 
 /// A recommendation shelf opens as a playable collection, following Muzza's
@@ -55,7 +56,8 @@ class _MusicRecommendationCollectionState
     if (index < 0) return;
     final request = ++_playRequest;
     try {
-      await MusicScreen.playTracks(context, videos, startIndex: index);
+      await MusicScreen.playTracks(context, videos,
+          queueTitle: widget.title, startIndex: index);
     } catch (_) {
       if (mounted && request == _playRequest && _current) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -75,7 +77,9 @@ class _MusicRecommendationCollectionState
             child: const Icon(Icons.queue_music_rounded),
           )
         : Thumbnail(
-            images: images, decoration: BoxDecoration(borderRadius: shape));
+            musicArtwork: true,
+            images: images,
+            decoration: BoxDecoration(borderRadius: shape));
     return ExcludeSemantics(
       child: SizedBox.square(
         dimension: size,
@@ -103,69 +107,74 @@ class _MusicRecommendationCollectionState
               builder: (context, _) {
                 final locals = AppLocalizations.of(context)!;
                 final tracks = _tracks;
-                return CustomScrollView(slivers: [
-                  SliverToBoxAdapter(
-                    child: Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
-                      child: Column(children: [
-                        if (MediaQuery.sizeOf(context).height >= 480) ...[
-                          _art(tracks.firstOrNull, size: 180),
-                          const SizedBox(height: 12),
-                        ],
-                        if (tracks.isNotEmpty) ...[
-                          Text(locals.musicTrackCount(tracks.length)),
-                          const SizedBox(height: 12),
-                          Wrap(
-                            alignment: WrapAlignment.center,
-                            spacing: 8,
-                            runSpacing: 6,
-                            children: [
-                              FilledButton.icon(
-                                key: const ValueKey('music-collection-play'),
-                                onPressed: () => _play(),
-                                icon: const Icon(Icons.play_arrow_rounded),
-                                label: Text(locals.musicPlayAll),
-                              ),
-                              if (tracks.length > 1)
-                                FilledButton.tonalIcon(
-                                  key: const ValueKey(
-                                      'music-collection-shuffle'),
-                                  onPressed: () => _play(shuffle: true),
-                                  icon: const Icon(Icons.shuffle_rounded),
-                                  label: Text(locals.musicShuffle),
-                                ),
-                            ],
+                final details = Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
+                  child: Column(children: [
+                    if (MediaQuery.sizeOf(context).height >= 480) ...[
+                      _art(tracks.firstOrNull, size: 180),
+                      const SizedBox(height: 12),
+                    ],
+                    if (tracks.isNotEmpty) ...[
+                      Text(locals.musicTrackCount(tracks.length)),
+                      const SizedBox(height: 12),
+                      Wrap(
+                        alignment: WrapAlignment.center,
+                        spacing: 8,
+                        runSpacing: 6,
+                        children: [
+                          FilledButton.icon(
+                            key: const ValueKey('music-collection-play'),
+                            onPressed: () => _play(),
+                            icon: const Icon(Icons.play_arrow_rounded),
+                            label: Text(locals.musicPlayAll),
                           ),
-                        ] else
-                          Text(locals.musicEmptyCollection),
-                      ]),
-                    ),
+                          if (tracks.length > 1)
+                            FilledButton.tonalIcon(
+                              key: const ValueKey('music-collection-shuffle'),
+                              onPressed: () => _play(shuffle: true),
+                              icon: const Icon(Icons.shuffle_rounded),
+                              label: Text(locals.musicShuffle),
+                            ),
+                        ],
+                      ),
+                    ] else
+                      Text(locals.musicEmptyCollection),
+                  ]),
+                );
+                final songs = SliverList.builder(
+                  key: const ValueKey('music-recommendation-tracks'),
+                  itemCount: tracks.length,
+                  itemBuilder: (context, index) {
+                    final song = tracks[index];
+                    final artists = song.artists.join(', ');
+                    return ListTile(
+                      key: ValueKey('music-collection-${song.videoId}'),
+                      onTap: () => _play(from: song.videoId),
+                      onLongPress: () => MusicLibraryActions.showSongMenu(
+                          context, song.toVideo(),
+                          onPlay: () => _play(from: song.videoId)),
+                      leading: _art(song, size: 48, songRow: true),
+                      title: Text(song.title,
+                          maxLines: 1, overflow: TextOverflow.ellipsis),
+                      subtitle: artists.isEmpty
+                          ? null
+                          : Text(artists,
+                              maxLines: 1, overflow: TextOverflow.ellipsis),
+                      trailing: MusicLibraryActions(
+                          videos: [song.toVideo()],
+                          onPlay: () => _play(from: song.videoId)),
+                    );
+                  },
+                );
+                return MusicCollectionPanes(
+                  details: details,
+                  buildTracks: (_, split) => CustomScrollView(
+                    slivers: [
+                      if (!split) SliverToBoxAdapter(child: details),
+                      songs,
+                    ],
                   ),
-                  SliverList.builder(
-                    itemCount: tracks.length,
-                    itemBuilder: (context, index) {
-                      final song = tracks[index];
-                      final artists = song.artists.join(', ');
-                      return ListTile(
-                        key: ValueKey('music-collection-${song.videoId}'),
-                        onTap: () => _play(from: song.videoId),
-                        onLongPress: () => MusicLibraryActions.showSongMenu(
-                            context, song.toVideo(),
-                            onPlay: () => _play(from: song.videoId)),
-                        leading: _art(song, size: 48, songRow: true),
-                        title: Text(song.title,
-                            maxLines: 1, overflow: TextOverflow.ellipsis),
-                        subtitle: artists.isEmpty
-                            ? null
-                            : Text(artists,
-                                maxLines: 1, overflow: TextOverflow.ellipsis),
-                        trailing: MusicLibraryActions(
-                            videos: [song.toVideo()],
-                            onPlay: () => _play(from: song.videoId)),
-                      );
-                    },
-                  ),
-                ]);
+                );
               },
             ),
           ),

@@ -10,12 +10,14 @@ class ChannelAvatar extends StatelessWidget {
   final List<ImageObject>? images;
   final double? size;
   final bool instanceOnly;
+  final bool musicArtwork;
 
   const ChannelAvatar(
       {super.key,
       required this.name,
       this.images,
       this.size,
+      this.musicArtwork = false,
       this.instanceOnly = false});
 
   @override
@@ -27,6 +29,7 @@ class ChannelAvatar extends StatelessWidget {
     return ExcludeSemantics(
       child: Thumbnail(
         images: images ?? const [],
+        musicArtwork: musicArtwork,
         instanceOnly: instanceOnly && images?.isNotEmpty == true,
         // Empty optional artwork needs only the local initial, even before an
         // account is available. Every actual image still uses private routing.

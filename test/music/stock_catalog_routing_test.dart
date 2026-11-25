@@ -167,12 +167,31 @@ void main() {
     expect(calls.last.queryParameters['continuation'], 'page+=2');
     final album = await music.getPlaylist(release.id);
     expect(album.tracks.single.videoId, videoId);
+    expect(album.tracks.single.albumPlaylistId, albumId);
+    expect(album.tracks.single.toVideo().musicMetadata!.album, 'Album');
+    expect(
+        album.tracks.single.toVideo().musicMetadata!.albumPlaylistId, albumId);
     expect(calls.map((uri) => uri.path), [
       '/api/v1/channels/$channelId/releases',
       '/api/v1/channels/$channelId/releases',
       '/api/v1/playlists/$albumId',
     ]);
     expect(calls.every((uri) => uri.origin == instance), isTrue);
+  });
+
+  test('ordinary playlists, mixes and searches do not invent release IDs',
+      () async {
+    final music = InvidiousMusicCatalogService(api: api);
+    final songs = [
+      ...(await music.getPlaylist(playlistId)).tracks,
+      ...(await music.getPlaylist(mixId)).tracks,
+      ...await music.searchSongs('Song'),
+    ];
+    expect(songs.length, greaterThanOrEqualTo(3));
+    for (final song in songs) {
+      expect(song.musicMetadata.albumPlaylistId, isNull);
+      expect(song.albumTitle, isNull);
+    }
   });
 
   test('artists retain uploads when the instance lacks the releases API',

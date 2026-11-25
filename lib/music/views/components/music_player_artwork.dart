@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
@@ -9,6 +11,8 @@ import '../../../l10n/generated/app_localizations.dart';
 import '../../../network/network_proxy.dart';
 import '../../../player/models/local_music_playback.dart';
 import '../../../player/states/player.dart';
+import '../../../settings/states/settings.dart';
+import '../../../utils/motion.dart';
 import '../../../videos/models/music_metadata.dart';
 import '../../../videos/models/video.dart';
 import '../../models/music_cover_corners.dart';
@@ -29,6 +33,9 @@ class MusicPlayerArtwork extends StatefulWidget {
   final DownloadedVideo? offline;
   final double size;
   final bool active;
+  final bool interactive;
+  final bool scaleWithPlayback;
+  final ValueChanged<bool>? onSeekStep;
   final MusicLyricsLoader lyricsLoader;
   final MusicVideoSurfaceBuilder? videoSurfaceBuilder;
 
@@ -39,6 +46,9 @@ class MusicPlayerArtwork extends StatefulWidget {
     required this.offline,
     required this.size,
     required this.active,
+    this.interactive = true,
+    this.scaleWithPlayback = true,
+    this.onSeekStep,
     required this.lyricsLoader,
     this.videoSurfaceBuilder,
   });
@@ -58,6 +68,10 @@ class _MusicPlayerArtworkState extends State<MusicPlayerArtwork>
   bool _showVideo = false;
   Object? _display;
   late bool _foreground;
+  int _gestureRevision = 0;
+  (Object, bool)? _doubleTap;
+  (Object, bool)? _seekFeedback;
+  Timer? _feedbackTimer;
   final _filterChanges = communityFilters.changes;
   bool _needsFilterCheck = true;
   bool _songAllowed = true;
@@ -79,6 +93,7 @@ class _MusicPlayerArtworkState extends State<MusicPlayerArtwork>
     if (_foreground == foreground) return;
     setState(() {
       _foreground = foreground;
+      _gestureRevision++;
       if (!foreground) {
         _request = null;
         _display = null;
@@ -117,6 +132,7 @@ class _MusicPlayerArtworkState extends State<MusicPlayerArtwork>
 
   @override
   void dispose() {
+    _feedbackTimer?.cancel();
     _filterChanges.removeListener(_filtersChanged);
     MusicCoverCorners.revision.removeListener(_coverCornersChanged);
     NetworkProxy.instance.removeBeforeApply(_proxyChanging);
@@ -138,6 +154,7 @@ class _MusicPlayerArtworkState extends State<MusicPlayerArtwork>
     final song = widget.video;
     if (song == null ||
         song.downloadPlaybackOnly ||
+        song.explicitMusicDownload != null ||
         widget.offline != null ||
         isLocalMusicPlaybackId(song.videoId)) {
       return null;
@@ -155,6 +172,7 @@ class _MusicPlayerArtworkState extends State<MusicPlayerArtwork>
         !state.isAudio ||
         state.currentlyPlaying?.videoId != song.videoId ||
         state.currentlyPlaying?.downloadPlaybackOnly == true ||
+        state.currentlyPlaying?.explicitMusicDownload != null ||
         connection == null ||
         !connection.matches(server)) {
       return null;
@@ -215,7 +233,11 @@ class _MusicPlayerArtworkState extends State<MusicPlayerArtwork>
 
   @override
   Widget build(BuildContext context) {
-    context.watch<AppCubit>();
+    final session = context.watch<AppCubit>().state;
+    final player = context.read<PlayerCubit>();
+    final playing =
+        context.select((PlayerCubit player) => player.state.isPlaying);
+    final queueId = player.state.currentQueueId;
     final source = _currentSource();
     if (source != _source) _reset(source);
     final active = _visible && source != null;
@@ -271,38 +293,205 @@ class _MusicPlayerArtworkState extends State<MusicPlayerArtwork>
       });
     }
 
+    final canTapCover = !showing &&
+        widget.interactive &&
+        _foreground &&
+        TickerMode.of(context) &&
+        ModalRoute.isCurrentOf(context) != false &&
+        !player.state.isHidden &&
+        !player.state.isMini &&
+        player.openingMusicEntry == null &&
+        !player.state.isClosing &&
+        !session.globalLoading &&
+        !session.sessionRecoveryRequired;
+    final seekStep = widget.onSeekStep;
+    final canSeekCover = canTapCover &&
+        seekStep != null &&
+        context.select((SettingsCubit? settings) =>
+            settings?.state.musicArtworkDoubleTapSeek == true);
+    final generation = player.playlistGeneration;
+    final gestureRevision = _gestureRevision;
+    final tapOwner = (
+      session.profileId,
+      session.sessionRevision,
+      queueId,
+      generation,
+      gestureRevision,
+      widget.size,
+      canTapCover,
+      canSeekCover,
+    );
+    bool currentCover() {
+      if (!mounted || player.isClosed) return false;
+      final current = context.read<AppCubit>().state;
+      return widget.interactive &&
+          _foreground &&
+          _gestureRevision == gestureRevision &&
+          TickerMode.of(context) &&
+          ModalRoute.isCurrentOf(context) != false &&
+          !_showVideo &&
+          !player.state.isClosing &&
+          !player.state.isHidden &&
+          !player.state.isMini &&
+          player.state.currentQueueId == queueId &&
+          player.playlistGeneration == generation &&
+          player.openingMusicEntry == null &&
+          !current.globalLoading &&
+          !current.sessionRecoveryRequired &&
+          current.profileId == session.profileId &&
+          current.sessionRevision == session.sessionRevision;
+    }
+
+    void tapCover() {
+      if (currentCover()) player.togglePlaying();
+    }
+
+    void doubleTapDown(TapDownDetails details) {
+      final offset = details.localPosition.dx - widget.size / 2;
+      _doubleTap = offset == 0 ? null : (tapOwner, offset < 0);
+    }
+
+    void doubleTapCover() {
+      final tap = _doubleTap;
+      _doubleTap = null;
+      if (tap == null ||
+          tap.$1 != tapOwner ||
+          seekStep == null ||
+          !currentCover() ||
+          context.read<SettingsCubit?>()?.state.musicArtworkDoubleTapSeek !=
+              true) {
+        return;
+      }
+      seekStep(tap.$2);
+      setState(() => _seekFeedback = tap);
+      _feedbackTimer?.cancel();
+      _feedbackTimer = Timer(const Duration(milliseconds: 500),
+          () => setState(() => _seekFeedback = null));
+    }
+
+    final feedback = _seekFeedback;
+    final scale = playing ? 1.0 : 0.92;
+    final scaleDuration =
+        AppMotion.duration(context, const Duration(milliseconds: 220));
+    Widget scaleVisual(Widget child, {Key? key}) {
+      if (!widget.scaleWithPlayback) return child;
+      return TweenAnimationBuilder<double>(
+        // Also snap when reduced motion is turned on mid-transition.
+        key: ValueKey(scaleDuration == Duration.zero),
+        tween: Tween(end: scale),
+        duration: scaleDuration,
+        curve: Curves.easeOutCubic,
+        child: child,
+        builder: (context, value, child) => Transform.scale(
+          key: key,
+          scale: value,
+          transformHitTests: false,
+          child: child,
+        ),
+      );
+    }
+
+    final cover = MusicPlaybackArtwork(
+        music: widget.music,
+        video: widget.video,
+        offline: widget.offline,
+        allowCommunityLookup: widget.active);
+    final decoration = BoxDecoration(borderRadius: border, boxShadow: const [
+      BoxShadow(color: Colors.black38, blurRadius: 24, offset: Offset(0, 12)),
+    ]);
+    final scaleCover = widget.scaleWithPlayback && !showing;
     return Center(
         child: Stack(children: [
-      MusicTrackSwipe(
-          child: Container(
-        key: const ValueKey('music-player-artwork'),
-        width: widget.size,
-        height: widget.size,
-        decoration: BoxDecoration(borderRadius: border, boxShadow: const [
-          BoxShadow(
-              color: Colors.black38, blurRadius: 24, offset: Offset(0, 12)),
-        ]),
-        child: ClipRRect(
-            borderRadius: border,
-            child: showing
-                ? KeyedSubtree(
-                    key: _videoSurface,
-                    child: ColoredBox(
-                        key: const ValueKey('music-player-video'),
-                        color: Colors.black,
-                        child: widget.videoSurfaceBuilder
-                                ?.call(match, unavailable) ??
-                            MusicVideoSurface(
-                                video: match, onUnavailable: unavailable)))
-                : Semantics(
-                    image: true,
-                    label: widget.music.album ?? widget.music.title,
-                    child: MusicPlaybackArtwork(
-                        music: widget.music,
-                        video: widget.video,
-                        offline: widget.offline,
-                        allowCommunityLookup: widget.active))),
-      )),
+      Container(
+          key: const ValueKey('music-player-artwork'),
+          width: widget.size,
+          height: widget.size,
+          decoration:
+              scaleCover ? BoxDecoration(borderRadius: border) : decoration,
+          child:
+              Stack(fit: StackFit.expand, clipBehavior: Clip.none, children: [
+            if (scaleCover)
+              IgnorePointer(
+                  child: scaleVisual(DecoratedBox(decoration: decoration))),
+            MusicTrackSwipe(
+              buildPreview: showing
+                  ? null
+                  : (entry) {
+                      final video = entry is Video ? entry : null;
+                      final offline = entry is DownloadedVideo ? entry : null;
+                      return scaleVisual(
+                          ClipRRect(
+                              borderRadius: border,
+                              child: MusicPlaybackArtwork(
+                                  video: video,
+                                  offline: offline,
+                                  music: video?.musicMetadata ??
+                                      offline?.musicMetadata)),
+                          key: const ValueKey(
+                              'music-player-adjacent-cover-scale'));
+                    },
+              child: ClipRRect(
+                  borderRadius: border,
+                  child: showing
+                      ? KeyedSubtree(
+                          key: _videoSurface,
+                          child: ColoredBox(
+                              key: const ValueKey('music-player-video'),
+                              color: Colors.black,
+                              child: widget.videoSurfaceBuilder
+                                      ?.call(match, unavailable) ??
+                                  MusicVideoSurface(
+                                      video: match,
+                                      onUnavailable: unavailable)))
+                      : Semantics(
+                          image: true,
+                          button: canTapCover,
+                          label: widget.music.album ?? widget.music.title,
+                          onTapHint:
+                              playing ? locals.musicPause : locals.musicPlay,
+                          onTap: canTapCover ? tapCover : null,
+                          child: Stack(fit: StackFit.expand, children: [
+                            if (scaleCover)
+                              scaleVisual(
+                                  ClipRRect(borderRadius: border, child: cover),
+                                  key: const ValueKey(
+                                      'music-player-cover-scale'))
+                            else
+                              cover,
+                            if (feedback != null && feedback.$1 == tapOwner)
+                              Align(
+                                alignment: feedback.$2
+                                    ? Alignment.centerLeft
+                                    : Alignment.centerRight,
+                                child: Padding(
+                                  padding: const EdgeInsets.all(12),
+                                  child: ExcludeSemantics(
+                                    child: CircleAvatar(
+                                      backgroundColor: Colors.black54,
+                                      child: Icon(
+                                        feedback.$2
+                                            ? Icons.fast_rewind_rounded
+                                            : Icons.fast_forward_rounded,
+                                        color: Colors.white,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            GestureDetector(
+                              key: ValueKey(tapOwner),
+                              behavior: HitTestBehavior.opaque,
+                              excludeFromSemantics: true,
+                              onTap: canTapCover ? tapCover : null,
+                              onDoubleTapDown:
+                                  canSeekCover ? doubleTapDown : null,
+                              onDoubleTap: canSeekCover ? doubleTapCover : null,
+                              onDoubleTapCancel:
+                                  canSeekCover ? () => _doubleTap = null : null,
+                            ),
+                          ]))),
+            ),
+          ])),
       if (!isLocalMusicPlaybackId(
           widget.video?.videoId ?? widget.offline?.videoId))
         PositionedDirectional(

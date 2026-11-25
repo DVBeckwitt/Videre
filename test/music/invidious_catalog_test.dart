@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:clipious/globals.dart';
+import 'package:clipious/music/models/music_catalog_search.dart';
 import 'package:clipious/music/models/music_charts.dart';
 import 'package:clipious/music/models/music_library_entry.dart';
 import 'package:clipious/music/models/song_artwork.dart';
@@ -150,6 +151,141 @@ void main() {
 
   test('the production catalog defaults to Invidious', () {
     expect(musicCatalogService, isA<InvidiousMusicCatalogService>());
+  });
+
+  group('stock Music search pages', () {
+    test('mixed page keeps wire order and tracks filtered raw rows', () async {
+      await db.saveSetting(SettingsValue(browsingCountry, 'DE'));
+      const later = 'aaaaaaaaaaa';
+      respond = (request) async => _json([
+            _playlist(),
+            _song(),
+            {'type': 'movie', 'videoId': 'bbbbbbbbbbb'},
+            {'type': 'channel', 'author': 'No channel ID'},
+            _channel(),
+            {..._song(), 'title': 'Duplicate title'},
+            {'type': 'video', 'videoId': 'ccccccccccc'},
+            'malformed row',
+            {'type': 'video', 'videoId': later},
+            _song(id: later),
+          ], request);
+
+      final page = await catalog.searchPage(
+          ' Café & live ', MusicCatalogSearchType.all, 2);
+      final url = requests.single.url;
+      expect(url.origin, 'https://invidious.example');
+      expect(url.path, '/api/v1/search');
+      expect(url.queryParameters, {
+        'q': 'Café & live',
+        'type': 'all',
+        'page': '2',
+        'region': 'DE',
+        'local': 'true',
+      });
+      expect(page.rawCount, 10);
+      expect(page.rawKeys, [
+        'playlists:$_playlistId',
+        'songs:$_songId',
+        'channels:$_channelId',
+        'songs:$_songId',
+        'songs:ccccccccccc',
+        'songs:$later',
+        'songs:$later',
+      ]);
+      expect(page.hits.map((hit) => hit.key), [
+        'playlists:$_playlistId',
+        'songs:$_songId',
+        'channels:$_channelId',
+        'songs:$later',
+      ]);
+      expect((page.hits[0] as MusicCatalogPlaylistHit).playlist.title,
+          'Test playlist');
+      expect((page.hits[1] as MusicCatalogSongHit).track.title, 'Test song');
+      expect(
+          (page.hits[2] as MusicCatalogChannelHit).artist.name, 'Test artist');
+    });
+
+    for (final (filter, stockType, row, key) in [
+      (MusicCatalogSearchType.songs, 'video', _song(), 'songs:$_songId'),
+      (
+        MusicCatalogSearchType.channels,
+        'channel',
+        _channel(),
+        'channels:$_channelId'
+      ),
+      (
+        MusicCatalogSearchType.playlists,
+        'playlist',
+        _playlist(),
+        'playlists:$_playlistId'
+      ),
+    ]) {
+      test('$filter forwards the typed stock page', () async {
+        final other =
+            filter == MusicCatalogSearchType.songs ? _channel() : _song();
+        respond = (request) async => _json([other, row], request);
+        final page = await catalog.searchPage('typed', filter, 3);
+        expect(requests.single.url.queryParameters, {
+          'q': 'typed',
+          'type': stockType,
+          'page': '3',
+          'region': 'US',
+          'local': 'true',
+        });
+        expect(page.hits.single.key, key);
+        expect(page.rawKeys, [
+          filter == MusicCatalogSearchType.songs
+              ? 'channels:$_channelId'
+              : 'songs:$_songId',
+          key,
+        ]);
+        expect(page.rawCount, 2);
+      });
+    }
+
+    test('a retired request cannot publish a delayed mixed page', () async {
+      final started = Completer<http.Request>();
+      final pending = Completer<http.Response>();
+      respond = (request) {
+        started.complete(request);
+        return pending.future;
+      };
+      var current = true;
+      final search = catalog.searchPage(
+          'retired', MusicCatalogSearchType.all, 2,
+          isCurrent: () => current);
+      final discarded =
+          expectLater(search, throwsA(isA<MusicCatalogException>()));
+      final request = await started.future;
+      current = false;
+      pending.complete(_json([_song()], request));
+      await discarded;
+      expect(requests, hasLength(1));
+    });
+
+    test('a failed mixed page can retry the same selected-instance request',
+        () async {
+      respond = (request) async => requests.length == 1
+          ? http.Response('Unavailable', 503,
+              request: request, headers: {'content-type': 'text/plain'})
+          : _json([_song()], request);
+
+      await expectLater(
+          catalog.searchPage('retry', MusicCatalogSearchType.all, 2),
+          throwsA(isA<InvidiousServiceError>()));
+      await expectLater(
+          catalog.searchPage('retry', MusicCatalogSearchType.all, 2,
+              isCurrent: () => false),
+          throwsA(isA<MusicCatalogException>()));
+      expect(requests, hasLength(1));
+      final page =
+          await catalog.searchPage('retry', MusicCatalogSearchType.all, 2);
+      expect(page.hits.single.key, 'songs:$_songId');
+      expect(requests, hasLength(2));
+      expect(requests.last.url, requests.first.url);
+      expect(requests.last.url.queryParameters['page'], '2');
+      expect(requests.last.url.host, 'invidious.example');
+    });
   });
 
   group('finding the playing song’s music video', () {

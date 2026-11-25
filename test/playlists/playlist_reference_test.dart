@@ -29,6 +29,40 @@ void main() {
     expect(PlaylistReference.fromJson(a.toJson()), a);
   });
 
+  test('display titles survive a round trip without affecting identity', () {
+    final original = PlaylistReference.forPlaylist(public, database);
+    final renamed = PlaylistReference.forPlaylist(
+        public.copyWith(title: '  Café collection  '), database);
+    final restored = PlaylistReference.fromJson(renamed.toJson());
+    expect(original.displayTitle, 'Public');
+    expect(restored.displayTitle, 'Café collection');
+    expect(restored, original);
+    expect(restored.key, original.key);
+    expect(restored.hashCode, original.hashCode);
+  });
+
+  test('missing or unusable display metadata preserves the playlist', () {
+    final reference = PlaylistReference.forPlaylist(public, database);
+    final legacy = reference.toJson()..remove('displayTitle');
+    for (final json in [
+      legacy,
+      for (final title in [
+        null,
+        12,
+        '  ',
+        'a\nb',
+        'x' * 513,
+        public.playlistId
+      ])
+        {...legacy, 'displayTitle': title},
+    ]) {
+      final restored = PlaylistReference.fromJson(json);
+      expect(restored, reference);
+      expect(restored.displayTitle, isNull);
+      expect(restored.toJson(), legacy);
+    }
+  });
+
   test('instance playlists retain exact account and origin', () async {
     const first = Server(url: 'https://one.example', id: 'first');
     const other = Server(url: 'https://one.example', id: 'other');
@@ -36,6 +70,8 @@ void main() {
     await database.upsertServer(other);
     final reference =
         PlaylistReference.forPlaylist(private, database, server: first);
+    expect(PlaylistReference.fromJson(reference.toJson()).displayTitle,
+        private.title);
     expect(reference.resolveServer(database)?.accountId, 'first');
     expect(reference,
         isNot(PlaylistReference.forPlaylist(private, database, server: other)));

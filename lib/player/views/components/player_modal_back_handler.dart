@@ -7,9 +7,14 @@ class PlayerModalBackHandler extends StatefulWidget {
   final Widget child;
   final VoidCallback? onBack;
   final int priority;
+  final bool active;
 
   const PlayerModalBackHandler(
-      {super.key, required this.child, this.onBack, this.priority = 3});
+      {super.key,
+      required this.child,
+      this.onBack,
+      this.priority = 3,
+      this.active = true});
 
   @override
   State<PlayerModalBackHandler> createState() => _PlayerModalBackHandlerState();
@@ -24,7 +29,11 @@ class _PlayerModalBackHandlerState extends State<PlayerModalBackHandler> {
   }
 
   bool _handleBack(bool stopDefaultButtonEvent, RouteInfo info) {
-    if (!mounted || ModalRoute.of(context)?.isCurrent != true) return false;
+    if (!mounted ||
+        !widget.active ||
+        ModalRoute.of(context)?.isCurrent != true) {
+      return false;
+    }
     if (widget.onBack case final dismiss?) {
       dismiss();
     } else {

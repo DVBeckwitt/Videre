@@ -247,8 +247,11 @@ class _SavedSongs extends StatelessWidget {
                                   session, context.read<AppCubit>().state)) {
                             return;
                           }
-                          await _openSong(context, song.id,
-                              preview().map((entry) => entry.toVideo()));
+                          await _openSong(
+                              context,
+                              song.id,
+                              preview().map((entry) => entry.toVideo()),
+                              locals.musicSavedSongs);
                         }),
                 ],
               );
@@ -358,6 +361,7 @@ class _SavedSongRow extends StatelessWidget {
                                   color: colors.onSurfaceVariant),
                             )
                           : Thumbnail(
+                              musicArtwork: true,
                               images: covers,
                               decoration: BoxDecoration(
                                   borderRadius: BorderRadius.circular(6)),
@@ -462,6 +466,7 @@ class _DiscoverySongs extends StatefulWidget {
 
 class _DiscoverySongsState extends State<_DiscoverySongs>
     with WidgetsBindingObserver {
+  final _freshSelection = GlobalKey<_FreshSelectionState>();
   _DiscoverySession? _session;
   final _batches = <String?, _DiscoveryBatch>{};
   final _failures = <String?>{};
@@ -469,6 +474,7 @@ class _DiscoverySongsState extends State<_DiscoverySongs>
   String? _loadingArtist;
   int _generation = 0;
   bool _loading = false;
+  Future<void>? _request;
   bool _paused = false;
   Timer? _cooldown;
   bool _visible = false;
@@ -562,8 +568,14 @@ class _DiscoverySongsState extends State<_DiscoverySongs>
                   session.database, session.app.profileId))
               .contains(artist));
 
-  Future<void> _load(_DiscoverySession session, String? artist) async {
-    if (_loading || _paused || !_current(session, artist)) return;
+  Future<void> _load(_DiscoverySession session, String? artist) {
+    if (!_current(session, artist)) return Future.value();
+    if (_loading) return _request!;
+    if (_paused) return Future.value();
+    return _request = _loadDiscovery(session, artist);
+  }
+
+  Future<void> _loadDiscovery(_DiscoverySession session, String? artist) async {
     final generation = _generation;
     bool current() => generation == _generation && _current(session, artist);
     setState(() {
@@ -599,6 +611,36 @@ class _DiscoverySongsState extends State<_DiscoverySongs>
           }
         });
       }
+    }
+  }
+
+  Future<void> _refreshHome(_DiscoverySession session) async {
+    final generation = _generation;
+    bool current() =>
+        generation == _generation && _pageVisible && _sameConnection(session);
+    if (!current()) return;
+    final fresh = _freshSelection.currentState;
+    final previous = fresh?._request;
+    final freshWasLoading = fresh?._loading == true;
+    final artist = _artist;
+    final primingAnotherSeed = _loading && _loadingArtist != artist;
+
+    await _load(session, artist);
+    if (primingAnotherSeed && current() && !_paused && _artist == artist) {
+      await _load(session, artist);
+    }
+    if (!current() ||
+        fresh == null ||
+        !identical(fresh, _freshSelection.currentState)) {
+      return;
+    }
+    // A chart or release request can finish while discovery is still loading.
+    // Reuse work started before or during this pull instead of requesting it twice.
+    final freshRequest = fresh._request;
+    if (freshWasLoading || !identical(previous, freshRequest)) {
+      await freshRequest;
+    } else if (!_paused) {
+      await fresh.refreshShelves();
     }
   }
 
@@ -683,16 +725,22 @@ class _DiscoverySongsState extends State<_DiscoverySongs>
         ? RecommendationService.forProfile(
             session.database, session.app.profileId)
         : null;
-    return ListenableBuilder(
-      listenable: Listenable.merge([
-        communityFilters.changes,
-        library?.changes,
-        recommendations?.changes
-      ]),
-      builder: (context, _) => library == null || recommendations == null
-          ? widget.builder(
-              null, const SizedBox.shrink(), const SizedBox.shrink())
-          : _buildSelection(context, session, library, recommendations),
+    return RefreshIndicator(
+      key: const ValueKey('music-home-pull-refresh'),
+      notificationPredicate: (notification) =>
+          notification.depth == 0 && notification.metrics.axis == Axis.vertical,
+      onRefresh: () => _refreshHome(session),
+      child: ListenableBuilder(
+        listenable: Listenable.merge([
+          communityFilters.changes,
+          library?.changes,
+          recommendations?.changes
+        ]),
+        builder: (context, _) => library == null || recommendations == null
+            ? widget.builder(
+                null, const SizedBox.shrink(), const SizedBox.shrink())
+            : _buildSelection(context, session, library, recommendations),
+      ),
     );
   }
 
@@ -763,6 +811,7 @@ class _DiscoverySongsState extends State<_DiscoverySongs>
     return widget.builder(
         ready.isEmpty ? null : () => ready.any(readyNow),
         _FreshSelection(
+          key: _freshSelection,
           session: session,
           artists: [
             for (final entry in library.entries
@@ -870,7 +919,8 @@ class _DiscoverySongsState extends State<_DiscoverySongs>
                           context,
                           song.videoId,
                           playable(artist, batch.songs)
-                              .map((track) => track.toVideo()));
+                              .map((track) => track.toVideo()),
+                          locals.musicDiscover);
                     }
                   }
 
@@ -1164,8 +1214,8 @@ class _MusicExploreState extends State<_MusicExplore>
   }
 }
 
-Future<void> _openSong(
-    BuildContext context, String videoId, Iterable<Video> songs) async {
+Future<void> _openSong(BuildContext context, String videoId,
+    Iterable<Video> songs, String queueTitle) async {
   final queue = songs.toList(growable: false);
   final index = queue.indexWhere((video) => video.videoId == videoId);
   if (index < 0) return;
@@ -1173,6 +1223,7 @@ Future<void> _openSong(
       videoId: videoId,
       artistCredits: queue[index].musicMetadata?.artistCredits ?? const [],
       queue: queue,
+      queueTitle: queueTitle,
       startIndex: index));
 }
 
@@ -1196,6 +1247,7 @@ class _DiscoveryScroll extends StatelessWidget {
           key: PageStorageKey(storageKey),
           controller: controller,
           primary: false,
+          physics: const AlwaysScrollableScrollPhysics(),
           padding: EdgeInsets.fromLTRB(
               MediaQuery.sizeOf(context).width < 600 ? 12 : 24,
               8,
@@ -1256,7 +1308,8 @@ class _FreshSelection extends StatefulWidget {
   final _DiscoverySession session;
   final List<String> artists;
 
-  const _FreshSelection({required this.session, required this.artists});
+  const _FreshSelection(
+      {super.key, required this.session, required this.artists});
 
   @override
   State<_FreshSelection> createState() => _FreshSelectionState();
@@ -1270,6 +1323,7 @@ class _FreshSelectionState extends State<_FreshSelection>
   List<MusicTrack> _chartTracks = const [];
   bool _scheduled = false;
   bool _loading = false;
+  Future<void>? _request;
   bool _prepared = false;
   bool _chartPrepared = false;
   bool _failed = false;
@@ -1362,12 +1416,26 @@ class _FreshSelectionState extends State<_FreshSelection>
     }
   }
 
-  Future<void> _load(MusicChart chart, {bool refresh = false}) async {
+  MusicChart get _chart =>
+      musicCharts
+          .where((chart) => chart.countryCode == widget.session.country)
+          .firstOrNull ??
+      musicCharts.first;
+
+  Future<void> refreshShelves() => _load(_chart, refresh: true);
+
+  Future<void> _load(MusicChart chart, {bool refresh = false}) {
+    if (!_current(widget.session)) return Future.value();
+    if (_loading) return _request!;
+    if (_cooldown != null) return Future.value();
+    return _request = _loadSelection(chart, refresh: refresh);
+  }
+
+  Future<void> _loadSelection(MusicChart chart, {required bool refresh}) async {
     final session = widget.session;
     final generation = _generation;
     final artists = widget.artists;
     bool current() => generation == _generation && _current(session);
-    if (_loading || _cooldown != null || !current()) return;
     setState(() {
       _loading = true;
       _failed = false;
@@ -1431,10 +1499,7 @@ class _FreshSelectionState extends State<_FreshSelection>
   @override
   Widget build(BuildContext context) {
     final session = widget.session;
-    final chart = musicCharts
-            .where((chart) => chart.countryCode == session.country)
-            .firstOrNull ??
-        musicCharts.first;
+    final chart = _chart;
     final visible = _visible;
     if (!visible && _loading) _cancel();
     if (visible &&
@@ -1465,9 +1530,8 @@ class _FreshSelectionState extends State<_FreshSelection>
         recommendations.eligibleMusic(_chartTracks).take(_shelfSize).toList();
     if (visible) _rememberChartTracks(tracks);
     final locals = AppLocalizations.of(context)!;
-    final refreshSelection = _loading || _cooldown != null
-        ? null
-        : () => _load(chart, refresh: true);
+    final refreshSelection =
+        _loading || _cooldown != null ? null : refreshShelves;
     if (releases.isEmpty && tracks.isEmpty) {
       if (!_failed && !(_prepared && _loading)) return const SizedBox.shrink();
       return Column(
@@ -1484,6 +1548,9 @@ class _FreshSelectionState extends State<_FreshSelection>
     }
 
     bool current() => _current(session);
+    final chartTitle = chart.countryCode == null
+        ? locals.musicWorldwideChart
+        : locals.musicRegionalChart;
     final refresh = IconButton(
       key: const ValueKey('music-home-fresh-refresh'),
       tooltip: locals.refresh,
@@ -1518,11 +1585,7 @@ class _FreshSelectionState extends State<_FreshSelection>
           ),
         ],
         if (tracks.isNotEmpty) ...[
-          _SectionHeading(
-              title: chart.countryCode == null
-                  ? locals.musicWorldwideChart
-                  : locals.musicRegionalChart,
-              action: refresh),
+          _SectionHeading(title: chartTitle, action: refresh),
           MusicCatalogShelf(
             key: const ValueKey('music-home-chart'),
             itemCount: tracks.length,
@@ -1537,7 +1600,7 @@ class _FreshSelectionState extends State<_FreshSelection>
                   if (!current()) return;
                   final playable = recommendations.eligibleMusic(tracks);
                   _openSong(context, track.videoId,
-                      playable.map((track) => track.toVideo()));
+                      playable.map((track) => track.toVideo()), chartTitle);
                 },
               );
             },

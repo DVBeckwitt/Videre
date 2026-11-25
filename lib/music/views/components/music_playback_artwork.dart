@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/downloads/services/download_playback_source.dart';
+import 'package:clipious/downloads/services/explicit_music_download.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/music/models/song_artwork.dart';
 import 'package:clipious/music/services/local_music_library.dart';
@@ -44,6 +45,18 @@ class MusicPlaybackArtwork extends StatelessWidget {
             : const SizedBox.expand());
     final videoId = video?.videoId ?? offline?.videoId;
     final offlineId = offline?.videoId;
+    final videoPin = video?.explicitMusicDownload;
+    final fingerprint = videoPin ?? offline?.explicitMusicDownload;
+    if (fingerprint != null) {
+      final id = videoPin != null ? video!.videoId : offline!.videoId;
+      final download = readyMusicDownload(db, id, fingerprint: fingerprint);
+      return download == null
+          ? placeholder
+          : _LocalSongCover(
+              key: ValueKey(download),
+              download: download,
+              placeholder: placeholder);
+    }
     final deviceId = isLocalMusicPlaybackId(offlineId) ? offlineId : videoId;
     if (isLocalMusicPlaybackId(deviceId)) {
       return ListenableBuilder(
@@ -76,6 +89,7 @@ class MusicPlaybackArtwork extends StatelessWidget {
       stock = images.isEmpty
           ? placeholder
           : Thumbnail(
+              musicArtwork: true,
               images: images,
               fallback: placeholder,
               decoration: const BoxDecoration());

@@ -290,6 +290,7 @@ class _HistoryVideoState extends State<_HistoryVideo> {
         return TvVideoItem(
           key: ValueKey(widget.videoId),
           video: video,
+          musicArtwork: widget.source == HistorySource.music,
           autoFocus: false,
           onSelect: widget.onOpen,
           onFocusChange: (focused) {

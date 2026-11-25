@@ -1,9 +1,13 @@
+import 'dart:async';
+
 import 'package:auto_route/auto_route.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../../l10n/generated/app_localizations.dart';
+import '../../../player/states/player.dart';
+import '../../../player/views/components/mini_player_aware.dart';
 import '../../../router.dart';
 import '../../../settings/states/settings.dart';
 import '../../../utils.dart';
@@ -71,6 +75,10 @@ class _MusicModeScreenState extends State<MusicModeScreen> {
   late final PageController _pages;
   final _storage = PageStorageBucket();
   final _search = GlobalKey<MusicScreenState>();
+  final _retained = {
+    for (final destination in MusicDestination.values)
+      destination: GlobalKey<_RetainedMusicPageState>(),
+  };
   MusicDestination _page = MusicDestination.home;
   Object? _pendingSearchFocus;
 
@@ -91,6 +99,18 @@ class _MusicModeScreenState extends State<MusicModeScreen> {
   void _openSearch() => _show(MusicDestination.search, focusSearch: true);
 
   void _select(MusicDestination page) {
+    if (_pages.positions.length != 1) return;
+    if (page == _page && !_pages.position.isScrollingNotifier.value) {
+      final player = context.read<PlayerCubit?>()?.state;
+      final covered = player != null &&
+          (player.isPip || !player.isHidden && !player.isMini);
+      if (!covered &&
+          TickerMode.of(context) &&
+          ModalRoute.isCurrentOf(context) != false) {
+        _retained[page]?.currentState?.scrollToTop();
+      }
+      return;
+    }
     if (page == MusicDestination.search) {
       _openSearch();
     } else {
@@ -139,6 +159,33 @@ class _MusicModeScreenState extends State<MusicModeScreen> {
     super.dispose();
   }
 
+  Widget _navigationBar(BuildContext context,
+      {required bool embedded, required bool compact}) {
+    final locals = AppLocalizations.of(context)!;
+    final colors = Theme.of(context).colorScheme;
+    return NavigationBar(
+      key: embedded ? const ValueKey('music-destination-bar') : null,
+      height: phoneNavigationHeight(context, compact: compact),
+      backgroundColor: colors.surfaceContainer,
+      surfaceTintColor: Colors.transparent,
+      indicatorColor:
+          embedded ? colors.secondaryContainer : colors.surfaceContainerHighest,
+      labelBehavior:
+          compact ? NavigationDestinationLabelBehavior.alwaysHide : null,
+      selectedIndex: _order.indexOf(_page),
+      onDestinationSelected: (index) => _select(_order[index]),
+      destinations: [
+        for (final destination in _order)
+          NavigationDestination(
+              key: embedded
+                  ? ValueKey('music-section-${destination.name}')
+                  : null,
+              icon: Icon(destination.icon),
+              label: destination.label(locals)),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final locals = AppLocalizations.of(context)!;
@@ -146,32 +193,33 @@ class _MusicModeScreenState extends State<MusicModeScreen> {
     final embedded = widget.inMainPager ||
         widget.mainNavigationBar != null ||
         widget.mainNavigationRail != null;
-    final colors = Theme.of(context).colorScheme;
+    final embeddedPhone =
+        phone && (widget.inMainPager || widget.mainNavigationBar != null);
+    final dock = embeddedPhone ? MiniPlayerDock.maybeOf(context) : null;
+    final keyboardVisible =
+        dock?.keyboardVisible ?? MediaQuery.viewInsetsOf(context).bottom > 0;
+    final phoneBar = phone && !(embeddedPhone && keyboardVisible)
+        ? _navigationBar(context,
+            embedded: embeddedPhone,
+            compact: embeddedPhone && usesCompactMusicNavigation(context))
+        : null;
+    final mainBar = widget.mainNavigationBar;
+    final bottomBar = mainBar == null
+        ? phoneBar
+        : embeddedPhone
+            ? keyboardVisible
+                ? null
+                : Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [phoneBar!, mainBar])
+            : mainBar;
     return BlocListener<SettingsCubit, SettingsState>(
       listenWhen: (before, after) => !listEquals(
           before.musicLayout.destinations, after.musicLayout.destinations),
       listener: (_, state) => _applyOrder(state.musicLayout.destinations),
       child: Scaffold(
         appBar: widget.appBar,
-        bottomNavigationBar: widget.mainNavigationBar ??
-            (phone && !widget.inMainPager
-                ? NavigationBar(
-                    height: MediaQuery.textScalerOf(context).scale(12) <= 16
-                        ? 60
-                        : 76,
-                    backgroundColor: colors.surfaceContainer,
-                    surfaceTintColor: Colors.transparent,
-                    indicatorColor: colors.surfaceContainerHighest,
-                    selectedIndex: _order.indexOf(_page),
-                    onDestinationSelected: (index) => _select(_order[index]),
-                    destinations: [
-                      for (final destination in _order)
-                        NavigationDestination(
-                            icon: Icon(destination.icon),
-                            label: destination.label(locals)),
-                    ],
-                  )
-                : null),
+        bottomNavigationBar: bottomBar,
         body: Row(children: [
           if (widget.mainNavigationRail != null)
             widget.mainNavigationRail!
@@ -189,7 +237,7 @@ class _MusicModeScreenState extends State<MusicModeScreen> {
             ),
           Expanded(
             child: Column(children: [
-              if (embedded)
+              if (embedded && !embeddedPhone)
                 Align(
                   alignment: AlignmentDirectional.centerStart,
                   child: SingleChildScrollView(
@@ -211,50 +259,58 @@ class _MusicModeScreenState extends State<MusicModeScreen> {
                   ),
                 ),
               Expanded(
-                child: PageStorage(
-                    bucket: _storage,
-                    child: PageView(
-                      key: const PageStorageKey('music-mode-pages'),
-                      controller: _pages,
-                      // In the primary phone pager, horizontal page gestures
-                      // follow the configured bottom tabs. Chips still select
-                      // Music sections, and their own horizontal lists scroll.
-                      physics: widget.inMainPager
-                          ? const NeverScrollableScrollPhysics()
-                          : null,
-                      onPageChanged: (index) {
-                        final page = _order[index];
-                        if (page != MusicDestination.search) {
-                          _search.currentState?.leaveSearch();
-                        }
-                        setState(() => _page = page);
-                      },
-                      children: [
-                        for (final destination in _order)
-                          _RetainedMusicPage(
-                            key: ValueKey(destination),
-                            active: destination == _page,
-                            child: switch (destination) {
-                              MusicDestination.home => MusicHomePage(
-                                  showSearchShortcut: false,
-                                  onSearch: () =>
-                                      _show(MusicDestination.search),
-                                  onLibrary: () =>
-                                      _show(MusicDestination.library)),
-                              MusicDestination.search =>
-                                MusicScreen(key: _search, embedded: true),
-                              MusicDestination.library =>
-                                const MusicLibraryPage(),
-                            },
-                          ),
-                      ],
-                    )),
+                child: _musicBody(
+                    dock: dock,
+                    child: PageStorage(
+                        bucket: _storage,
+                        child: PageView(
+                          key: const PageStorageKey('music-mode-pages'),
+                          controller: _pages,
+                          // In the primary phone pager, horizontal page gestures
+                          // follow the configured app tabs. The Music row selects
+                          // Music sections, and their own horizontal lists scroll.
+                          physics: widget.inMainPager
+                              ? const NeverScrollableScrollPhysics()
+                              : null,
+                          onPageChanged: (index) {
+                            final page = _order[index];
+                            if (page != MusicDestination.search) {
+                              _search.currentState?.leaveSearch();
+                            }
+                            setState(() => _page = page);
+                          },
+                          children: [
+                            for (final destination in _order)
+                              _RetainedMusicPage(
+                                key: _retained[destination],
+                                active: destination == _page,
+                                child: switch (destination) {
+                                  MusicDestination.home => MusicHomePage(
+                                      showSearchShortcut: false,
+                                      onSearch: () =>
+                                          _show(MusicDestination.search),
+                                      onLibrary: () =>
+                                          _show(MusicDestination.library)),
+                                  MusicDestination.search =>
+                                    MusicScreen(key: _search, embedded: true),
+                                  MusicDestination.library =>
+                                    const MusicLibraryPage(),
+                                },
+                              ),
+                          ],
+                        ))),
               ),
             ]),
           ),
         ]),
       ),
     );
+  }
+
+  Widget _musicBody({required MiniPlayerDock? dock, required Widget child}) {
+    if (dock == null) return child;
+    return MiniPlayerInset(
+        enabled: dock.active && !dock.miniSuppressed, child: child);
   }
 }
 
@@ -271,15 +327,65 @@ class _RetainedMusicPage extends StatefulWidget {
 
 class _RetainedMusicPageState extends State<_RetainedMusicPage>
     with AutomaticKeepAliveClientMixin {
+  final _verticalPanes = <ScrollableState>{};
+
   @override
   bool get wantKeepAlive => true;
+
+  bool _rememberScroll(ScrollMetrics metrics, int depth, BuildContext? source) {
+    if (depth == 0 &&
+        metrics.axis == Axis.vertical &&
+        source?.mounted == true) {
+      _verticalPanes.removeWhere((pane) => !pane.mounted);
+      final pane = Scrollable.maybeOf(source!, axis: Axis.vertical);
+      if (pane != null) _verticalPanes.add(pane);
+    }
+    return false;
+  }
+
+  void scrollToTop() {
+    if (!widget.active) return;
+    _verticalPanes.removeWhere((pane) => !pane.mounted);
+    final duration = AppMotion.duration(context);
+    // Compact Search can have independent scrollable controls and results.
+    // Each page records its own top-level panes, apart from nested shelves.
+    for (final pane in _verticalPanes.toList()) {
+      final position = pane.position;
+      if (position.context.notificationContext?.mounted != true ||
+          !TickerMode.of(pane.context) ||
+          !position.hasPixels ||
+          !position.hasContentDimensions ||
+          !position.hasViewportDimension ||
+          position.viewportDimension <= 0 ||
+          position.pixels <= position.minScrollExtent) {
+        continue;
+      }
+      if (duration == Duration.zero) {
+        position.jumpTo(position.minScrollExtent);
+      } else {
+        unawaited(position.animateTo(position.minScrollExtent,
+            duration: duration, curve: Curves.easeInOutQuad));
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     super.build(context);
     return TickerMode(
       enabled: widget.active,
-      child: ExcludeFocus(excluding: !widget.active, child: widget.child),
+      child: ExcludeFocus(
+        excluding: !widget.active,
+        child: NotificationListener<ScrollMetricsNotification>(
+          onNotification: (notification) => _rememberScroll(
+              notification.metrics, notification.depth, notification.context),
+          child: NotificationListener<ScrollNotification>(
+            onNotification: (notification) => _rememberScroll(
+                notification.metrics, notification.depth, notification.context),
+            child: widget.child,
+          ),
+        ),
+      ),
     );
   }
 }

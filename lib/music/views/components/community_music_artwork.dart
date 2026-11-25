@@ -7,6 +7,7 @@ import '../../../app/states/app.dart';
 import '../../../globals.dart';
 import '../../../network/network_proxy.dart';
 import '../../../videos/models/music_metadata.dart';
+import '../../services/music_artwork_cache.dart';
 import '../../services/music_community_cover_cache.dart';
 import '../../services/music_community_cover_preferences.dart';
 
@@ -39,6 +40,8 @@ class _CommunityMusicArtworkState extends State<CommunityMusicArtwork>
   Object? _request;
   int _generation = 0;
   String? _profile;
+  (String, String)? _suppressed;
+  int _cacheRevision = 0;
   Future<File?>? _cover;
   bool _foreground = true;
 
@@ -52,16 +55,19 @@ class _CommunityMusicArtworkState extends State<CommunityMusicArtwork>
     _foreground = lifecycle == null || lifecycle == AppLifecycleState.resumed;
     WidgetsBinding.instance.addObserver(this);
     _cache.savedCover.addListener(_coverWasSaved);
+    _cache.invalidated.addListener(_coverWasRemoved);
   }
 
   @override
   void didUpdateWidget(CommunityMusicArtwork oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.cache != oldWidget.cache) {
-      (oldWidget.cache ?? communityMusicCoverCache)
-          .savedCover
-          .removeListener(_coverWasSaved);
+      final old = oldWidget.cache ?? communityMusicCoverCache;
+      old.savedCover.removeListener(_coverWasSaved);
+      old.invalidated.removeListener(_coverWasRemoved);
       _cache.savedCover.addListener(_coverWasSaved);
+      _cache.invalidated.addListener(_coverWasRemoved);
+      _suppressed = null;
       _cover = null;
     }
   }
@@ -83,6 +89,7 @@ class _CommunityMusicArtworkState extends State<CommunityMusicArtwork>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _cache.savedCover.removeListener(_coverWasSaved);
+    _cache.invalidated.removeListener(_coverWasRemoved);
     super.dispose();
   }
 
@@ -91,6 +98,25 @@ class _CommunityMusicArtworkState extends State<CommunityMusicArtwork>
         _cache.savedCover.value == (_profile, widget.videoId)) {
       setState(() => _cover = null);
     }
+  }
+
+  void _coverWasRemoved() {
+    final removed = _cache.invalidated.value;
+    final id = widget.videoId;
+    if (removed == null ||
+        removed.$1 != _profile ||
+        id == null ||
+        (removed.$2 != null && removed.$2 != id)) {
+      return;
+    }
+    setState(() {
+      // Keep this mounted track on its fallback after eviction. Selecting a
+      // different song can start its normally authorized foreground lookup.
+      _suppressed = (removed.$1, id);
+      _generation++;
+      _cacheRevision++;
+      _cover = null;
+    });
   }
 
   @override
@@ -113,17 +139,26 @@ class _CommunityMusicArtworkState extends State<CommunityMusicArtwork>
           _request = null;
           _cover = null;
           _profile = null;
+          _suppressed = null;
           return widget.fallback;
         }
         final owner = db;
         final profile = state.profileId;
+        if (identical(_cache, communityMusicCoverCache)) {
+          (context.read<MusicArtworkCache?>() ?? musicArtworkCache)
+              .trackProfile(profile);
+        }
         final session = state.sessionRevision;
         final music = widget.music;
         final duration = widget.durationSeconds;
         final proxy = NetworkProxy.instance;
         final network = proxy.config;
-        final lookup =
-            widget.allowLookup && visible && _foreground && music != null;
+        if (_suppressed != (profile, id)) _suppressed = null;
+        final lookup = _suppressed == null &&
+            widget.allowLookup &&
+            visible &&
+            _foreground &&
+            music != null;
         final request = (
           owner,
           profile,
@@ -135,7 +170,8 @@ class _CommunityMusicArtworkState extends State<CommunityMusicArtwork>
           music?.artist,
           music?.album,
           duration,
-          network
+          network,
+          _cacheRevision
         );
         if (request != _request || _cover == null) {
           _request = request;

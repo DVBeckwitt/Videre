@@ -17,6 +17,7 @@ import 'package:clipious/utils/views/components/app_icon.dart';
 import 'package:logging/logging.dart';
 
 import '../../../notifications/notifications.dart';
+import '../../../player/views/components/mini_player_aware.dart';
 import '../../models/phone_navigation.dart';
 import '../../../music/views/screens/music_mode.dart';
 
@@ -40,6 +41,24 @@ class _MainScreenState extends State<MainContentScreen> {
   bool _musicVisited = false;
   bool _videoVisited = false;
   PageStorageBucket _videoStorage = PageStorageBucket();
+  MiniPlayerDockController? _musicDock;
+  bool _musicDockRequested = false;
+
+  void _updateMusicDock(BuildContext context, bool active) {
+    final dock = MiniPlayerDock.maybeOf(context)?.controller;
+    if (_musicDock == dock && _musicDockRequested == active) return;
+    final previousDock = _musicDock;
+    _musicDock = dock;
+    _musicDockRequested = active;
+    // The selected tab is resolved inside the pager. Move the sibling player
+    // and its reserved space together after this frame.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (previousDock != dock) previousDock?.setActive(this, false);
+      if (mounted && _musicDock == dock && _musicDockRequested == active) {
+        dock?.setActive(this, active);
+      }
+    });
+  }
 
   void _openItem(BuildContext context, PhoneNavigationItem item) {
     final router = AutoRouter.of(context);
@@ -175,15 +194,15 @@ class _MainScreenState extends State<MainContentScreen> {
   PhoneNavigationItem _itemFor(HomeDataSource page) =>
       PhoneNavigationItem.values.firstWhere((item) => item.source == page);
 
-  Widget _phoneBar(
-      BuildContext context,
-      PhoneNavigation navigation,
-      PhoneNavigationItem selected,
-      ValueChanged<PhoneNavigationItem> onSelect) {
+  Widget _phoneBar(BuildContext context, PhoneNavigation navigation,
+      PhoneNavigationItem selected, ValueChanged<PhoneNavigationItem> onSelect,
+      {bool compact = false}) {
     final locals = AppLocalizations.of(context)!;
     final colors = Theme.of(context).colorScheme;
     return NavigationBar(
-      height: MediaQuery.textScalerOf(context).scale(12) <= 16 ? 60 : 76,
+      height: phoneNavigationHeight(context, compact: compact),
+      labelBehavior:
+          compact ? NavigationDestinationLabelBehavior.alwaysHide : null,
       indicatorColor: colors.surfaceContainerHighest,
       surfaceTintColor: Colors.transparent,
       animationDuration:
@@ -252,6 +271,10 @@ class _MainScreenState extends State<MainContentScreen> {
 
   @override
   void dispose() {
+    if (_musicDock case final dock?) {
+      WidgetsBinding.instance
+          .addPostFrameCallback((_) => dock.setActive(this, false));
+    }
     BackButtonInterceptor.removeByName('mainNavigator');
     super.dispose();
   }
@@ -317,6 +340,7 @@ class _MainScreenState extends State<MainContentScreen> {
       _musicSelected ??=
           phone && phoneNavigation.startup == PhoneNavigationItem.music;
       final phoneMusicTab = phone && hasMusicTab;
+      if (!phoneMusicTab) _updateMusicDock(context, false);
       final musicTabSelected =
           hasMusicTab && !phoneMusicTab && _musicSelected == true;
       final music = musicTabSelected;
@@ -427,6 +451,14 @@ class _MainScreenState extends State<MainContentScreen> {
                     final tabsRouter = AutoTabsRouter.of(context);
                     _initializeStartupTab(tabsRouter, selectedIndex);
                     final selectedItem = tabItems[tabsRouter.activeIndex];
+                    final embeddedPhoneMusic =
+                        phone && selectedItem == PhoneNavigationItem.music;
+                    _updateMusicDock(
+                        context,
+                        embeddedPhoneMusic &&
+                            ModalRoute.isCurrentOf(context) != false);
+                    final hideBars = embeddedPhoneMusic &&
+                        MediaQuery.viewInsetsOf(context).bottom > 0;
                     _setVideoRouterActive(tabsRouter,
                         !music && selectedItem != PhoneNavigationItem.music);
                     final selectedPage = selectedItem.source;
@@ -437,9 +469,11 @@ class _MainScreenState extends State<MainContentScreen> {
                     }
                     return Scaffold(
                       backgroundColor: colorScheme.surface,
-                      bottomNavigationBar: phone
+                      bottomNavigationBar: phone && !hideBars
                           ? _phoneBar(context, phoneNavigation, selectedItem,
-                              (item) => select(context, item))
+                              (item) => select(context, item),
+                              compact: embeddedPhoneMusic &&
+                                  usesCompactMusicNavigation(context))
                           : null,
                       appBar: selectedItem == PhoneNavigationItem.music
                           ? _musicAppBar(context,

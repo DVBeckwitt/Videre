@@ -31,6 +31,7 @@ import '../models/media_command.dart';
 import '../models/playback_pitch.dart';
 import '../models/playback_cache_identity.dart';
 import '../models/video_quality.dart';
+import '../models/watch_audio_track.dart';
 import '../views/components/player_controls.dart';
 import '../views/components/subtitle_failure_notice.dart';
 import '../views/tv/components/player_controls.dart';
@@ -85,6 +86,7 @@ List<BetterPlayerDataSource> _buildPlaybackDataSources(
   required bool preferDash,
   required bool preferProgressiveStartup,
   int? preferredQuality,
+  String? preferredAudioTrack,
   String? lastSubtitle,
   void Function()? onBlockedMediaOrigin,
 }) {
@@ -153,31 +155,45 @@ List<BetterPlayerDataSource> _buildPlaybackDataSources(
     }
   }
 
-  final streams = <({String resolution, String url, bool isVideo})>[];
+  final ordinaryStreams = <({String resolution, String url, bool isVideo})>[];
+  final matchingStreams = <({String resolution, String url, bool isVideo})>[];
   final streamUrls = <String>{};
   for (final stream in (video.formatStreams ?? []).reversed) {
     if (stream.isLegacyHd720) continue;
+    final isVideo = stream.type.toLowerCase().startsWith('video/');
+    final mayMatch = isVideo &&
+        preferredAudioTrack != null &&
+        watchAudioTrackId(stream.audioTrack) == preferredAudioTrack;
+    if (ordinaryStreams.length == _maxPlaybackSources &&
+        (!mayMatch || matchingStreams.length == _maxPlaybackSources)) {
+      continue;
+    }
     final safeUrl = admit(stream.url);
-    if (safeUrl == null || !streamUrls.add(_sourceKey(safeUrl))) continue;
+    if (safeUrl == null) continue;
+    final key = _sourceKey(safeUrl);
+    if (streamUrls.contains(key)) continue;
+    final matches = mayMatch &&
+        watchAudioTrackIdForProgressiveUrl(video, server, safeUrl) ==
+            preferredAudioTrack;
+    final target = matches ? matchingStreams : ordinaryStreams;
+    if (target.length == _maxPlaybackSources) continue;
+    streamUrls.add(key);
     final resolution = _streamLabel([
       stream.resolution,
       stream.qualityLabel,
       stream.quality,
       stream.itag,
     ]);
-    streams.add((
-      resolution: resolution,
-      url: safeUrl,
-      isVideo: stream.type.toLowerCase().startsWith('video/'),
-    ));
-    if (streams.length >= _maxPlaybackSources) {
+    target.add((resolution: resolution, url: safeUrl, isVideo: isVideo));
+    if (preferredAudioTrack == null && target.length == _maxPlaybackSources) {
       break;
     }
   }
+  final streams = [...matchingStreams, ...ordinaryStreams];
 
   // NerdVPN's signed DASH route adds a watch request and separate audio/video
   // buffering. Try one suitable combined stream, then keep DASH next in line.
-  final startupStream = preferDash &&
+  var selectedStartupStream = preferDash &&
           preferProgressiveStartup &&
           hls == null &&
           dash != null &&
@@ -192,6 +208,17 @@ List<BetterPlayerDataSource> _buildPlaybackDataSources(
               _sourceKey(stream.url) != _sourceKey(dash);
         }).firstOrNull
       : null;
+  if (selectedStartupStream != null &&
+      !matchingStreams.contains(selectedStartupStream)) {
+    final matchingStartup = matchingStreams
+        .where((stream) => _sourceKey(stream.url) != _sourceKey(dash!))
+        .toList();
+    final index = preferredVideoQualityIndex(
+        matchingStartup.map((s) => videoQualityHeight(s.resolution)).toList(),
+        preferredQuality);
+    if (index != null) selectedStartupStream = matchingStartup[index];
+  }
+  final startupStream = selectedStartupStream;
 
   void addProgressive() {
     final reservedDash = startupStream == null ? 0 : 1;
@@ -208,12 +235,17 @@ List<BetterPlayerDataSource> _buildPlaybackDataSources(
       resolutions.putIfAbsent(stream.resolution, () => stream.url);
     }
     // Change playback priority without reordering the quality menu.
+    final matching = accepted.where(matchingStreams.contains).toList();
+    final qualityChoices = matching.isEmpty ? accepted : matching;
+    final qualityIndex = preferredVideoQualityIndex(
+        qualityChoices.map((s) => videoQualityHeight(s.resolution)).toList(),
+        preferredQuality);
     final preferred = startupStream != null
         ? accepted.indexOf(startupStream)
-        : preferredVideoQualityIndex(
-            accepted.map((s) => videoQualityHeight(s.resolution)).toList(),
-            preferredQuality);
-    if (preferred != null) {
+        : (qualityIndex == null
+            ? 0
+            : accepted.indexOf(qualityChoices[qualityIndex]));
+    if (preferred > 0) {
       accepted.insert(0, accepted.removeAt(preferred));
     }
     for (final (index, stream) in accepted.indexed) {
@@ -889,6 +921,7 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
     _sourceMediaOriginBlocked = false;
     final generation = _playbackGeneration;
     final sourceIndex = _playbackSourceIndex;
+    final parentPositionGeneration = player.playbackPositionGeneration;
     var source = _playbackSources[sourceIndex];
     final cancelled = _setupCancellation.future;
     final previousSetup = _controllerSetup;
@@ -1090,6 +1123,19 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
       _sourceFailurePending = true;
       await _handleSourceFailure(generation, sourceIndex);
     } else {
+      final video = state.video;
+      if (!_playbackOffline &&
+          parentPositionGeneration == player.playbackPositionGeneration &&
+          video != null &&
+          server != null &&
+          source.videoFormat == BetterPlayerVideoFormat.other &&
+          source.playbackCache?['download'] is! Map) {
+        player.rememberWatchProgressiveAudio(
+            video,
+            source.url,
+            watchAudioTrackIdForProgressiveUrl(
+                _qualityMetadata ?? video, server, source.url));
+      }
       final native = videoController?.videoPlayerController;
       _nativePositionSubscription =
           native?.nativePositionStream.listen((position) {
@@ -1331,12 +1377,17 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
         );
         _playbackVideoId = newState.video!.videoId;
         var blockedMediaOrigin = false;
+        // The saved setting orders the adaptive and progressive sources.
+        // Within the progressive candidates, keep the known audio track.
+        final preferredAudioTrack =
+            player.watchAudioPreferenceFor(newState.video!)?.trackId;
         final sources = _buildPlaybackDataSources(
           newState.video!,
           server,
           preferDash: settings.state.useDash,
           preferProgressiveStartup: _canStartNerdVpnProgressive,
           preferredQuality: _videoQuality,
+          preferredAudioTrack: preferredAudioTrack,
           onBlockedMediaOrigin: () => blockedMediaOrigin = true,
           lastSubtitle: settings.state.rememberSubtitles
               ? settings.state.lastSubtitles
@@ -1356,12 +1407,26 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
                     _isCurrentAttempt(generation, 0) && !player.state.isAudio);
         if (!_isCurrentAttempt(generation, 0) || player.state.isAudio) return;
         if (local != null) {
+          final localPriority = preferredAudioTrack == null ||
+                  local.download.audioTrackId == preferredAudioTrack
+              ? 0
+              : sources.lastIndexWhere((source) =>
+                      source.videoFormat == BetterPlayerVideoFormat.other &&
+                      watchAudioTrackIdForProgressiveUrl(
+                              newState.video!, server, source.url) ==
+                          preferredAudioTrack) +
+                  1;
           final resolutions = <String, String>{
-            for (final source in sources) ...?source.resolutions,
-            if (local.videoQuality != null) local.videoQuality!: local.uri,
+            // Preserve the first source's language-aware choice for each
+            // quality when the mounted fallback is a saved file.
+            for (final source
+                in preferredAudioTrack == null ? sources : sources.reversed)
+              ...?source.resolutions,
+            if (local.videoQuality != null && localPriority == 0)
+              local.videoQuality!: local.uri,
           };
           sources.insert(
-              0,
+              localPriority,
               BetterPlayerDataSource(
                 // The platform source DTO accepts content/file URIs here and
                 // carries the same initial-seek and guarded admission metadata.
@@ -1664,6 +1729,7 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
         final sources = _buildPlaybackDataSources(refreshed, _playbackServer!,
             preferDash: false,
             preferProgressiveStartup: false,
+            preferredAudioTrack: player.watchAudioPreferenceFor(video)?.trackId,
             lastSubtitle: settings.state.rememberSubtitles
                 ? settings.state.lastSubtitles
                 : null);

@@ -14,7 +14,8 @@ import 'package:flutter/widgets.dart';
 import '../../globals.dart';
 import '../../home/models/db/home_layout.dart';
 import '../../main.dart' show isTv;
-import '../../music/services/music_community_cover_cache.dart';
+import '../../music/services/local_music_library.dart';
+import '../../music/services/music_artwork_cache.dart';
 import '../../network/content_link.dart';
 import '../../network/network_proxy.dart';
 import '../../playlists/models/playlist.dart';
@@ -34,6 +35,7 @@ class AppCubit extends Cubit<AppState> with WidgetsBindingObserver {
   late final StreamSubscription intentDataStreamSubscription;
   Future<void>? _pendingServerSwitch;
   final FileDB _backgroundDatabase;
+  final MusicArtworkCache _artworkCache;
   final VoidCallback? _onResume;
   _SessionSelection? _recoverySelection;
   ({
@@ -50,8 +52,11 @@ class AppCubit extends Cubit<AppState> with WidgetsBindingObserver {
   Future<void> Function(bool hasServer)? resetNavigation;
 
   AppCubit(super.initialState,
-      {FileDB? backgroundDatabase, VoidCallback? onResume})
+      {FileDB? backgroundDatabase,
+      MusicArtworkCache? artworkCache,
+      VoidCallback? onResume})
       : _backgroundDatabase = backgroundDatabase ?? fileDb,
+        _artworkCache = artworkCache ?? musicArtworkCache,
         _onResume = onResume {
     WidgetsBinding.instance.addObserver(this);
     onReady();
@@ -465,6 +470,10 @@ class AppCubit extends Cubit<AppState> with WidgetsBindingObserver {
         throw StateError('Leave this profile before deleting it');
       }
       setGlobalLoading(true);
+      // If artwork cleanup fails, the profile still has its sign-ins and
+      // background mirror when it is selected again.
+      await _artworkCache.removeProfile(profileId);
+      _requireOpen();
       for (final account in accounts) {
         await service.logOutProtected(account);
         _requireOpen();
@@ -474,8 +483,6 @@ class AppCubit extends Cubit<AppState> with WidgetsBindingObserver {
       await _backgroundDatabase.deleteProfile(profileId);
       _requireOpen();
       await PlaybackCache.removeProfile(profileId);
-      _requireOpen();
-      await communityMusicCoverCache.removeProfile(profileId);
       _requireOpen();
       RecommendationService.forgetProfile(db, profileId);
       await db.deleteProfile(profileId);
@@ -637,6 +644,7 @@ class AppCubit extends Cubit<AppState> with WidgetsBindingObserver {
 
   void _publishSession(IDbClient owner, Server? selected) {
     if (isClosed) return;
+    final profileChanged = state.profileId != owner.profileId;
     emit(state.copyWith(
         server: selected,
         firstIndex: 0,
@@ -644,6 +652,7 @@ class AppCubit extends Cubit<AppState> with WidgetsBindingObserver {
         homeLayout: owner.getHomeLayout(),
         sessionRevision: state.sessionRevision + 1,
         sessionRecoveryRequired: false));
+    if (profileChanged) LocalMusicLibrary.instance.visibilityProfileChanged();
   }
 
   Future<void> _restoreSession(_SessionSelection selection,

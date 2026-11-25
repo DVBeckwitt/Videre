@@ -60,6 +60,7 @@ class TvVideoItem extends StatelessWidget {
   final Video video;
   final bool autoFocus;
   final bool showCommunityLabels;
+  final bool musicArtwork;
   final void Function(bool focus)? onFocusChange;
   final Function(BuildContext context, Video video)? onSelect;
 
@@ -68,6 +69,7 @@ class TvVideoItem extends StatelessWidget {
       required this.video,
       required this.autoFocus,
       this.showCommunityLabels = false,
+      this.musicArtwork = false,
       this.onSelect,
       this.onFocusChange});
 
@@ -184,6 +186,7 @@ class TvVideoItem extends StatelessWidget {
                                         // Give the text its actual line height,
                                         // including fallback font metrics.
                                         child: thumbnail(VideoThumbnailView(
+                                            musicArtwork: musicArtwork,
                                             musicThumbnails:
                                                 video.musicMetadata?.thumbnails,
                                             videoId: video.videoId,

@@ -714,6 +714,42 @@ class AudioPlayer {
     }
   }
 
+  /// Reads a recognized file advisory from the currently loaded Android source.
+  /// No decoder is activated for this optional metadata.
+  Future<int?> getCurrentFileAdvisory(AudioSource source) async {
+    if (kIsWeb ||
+        defaultTargetPlatform != TargetPlatform.android ||
+        _disposed ||
+        !_active ||
+        source is! UriAudioSource ||
+        !const {'file', 'content'}.contains(source.uri.scheme)) {
+      return null;
+    }
+    final id = _id;
+    final native = _nativePlatform;
+    final revision = _sourceLoadRevision;
+    if (id == null || native == null) return null;
+    bool current() =>
+        !_disposed &&
+        _active &&
+        _id == id &&
+        identical(_nativePlatform, native) &&
+        _sourceLoadRevision == revision &&
+        identical(sequenceState.currentSource, source);
+    try {
+      await native;
+      if (!current()) return null;
+      final value = await MethodChannel('com.ryanheise.just_audio.methods.$id')
+          .invokeMethod<int>(
+              'getCurrentFileAdvisory', {'audioSourceId': source._id});
+      return current() && (value == 1 || value == 2) ? value : null;
+    } on MissingPluginException {
+      return null;
+    } on PlatformException {
+      return null;
+    }
+  }
+
   /// Reads this active Android session's equalizer without changing playback.
   /// The effect is allocated disabled on first use; unsupported hardware reports
   /// an error to this call rather than preventing the decoder from loading.

@@ -45,7 +45,11 @@ class _MusicCatalogCardState extends State<MusicCatalogCard> {
     final song = widget.song;
     final images = song?.displayThumbnails ?? widget.thumbnails;
     final artwork = widget.artist
-        ? ChannelAvatar(name: widget.title, images: images, instanceOnly: true)
+        ? ChannelAvatar(
+            musicArtwork: true,
+            name: widget.title,
+            images: images,
+            instanceOnly: true)
         : images.isEmpty
             ? DecoratedBox(
                 decoration: BoxDecoration(
@@ -56,6 +60,7 @@ class _MusicCatalogCardState extends State<MusicCatalogCard> {
                     size: 40, color: colors.onSurfaceVariant),
               )
             : Thumbnail(
+                musicArtwork: true,
                 images: images,
                 instanceOnly: true,
                 decoration: BoxDecoration(borderRadius: radius),

@@ -21,9 +21,12 @@ import 'package:clipious/music/models/music_artist.dart';
 import 'package:clipious/music/models/music_artist_page.dart';
 import 'package:clipious/music/models/music_collection.dart';
 import 'package:clipious/music/models/music_layout.dart';
+import 'package:clipious/music/models/music_library_entry.dart';
 import 'package:clipious/music/models/music_track.dart';
 import 'package:clipious/music/models/music_playlist.dart';
 import 'package:clipious/music/services/music_catalog_service.dart';
+import 'package:clipious/music/services/music_library_service.dart';
+import 'package:clipious/music/views/screens/music.dart';
 import 'package:clipious/music/views/screens/music_mode.dart';
 import 'package:clipious/network/gateway_context.dart';
 import 'package:clipious/player/states/interfaces/media_player.dart';
@@ -75,6 +78,12 @@ import 'test_player_cubit.dart';
 import 'test_settings_cubit.dart';
 
 const _instanceHeaders = {'Authorization': 'Basic test'};
+const _navigationSong = Video(
+  videoId: 'musicnav001',
+  title: 'Preview song',
+  lengthSeconds: 60,
+  musicMetadata: MusicMetadata(title: 'Preview song', artist: 'Artist'),
+);
 final _instanceRequestHeaders = gatewayContextHeaders(
     profileId: 'default',
     accountId: 'https://example.com',
@@ -246,6 +255,8 @@ class _SessionApp extends TestAppCubit {
 
 class _TestMusicCatalog extends MusicCatalogService {
   int trendingCalls = 0;
+  int searchSongCalls = 0;
+  int searchSongCount = 1;
   Completer<void>? pendingArtist;
 
   List<MusicTrack> discoverySongs = const [];
@@ -265,17 +276,26 @@ class _TestMusicCatalog extends MusicCatalogService {
   }
 
   @override
-  Future<List<MusicTrack>> searchSongs(String query) async => [
+  Future<List<MusicTrack>> searchSongs(String query) async {
+    searchSongCalls++;
+    return [
+      MusicTrack(
+          videoId: 'searchsong1',
+          title: 'Search result $query',
+          artists: const [
+            'Music channel'
+          ],
+          artistLinks: const [
+            MusicArtist(id: 'UCmusic', name: 'Music channel')
+          ]),
+      for (var index = 1; index < searchSongCount; index++)
         MusicTrack(
-            videoId: 'searchsong1',
-            title: 'Search result $query',
-            artists: const [
-              'Music channel'
-            ],
-            artistLinks: const [
-              MusicArtist(id: 'UCmusic', name: 'Music channel')
-            ]),
-      ];
+          videoId: 'result${index.toString().padLeft(5, '0')}',
+          title: 'Search result $query $index',
+          artists: const ['Music channel'],
+        ),
+    ];
+  }
 
   @override
   Future<List<MusicArtist>> searchArtists(String query) async =>
@@ -309,6 +329,16 @@ class _TestMusicCatalog extends MusicCatalogService {
 Finder _phoneTab(PhoneNavigationItem item) =>
     find.byKey(ValueKey('main-navigation-${item.name}'));
 
+final _musicNavigation = find.byKey(const ValueKey('music-destination-bar'));
+
+final _phoneNavigation = find.byWidgetPredicate((widget) =>
+    widget is NavigationBar &&
+    widget.destinations.any((destination) {
+      final key = destination.key;
+      return key is ValueKey<String> &&
+          key.value.startsWith('main-navigation-');
+    }));
+
 Future<void> _selectPhoneTab(
     WidgetTester tester, PhoneNavigationItem item) async {
   await tester.tap(_phoneTab(item));
@@ -318,11 +348,17 @@ Future<void> _selectPhoneTab(
 Finder _musicSection(MusicDestination section) =>
     find.byKey(ValueKey('music-section-${section.name}'));
 
+void _expectMusicSection(WidgetTester tester, MusicDestination section) {
+  final row = tester.widget<NavigationBar>(_musicNavigation);
+  expect(row.destinations[row.selectedIndex].key,
+      ValueKey('music-section-${section.name}'));
+}
+
 Future<void> _selectMusicSection(
     WidgetTester tester, MusicDestination section) async {
-  await tester.ensureVisible(_musicSection(section));
-  await tester.pumpAndSettle();
-  await tester.tap(_musicSection(section));
+  final target = _musicSection(section).hitTestable();
+  expect(target, findsOneWidget);
+  await tester.tap(target);
   await tester.pumpAndSettle();
 }
 
@@ -355,6 +391,7 @@ class _WatchSelectionPlayer extends TestPlayerCubit {
       Duration? startAt,
       bool? playing,
       int? startIndex,
+      String? queueTitle,
       bool fromMusic = false}) async {
     selection.add((videos.single.videoId, audio));
   }
@@ -1295,13 +1332,14 @@ void main() {
   testWidgets('Music is a primary phone tab and retains its section pages',
       (tester) async {
     await _pumpHomepage(tester, const Size(320, 640));
-    final navigation = find.byType(NavigationBar);
+    final navigation = _phoneNavigation;
     await _selectPhoneTab(tester, PhoneNavigationItem.history);
     final historyIndex = tester.widget<NavigationBar>(navigation).selectedIndex;
     await _selectPhoneTab(tester, PhoneNavigationItem.music);
     expect(find.byType(MusicModeScreen), findsOneWidget);
     expect(find.byType(SegmentedButton<HomeContentMode>), findsNothing);
     expect(navigation, findsOneWidget);
+    expect(_musicNavigation, findsOneWidget);
     expect(find.text('Saved songs'), findsOneWidget);
     expect((musicCatalogService as _TestMusicCatalog).trendingCalls, 0);
     final primary = tester.widget<NavigationBar>(navigation);
@@ -1311,31 +1349,37 @@ void main() {
             .map((item) => item.label),
         ['Home', 'Subscriptions', 'History', 'Music', 'Search']);
     expect(primary.selectedIndex, 3);
+    final row = tester.widget<NavigationBar>(_musicNavigation);
+    expect(
+        row.destinations
+            .cast<NavigationDestination>()
+            .map((destination) => destination.label),
+        ['Home', 'Search', 'Library']);
+    expect(row.destinations.map((destination) => destination.key), [
+      for (final section in MusicDestination.values)
+        ValueKey('music-section-${section.name}'),
+    ]);
+    expect(tester.getRect(_musicNavigation).bottom,
+        closeTo(tester.getRect(navigation).top, 0.01));
+    for (final section in MusicDestination.values) {
+      final target = _musicSection(section);
+      expect(target.hitTestable(), findsOneWidget);
+      expect(tester.getSize(target).width, greaterThanOrEqualTo(48));
+      expect(tester.getSize(target).height, greaterThanOrEqualTo(48));
+    }
 
     await _selectMusicSection(tester, MusicDestination.search);
     expect(tester.widget<NavigationBar>(navigation).selectedIndex, 3);
-    expect(
-        tester
-            .widget<ChoiceChip>(_musicSection(MusicDestination.search))
-            .selected,
-        isTrue);
+    _expectMusicSection(tester, MusicDestination.search);
     final field = find.byKey(const ValueKey('music-search'));
     await tester.enterText(field, 'retained song');
     await _selectMusicSection(tester, MusicDestination.library);
-    expect(
-        tester
-            .widget<ChoiceChip>(_musicSection(MusicDestination.library))
-            .selected,
-        isTrue);
+    _expectMusicSection(tester, MusicDestination.library);
     expect(find.byKey(const ValueKey('music-library-shortcut-songs')),
         findsOneWidget);
 
     await _selectPhoneTab(tester, PhoneNavigationItem.search);
-    expect(
-        tester
-            .widget<ChoiceChip>(_musicSection(MusicDestination.search))
-            .selected,
-        isTrue);
+    _expectMusicSection(tester, MusicDestination.search);
     expect(tester.widget<TextField>(field).focusNode!.hasFocus, isTrue);
     expect(tester.widget<TextField>(field).controller!.text, 'retained song');
     tester.testTextInput.hide();
@@ -1344,24 +1388,390 @@ void main() {
     await tester.binding.handlePopRoute();
     await tester.pumpAndSettle();
     expect(tester.widget<NavigationBar>(navigation).selectedIndex, 3);
-    expect(
-        tester
-            .widget<ChoiceChip>(_musicSection(MusicDestination.library))
-            .selected,
-        isTrue);
+    _expectMusicSection(tester, MusicDestination.library);
 
     await _selectPhoneTab(tester, PhoneNavigationItem.history);
     expect(
         tester.widget<NavigationBar>(navigation).selectedIndex, historyIndex);
     expect(find.text('History'), findsWidgets);
+    expect(_musicNavigation.hitTestable(), findsNothing);
     await _selectPhoneTab(tester, PhoneNavigationItem.music);
-    expect(
-        tester
-            .widget<ChoiceChip>(_musicSection(MusicDestination.library))
-            .selected,
-        isTrue);
+    _expectMusicSection(tester, MusicDestination.library);
     await _selectMusicSection(tester, MusicDestination.home);
     expect(find.text('Saved songs'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('reselecting a Music destination scrolls only its active list',
+      (tester) async {
+    final catalog = musicCatalogService as _TestMusicCatalog;
+    catalog.searchSongCount = 35;
+    final library =
+        MusicLibraryService.forProfile(globals.db, globals.db.profileId);
+    await tester.runAsync(() async {
+      for (var index = 0; index < 30; index++) {
+        await library.save(MusicLibraryEntry(
+          kind: MusicLibraryKind.song,
+          id: 'reselect${index.toString().padLeft(3, '0')}',
+          title: 'Recorded song $index',
+          subtitle: 'Fixture artist',
+        ));
+      }
+    });
+    app_main.darkColorScheme = const ColorScheme.dark();
+    const position = Duration(seconds: 18);
+    final initial = SettingsState.init();
+    final layout = const MusicLayout.defaults().copyWith(destinations: const [
+      MusicDestination.library,
+      MusicDestination.home,
+      MusicDestination.search,
+    ]);
+    await _pumpHomepage(tester, const Size(360, 640),
+        settingsState: initial.copyWith(settings: {
+          ...initial.settings,
+          musicLayoutSettingName:
+              SettingsValue(musicLayoutSettingName, layout.encode()),
+        }),
+        playerState: PlayerState.init([_navigationSong]).copyWith(
+          currentlyPlaying: _navigationSong,
+          isAudio: true,
+          isHidden: false,
+          position: position,
+        ));
+    final player = tester.element(find.byType(Player)).read<PlayerCubit>();
+    await _selectPhoneTab(tester, PhoneNavigationItem.music);
+    _expectMusicSection(tester, MusicDestination.home);
+    final home = find.byKey(const PageStorageKey('music-home'));
+    final searchResults = find.descendant(
+        of: find.byType(MusicScreen), matching: find.byType(ListView));
+    final libraryResults =
+        find.byKey(const ValueKey('music-saved-songs-results'));
+    ScrollPosition scrollOf(Finder view) => tester
+        .state<ScrollableState>(find.descendant(
+            of: view,
+            matching: find.byWidgetPredicate((widget) =>
+                widget is Scrollable &&
+                widget.axisDirection == AxisDirection.down)))
+        .position;
+    Future<double> scrollDown(Finder view) async {
+      await tester.drag(view, const Offset(0, -280));
+      await tester.pumpAndSettle();
+      final offset = scrollOf(view).pixels;
+      expect(offset, greaterThan(0));
+      return offset;
+    }
+
+    final homeOffset = await scrollDown(home);
+    await _selectMusicSection(tester, MusicDestination.search);
+    const query = 'retained destination';
+    final searchField = find.byKey(const ValueKey('music-search'));
+    final songsFilter = find.descendant(
+        of: find.byKey(const ValueKey('music-search-filters')),
+        matching: find.widgetWithText(ChoiceChip, 'Songs'));
+    await tester.tap(songsFilter);
+    await tester.enterText(searchField, query);
+    await tester.testTextInput.receiveAction(TextInputAction.search);
+    await tester.pumpAndSettle();
+    final searchOffset = await scrollDown(searchResults);
+    final searches = catalog.searchSongCalls;
+
+    await _selectMusicSection(tester, MusicDestination.library);
+    _expectMusicSection(tester, MusicDestination.library);
+    final savedSongs = find.byKey(const ValueKey('music-library-tab-songs'));
+    await tester.ensureVisible(savedSongs);
+    await tester.tap(savedSongs);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('music-saved-songs-search')));
+    await tester.pumpAndSettle();
+    final libraryFind = find.byKey(const ValueKey('music-saved-songs-query'));
+    await tester.enterText(libraryFind, 'recorded');
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await tester.pumpAndSettle();
+    await tester
+        .longPress(find.textContaining('Recorded song').hitTestable().first);
+    await tester.pumpAndSettle();
+    expect(find.text('1 selected'), findsOneWidget);
+    final libraryOffset = await scrollDown(libraryResults);
+
+    await tester.tap(_musicSection(MusicDestination.library));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+    final libraryScroll = scrollOf(libraryResults);
+    expect(
+        libraryScroll.pixels, allOf(greaterThan(0), lessThan(libraryOffset)));
+    await tester.pumpAndSettle();
+    expect(libraryScroll.pixels, libraryScroll.minScrollExtent);
+    expect(find.text('1 selected'), findsOneWidget);
+    _expectMusicSection(tester, MusicDestination.library);
+
+    await _selectMusicSection(tester, MusicDestination.home);
+    expect(scrollOf(home).pixels, closeTo(homeOffset, 0.01));
+    await _selectMusicSection(tester, MusicDestination.home);
+    expect(scrollOf(home).pixels, scrollOf(home).minScrollExtent);
+    _expectMusicSection(tester, MusicDestination.home);
+
+    await _selectMusicSection(tester, MusicDestination.search);
+    expect(scrollOf(searchResults).pixels, closeTo(searchOffset, 0.01));
+    expect(tester.widget<TextField>(searchField).controller!.text, query);
+    expect(tester.widget<ChoiceChip>(songsFilter).selected, isTrue);
+    tester.widget<TextField>(searchField).focusNode!.unfocus();
+    await tester.pump();
+    expect(tester.testTextInput.isVisible, isFalse);
+
+    tester.platformDispatcher.accessibilityFeaturesTestValue =
+        const FakeAccessibilityFeatures(disableAnimations: true);
+    addTearDown(tester.platformDispatcher.clearAccessibilityFeaturesTestValue);
+    await tester.pump();
+    final searchTab = _musicSection(MusicDestination.search);
+    final searchIcon = find.descendant(
+        of: searchTab, matching: find.byIcon(MusicDestination.search.icon));
+    Focus.of(tester.element(searchIcon)).requestFocus();
+    await tester.pump();
+    expect(Focus.of(tester.element(searchIcon)).hasPrimaryFocus, isTrue);
+    expect(MediaQuery.disableAnimationsOf(tester.element(searchIcon)), isTrue);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pump();
+    final searchScroll = scrollOf(searchResults);
+    expect(searchScroll.pixels, searchScroll.minScrollExtent);
+    expect(tester.widget<TextField>(searchField).controller!.text, query);
+    expect(tester.widget<ChoiceChip>(songsFilter).selected, isTrue);
+    expect(tester.testTextInput.isVisible, isFalse);
+    expect(catalog.searchSongCalls, searches);
+    _expectMusicSection(tester, MusicDestination.search);
+
+    await _selectMusicSection(tester, MusicDestination.library);
+    expect(find.text('1 selected'), findsOneWidget);
+    expect(scrollOf(libraryResults).pixels, libraryScroll.minScrollExtent);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(tester.widget<TextField>(libraryFind).controller!.text, 'recorded');
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(tester.widget<ChoiceChip>(savedSongs).selected, isTrue);
+    _expectMusicSection(tester, MusicDestination.library);
+    final appBar = tester.widget<NavigationBar>(_phoneNavigation);
+    expect(appBar.destinations[appBar.selectedIndex].key,
+        const ValueKey('main-navigation-music'));
+    expect(player.state.currentlyPlaying, _navigationSong);
+    expect(player.state.position, position);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('phone Music Search fits above the keyboard at 320 dp',
+      (tester) async {
+    tester.platformDispatcher.textScaleFactorTestValue = 2;
+    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+    addTearDown(tester.view.resetViewInsets);
+    final catalog = musicCatalogService as _TestMusicCatalog;
+    final library =
+        MusicLibraryService.forProfile(globals.db, globals.db.profileId);
+    await tester.runAsync(() => library.save(const MusicLibraryEntry(
+          kind: MusicLibraryKind.song,
+          id: 'cafelibrary',
+          title: 'Café by the river',
+          subtitle: 'Fixture artist',
+        )));
+    await _pumpHomepage(tester, const Size(320, 640));
+    await _selectPhoneTab(tester, PhoneNavigationItem.music);
+    await _selectMusicSection(tester, MusicDestination.search);
+    expect(tester.testTextInput.isVisible, isTrue);
+    const keyboardHeight = 300.0;
+    tester.view.viewInsets = const FakeViewPadding(bottom: keyboardHeight);
+    await tester.pumpAndSettle();
+
+    final field = find.byKey(const ValueKey('music-search'));
+    await tester.enterText(field, 'small screen query');
+    expect(field.hitTestable(), findsOneWidget);
+    expect(tester.getRect(field).bottom, lessThan(640 - keyboardHeight));
+    expect(_musicNavigation.hitTestable(), findsNothing);
+    expect(_phoneNavigation.hitTestable(), findsNothing);
+    expect(tester.takeException(), isNull);
+
+    final librarySource =
+        find.byKey(const ValueKey('music-search-source-library'));
+    final onlineSource =
+        find.byKey(const ValueKey('music-search-source-online'));
+    await tester.ensureVisible(librarySource);
+    await tester.tap(librarySource);
+    await tester.pumpAndSettle();
+    await tester.enterText(field, 'cafe river');
+    await tester.pumpAndSettle();
+    expect(tester.getRect(field).bottom, lessThan(640 - keyboardHeight));
+    final librarySongs = find.widgetWithText(ChoiceChip, 'Songs');
+    expect(librarySongs.hitTestable(), findsOneWidget);
+    await tester.tap(librarySongs);
+    await tester.pumpAndSettle();
+    expect(tester.widget<ChoiceChip>(librarySongs).selected, isTrue);
+    expect(tester.widget<TextField>(field).controller!.text, 'cafe river');
+    expect(catalog.searchSongCalls, 0);
+
+    tester.testTextInput.hide();
+    tester.view.resetViewInsets();
+    await tester.pumpAndSettle();
+    expect(find.text('Café by the river'), findsOneWidget);
+    await tester.ensureVisible(onlineSource);
+    await tester.tap(onlineSource);
+    await tester.pumpAndSettle();
+    expect(catalog.searchSongCalls, 0);
+    expect(_musicSection(MusicDestination.home).hitTestable(), findsOneWidget);
+    expect(
+        _phoneTab(PhoneNavigationItem.history).hitTestable(), findsOneWidget);
+    _expectMusicSection(tester, MusicDestination.search);
+    expect(
+        tester.widget<TextField>(field).controller!.text, 'small screen query');
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('Music fits playback, navigation and keyboard on a short phone',
+      (tester) async {
+    app_main.darkColorScheme = const ColorScheme.dark();
+    addTearDown(tester.view.resetViewInsets);
+    await _pumpHomepage(tester, const Size(320, 453),
+        playerState: PlayerState.init([_navigationSong]).copyWith(
+          currentlyPlaying: _navigationSong,
+          isAudio: true,
+          isHidden: false,
+        ));
+    await _selectPhoneTab(tester, PhoneNavigationItem.music);
+    final mini = find.byKey(const ValueKey('music-mini-player'));
+    void expectDocked() {
+      expect(find.byKey(const ValueKey('music-mini-expand')).hitTestable(),
+          findsOneWidget);
+      expect(tester.getRect(mini).bottom,
+          lessThanOrEqualTo(tester.getRect(_musicNavigation).top + 0.01));
+      expect(tester.getRect(_musicNavigation).bottom,
+          closeTo(tester.getRect(_phoneNavigation).top, 0.01));
+    }
+
+    expectDocked();
+    for (final section in MusicDestination.values) {
+      final target = _musicSection(section);
+      expect(target.hitTestable(), findsOneWidget);
+      expect(tester.getSize(target).shortestSide, greaterThanOrEqualTo(48));
+    }
+    await _selectMusicSection(tester, MusicDestination.search);
+    expect(tester.testTextInput.isVisible, isTrue);
+    const keyboardHeight = 210.0;
+    tester.view.viewInsets = const FakeViewPadding(bottom: keyboardHeight);
+    await tester.pumpAndSettle();
+    final field = find.byKey(const ValueKey('music-search'));
+    await tester.enterText(field, 'short phone query');
+    expect(field.hitTestable(), findsOneWidget);
+    expect(tester.getRect(field).bottom, lessThan(453 - keyboardHeight));
+    expect(tester.takeException(), isNull);
+
+    const tallKeyboardHeight = 260.0;
+    tester.view.viewInsets = const FakeViewPadding(bottom: tallKeyboardHeight);
+    await tester.pumpAndSettle();
+    expect(field.hitTestable(), findsOneWidget);
+    expect(tester.getRect(field).bottom, lessThan(453 - tallKeyboardHeight));
+    expect(mini.hitTestable(), findsNothing);
+    expect(tester.takeException(), isNull);
+    tester.testTextInput.hide();
+    tester.view.resetViewInsets();
+    await tester.pumpAndSettle();
+    expectDocked();
+    expect(
+        tester.widget<TextField>(field).controller!.text, 'short phone query');
+
+    await _selectMusicSection(tester, MusicDestination.library);
+    _expectMusicSection(tester, MusicDestination.library);
+    expect(find.byKey(const ValueKey('music-library-shortcut-songs')),
+        findsOneWidget);
+    await _selectPhoneTab(tester, PhoneNavigationItem.history);
+    expect(_musicNavigation.hitTestable(), findsNothing);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets(
+      'Music Back from Now Playing and Settings restores the dock and Search',
+      (tester) async {
+    (musicCatalogService as _TestMusicCatalog).searchSongCount = 25;
+    app_main.darkColorScheme = const ColorScheme.dark();
+    await _pumpHomepage(tester, const Size(390, 844),
+        playerState: PlayerState.init([_navigationSong]).copyWith(
+          currentlyPlaying: _navigationSong,
+          isAudio: true,
+          isHidden: false,
+        ));
+    final player = tester.element(find.byType(Player)).read<PlayerCubit>();
+    BackButtonInterceptor.add(player.handleBackButton,
+        name: 'miniPlayer', zIndex: 2, ifNotYetIntercepted: true);
+    addTearDown(() => BackButtonInterceptor.removeByName('miniPlayer'));
+
+    await _selectPhoneTab(tester, PhoneNavigationItem.music);
+    await _selectMusicSection(tester, MusicDestination.search);
+    final field = find.byKey(const ValueKey('music-search'));
+    await tester.enterText(field, 'scrolling query');
+    await tester.testTextInput.receiveAction(TextInputAction.search);
+    await tester.pumpAndSettle();
+    final results = find.descendant(
+        of: find.byType(MusicScreen), matching: find.byType(ListView));
+    final scrollable =
+        find.descendant(of: results, matching: find.byType(Scrollable));
+
+    final mini = find.byKey(const ValueKey('music-mini-player'));
+    final expand = find.byKey(const ValueKey('music-mini-expand'));
+    void expectPlaybackStack() {
+      expect(tester.getRect(mini).bottom,
+          lessThanOrEqualTo(tester.getRect(_musicNavigation).top + 0.01));
+      expect(tester.getRect(_musicNavigation).bottom,
+          closeTo(tester.getRect(_phoneNavigation).top, 0.01));
+      expect(tester.getRect(results).bottom,
+          lessThanOrEqualTo(tester.getRect(mini).top + 0.01));
+      expect(expand.hitTestable(), findsOneWidget);
+      expect(_musicSection(MusicDestination.library).hitTestable(),
+          findsOneWidget);
+      expect(
+          _phoneTab(PhoneNavigationItem.history).hitTestable(), findsOneWidget);
+    }
+
+    expectPlaybackStack();
+    await tester.drag(results, const Offset(0, -385));
+    await tester.pumpAndSettle();
+    final offset = tester.state<ScrollableState>(scrollable).position.pixels;
+    expect(offset, greaterThan(200));
+
+    await tester.tap(expand);
+    await tester.pumpAndSettle();
+    expect(player.state.isMini, isFalse);
+    expect(find.byKey(const ValueKey('music-player-title')).hitTestable(),
+        findsOneWidget);
+    expect(_musicSection(MusicDestination.search).hitTestable(), findsNothing);
+    expect(_phoneTab(PhoneNavigationItem.history).hitTestable(), findsNothing);
+    await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+      SystemChannels.navigation.name,
+      SystemChannels.navigation.codec
+          .encodeMethodCall(const MethodCall('popRoute')),
+      null,
+    );
+    await tester.pumpAndSettle();
+
+    expect(player.state.isMini, isTrue);
+    expectPlaybackStack();
+    _expectMusicSection(tester, MusicDestination.search);
+    expect(tester.widget<TextField>(field).controller!.text, 'scrolling query');
+    expect(tester.state<ScrollableState>(scrollable).position.pixels,
+        closeTo(offset, 0.01));
+
+    await tester.tap(find.byTooltip('Settings'));
+    await tester.pumpAndSettle();
+    expect(find.text('Browsing'), findsOneWidget);
+    expect(_musicSection(MusicDestination.search).hitTestable(), findsNothing);
+    expect(expand.hitTestable(), findsOneWidget);
+    expect(tester.getRect(mini).bottom, closeTo(844, 12));
+
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(find.text('Browsing'), findsNothing);
+    expectPlaybackStack();
+    _expectMusicSection(tester, MusicDestination.search);
+    expect(tester.state<ScrollableState>(scrollable).position.pixels,
+        closeTo(offset, 0.01));
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
   });
@@ -1396,19 +1806,19 @@ void main() {
     await tester.pumpAndSettle();
     final library = _musicSection(MusicDestination.library);
     final search = _musicSection(MusicDestination.search);
-    expect(tester.widget<ChoiceChip>(library).selected, isTrue);
+    _expectMusicSection(tester, MusicDestination.library);
     expect(tester.getCenter(library).dx, lessThan(tester.getCenter(search).dx));
     expect(find.byKey(const ValueKey('music-library-shortcut-songs')),
         findsOneWidget);
 
     await _selectPhoneTab(tester, PhoneNavigationItem.search);
-    expect(tester.widget<ChoiceChip>(search).selected, isTrue);
+    _expectMusicSection(tester, MusicDestination.search);
     expect(tester.widget<TextField>(field).focusNode!.hasFocus, isTrue);
     expect(tester.widget<TextField>(field).controller!.text,
         'kept during reorder');
     await tester.binding.handlePopRoute();
     await tester.pumpAndSettle();
-    expect(tester.widget<ChoiceChip>(library).selected, isTrue);
+    _expectMusicSection(tester, MusicDestination.library);
 
     await _selectMusicSection(tester, MusicDestination.home);
     final discover = find.byKey(const ValueKey('music-home-discover'));
@@ -1418,7 +1828,7 @@ void main() {
     expect(find.byKey(const ValueKey('music-home-charts')), findsNothing);
     await tester.tap(libraryShortcut);
     await tester.pumpAndSettle();
-    expect(tester.widget<ChoiceChip>(library).selected, isTrue);
+    _expectMusicSection(tester, MusicDestination.library);
     expect(tester.takeException(), isNull);
   });
 
@@ -1431,11 +1841,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 30));
     await tester.tap(_musicSection(MusicDestination.home));
     await tester.pumpAndSettle();
-    expect(
-        tester
-            .widget<ChoiceChip>(_musicSection(MusicDestination.home))
-            .selected,
-        isTrue);
+    _expectMusicSection(tester, MusicDestination.home);
     expect(tester.testTextInput.isVisible, isFalse);
   });
 
@@ -1482,7 +1888,7 @@ void main() {
           phoneNavigationSettingName:
               SettingsValue(phoneNavigationSettingName, layout.encode()),
         }));
-    final navigation = find.byType(NavigationBar);
+    final navigation = _phoneNavigation;
     expect(tester.widget<NavigationBar>(navigation).selectedIndex, 3);
     expect(find.text('Saved songs'), findsOneWidget);
     final settings =
@@ -1495,18 +1901,10 @@ void main() {
         of: find.byType(AppBar), matching: find.byTooltip('Search'));
     await tester.tap(appBarSearch);
     await tester.pumpAndSettle();
-    expect(
-        tester
-            .widget<ChoiceChip>(_musicSection(MusicDestination.search))
-            .selected,
-        isTrue);
+    _expectMusicSection(tester, MusicDestination.search);
     await tester.binding.handlePopRoute();
     await tester.pumpAndSettle();
-    expect(
-        tester
-            .widget<ChoiceChip>(_musicSection(MusicDestination.home))
-            .selected,
-        isTrue);
+    _expectMusicSection(tester, MusicDestination.home);
     await _selectPhoneTab(tester, PhoneNavigationItem.history);
     await _selectPhoneTab(tester, PhoneNavigationItem.music);
 
@@ -1565,10 +1963,7 @@ void main() {
           }));
 
       void expectPage(PhoneNavigationItem item) {
-        expect(
-            tester
-                .widget<NavigationBar>(find.byType(NavigationBar))
-                .selectedIndex,
+        expect(tester.widget<NavigationBar>(_phoneNavigation).selectedIndex,
             bottom.indexOf(item));
       }
 
@@ -1589,11 +1984,7 @@ void main() {
         await tester.pumpAndSettle();
         expectPage(pages[i]);
         if (pages[i] == PhoneNavigationItem.music) {
-          expect(
-              tester
-                  .widget<ChoiceChip>(_musicSection(MusicDestination.library))
-                  .selected,
-              isTrue);
+          _expectMusicSection(tester, MusicDestination.library);
         }
       }
       expect(tester.takeException(), isNull);
@@ -1655,7 +2046,7 @@ void main() {
   testWidgets('Back closes Music channel detail but ignores inactive Search',
       (tester) async {
     await _pumpHomepage(tester, const Size(390, 844));
-    final navigation = find.byType(NavigationBar);
+    final navigation = _phoneNavigation;
     await _selectPhoneTab(tester, PhoneNavigationItem.history);
     final videoTab = tester.widget<NavigationBar>(navigation).selectedIndex;
     await _selectPhoneTab(tester, PhoneNavigationItem.music);
@@ -1669,11 +2060,7 @@ void main() {
     expect(find.text('Channel uploads'), findsOneWidget);
     await tester.binding.handlePopRoute();
     await tester.pumpAndSettle();
-    expect(
-        tester
-            .widget<ChoiceChip>(_musicSection(MusicDestination.search))
-            .selected,
-        isTrue);
+    _expectMusicSection(tester, MusicDestination.search);
     expect(find.text('Channel uploads'), findsNothing);
     expect(find.text('Search result kept query'), findsOneWidget);
 
@@ -1685,11 +2072,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(tester.widget<NavigationBar>(navigation).selectedIndex, 0);
     await _selectPhoneTab(tester, PhoneNavigationItem.music);
-    expect(
-        tester
-            .widget<ChoiceChip>(_musicSection(MusicDestination.search))
-            .selected,
-        isTrue);
+    _expectMusicSection(tester, MusicDestination.search);
     expect(find.text('Channel uploads'), findsOneWidget,
         reason:
             'The hidden Music detail must not consume the video Back action');
@@ -1743,10 +2126,7 @@ void main() {
           expect(find.byType(MusicModeScreen), findsOneWidget);
           await _selectPhoneTab(tester, PhoneNavigationItem.home);
           expect(
-              tester
-                  .widget<NavigationBar>(find.byType(NavigationBar))
-                  .selectedIndex,
-              0);
+              tester.widget<NavigationBar>(_phoneNavigation).selectedIndex, 0);
         } else {
           final rail = find.byType(NavigationRail);
           expect(find.descendant(of: rail, matching: find.text('Home')),
@@ -1777,6 +2157,7 @@ void main() {
 
     await select('Music');
     expect(rail, findsOneWidget);
+    expect(_musicNavigation, findsNothing);
     expect(tester.widget<NavigationRail>(rail).selectedIndex, 4);
     await _selectMusicSection(tester, MusicDestination.search);
     expect(
@@ -1830,25 +2211,17 @@ void main() {
       (tester) async {
     final app = _SessionApp();
     await _pumpHomepage(tester, const Size(390, 844), initialApp: app);
-    final navigation = find.byType(NavigationBar);
+    final navigation = _phoneNavigation;
     await _selectPhoneTab(tester, PhoneNavigationItem.history);
     await _selectPhoneTab(tester, PhoneNavigationItem.music);
     await _selectMusicSection(tester, MusicDestination.library);
-    expect(
-        tester
-            .widget<ChoiceChip>(_musicSection(MusicDestination.library))
-            .selected,
-        isTrue);
+    _expectMusicSection(tester, MusicDestination.library);
     app.restartSession();
     await tester.pumpAndSettle();
     expect(tester.widget<NavigationBar>(navigation).selectedIndex, 0);
     expect(find.byType(MusicModeScreen), findsNothing);
     await _selectPhoneTab(tester, PhoneNavigationItem.music);
-    expect(
-        tester
-            .widget<ChoiceChip>(_musicSection(MusicDestination.home))
-            .selected,
-        isTrue);
+    _expectMusicSection(tester, MusicDestination.home);
     expect(find.text('Saved songs'), findsOneWidget);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
@@ -2400,7 +2773,7 @@ void main() {
 
     void expectSelectedTab(int index) {
       expect(
-        tester.widget<NavigationBar>(find.byType(NavigationBar)).selectedIndex,
+        tester.widget<NavigationBar>(_phoneNavigation).selectedIndex,
         index,
       );
     }

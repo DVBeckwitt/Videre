@@ -15,6 +15,7 @@ import 'package:clipious/router.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
+import 'package:clipious/utils/views/components/thumbnail.dart';
 import 'package:clipious/utils/views/tv/components/tv_button.dart';
 import 'package:clipious/videos/models/db/history_video_cache.dart';
 import 'package:clipious/videos/models/db/progress.dart';
@@ -131,6 +132,7 @@ class _Player extends Cubit<PlayerState> implements PlayerCubit {
       Duration? startAt,
       bool? playing,
       int? startIndex,
+      String? queueTitle,
       bool fromMusic = false}) async {
     if (failPlayback) throw StateError('Playback unavailable');
     calls.add((videos: videos, audio: audio, startAt: startAt));
@@ -575,6 +577,10 @@ void main() {
         ));
         await settle(tester);
         navigator.currentState!.failPlayback = selection == 'unavailable Music';
+        final artwork = find.descendant(
+            of: find.byType(VideoThumbnailView),
+            matching: find.byType(Thumbnail));
+        expect(tester.widget<Thumbnail>(artwork).musicArtwork, musicSource);
 
         if (tv) {
           await focusCard(tester, 'song');

@@ -4,21 +4,33 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
 import '../../downloads/services/download_rename.dart';
+import '../../downloads/services/download_storage.dart';
+import '../../globals.dart';
+import '../../utils/interfaces/db.dart';
 import '../models/local_music_track.dart';
+import 'local_music_visibility.dart';
+
+export 'local_music_visibility.dart' show HiddenLocalMusicTrack;
 
 typedef _SelectedFolder = ({Uri uri, String name, String? selectionId});
 
 /// Library for the Android music source the listener has approved.
 class LocalMusicLibrary extends ChangeNotifier with WidgetsBindingObserver {
-  static final instance = LocalMusicLibrary();
+  static final instance = LocalMusicLibrary(visibilityDatabase: () => db);
   static const _channel =
       MethodChannel('com.github.dvbeckwitt.videre/local_music');
   static final _batchCallbacks = <int, void Function(List<dynamic>)>{};
   static int _nextScanId = 0;
 
+  LocalMusicLibrary({IDbClient Function()? visibilityDatabase})
+      : _visibilityDatabase = visibilityDatabase;
+
+  final IDbClient Function()? _visibilityDatabase;
+  LocalMusicVisibility? _profileVisibility;
   _SelectedFolder? _folder;
   List<LocalMusicTrack> _tracks = const [];
   Map<String, LocalMusicTrack> _byId = const {};
+  Map<String, LocalMusicTrack> _byVisibilityKey = const {};
   Set<String> _uris = const {};
   Future<void>? _initialization;
   Future<bool>? _choosing;
@@ -48,6 +60,220 @@ class LocalMusicLibrary extends ChangeNotifier with WidgetsBindingObserver {
   List<LocalMusicTrack> get tracks => _tracks;
   bool containsUri(String uri) => _uris.contains(uri);
   LocalMusicTrack? trackById(String id) => _byId[id];
+
+  LocalMusicVisibility? get _visibility {
+    final database = _visibilityDatabase?.call();
+    if (database == null) return null;
+    final owner = (database: database, profileId: database.profileId);
+    final current = _profileVisibility;
+    if (current?.owner == owner) return current;
+    return _profileVisibility = LocalMusicVisibility(owner);
+  }
+
+  Object? get visibilityProfile => _visibility?.owner;
+
+  /// Session publication refreshes listeners even if the device source stayed
+  /// the same across a profile switch.
+  void visibilityProfileChanged() => _notify();
+
+  List<LocalMusicTrack> get visibleTracks =>
+      _visibility?.visible(_tracks) ?? _tracks;
+
+  LocalMusicTrack? visibleTrackById(String id) {
+    final track = trackById(id);
+    return track != null && _visibility?.isVisible(track) == false
+        ? null
+        : track;
+  }
+
+  List<HiddenLocalMusicTrack> get hiddenTracks =>
+      _visibility?.records(_byVisibilityKey) ?? const [];
+
+  bool get excludesRecordings => _visibility?.excludesRecordings ?? false;
+
+  List<LocalMusicTrack> get excludedTracks =>
+      _visibility?.excluded(_tracks) ?? const [];
+
+  List<LocalMusicFolderLocation> get exclusionFolders {
+    final folders = {
+      for (final folder
+          in _visibility?.savedFolders ?? const <LocalMusicFolderLocation>[])
+        folder.key: folder,
+      for (final track in _tracks)
+        for (final folder in track.folderLocations) folder.key: folder,
+    }.values.toList();
+    return folders
+      ..sort((first, second) =>
+          first.label.toLowerCase().compareTo(second.label.toLowerCase()));
+  }
+
+  bool isFolderExcluded(LocalMusicFolderLocation folder) =>
+      _visibility?.isFolderExcluded(folder.key) ?? false;
+
+  bool hasExclusionOverride(LocalMusicTrack track) =>
+      _visibility?.hasOverride(track) ?? false;
+
+  bool canKeepExcludedTrack(LocalMusicTrack track) {
+    final current = _eligibleForHiding(track);
+    return current != null && _visibility?.isExcluded(current) == true;
+  }
+
+  Future<bool> setExcludeRecordings(bool value) => _changeExclusion(
+      (visibility, active) => visibility.setExcludeRecordings(value, active));
+
+  Future<bool> setFolderExcluded(LocalMusicFolderLocation folder, bool value) =>
+      _changeExclusion((visibility, active) => visibility.setFolderExcluded(
+          folder,
+          value,
+          () =>
+              active() &&
+              (!value ||
+                  _tracks.any((track) => track.folderLocations
+                      .any((candidate) => candidate.key == folder.key)))));
+
+  Future<bool> setExclusionOverride(LocalMusicTrack track, bool value) =>
+      _changeExclusion((visibility, active) => visibility.setOverride(
+          value, () => active() ? _eligibleForHiding(track) : null));
+
+  Future<bool> _changeExclusion(
+      Future<bool> Function(LocalMusicVisibility, bool Function())
+          change) async {
+    final visibility = _visibility;
+    if (visibility == null || _disposed) return false;
+    bool active() => !_disposed && identical(_visibility, visibility);
+    final changed = await change(visibility, active);
+    if (changed && active()) _notify();
+    return changed;
+  }
+
+  bool canHideTrack(LocalMusicTrack track) {
+    final visibility = _visibility;
+    return visibility != null &&
+        _eligibleForHiding(track) != null &&
+        !visibility.contains(track.visibilityKey);
+  }
+
+  LocalMusicTrack? _eligibleForHiding(LocalMusicTrack track) {
+    final current = _byId[track.playbackId];
+    return !_disposed &&
+            enabled &&
+            !unavailable &&
+            _choosing == null &&
+            _renaming == null &&
+            _disabling == null &&
+            track.visibilityKey != null &&
+            current?.visibilityKey == track.visibilityKey
+        ? current
+        : null;
+  }
+
+  Future<HiddenLocalMusicTrack?> hideTrack(LocalMusicTrack track,
+      {String? storageProof}) async {
+    final visibility = _visibility;
+    if (visibility == null) return null;
+    final record = await visibility.hide(
+      () =>
+          identical(_visibility, visibility) ? _eligibleForHiding(track) : null,
+      storageProof: storageProof,
+    );
+    if (record != null && identical(_visibility, visibility)) _notify();
+    return record;
+  }
+
+  Set<String> get hiddenDownloadProofs =>
+      _visibility?.hiddenStorageProofs ?? const {};
+
+  Future<void> rememberHiddenDownloadAliases(
+      Map<LocalMusicTrack, String> aliases,
+      {bool Function()? isCurrent}) async {
+    final visibility = _visibility;
+    if (visibility == null ||
+        aliases.isEmpty ||
+        _disposed ||
+        isCurrent?.call() == false) {
+      return;
+    }
+    bool current() =>
+        !_disposed &&
+        identical(_visibility, visibility) &&
+        isCurrent?.call() != false;
+    final changed = await visibility.rememberDownloadAliases(() => {
+          if (current())
+            for (final entry in aliases.entries)
+              if (identical(trackById(entry.key.playbackId), entry.key))
+                if (entry.key.visibilityKey case final String key)
+                  key: entry.value,
+        });
+    if (changed && current()) _notify();
+  }
+
+  Future<Map<String, List<LocalMusicTrack>>?> verifiedDownloadAliases(
+      List<MusicFileProbe> files,
+      {bool Function()? isCurrent}) async {
+    final folder = _folder;
+    if (folder == null ||
+        !acceptsSessionSelection(folder.selectionId) ||
+        !_loaded ||
+        scanning ||
+        isCurrent?.call() == false) {
+      return null;
+    }
+    final snapshot = _tracks;
+    final documents = files
+        .where((file) => file.download.storageUri != null)
+        .toList(growable: false);
+    if (documents.isEmpty || snapshot.isEmpty) return {};
+
+    final indexed = {for (final track in snapshot) track.uri: track};
+    final matches = <String, List<LocalMusicTrack>>{};
+    try {
+      for (var start = 0; start < documents.length; start += 64) {
+        final result = await _channel
+            .invokeMapMethod<String, dynamic>('matchDownloadTracks', {
+          'treeUri': folder.uri.toString(),
+          'selectionId': folder.selectionId,
+          'files': [
+            for (final file in documents.skip(start).take(64))
+              {
+                'key': file.download.videoId,
+                'uri': file.uri,
+                'folderUri': file.download.folderUri,
+                'identity': file.identity,
+                'byteLength': file.byteLength,
+              },
+          ],
+        });
+        if (result == null ||
+            !identical(_folder, folder) ||
+            !identical(snapshot, _tracks) ||
+            !acceptsSessionSelection(folder.selectionId) ||
+            isCurrent?.call() == false) {
+          return null;
+        }
+        for (final entry in result.entries) {
+          if (entry.value is! List) continue;
+          matches[entry.key] = [
+            for (final uri in entry.value as List)
+              if (indexed[uri] case final track?) track,
+          ];
+        }
+      }
+    } on PlatformException {
+      return null;
+    } on MissingPluginException {
+      return null;
+    }
+    return matches;
+  }
+
+  Future<bool> restoreTrack(HiddenLocalMusicTrack record) async {
+    final visibility = _visibility;
+    if (visibility == null || _disposed) return false;
+    bool active() => !_disposed && identical(_visibility, visibility);
+    final restored = await visibility.restore(record, active);
+    if (restored && active()) _notify();
+    return restored;
+  }
 
   // The Android side reads only its stored selection here. It never queries
   // documents, opens audio or invokes the picker when initializing settings.
@@ -286,6 +512,10 @@ class LocalMusicLibrary extends ChangeNotifier with WidgetsBindingObserver {
   void _publish(Map<String, LocalMusicTrack> tracks) {
     _byId = tracks;
     _tracks = List.unmodifiable(tracks.values);
+    _byVisibilityKey = {
+      for (final track in _tracks)
+        if (track.visibilityKey case final String key) key: track,
+    };
     _uris = _tracks.map((track) => track.uri).toSet();
   }
 
@@ -400,6 +630,7 @@ class LocalMusicLibrary extends ChangeNotifier with WidgetsBindingObserver {
   void _clearTracks() {
     _tracks = const [];
     _byId = const {};
+    _byVisibilityKey = const {};
     _uris = const {};
     _loaded = false;
   }

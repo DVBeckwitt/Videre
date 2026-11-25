@@ -132,9 +132,13 @@ backups exclude it.
   the queue. [PlayerExt.kt](https://github.com/Maloy-Android/Muzza/blob/9e6cdc6be158e9699cf689970f30f279dddc2895/app/src/main/java/com/maloy/muzza/extensions/PlayerExt.kt#L34),
   [Queue.kt](https://github.com/Maloy-Android/Muzza/blob/9e6cdc6be158e9699cf689970f30f279dddc2895/app/src/main/java/com/maloy/muzza/ui/player/Queue.kt#L516),
   and [PlayingIndicator.kt](https://github.com/Maloy-Android/Muzza/blob/9e6cdc6be158e9699cf689970f30f279dddc2895/app/src/main/java/com/maloy/muzza/ui/component/PlayingIndicator.kt#L86).
-- Now Playing places artwork alongside controls on short landscape screens
-  and supports opening and closing the queue beside the player on large
-  screens. TV Music renders the same controls and queue under the existing
+- The phone queue uses Muzza's persistent queue entry point and a sheet that
+  follows an upward pull. Back and a downward drag on the queue header close
+  the sheet. Its list handles scrolling and reorder. [Muzza queue footer](https://github.com/Maloy-Android/Muzza/blob/9e6cdc6be158e9699cf689970f30f279dddc2895/app/src/main/java/com/maloy/muzza/ui/player/Queue.kt#L286).
+- Now Playing places artwork alongside controls on short landscape screens.
+  Wider touch layouts keep Now Playing and Queue in two panes with independent
+  scrolling, following the [Auxio wide layout](https://github.com/OxygenCobalt/Auxio/blob/v4.1.5/app/src/main/res/layout-w720dp/fragment_main.xml#L93).
+  TV Music renders the same controls and queue under the existing
   audio decoder, with D-pad activation, Back to Now Playing, and restored
   focus when the queue closes. [Player.kt](https://github.com/Maloy-Android/Muzza/blob/9e6cdc6be158e9699cf689970f30f279dddc2895/app/src/main/java/com/maloy/muzza/ui/player/Player.kt#L380)
   and [Player.kt landscape](https://github.com/Maloy-Android/Muzza/blob/9e6cdc6be158e9699cf689970f30f279dddc2895/app/src/main/java/com/maloy/muzza/ui/player/Player.kt#L962).
@@ -151,6 +155,12 @@ backups exclude it.
   The downward-slop check and horizontal-first exit also translate the expanded
   drag arbitration in Flow's pinned
   [DraggablePlayerGestureHandler.kt](https://github.com/Flow-Tube/Flow/blob/565d1f7a3da4ca8e54463b029f151ef87415858a/app/src/main/java/io/github/aedev/flow/ui/components/videoplayer/motion/DraggablePlayerGestureHandler.kt#L115).
-  Videre retains its 200dp release threshold and translates the expanded sheet
-  while held; Flow instead interpolates its collapse fraction and uses velocity
-  in the release decision.
+  Videre uses a 200dp release threshold. The expanded sheet translates while
+  held. Flow interpolates its collapse fraction and uses velocity in the
+  release decision.
+
+## Device library
+
+On-device search and artist/album filters follow [Auxio's local search](https://github.com/OxygenCobalt/Auxio/blob/v4.1.5/app/src/main/java/org/oxycblt/auxio/search/SearchFragment.kt#L135).
+Videre searches titles, filenames, artists and albums through its existing
+local index. Play uses the filtered sort order at the time of selection.

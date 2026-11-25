@@ -11,6 +11,8 @@ import 'package:clipious/media_handler.dart';
 import 'package:clipious/player/audio_playback_sources.dart';
 import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/player/models/media_command.dart';
+import 'package:clipious/player/models/media_event.dart';
+import 'package:clipious/player/models/watch_audio_track.dart';
 import 'package:clipious/player/states/audio_player.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/player/views/components/audio_player.dart' as view;
@@ -20,6 +22,7 @@ import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/adaptive_format.dart';
+import 'package:clipious/videos/models/format_stream.dart';
 import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:clipious/videos/models/sponsor_segment_types.dart';
 import 'package:clipious/videos/models/video.dart';
@@ -265,6 +268,136 @@ void main() {
     expect(samePreparedAudioSource(prepared, revoked), isFalse);
   });
 
+  group('ordinary Watch audio renditions', () {
+    const server = Server(url: 'https://instance.example');
+    const english = AudioTrack(
+        id: 'en.original', displayName: 'English', audioIsDefault: true);
+    const french = AudioTrack(id: 'fr.dub', displayName: 'French');
+
+    setUp(() async {
+      db = await SembastSqfDb.createInMemory();
+      addTearDown(db.close);
+      await db.upsertServer(server);
+      await db.useServer(server);
+    });
+
+    AdaptiveFormat audio(String path, String bitrate, [AudioTrack? track]) =>
+        AdaptiveFormat(null, bitrate, null, '${server.url}/$path', '140',
+            'audio/mp4', '10000', '1', 'RECTANGULAR', 'mp4', 'aac', null, null,
+            audioTrack: track);
+
+    FormatStream muxed(String path, [AudioTrack? track]) => FormatStream(
+        '${server.url}/$path',
+        '18',
+        'video/mp4',
+        'medium',
+        null,
+        null,
+        null,
+        null,
+        null,
+        audioTrack: track);
+
+    Future<AudioPlaybackSources> resolve(List<AdaptiveFormat> audio,
+            {List<FormatStream> video = const [],
+            String? trackId,
+            String? progressiveUrl}) async =>
+        (await resolveAudioPlaybackSources(
+            video: _playableVideo('language001', server)
+                .copyWith(adaptiveFormats: audio, formatStreams: video),
+            offlineVideo: null,
+            sessionId: 'watch-audio-test',
+            isCurrent: () => true,
+            watchAudio: (trackId: trackId, progressiveUrl: progressiveUrl),
+            skipDownload: true))!;
+
+    Iterable<String> paths(AudioPlaybackSources plan) =>
+        plan.sources.cast<UriAudioSource>().map((source) => source.uri.path);
+
+    test('default and explicit track decisions precede bitrate ranking',
+        () async {
+      final formats = [
+        audio('french-high', '256000', french),
+        audio('english-low', '64000', english),
+        audio('english-high', '128000', english),
+        audio('french-low', '96000', french),
+        audio('untagged', '480000'),
+        audio('blocked', '768000',
+            const AudioTrack(id: 'blocked', displayName: 'Blocked'))
+          ..url = 'https://unrelated.example/blocked',
+      ];
+      final primary =
+          await resolve(formats, video: [muxed('english-video', english)]);
+      expect(
+          paths(primary), ['/english-high', '/english-low', '/english-video']);
+      expect(primary.watchTrackIds.values, everyElement(english.id));
+      expect(primary.watchTracks, [
+        (id: english.id, label: 'English'),
+        (id: french.id, label: 'French'),
+      ]);
+
+      final explicit = await resolve(formats,
+          video: [muxed('english-video', english)], trackId: french.id);
+      expect(paths(explicit), ['/french-high', '/french-low']);
+      expect(explicit.watchTrackIds.values, everyElement(french.id));
+      expect(explicit.watchTracks, primary.watchTracks);
+    });
+
+    test('keeps the exact active muxed audio when no track is proven',
+        () async {
+      final active = muxed('active-video');
+      final formats = [audio('default-audio', '64000', english)];
+      final plan = await resolve(formats,
+          video: [active, muxed('other-video')],
+          progressiveUrl: active.url,
+          trackId: 'unavailable-id');
+      expect(paths(plan), ['/active-video']);
+      expect(plan.watchTrackIds, isEmpty);
+
+      // A stale URL is not admitted just because a previous decoder used it.
+      final stale = await resolve(formats,
+          video: [active], progressiveUrl: '${active.url}?old-signature');
+      expect(paths(stale), ['/default-audio']);
+      expect(stale.watchTrackIds.values, [english.id]);
+    });
+
+    test('untagged muxed fallback wins over ambiguous dubbed groups', () async {
+      const other = AudioTrack(id: 'de.dub', displayName: 'German');
+      final formats = [
+        audio('french', '256000', french),
+        audio('german', '64000', other),
+      ];
+      final safe = await resolve(formats, video: [muxed('unlabeled')]);
+      expect(paths(safe), ['/unlabeled']);
+      expect(safe.watchTrackIds, isEmpty);
+
+      for (final audio in [formats, formats.reversed.toList()]) {
+        final bounded = await resolve(audio);
+        expect(paths(bounded), ['/german']);
+        expect(bounded.watchTrackIds.values, [other.id]);
+      }
+    });
+
+    test('conflicting exact URL identities stay unlabeled', () async {
+      final active = FormatStream.fromJson(muxed('same', english).toJson());
+      expect(active.audioTrack?.id, english.id);
+      final video = Video(videoId: 'language001', formatStreams: [active]);
+      expect(watchAudioTrackIdForProgressiveUrl(video, server, active.url),
+          english.id);
+
+      final conflict = [active, muxed('same', french)];
+      expect(
+          watchAudioTrackIdForProgressiveUrl(
+              video.copyWith(formatStreams: conflict), server, active.url),
+          isNull);
+      final plan =
+          await resolve([], video: conflict, progressiveUrl: active.url);
+      expect(paths(plan), ['/same']);
+      expect(plan.watchTracks, isEmpty);
+      expect(plan.watchTrackIds, isEmpty);
+    });
+  });
+
   for (final completed in [true, false]) {
     test(
         completed
@@ -340,6 +473,106 @@ void main() {
         expect(platform.player!.seeks, completed ? [Duration.zero] : isEmpty);
         expect(platform.player!.plays, previousPlays + 1);
         expect(audio.audioPlayer!.processingState, ProcessingState.ready);
+      } finally {
+        await commands.cancel();
+        await audio.close();
+        await player.close();
+        await settings.close();
+        await app.close();
+        await db.close();
+        JustAudioPlatform.instance = originalPlatform;
+        debugDefaultTargetPlatformOverride = originalTarget;
+      }
+    });
+  }
+
+  for (final repeat in [PlayerRepeat.repeatOne, PlayerRepeat.repeatAll]) {
+    test('Music $repeat restarts the decoder once on focus gain after EOF',
+        () async {
+      final originalTarget = debugDefaultTargetPlatformOverride;
+      final originalPlatform = JustAudioPlatform.instance;
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      final platform = _TransportPlatform();
+      JustAudioPlatform.instance = platform;
+      db = await SembastSqfDb.createInMemory();
+      const server = Server(url: 'https://instance.example');
+      await db.upsertServer(server);
+      await db.useServer(server);
+      await db.saveSetting(
+          SettingsValue(SponsorSegmentType.sponsor.settingsName(), 'false'));
+      final app = TestAppCubit(AppState(0, server, HomeLayout()));
+      await app.initState();
+      app.intentDataStreamSubscription =
+          const Stream<void>.empty().listen((_) {});
+      final settings = TestSettingsCubit(SettingsState.init(), app);
+      await settings.setRepeatMode(repeat);
+      final player = _SessionPlayer(PlayerState.init(null), settings);
+      player.audioSession = await AudioSession.instance;
+      app_main.mediaHandler = MediaHandler(player);
+      final track = _playableVideo('repeatSong1', server, music: true);
+      await player.playVideo([track], audio: true, fromMusic: true);
+      final occurrence = player.state.currentQueueId;
+      final audio = AudioPlayerCubit(
+          AudioPlayerState(video: player.state.currentlyPlaying),
+          player,
+          settings);
+      var previous = player.state.mediaCommand;
+      final commands = player.stream.listen((state) {
+        final command = state.mediaCommand;
+        if (command == null || identical(command, previous)) return;
+        previous = command;
+        audio.handleCommand(command);
+      });
+      Iterable<_TransportPlayer> loaded() => platform.loaded(track.videoId);
+      int playCount() => loaded().fold(0, (total, p) => total + p.plays);
+      Future<void> until(bool Function() ready, String reason) async {
+        final deadline = Stopwatch()..start();
+        while (!ready() && deadline.elapsed < const Duration(seconds: 2)) {
+          await Future<void>.delayed(const Duration(milliseconds: 5));
+        }
+        expect(ready(), isTrue, reason: reason);
+      }
+
+      void focus(bool begin) {
+        final event =
+            AudioInterruptionEvent(begin, AudioInterruptionType.pause);
+        player.handleAudioInterruption(event);
+        audio.handleAudioInterruption(event);
+      }
+
+      try {
+        await until(() => playCount() == 1 && player.state.isPlaying,
+            'The source must be playing before foreground focus changes.');
+        final decoder = loaded().single;
+        focus(true);
+        // just_audio pauses its decoder on focus loss, before the queued EOF.
+        await audio.audioPlayer!.pause();
+        await until(() => !player.state.isPlaying,
+            'The controller must observe the native pause before EOF.');
+        decoder.report(
+            ProcessingStateMessage.completed, const Duration(seconds: 30));
+        await until(() => player.state.mediaEvent.state == MediaState.completed,
+            'The focused-out decoder must still report its EOF.');
+        expect(playCount(), 1);
+        expect(decoder.seeks, isEmpty);
+        expect(loaded().expand((p) => p.loads), hasLength(1));
+
+        focus(false);
+        focus(false);
+        await until(() => playCount() == 2 && player.state.isPlaying,
+            'Focus gain must start the repeat from its beginning.');
+        await Future<void>.delayed(Duration.zero);
+        expect(player.state.currentQueueId, occurrence);
+        expect(player.state.playQueue, isEmpty);
+        expect(playCount(), 2);
+        if (repeat == PlayerRepeat.repeatOne) {
+          expect(loaded().expand((p) => p.loads), hasLength(1));
+          expect(decoder.seeks, [Duration.zero]);
+        } else {
+          final loads = loaded().expand((p) => p.loads).toList();
+          expect(loads, hasLength(2));
+          expect(loads.last.initialPosition ?? Duration.zero, Duration.zero);
+        }
       } finally {
         await commands.cancel();
         await audio.close();

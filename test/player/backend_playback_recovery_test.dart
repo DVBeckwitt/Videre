@@ -74,6 +74,7 @@ class _RecoveryPlayer extends TestPlayerCubit {
 
   final refreshRequests = <Video>[];
   final refreshResults = <Video>[];
+  final refreshStarted = Completer<void>();
   Completer<void>? heldRefresh;
   Object? refreshError;
   bool interrupted = false;
@@ -88,6 +89,7 @@ class _RecoveryPlayer extends TestPlayerCubit {
   Future<Video?> refreshCurrentPlayback(Video video,
       {required bool Function() isCurrent}) async {
     refreshRequests.add(video);
+    if (!refreshStarted.isCompleted) refreshStarted.complete();
     if (heldRefresh != null) await heldRefresh!.future;
     if (!isCurrent()) throw StateError('Playback changed');
     if (refreshError != null) throw refreshError!;
@@ -949,7 +951,7 @@ void main() {
     final loading =
         video.playVideo(false, startAt: const Duration(seconds: 12));
     try {
-      await _flush();
+      await player.refreshStarted.future.timeout(const Duration(seconds: 5));
       expect(player.refreshRequests, [saved.current]);
       video.pause();
       await video.seek(const Duration(seconds: 21));

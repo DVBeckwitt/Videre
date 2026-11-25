@@ -4,7 +4,10 @@ import 'dart:io';
 import 'package:audio_service/audio_service.dart';
 import 'package:audio_session/audio_session.dart';
 import 'package:clipious/app/states/app.dart';
+import 'package:clipious/downloads/models/download_formats.dart';
+import 'package:clipious/downloads/models/download_playback_provenance.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
+import 'package:clipious/downloads/models/music_download_format.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/main.dart' as app_main;
@@ -23,6 +26,7 @@ import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/request_cookies.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
+import 'package:clipious/videos/models/db/history_video_cache.dart';
 import 'package:clipious/videos/models/ided_video.dart';
 import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:clipious/videos/models/sponsor_segment_types.dart';
@@ -36,6 +40,7 @@ import 'package:http/testing.dart';
 import '../test_app_cubit.dart';
 import '../test_player_cubit.dart';
 import '../test_settings_cubit.dart';
+import '../podcasts/fake_podcast_player.dart';
 import 'held_music_preparer.dart';
 
 class _ArtworkFailurePlayer extends TestPlayerCubit {
@@ -51,6 +56,28 @@ class _SessionPlayer extends PlayerCubit {
 
   @override
   Future<void> onReady() async {}
+}
+
+class _PodcastQueuePlayer extends TestPlayerCubit {
+  _PodcastQueuePlayer(super.initialState, super.settings, this.activePodcast);
+
+  @override
+  final FakePodcastPlayer activePodcast;
+}
+
+class _DelayedMediaItemPlayer extends _SessionPlayer {
+  _DelayedMediaItemPlayer(super.initialState, super.settings);
+
+  final itemReady = Completer<void>();
+  final publishItem = Completer<void>();
+
+  @override
+  Future<MediaItem?> getMediaItem(int index) async {
+    final item = await super.getMediaItem(index);
+    itemReady.complete();
+    await publishItem.future;
+    return item;
+  }
 }
 
 class _PendingMetadataService extends Service {
@@ -342,6 +369,7 @@ void main() {
     DownloadedVideo(
         videoId: 'saved-c',
         title: 'Selected first',
+        musicMetadata: MusicMetadata(title: 'Selected first', artist: 'Singer'),
         lengthSeconds: 120,
         quality: 'audio',
         audioOnly: true,
@@ -349,6 +377,8 @@ void main() {
     DownloadedVideo(
         videoId: 'saved-d',
         title: 'Selected second',
+        musicMetadata:
+            MusicMetadata(title: 'Selected second', artist: 'Singer'),
         lengthSeconds: 120,
         quality: 'audio',
         audioOnly: true,
@@ -369,6 +399,167 @@ void main() {
     player.pause();
   }
 
+  Future<List<DownloadedVideo>> storeMusicDownloads() async {
+    final songs = [
+      for (final file in offlineSongs)
+        file.copyWith(
+            musicMetadata: MusicMetadata(title: file.title, artist: 'Band')),
+    ];
+    for (final song in songs) {
+      await db.upsertDownload(song);
+    }
+    return songs;
+  }
+
+  test(
+      'Add downloads starts an idle Music queue in the requested order with shuffle on',
+      () async {
+    await player.close();
+    player = TestPlayerCubit(PlayerState.init(null), settings);
+    player.audioSession = await AudioSession.instance;
+    app_main.mediaHandler = handler = MediaHandler(player);
+    await settings.setShuffle(true);
+    final files = await storeMusicDownloads();
+    final ordered = [files[2], files[0], files[3], files[1]];
+    expect(player.canAddMusicDownloadsToQueue, isTrue);
+    expect(
+        await player.addMusicDownloadsToQueue(ordered, isCurrent: () => true),
+        isTrue);
+    expect(
+        player.state.offlineCurrentlyPlaying?.videoId, ordered.first.videoId);
+    expect(player.state.offlineVideos.map((file) => file.videoId),
+        ordered.map((file) => file.videoId));
+    expect(player.state.playQueue, ordered.skip(1).map((file) => file.videoId));
+    expect(player.state.isAudio, isTrue);
+    expect(settings.state.playerShuffleMode, isTrue);
+  });
+
+  test('Add downloads leaves an active podcast alone', () async {
+    await player.close();
+    final podcast = FakePodcastPlayer()..start();
+    player = _PodcastQueuePlayer(PlayerState.init(null), settings, podcast);
+    final file = offlineSongs[2];
+    await db.upsertDownload(file);
+    expect(player.canAddMusicDownloadsToQueue, isFalse);
+    expect(await player.addMusicDownloadsToQueue([file], isCurrent: () => true),
+        isFalse);
+    expect(player.state.offlineVideos, isEmpty);
+    expect(podcast.active, isTrue);
+    expect(podcast.stopCalls, 0);
+  });
+
+  test(
+      'Add downloads appends to an existing saved queue without restarting playback or partially accepting stale files',
+      () async {
+    // The fixture begins in regular video playback.
+    final songs = await storeMusicDownloads();
+    expect(player.canAddMusicDownloadsToQueue, isFalse);
+    final videoState = player.state;
+    expect(await player.addMusicDownloadsToQueue(songs, isCurrent: () => true),
+        isFalse);
+    expect(player.state, same(videoState));
+    player.setAudio(true);
+    await player.playOfflineVideos(songs.take(2).toList());
+    player.seek(const Duration(seconds: 7));
+    player.pause();
+    final before = player.state;
+    final generation = player.backendPlaybackGeneration;
+    final a = songs.first;
+    final c = songs[2];
+    expect(player.canAddMusicDownloadsToQueue, isTrue);
+    for (final invalid in [
+      c.copyWith(profileId: 'other'),
+      c.copyWith(downloadComplete: false),
+      c.copyWith(audioOnly: false),
+      c.copyWith(videoId: 'absent'),
+    ]) {
+      expect(
+          await player
+              .addMusicDownloadsToQueue([a, invalid], isCurrent: () => true),
+          isFalse);
+      expect(player.state, same(before));
+    }
+    await db.upsertDownload(c.copyWith(musicMetadata: null));
+    expect(await player.addMusicDownloadsToQueue([a, c], isCurrent: () => true),
+        isFalse);
+    expect(player.state, same(before));
+    await db.upsertDownload(c);
+    expect(
+        await player.addMusicDownloadsToQueue([a, c], isCurrent: () => false),
+        isFalse);
+    expect(player.state, same(before));
+    expect(await player.addMusicDownloadsToQueue([a, c], isCurrent: () => true),
+        isTrue);
+    final files = player.state.offlineVideos;
+    expect(files.map((file) => file.videoId),
+        [a.videoId, songs[1].videoId, a.videoId, c.videoId]);
+    expect(files.map(playbackQueueId).toSet(), hasLength(4));
+    expect(player.state.playQueue,
+        [...before.playQueue, ...files.skip(2).map(playbackQueueId)]);
+    expect(player.state.offlineCurrentlyPlaying,
+        same(before.offlineCurrentlyPlaying));
+    expect(player.state.position, before.position);
+    expect(player.state.mediaCommand, same(before.mediaCommand));
+    expect(player.requestedPlaying, isFalse);
+    expect(player.backendPlaybackGeneration, generation);
+  });
+
+  for (final shuffle in [false, true]) {
+    test('Shuffle all downloads follows its one-shot order (global=$shuffle)',
+        () async {
+      final files = await storeMusicDownloads();
+      final original = files.map((file) => file.videoId).toList();
+      await settings.setShuffle(shuffle);
+      await player.shuffleMusicDownloads(files, isCurrent: () => true);
+      final order = player.state.offlineVideos.map(playbackQueueId).toList();
+      expect(order, unorderedEquals(original));
+      expect(files.map((file) => file.videoId), original);
+      expect(player.state.currentQueueId, order.first);
+      expect(player.state.playedVideos, isEmpty);
+      expect(player.state.playQueue, order.skip(1));
+      expect(settings.state.playerShuffleMode, shuffle);
+      expect(player.state.videos, isEmpty);
+      expect(player.state.isAudio, isTrue);
+      expect(db.getPlaybackHistory(PlaybackHistoryOrigin.music).single.videoId,
+          order.first);
+      await player.selectQueueOccurrence(order.last);
+      expect(
+          db
+              .getPlaybackHistory(PlaybackHistoryOrigin.music)
+              .map((entry) => entry.videoId),
+          containsAll([order.first, order.last]));
+    });
+  }
+
+  test('Shuffle all downloads rejects a stale or incomplete batch', () async {
+    final files = await storeMusicDownloads();
+    final original = player.state;
+    final first = files.first;
+    for (final invalid in [
+      <DownloadedVideo>[],
+      [first, first],
+      [first, files.last.copyWith(videoId: 'missing')],
+      [first, files.last.copyWith(profileId: 'another')],
+      [first, files.last.copyWith(storageUri: 'content://test/replaced')],
+      [first, files.last.copyWith(downloadComplete: false)],
+    ]) {
+      await player.shuffleMusicDownloads(invalid, isCurrent: () => true);
+      expect(player.state, same(original));
+    }
+    await player.shuffleMusicDownloads(files, isCurrent: () => false);
+    expect(player.state, same(original));
+    for (final unavailable in [
+      files.last.copyWith(musicMetadata: null),
+      files.last.copyWith(audioOnly: false),
+      files.last.copyWith(downloadFailed: true),
+      files.last.copyWith(authenticationRequired: true),
+    ]) {
+      await db.upsertDownload(unavailable);
+      await player.shuffleMusicDownloads(files, isCurrent: () => true);
+      expect(player.state, same(original));
+    }
+  });
+
   for (final next in [true, false]) {
     test(
         'music enqueue into saved queue preserves playback and order (next=$next)',
@@ -376,12 +567,27 @@ void main() {
       await prepareSavedQueue();
       final before = player.state;
       final generation = player.backendPlaybackGeneration;
-      expect(player.canEnqueueMusicSongs(selectedSavedSongs), isTrue);
+      final downloads = [
+        for (final song in selectedSavedSongs)
+          db.getDownloadByVideoId(song.videoId)!,
+      ];
+      expect(
+          player.canEnqueueMusicSongs(selectedSavedSongs, downloads: downloads),
+          isTrue);
+      await db.upsertDownload(downloads.first.copyWith(
+          musicMetadata:
+              const MusicMetadata(title: 'Updated title', artist: 'Singer')));
 
       expect(
           await player.enqueueMusicSongs(selectedSavedSongs,
-              next: next, downloads: offlineSongs.skip(2).toList()),
+              next: next, downloads: downloads),
           isTrue);
+      expect(
+          player.state.offlineVideos
+              .singleWhere((song) => song.videoId == 'saved-c')
+              .musicMetadata
+              ?.title,
+          'Updated title');
 
       expect(player.state.offlineCurrentlyPlaying,
           same(before.offlineCurrentlyPlaying));
@@ -406,6 +612,97 @@ void main() {
     });
   }
 
+  test('saved song copies have independent queue and notification identities',
+      () async {
+    await prepareSavedQueue();
+    await player.close();
+    player = _SessionPlayer(PlayerState.init(null), settings);
+    player.audioSession = await AudioSession.instance;
+    app_main.mediaHandler = handler = MediaHandler(player);
+    final saved = offlineSongs.first.copyWith(
+        musicMetadata: const MusicMetadata(title: 'Current', artist: 'Band'));
+    await db.upsertDownload(saved);
+    await player.playOfflineVideos([saved], fromMusic: true);
+    player.seek(const Duration(seconds: 7));
+    player.pause();
+    player.setEvent(const MediaEvent(
+        state: MediaState.playing, type: MediaEventType.pause));
+    expect(handler.playbackState.value.controls,
+        contains(MediaControl.fastForward));
+    expect(handler.mediaItem.value?.id, saved.videoId);
+    final before = player.state;
+    final generation = player.backendPlaybackGeneration;
+    final copied = List.filled(2, const Video(videoId: 'saved-a'));
+    final downloads = List.filled(2, saved);
+    expect(player.canEnqueueMusicSongs(copied, downloads: downloads), isTrue);
+    expect(
+        await player.enqueueMusicSongs(copied,
+            next: true, downloads: downloads),
+        isTrue);
+    final keys = player.state.offlineVideos.map(playbackQueueId).toList();
+    expect(keys, ['saved-a', 'saved-a#1', 'saved-a#2']);
+    expect(player.state.offlineVideos.map((song) => song.videoId),
+        ['saved-a', 'saved-a', 'saved-a']);
+    expect(player.state.playQueue.toList(), keys.skip(1));
+    expect(player.state.offlineCurrentlyPlaying,
+        same(before.offlineCurrentlyPlaying));
+    expect(player.state.mediaCommand, same(before.mediaCommand));
+    expect(player.state.position, before.position);
+    expect(player.backendPlaybackGeneration, generation);
+    expect(handler.playbackState.value.controls,
+        contains(MediaControl.skipToNext));
+    expect(handler.playbackState.value.playing, isFalse);
+
+    await handler.skipToQueueItem(2);
+    expect(player.state.currentQueueId, keys.last);
+    expect(handler.mediaItem.value?.id, keys.last);
+    expect(player.state.offlineCurrentlyPlaying?.videoId, 'saved-a');
+
+    player.removeInactiveQueueOccurrences({keys.first, keys[1]});
+    expect(player.state.currentQueueId, keys.last);
+    expect(player.state.offlineVideos.map(playbackQueueId), [keys.last]);
+    expect(handler.playbackState.value.queueIndex, 0);
+    expect(handler.playbackState.value.controls,
+        contains(MediaControl.fastForward));
+    expect(db.getDownloadByVideoId('saved-a')?.downloadComplete, isTrue);
+  });
+
+  test(
+      'saved queue edits refresh paused controls when the media item arrives late',
+      () async {
+    await player.close();
+    final delayed = _DelayedMediaItemPlayer(PlayerState.init(null), settings);
+    player = delayed;
+    player.audioSession = await AudioSession.instance;
+    app_main.mediaHandler = handler = MediaHandler(player);
+    final saved = offlineSongs.first.copyWith(
+        musicMetadata: const MusicMetadata(title: 'Current', artist: 'Band'));
+    await db.upsertDownload(saved);
+
+    final opening = player.playOfflineVideos([saved], fromMusic: true);
+    try {
+      await delayed.itemReady.future.timeout(const Duration(seconds: 3));
+      player.pause();
+      player.setEvent(const MediaEvent(
+          state: MediaState.playing, type: MediaEventType.pause));
+      expect(handler.mediaItem.value, isNull);
+      expect(handler.playbackState.value.controls,
+          contains(MediaControl.fastForward));
+      expect(
+          await player.enqueueMusicSongs([Video(videoId: saved.videoId)],
+              next: false, downloads: [saved]),
+          isTrue);
+    } finally {
+      delayed.publishItem.complete();
+      await opening;
+    }
+
+    expect(handler.mediaItem.value?.id, saved.videoId);
+    expect(handler.playbackState.value.playing, isFalse);
+    expect(handler.playbackState.value.controls,
+        contains(MediaControl.skipToNext));
+  });
+
   test(
       'unsupported saved queue selections are rejected without any partial insertion',
       () async {
@@ -413,9 +710,6 @@ void main() {
     final before = player.state;
     for (final songs in [
       <Video>[],
-      [const Video(videoId: 'saved-a')],
-      [const Video(videoId: 'saved-b')],
-      [const Video(videoId: 'saved-c'), const Video(videoId: 'saved-c')],
       [const Video(videoId: 'saved-c'), const Video(videoId: 'online-only')],
     ]) {
       expect(player.canEnqueueMusicSongs(songs), isFalse);
@@ -433,7 +727,71 @@ void main() {
         await player.enqueueMusicSongs(selectedSavedSongs,
             next: false, downloads: [offlineSongs[2]]),
         isFalse);
+    expect(
+        await player.enqueueMusicSongs(
+            List.filled(2, const Video(videoId: 'saved-a')),
+            next: false,
+            downloads: [
+              offlineSongs.first,
+              offlineSongs.first.copyWith(profileId: 'other'),
+            ]),
+        isFalse);
     expect(player.state, same(before));
+  });
+
+  test('explicit saved enqueue rejects changes to the file, owner or rendition',
+      () async {
+    await prepareSavedQueue();
+    final saved = offlineSongs.last.copyWith(
+        accountId: 'account',
+        folderUri: 'content://files/tree/music',
+        storageUri: 'content://files/document/song',
+        musicFormat: MusicDownloadFormat.mp3,
+        container: DownloadContainer.webm);
+    final digest = 'a' * 64;
+    final provenance = DownloadPlaybackProvenance.tryFromJson({
+      'version': 1,
+      'profileId': saved.profileId,
+      'accountId': saved.accountId,
+      'origin': 'https://music.example',
+      'contentId': saved.videoId,
+      'audioOnly': true,
+      'container': 'webm',
+      'audio': {
+        'itag': '251',
+        'clen': '4096',
+        'lmt': '1',
+        'typeSha256': digest,
+        'audioTrackSha256': null,
+        'trackDimensionsSha256': digest,
+      },
+      'videoHeight': null,
+      'defaultAudioTrack': true,
+      'byteLength': 4096,
+      'sha256': digest,
+    })!;
+    final explicit = [offlineSongs[2], saved];
+    final before = player.state;
+    for (final changed in [
+      saved.copyWith(storageUri: 'content://files/document/other'),
+      saved.copyWith(folderUri: 'content://files/tree/other'),
+      saved.copyWith(storageUri: null, folderUri: null),
+      saved.copyWith(musicFormat: MusicDownloadFormat.opus),
+      saved.copyWith(container: DownloadContainer.mp4),
+      saved.copyWith(accountId: 'other'),
+      saved.copyWith(audioTrackId: 'another-language'),
+      saved.copyWith(playbackProvenance: provenance),
+    ]) {
+      await db.upsertDownload(changed);
+      expect(
+          player.canEnqueueMusicSongs(selectedSavedSongs, downloads: explicit),
+          isFalse);
+      expect(
+          await player.enqueueMusicSongs(selectedSavedSongs,
+              next: true, downloads: explicit),
+          isFalse);
+      expect(player.state, same(before));
+    }
   });
 
   test('music enqueue rechecks completed saved rows when a menu becomes stale',
@@ -547,6 +905,108 @@ void main() {
         before.where((id) => id != 'b'));
   });
 
+  test('sorting upcoming preserves playlist ownership and drives normal Next',
+      () async {
+    Video track(String id, String? title) => Video(
+          videoId: id,
+          title: title,
+          formatStreams: const [],
+          adaptiveFormats: const [],
+          lengthSeconds: 120,
+        );
+    final sourceId = Object();
+    final source = BackendPlayback(await db.getCurrentlySelectedServer());
+    final current = track('current', 'Current').copyWith(
+        musicMetadata: const MusicMetadata(title: 'Current', artist: 'Artist'),
+        playbackConnection: source,
+        playbackSourceId: sourceId);
+    final reference = PlaylistReference(
+        kind: PlaylistSourceKind.public,
+        playlistId: 'PLsort',
+        profileId: db.profileId);
+    await player.playPlaylist([
+      track('previous', 'Previous'),
+      current,
+      track('zulu', 'Zulu'),
+      track('first-echo', 'Écho'),
+      track('missing', null),
+      track('second-echo', ' echo '),
+    ], reference: reference, fromMusic: true, audio: true, startIndex: 1);
+    player.seek(const Duration(seconds: 17));
+    final generation = player.backendPlaybackGeneration;
+    final playlistGeneration = player.playlistGeneration;
+    final before = player.state;
+    final ids = before.videos.map(playbackQueueId).toList();
+    final expected = [ids[3], ids[5], ids[2], ids[4]];
+    expect(before.playQueue, ids.skip(2));
+
+    player.sortMusicQueueUpcoming(MusicQueueSort.titleAscending);
+
+    expect(player.state.playQueue, expected);
+    expect(player.state.videos.map(playbackQueueId), ids);
+    expect(player.state.playedVideos, [ids.first]);
+    expect(player.state.currentQueueId, ids[1]);
+    expect(player.state.currentlyPlaying, same(before.currentlyPlaying));
+    expect(player.state.currentlyPlaying?.playbackSourceId, same(sourceId));
+    expect(player.state.currentlyPlaying?.playbackConnection, same(source));
+    expect(player.state.position, const Duration(seconds: 17));
+    expect(player.state.mediaCommand, same(before.mediaCommand));
+    expect(player.backendPlaybackGeneration, generation);
+    expect(player.playlistGeneration, playlistGeneration);
+    expect(player.playlistReference, reference);
+
+    expect(
+        await player
+            .enqueueMusicSongs([track('aardvark', 'Aardvark')], next: false),
+        isTrue);
+    final appended = playbackQueueId(player.state.videos.last);
+    expect(player.state.playQueue, [...expected, appended]);
+    final advanced = player.stream
+        .firstWhere((state) => state.currentQueueId == expected.first);
+    player.playNext();
+    final next = await advanced.timeout(const Duration(seconds: 2));
+    expect(next.playedVideos, [...before.playedVideos, ids[1]]);
+    expect(next.playQueue, [...expected.skip(1), appended]);
+  });
+
+  test('sorting while the next song opens leaves its transition intact',
+      () async {
+    final previousService = service;
+    final pending = _PendingMetadataService();
+    service = pending;
+    addTearDown(() => service = previousService);
+    const opening = Video(
+        videoId: 'opening',
+        musicMetadata: MusicMetadata(title: 'Opening', artist: 'Artist'));
+    await player.playVideo([
+      videos.first,
+      opening,
+      videos[1].copyWith(title: 'Zulu'),
+      videos[2].copyWith(title: 'Alpha'),
+    ], audio: true, fromMusic: true);
+    player.playNext();
+    await pending.started.future.timeout(const Duration(seconds: 2));
+    final before = player.state;
+    final generation = player.backendPlaybackGeneration;
+    final opened = player.openingMusicEntry;
+    expect(opened?.videoId, opening.videoId);
+    expect(before.playQueue, ['b', 'c']);
+
+    expect(player.canSortMusicQueueUpcoming, isFalse);
+    player.sortMusicQueueUpcoming(MusicQueueSort.titleAscending);
+
+    expect(player.state, same(before));
+    expect(player.openingMusicEntry, same(opened));
+    expect(player.backendPlaybackGeneration, generation);
+    final advanced = player.stream
+        .firstWhere((state) => state.currentQueueId == opening.videoId);
+    pending.response.complete(
+        opening.copyWith(formatStreams: const [], adaptiveFormats: const []));
+    final next = await advanced.timeout(const Duration(seconds: 2));
+    expect(next.playedVideos, ['a']);
+    expect(next.playQueue, ['b', 'c']);
+  });
+
   test('repeated playlist songs advance and go back by queue occurrence',
       () async {
     await player.playVideo([videos[0], videos[1], videos[0]], audio: true);
@@ -606,6 +1066,14 @@ void main() {
 
     final selection = player.selectQueueOccurrence('b');
     await pending.started.future;
+    await db.upsertDownload(offlineSongs[2]);
+    final switching = player.state;
+    expect(player.canAddMusicDownloadsToQueue, isFalse);
+    expect(
+        await player
+            .addMusicDownloadsToQueue([offlineSongs[2]], isCurrent: () => true),
+        isFalse);
+    expect(player.state, same(switching));
     pending.response.completeError(StateError('Cannot load this song'));
     await selection;
     expect(player.state.currentQueueId, 'b');
@@ -973,6 +1441,61 @@ void main() {
         expect(catalog.requests, isNot(contains(saved.last.videoId)));
       });
 
+      for (final change in [
+        'none',
+        'owner',
+        'remove',
+        'replace',
+        'supersede'
+      ]) {
+        test('Shuffle all downloads rechecks before decoder commit ($change)',
+            () async {
+          final files = await storeMusicDownloads();
+          final previous = player.state;
+          final generation = player.backendPlaybackGeneration;
+          var current = true;
+          final selecting =
+              player.shuffleMusicDownloads(files, isCurrent: () => current);
+          final entry =
+              await preparer.started.future.timeout(const Duration(seconds: 3));
+          final other =
+              files.firstWhere((file) => file.videoId != entry.videoId);
+          expect(player.state, same(previous));
+          Future<void>? newer;
+          switch (change) {
+            case 'owner':
+              current = false;
+            case 'remove':
+              await db.deleteDownload(other);
+            case 'replace':
+              await db.upsertDownload(
+                  other.copyWith(storageUri: 'content://test/replaced'));
+            case 'supersede':
+              newer = player.playVideo([song('newer')], audio: true);
+              await until(() => preparer.requests.containsKey('newer'));
+          }
+          preparer.requests[entry.videoId]!.complete(true);
+          await selecting;
+          if (change == 'none') {
+            expect(player.state.currentQueueId, entry.videoId);
+            expect(player.state.offlineVideos.map(playbackQueueId),
+                unorderedEquals(files.map((file) => file.videoId)));
+            expect(player.state.playQueue,
+                player.state.offlineVideos.skip(1).map(playbackQueueId));
+          } else {
+            expect(player.state, same(previous));
+            expect(player.backendPlaybackGeneration, generation);
+            expect(db.getPlaybackHistory(PlaybackHistoryOrigin.music), isEmpty);
+          }
+          if (newer != null) {
+            expect(preparer.current['newer']!(), isTrue);
+            preparer.requests['newer']!.complete(true);
+            await newer;
+            expect(player.state.currentQueueId, 'newer');
+          }
+        });
+      }
+
       for (final externalSkip in [false, true]) {
         test(
             externalSkip
@@ -1127,6 +1650,9 @@ void main() {
       expect(player.state.currentQueueId, 'a');
       expect(player.state.position, Duration.zero);
       expect(player.state.playQueue, ['b']);
+      final replay = player.state.mediaCommand;
+      player.setEvent(const MediaEvent(state: MediaState.completed));
+      expect(player.state.mediaCommand, same(replay));
 
       final changed = player.stream.firstWhere((s) => s.currentQueueId == 'b');
       player.playNext();

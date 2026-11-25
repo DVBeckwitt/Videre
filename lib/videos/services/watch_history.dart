@@ -176,7 +176,7 @@ class WatchRepository {
         final saved = await sessionRecord.get(txn);
         final session = PlaybackSession.decode(saved?['value'] as String?);
         if (session != null &&
-            (session.currentId == videoId ||
+            ((session.currentSavedDownloadId ?? session.currentId) == videoId ||
                 session.videos.any((video) =>
                     video.videoId == videoId &&
                     playbackQueueId(video) == session.currentId))) {

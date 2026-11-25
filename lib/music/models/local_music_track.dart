@@ -2,17 +2,30 @@ import 'dart:convert';
 
 import 'package:crypto/crypto.dart';
 
+/// One exact folder or verified ancestor in the authorized device source.
+class LocalMusicFolderLocation {
+  final String key;
+  final String label;
+
+  const LocalMusicFolderLocation(this.key, this.label);
+}
+
 /// Metadata for a track from the selected Android music source.
 class LocalMusicTrack {
   static final systemSource = Uri.parse('content://media/external/audio/media');
   static final _identityPattern = RegExp(r'^[a-f0-9]{64}$');
   static final _volumePattern = RegExp(r'^[a-zA-Z0-9_-]+$');
   static final _rowPattern = RegExp(r'^[0-9]+$');
+  static final _folderLabelControls = RegExp(r'[\x00-\x1f\x7f-\x9f]');
 
   final String uri;
   final String title;
   final String? artist;
   final String? album;
+  final String? albumArtist;
+
+  /// Identifies an album grouping only within the authorized device catalog.
+  final String? albumKey;
   final int durationMs;
   final String? artPath;
   final String? fileName;
@@ -20,6 +33,13 @@ class LocalMusicTrack {
   final DateTime? dateModified;
   final bool firstSeen;
   final bool canRename;
+
+  /// Android positively identified this track as a recording.
+  final bool isRecording;
+
+  /// Verified ancestors in order, ending with the exact containing folder.
+  final List<LocalMusicFolderLocation> folderLocations;
+  final String? visibilityKey;
   final String? _identityUri;
   final String? _identityKey;
 
@@ -28,6 +48,8 @@ class LocalMusicTrack {
     required this.title,
     this.artist,
     this.album,
+    this.albumArtist,
+    this.albumKey,
     this.durationMs = 0,
     this.artPath,
     this.fileName,
@@ -35,6 +57,9 @@ class LocalMusicTrack {
     this.dateModified,
     this.firstSeen = false,
     this.canRename = false,
+    this.isRecording = false,
+    this.folderLocations = const [],
+    this.visibilityKey,
     String? identityUri,
     String? identityKey,
   })  : _identityUri = identityUri,
@@ -62,11 +87,19 @@ class LocalMusicTrack {
     final duration = value['durationMs'];
     final art = value['artPath'];
     final name = value['fileName'];
+    final albumKey = value['albumKey'];
+    final visibilityKey = value['visibilityKey'];
     return LocalMusicTrack(
       uri: uri,
       title: title,
       artist: value['artist'] is String ? value['artist'] as String : null,
       album: value['album'] is String ? value['album'] as String : null,
+      albumArtist: value['albumArtist'] is String
+          ? value['albumArtist'] as String
+          : null,
+      albumKey: albumKey is String && _identityPattern.hasMatch(albumKey)
+          ? albumKey
+          : null,
       durationMs: duration is int && duration > 0 ? duration : 0,
       artPath: art is String && art.startsWith('/') ? art : null,
       fileName: name is String && name.isNotEmpty ? name : null,
@@ -74,6 +107,12 @@ class LocalMusicTrack {
       dateModified: _date(value['modifiedMs']),
       firstSeen: value['firstSeen'] == true,
       canRename: value['canRename'] == true,
+      isRecording: source == systemSource && value['isRecording'] == true,
+      folderLocations: _parseFolderLocations(value['folderLocations']),
+      visibilityKey:
+          visibilityKey is String && _identityPattern.hasMatch(visibilityKey)
+              ? visibilityKey
+              : null,
       identityUri: identityUri as String?,
       identityKey: identityKey as String?,
     );
@@ -83,6 +122,38 @@ class LocalMusicTrack {
       value is int && value > 0 && value <= 8640000000000000
           ? DateTime.fromMillisecondsSinceEpoch(value)
           : null;
+
+  static List<LocalMusicFolderLocation> _parseFolderLocations(Object? value) {
+    if (value is! List || value.isEmpty || value.length > 64) return const [];
+    final folders = <LocalMusicFolderLocation>[];
+    final seen = <String>{};
+    for (final item in value) {
+      if (item is! Map || item['key'] is! String || item['label'] is! String) {
+        return const [];
+      }
+      final key = item['key'] as String;
+      final label = item['label'] as String;
+      if (_identityPattern.stringMatch(key) != key ||
+          !seen.add(key) ||
+          label.isEmpty ||
+          label.length > 1024 ||
+          _folderLabelControls.hasMatch(label) ||
+          !label.split(' / ').every(_validFolderLabelPart)) {
+        return const [];
+      }
+      folders.add(LocalMusicFolderLocation(key, label));
+    }
+    return List.unmodifiable(folders);
+  }
+
+  static bool _validFolderLabelPart(String part) =>
+      part.isNotEmpty &&
+      part.trim() == part &&
+      part != '.' &&
+      part != '..' &&
+      part.toLowerCase() != '<unknown>' &&
+      !part.contains('/') &&
+      !part.contains(r'\');
 
   static bool _isSourceTrack(String uri, Uri source) {
     final document = Uri.tryParse(uri);

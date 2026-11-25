@@ -122,6 +122,13 @@ class _AdjacentMusicPreparation {
       IdedVideo? resolved;
       if (entry is DownloadedVideo) {
         if (entry.profileId != profile || !entry.audioOnly) return null;
+        if (entry.explicitMusicDownload case final fingerprint?) {
+          if (readyMusicDownload(database, entry.videoId,
+                  fingerprint: fingerprint) ==
+              null) {
+            return null;
+          }
+        }
         if (isLocalMusicPlaybackId(entry.videoId)) {
           final track = localMusicTrackForPlayback(entry.videoId);
           if (track == null) return null;
@@ -129,6 +136,9 @@ class _AdjacentMusicPreparation {
         } else {
           resolved = entry;
         }
+      } else if (entry is Video && entry.explicitMusicDownload != null) {
+        resolved = await player._resolvePlaybackVideo(entry,
+            audio: true, active: current);
       } else if (entry is Video && !isLocalMusicPlaybackId(entry.videoId)) {
         final selected = await database.getCurrentlySelectedServer();
         if (!current()) return null;
@@ -189,6 +199,9 @@ class _AdjacentMusicPreparation {
   }
 
   Future<Video?> forPlayback(Video entry, Video? downloaded) async {
+    if (entry.explicitMusicDownload != null) {
+      return player._explicitDownload(entry) == null ? null : entry;
+    }
     final song = _songs[playbackQueueId(entry)];
     if (!_active || song == null || song.entry != entry) return downloaded;
     // A newly finished download wins immediately, even while a speculative

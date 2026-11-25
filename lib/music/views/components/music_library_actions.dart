@@ -2,31 +2,51 @@ import 'dart:async';
 import 'dart:ui' show SemanticsRole;
 
 import 'package:clipious/app/states/app.dart';
+import 'package:clipious/content_filter/community_models.dart'
+    show normalizeChannelId;
 import 'package:clipious/downloads/states/download_manager.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
+import 'package:clipious/downloads/services/explicit_music_download.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' show isTv;
 import 'package:clipious/music/models/music_library_entry.dart';
+import 'package:clipious/music/services/local_music_library.dart';
 import 'package:clipious/music/services/music_library_service.dart';
+import 'package:clipious/player/models/local_music_playback.dart';
+import 'package:clipious/player/models/playback_queue.dart';
+import 'package:clipious/player/models/playback_session.dart'
+    show normalizedQueueTitle;
 import 'package:clipious/player/views/components/player_modal_back_handler.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/playlists/models/playlist.dart';
+import 'package:clipious/playlists/models/playlist_reference.dart';
 import 'package:clipious/recommendations/recommendation_service.dart';
 import 'package:clipious/service.dart';
+import 'package:clipious/videos/models/ided_video.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:clipious/downloads/models/download_formats.dart';
 import 'package:clipious/videos/views/components/download_modal_sheet.dart';
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:logging/logging.dart';
 
 import '../screens/music.dart';
+import 'local_music_folder.dart' show renameLocalMusicTrack;
 
 void _showActionError(BuildContext context) {
   final message = AppLocalizations.of(context)!.musicLibraryActionError;
   ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
 }
+
+bool _matchesCompletedDownload(DownloadedVideo record, String id) =>
+    record.videoId == id &&
+    record.profileId == db.profileId &&
+    record.downloadComplete &&
+    !record.downloadFailed &&
+    !record.storageFailed &&
+    !record.authenticationRequired;
 
 /// A dialog or collection operation may outlive its original profile.
 class MusicLibrarySession {
@@ -108,6 +128,16 @@ class MusicLibrarySession {
     library.notifyChanged();
   }
 
+  Future<void> removeCurrentPlaylistEntry(
+      PlaylistReference source, Playlist playlist, Video entry,
+      {required bool Function() isCurrentEntry}) async {
+    _requireCurrent();
+    final removed = await _service.removeUniqueLocalPlaylistEntry(
+        source, entry, playlist.title,
+        isCurrent: () => isCurrent && isCurrentEntry());
+    if (removed) library.notifyChanged();
+  }
+
   Future<void> setBookmark(MusicLibraryEntry entry,
       {required bool saved}) async {
     _requireCurrent();
@@ -141,11 +171,15 @@ class MusicLibrarySession {
   }
 
   Future<int> download(DownloadManagerCubit manager, List<Video> videos,
-      {DownloadContainer? container}) async {
+      {DownloadContainer? container, bool Function()? canStart}) async {
     _requireCurrent();
     if (isTv) return 0;
     final songs = _unique(videos);
-    if (songs.length > 1 && !await manager.prepareMusicDownloads()) return 0;
+    if ((songs.length > 1 || canStart != null) &&
+        !await manager.prepareMusicDownloads()) {
+      return 0;
+    }
+    if (canStart?.call() == false) return 0;
     var added = 0;
     for (final video in songs) {
       _requireCurrent();
@@ -182,6 +216,218 @@ enum _LibraryAction {
 }
 
 enum _RecommendationAction { why, more, less, block }
+
+enum _PlayingSongAction { rename }
+
+class _OpenPlayingArtist {
+  final String id;
+
+  const _OpenPlayingArtist(this.id);
+}
+
+enum _PlaylistSelectionAction {
+  play,
+  shuffle,
+  next,
+  append,
+  save,
+  download,
+  removeDownloads
+}
+
+/// Resolves the current files for a Downloads selection in the supplied order.
+typedef MusicSelectionDownloadResolver = List<DownloadedVideo>? Function(
+    List<Video> playable);
+
+class MusicPlaylistSelectionActions extends StatefulWidget {
+  final List<Video> videos;
+  final Future<void> Function(bool shuffle) onPlay;
+  final VoidCallback onCompleted;
+  final bool Function() isCurrent;
+  final int? selectedCount;
+  final MusicSelectionDownloadResolver? resolveDownloads;
+  final Future<void> Function()? onRemoveDownloads;
+
+  const MusicPlaylistSelectionActions({
+    super.key,
+    required this.videos,
+    required this.onPlay,
+    required this.onCompleted,
+    required this.isCurrent,
+    this.selectedCount,
+    this.resolveDownloads,
+    this.onRemoveDownloads,
+  });
+
+  @override
+  State<MusicPlaylistSelectionActions> createState() =>
+      _MusicPlaylistSelectionActionsState();
+}
+
+class _MusicPlaylistSelectionActionsState
+    extends State<MusicPlaylistSelectionActions> {
+  bool _busy = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final locals = AppLocalizations.of(context)!;
+    return PopupMenuButton<Future<void> Function()>(
+      key: const ValueKey('music-playlist-selection-actions'),
+      tooltip: locals.musicPlaylistSelectionActions,
+      enabled: !_busy &&
+          (widget.videos.isNotEmpty || widget.onRemoveDownloads != null),
+      onSelected: (command) => unawaited(command()),
+      itemBuilder: (_) {
+        // Each command retains the source rows and owner from the moment this
+        // menu opened, even if a library or player update rebuilds the button.
+        final source = widget;
+        final session = MusicLibrarySession(context.read<AppCubit>());
+        bool current() => mounted && session.isCurrent && source.isCurrent();
+        final catalog = source.videos
+            .where((v) => !isLocalMusicPlaybackId(v.videoId))
+            .toList();
+        final playable = catalog
+            .where((v) => !v.filtered && !v.filterHide && v.isUpcoming != true)
+            .toList();
+        final resolve = source.resolveDownloads;
+        List<DownloadedVideo>? completedFiles() {
+          if (resolve == null || playable.isEmpty) return null;
+          final files = resolve(playable);
+          if (files == null || files.length != playable.length) return null;
+          for (var i = 0; i < files.length; i++) {
+            if (!files[i].audioOnly ||
+                !_matchesCompletedDownload(files[i], playable[i].videoId)) {
+              return null;
+            }
+          }
+          return files;
+        }
+
+        final player = context.read<PlayerCubit?>();
+        bool canEnqueue(List<DownloadedVideo>? files) =>
+            player != null &&
+            identical(context.read<PlayerCubit?>(), player) &&
+            !player.isClosed &&
+            player.state.isAudio &&
+            (player.state.currentlyPlaying?.musicMetadata ??
+                    player.state.offlineCurrentlyPlaying?.musicMetadata) !=
+                null &&
+            playable.isNotEmpty &&
+            (resolve == null || files != null) &&
+            player.canEnqueueMusicSongs(playable, downloads: files);
+        final files = completedFiles();
+        final fileFingerprints = files?.map(musicDownloadFingerprint).toList();
+        final canPlay =
+            playable.isNotEmpty && (resolve == null || files != null);
+        final generation =
+            canEnqueue(files) ? player!.playlistGeneration : null;
+        List<Video> downloads() {
+          if (isTv) return [];
+          final playing = player?.state.currentlyPlaying;
+          return MusicLibrarySession._unique(catalog)
+              .where((song) =>
+                  !song.downloadPlaybackOnly &&
+                  !(playing?.videoId == song.videoId &&
+                      playing?.downloadPlaybackOnly == true) &&
+                  DownloadedVideo.isSafeFileId(song.videoId) &&
+                  db.getDownloadByVideoId(song.videoId) == null)
+              .toList();
+        }
+
+        Future<void> run(_PlaylistSelectionAction action) async {
+          if (_busy || !current()) return;
+          setState(() => _busy = true);
+          try {
+            switch (action) {
+              case _PlaylistSelectionAction.play:
+              case _PlaylistSelectionAction.shuffle:
+                if (resolve != null && completedFiles() == null) return;
+                await source.onPlay(action == _PlaylistSelectionAction.shuffle);
+              case _PlaylistSelectionAction.next:
+              case _PlaylistSelectionAction.append:
+                final currentFiles = completedFiles();
+                if (generation == null ||
+                    !canEnqueue(currentFiles) ||
+                    player!.playlistGeneration != generation ||
+                    (player.state.videos.isNotEmpty &&
+                        !listEquals(
+                            fileFingerprints,
+                            currentFiles
+                                ?.map(musicDownloadFingerprint)
+                                .toList())) ||
+                    !await player.enqueueMusicSongs(playable,
+                        next: action == _PlaylistSelectionAction.next,
+                        downloads: currentFiles)) {
+                  throw StateError('The active music queue changed.');
+                }
+              case _PlaylistSelectionAction.save:
+                if (!await MusicLibraryActions._showSave(
+                    context, resolve == null ? catalog : playable,
+                    canSave: () =>
+                        current() &&
+                        (resolve == null || completedFiles() != null))) {
+                  return;
+                }
+              case _PlaylistSelectionAction.download:
+                final count = await MusicLibraryActions.download(
+                    context, downloads(),
+                    canDownload: current);
+                if (count == 0) return;
+              case _PlaylistSelectionAction.removeDownloads:
+                await source.onRemoveDownloads?.call();
+                return;
+            }
+            if (current()) source.onCompleted();
+          } catch (_) {
+            if (!context.mounted || !current()) return;
+            final message = switch (action) {
+              _PlaylistSelectionAction.save ||
+              _PlaylistSelectionAction.download =>
+                locals.musicLibraryActionError,
+              _PlaylistSelectionAction.removeDownloads =>
+                locals.musicDownloadError,
+              _ => locals.musicPlaybackError,
+            };
+            ScaffoldMessenger.of(context)
+                .showSnackBar(SnackBar(content: Text(message)));
+          } finally {
+            if (mounted) setState(() => _busy = false);
+          }
+        }
+
+        PopupMenuItem<Future<void> Function()> item(
+                _PlaylistSelectionAction action, String label, bool enabled) =>
+            PopupMenuItem(
+                value: () => run(action), enabled: enabled, child: Text(label));
+        return [
+          if (resolve != null &&
+              (source.selectedCount ?? 0) > source.videos.length)
+            PopupMenuItem<Future<void> Function()>(
+                enabled: false,
+                child: Text(locals
+                    .musicSelectedCompletedDownloads(source.videos.length))),
+          if (resolve == null || canPlay) ...[
+            item(_PlaylistSelectionAction.play, locals.musicPlay, canPlay),
+            item(
+                _PlaylistSelectionAction.shuffle, locals.musicShuffle, canPlay),
+            item(_PlaylistSelectionAction.next, locals.playNext,
+                generation != null),
+            item(_PlaylistSelectionAction.append, locals.addToQueueList,
+                generation != null),
+            item(_PlaylistSelectionAction.save, locals.musicSaveToPlaylist,
+                catalog.isNotEmpty),
+          ],
+          if (resolve == null && downloads().isNotEmpty)
+            item(_PlaylistSelectionAction.download, locals.musicDownloadAudio,
+                true),
+          if (source.onRemoveDownloads != null)
+            item(_PlaylistSelectionAction.removeDownloads,
+                locals.musicRemoveSelectedDownloads, true),
+        ];
+      },
+    );
+  }
+}
 
 /// Feedback is available only for songs the ranking service has scored.
 class MusicSongRecommendation {
@@ -304,7 +550,9 @@ class MusicLibraryActions extends StatefulWidget {
   static List<PopupMenuEntry<_LibraryAction>> _items(
       BuildContext context, List<Video> videos, String? playlistId,
       {required Widget Function(Widget) first,
-      List<DownloadedVideo>? downloads}) {
+      List<DownloadedVideo>? downloads,
+      bool nowPlaying = false,
+      bool showDownload = true}) {
     final locals = AppLocalizations.of(context)!;
     final song = _song(videos);
     final library = MusicLibraryService.forProfile(db, db.profileId);
@@ -316,6 +564,8 @@ class MusicLibraryActions extends StatefulWidget {
             player.state.isClosing);
     final canQueue = player != null &&
         (idle || player.canEnqueueMusicSongs(videos, downloads: downloads));
+    final addLabel =
+        nowPlaying ? locals.addToPlaylist : locals.musicSaveToPlaylist;
     return [
       if (song != null) ...[
         PopupMenuItem(
@@ -341,14 +591,12 @@ class MusicLibraryActions extends StatefulWidget {
       ],
       PopupMenuItem(
           value: _LibraryAction.save,
-          child: song == null
-              ? first(Text(locals.musicSaveToPlaylist))
-              : Text(locals.musicSaveToPlaylist)),
+          child: song == null ? first(Text(addLabel)) : Text(addLabel)),
       if (playlistId?.startsWith('local:') == true && videos.length == 1)
         PopupMenuItem(
             value: _LibraryAction.removeFromPlaylist,
             child: Text(locals.removeFromPlayList)),
-      if (!isTv)
+      if (!isTv && showDownload)
         PopupMenuItem(
             value: _LibraryAction.download,
             child: Text(locals.musicDownloadAudio)),
@@ -362,7 +610,9 @@ class MusicLibraryActions extends StatefulWidget {
       List<Video> videos,
       String? playlistId,
       Future<void> Function()? onPlay,
-      List<DownloadedVideo>? downloads) async {
+      List<DownloadedVideo>? downloads,
+      {required bool inPlayer,
+      bool Function()? isCurrent}) async {
     if (!context.mounted || !session.isCurrent) return;
     if (action == _LibraryAction.play ||
         action == _LibraryAction.playNext ||
@@ -395,14 +645,186 @@ class MusicLibraryActions extends StatefulWidget {
             saved: action == _LibraryAction.saveBookmark);
       }
     } else if (action == _LibraryAction.save) {
-      await save(context, videos);
+      await _showSave(context, videos, inPlayer: inPlayer, canSave: isCurrent);
     } else if (action == _LibraryAction.removeFromPlaylist) {
       if (playlistId != null && videos.length == 1) {
         await session.removeFromPlaylist(playlistId, videos.single.videoId);
       }
     } else {
-      await download(context, videos);
+      await download(context, videos,
+          inPlayer: inPlayer, canDownload: isCurrent);
     }
+  }
+
+  static Future<void> showPlayingSongMenu(BuildContext context, IdedVideo entry,
+      {required bool television}) async {
+    final app = context.read<AppCubit>();
+    final player = context.read<PlayerCubit>();
+    final session = MusicLibrarySession(app);
+    final source = player.playlistReference;
+    final playlistGeneration = player.playlistGeneration;
+    final occurrenceRevision = player.playbackOccurrenceRevision;
+    final selectionRevision = player.musicSelectionRequestRevision;
+    final occurrence = playbackQueueId(entry);
+    bool current() =>
+        context.mounted &&
+        session.isCurrent &&
+        identical(context.read<AppCubit>(), app) &&
+        identical(context.read<PlayerCubit>(), player) &&
+        !player.isClosed &&
+        player.state.isAudio &&
+        !player.state.isHidden &&
+        !player.state.isClosing &&
+        !player.state.isMini &&
+        player.openingMusicEntry == null &&
+        player.playlistReference == source &&
+        player.playlistGeneration == playlistGeneration &&
+        player.playbackOccurrenceRevision == occurrenceRevision &&
+        player.musicSelectionRequestRevision == selectionRevision &&
+        player.state.currentQueueId == occurrence &&
+        (player.state.currentlyPlaying ?? player.state.offlineCurrentlyPlaying)
+                ?.videoId ==
+            entry.videoId;
+    if (!current()) return;
+
+    final locals = AppLocalizations.of(context)!;
+    final video = entry is Video ? entry : null;
+    final file = entry is DownloadedVideo ? entry : null;
+    final music = video?.musicMetadata ?? file?.musicMetadata;
+    if (music == null) return;
+    final onDevice = isLocalMusicPlaybackId(entry.videoId);
+    final song = onDevice
+        ? null
+        : video ??
+            Video(
+                videoId: entry.videoId,
+                title: music.title,
+                author: music.artist,
+                lengthSeconds: file?.lengthSeconds,
+                musicMetadata: music,
+                videoThumbnails: music.thumbnails);
+    final downloads = file != null && !onDevice ? [file] : null;
+    final track = onDevice ? localMusicTrackForPlayback(entry.videoId) : null;
+    final playlistEntry = player.currentLocalPlaylistEntry;
+    final playlist = source == null || playlistEntry == null
+        ? null
+        : session._service
+            .getLocalPlaylistWithUniqueEntry(source, playlistEntry);
+    final title = playlist?.playlistId == localWatchLaterId
+        ? locals.watchLater
+        : normalizedQueueTitle(playlist?.title);
+    final artists = <String, String>{
+      if (!onDevice)
+        for (final credit in music.artistCredits)
+          if (normalizeChannelId(credit.id) case final id?) id: credit.name,
+    };
+    ModalRoute<dynamic>? route;
+    Widget first(Widget child) => Builder(builder: (context) {
+          route = ModalRoute.of(context);
+          return PlayerModalBackHandler(child: child);
+        });
+    void dismissStaleMenu() {
+      if (!current() && route?.isActive == true) {
+        route!.navigator?.removeRoute(route!);
+      }
+    }
+
+    final canCopy = file != null && player.canCopyOfflineMusicEntries([file]);
+    final entries = <PopupMenuEntry<Object>>[
+      if (song != null)
+        ..._items(context, [song], null,
+            first: first,
+            downloads: downloads,
+            nowPlaying: true,
+            showDownload: !television &&
+                video != null &&
+                !video.downloadPlaybackOnly &&
+                video.explicitMusicDownload == null)
+      else ...[
+        PopupMenuItem(
+            value: _LibraryAction.play, child: first(Text(locals.musicPlay))),
+        if (canCopy) ...[
+          PopupMenuItem(
+              value: _LibraryAction.playNext, child: Text(locals.playNext)),
+          PopupMenuItem(
+              value: _LibraryAction.enqueue,
+              child: Text(locals.addToQueueList)),
+        ],
+        if (track?.canRename == true &&
+            track?.fileName != null &&
+            !LocalMusicLibrary.instance.busy)
+          PopupMenuItem(
+              value: _PlayingSongAction.rename,
+              child: Text(locals.localMusicRename)),
+      ],
+      if (title != null)
+        PopupMenuItem(
+            key: const ValueKey('music-player-remove-from-playlist'),
+            value: _LibraryAction.removeFromPlaylist,
+            child: Text(locals.musicRemoveFromNamedPlaylist(title))),
+      for (final artist in artists.entries)
+        PopupMenuItem(
+            key: ValueKey(('music-player-open-artist', artist.key)),
+            value: _OpenPlayingArtist(artist.key),
+            child: Text(artists.length == 1
+                ? locals.musicOpenArtist
+                : locals.musicOpenNamedArtist(artist.value))),
+    ];
+    final profileChanges = app.stream.listen((_) => dismissStaleMenu());
+    final playbackChanges = player.stream.listen((_) => dismissStaleMenu());
+    try {
+      final action = await _showSongPopup(context, entries);
+      if (!context.mounted || !current() || action == null) return;
+      if (action is _OpenPlayingArtist) {
+        MusicScreen.openPlayingArtist(context, action.id,
+            television: television);
+      } else if (action == _PlayingSongAction.rename && track != null) {
+        await renameLocalMusicTrack(context, LocalMusicLibrary.instance, track,
+            inPlayer: true, isCurrent: current);
+      } else if (action == _LibraryAction.removeFromPlaylist &&
+          source != null &&
+          playlist != null &&
+          playlistEntry != null) {
+        await session.removeCurrentPlaylistEntry(
+            source, playlist, playlistEntry,
+            isCurrentEntry: () =>
+                current() &&
+                identical(player.currentLocalPlaylistEntry, playlistEntry));
+      } else if (action == _LibraryAction.play) {
+        player.play();
+      } else if (song != null && action is _LibraryAction) {
+        await _apply(context, session, action, [song], null, null, downloads,
+            inPlayer: true, isCurrent: current);
+      } else if (file != null &&
+          (action == _LibraryAction.playNext ||
+              action == _LibraryAction.enqueue)) {
+        await player.enqueueOfflineMusicCopies([file],
+            next: action == _LibraryAction.playNext);
+      }
+    } catch (_) {
+      if (context.mounted && current()) _showActionError(context);
+    } finally {
+      await profileChanges.cancel();
+      await playbackChanges.cancel();
+    }
+  }
+
+  static Future<T?> _showSongPopup<T>(
+      BuildContext context, List<PopupMenuEntry<T>> items) async {
+    final overlay = Navigator.of(context).overlay?.context.findRenderObject();
+    if (overlay is! RenderBox || !overlay.hasSize) return null;
+    final anchor = context.findRenderObject();
+    // A sliver builder may supply its list's context instead of the row's box.
+    final center = anchor is RenderBox && anchor.hasSize
+        ? anchor.localToGlobal(anchor.size.center(Offset.zero),
+            ancestor: overlay)
+        : overlay.size.center(Offset.zero);
+    return showMenu<T>(
+        context: context,
+        position: RelativeRect.fromRect(
+            Rect.fromCenter(center: center, width: 0, height: 0),
+            Offset.zero & overlay.size),
+        items: items);
   }
 
   static Future<void> showSongMenu(BuildContext context, Video video,
@@ -410,6 +832,7 @@ class MusicLibraryActions extends StatefulWidget {
       String? localPlaylistId,
       bool inPlayer = false,
       List<DownloadedVideo>? downloads,
+      DownloadedVideo? Function()? resolveDownload,
       MusicSongRecommendation? recommendation}) async {
     final session = MusicLibrarySession(context.read<AppCubit>());
     if (!session.isCurrent ||
@@ -421,15 +844,6 @@ class MusicLibraryActions extends StatefulWidget {
     final saved = downloads == null
         ? null
         : List<DownloadedVideo>.unmodifiable(downloads);
-    final overlay = Navigator.of(context).overlay?.context.findRenderObject();
-    if (overlay is! RenderBox || !overlay.hasSize) return;
-    final anchor = context.findRenderObject();
-    // ListView and SliverList item builders supply their sliver's context,
-    // rather than the row's box. Such callers can still open the same menu.
-    final center = anchor is RenderBox && anchor.hasSize
-        ? anchor.localToGlobal(anchor.size.center(Offset.zero),
-            ancestor: overlay)
-        : overlay.size.center(Offset.zero);
     ModalRoute<dynamic>? route;
     final changes = session.app.stream.listen((_) {
       if (!session.isCurrent && route?.isActive == true) {
@@ -444,12 +858,7 @@ class MusicLibraryActions extends StatefulWidget {
                 return inPlayer ? PlayerModalBackHandler(child: child) : child;
               }));
       final action = await (recommendation == null
-          ? showMenu<_LibraryAction>(
-              context: context,
-              position: RelativeRect.fromRect(
-                  Rect.fromCenter(center: center, width: 0, height: 0),
-                  Offset.zero & overlay.size),
-              items: items)
+          ? _showSongPopup(context, items)
           : showDialog<Enum>(
               context: context,
               useRootNavigator: false,
@@ -460,8 +869,21 @@ class MusicLibraryActions extends StatefulWidget {
         return;
       }
       if (action is _LibraryAction) {
-        await _apply(
-            context, session, action, videos, localPlaylistId, onPlay, saved);
+        var currentDownloads = saved;
+        if (resolveDownload != null &&
+            (action == _LibraryAction.playNext ||
+                action == _LibraryAction.enqueue)) {
+          // The file can be removed or replaced while its menu is open.
+          final current = resolveDownload();
+          if (current == null ||
+              !_matchesCompletedDownload(current, video.videoId)) {
+            return;
+          }
+          currentDownloads = [current];
+        }
+        await _apply(context, session, action, videos, localPlaylistId, onPlay,
+            currentDownloads,
+            inPlayer: inPlayer);
       } else if (action is _RecommendationAction && recommendation != null) {
         if (action == _RecommendationAction.why) {
           final explanation = recommendation._explanation(context);
@@ -482,25 +904,37 @@ class MusicLibraryActions extends StatefulWidget {
     }
   }
 
-  static Future<void> save(BuildContext context, List<Video> videos) async {
+  static Future<void> save(BuildContext context, List<Video> videos,
+      {bool inPlayer = false}) async {
     if (videos.isEmpty) return;
-    await _showSave(context, videos);
+    await _showSave(context, videos, inPlayer: inPlayer);
   }
 
-  static Future<void> createPlaylist(BuildContext context) =>
-      _showSave(context, const [], creating: true);
+  static Future<void> createPlaylist(BuildContext context) async {
+    await _showSave(context, const [], creating: true);
+  }
 
-  static Future<void> _showSave(BuildContext context, List<Video> videos,
-      {bool creating = false}) async {
+  static Future<bool> _showSave(BuildContext context, List<Video> videos,
+      {bool creating = false,
+      bool inPlayer = false,
+      bool Function()? canSave}) async {
     final app = context.read<AppCubit>();
     final session = MusicLibrarySession(app);
-    if (!session.isCurrent) return;
+    if (!session.isCurrent || canSave?.call() == false) return false;
     final locals = AppLocalizations.of(context)!;
     final navigator = Navigator.of(context, rootNavigator: false);
     final route = DialogRoute<bool>(
         context: context,
-        builder: (_) => _SaveMusicDialog(
-            session: session, videos: videos, creating: creating));
+        builder: (_) {
+          final dialog = _SaveMusicDialog(
+              session: session,
+              videos: videos,
+              creating: creating,
+              canSave: canSave);
+          return inPlayer
+              ? PlayerModalBackHandler(priority: 5, child: dialog)
+              : dialog;
+        });
     final changes = app.stream.listen((_) {
       if (!session.isCurrent && route.isActive && navigator.mounted) {
         navigator.removeRoute(route);
@@ -512,24 +946,33 @@ class MusicLibraryActions extends StatefulWidget {
         ScaffoldMessenger.of(context)
             .showSnackBar(SnackBar(content: Text(locals.musicSavedToPlaylist)));
       }
+      return saved == true;
     } finally {
       await changes.cancel();
     }
   }
 
-  static Future<int> download(BuildContext context, List<Video> videos) async {
+  static Future<int> download(BuildContext context, List<Video> videos,
+      {bool inPlayer = false, bool Function()? canDownload}) async {
     if (isTv || videos.isEmpty) return 0;
     final session = MusicLibrarySession(context.read<AppCubit>());
     if (!session.isCurrent) return 0;
     final locals = AppLocalizations.of(context)!;
     try {
       final options = await DownloadModalSheet.showPlaylistOptions(context,
-          musicAudioOnly: true);
-      if (options == null || !context.mounted || !session.isCurrent) return 0;
+          musicAudioOnly: true, inPlayer: inPlayer);
+      if (options == null ||
+          !context.mounted ||
+          !session.isCurrent ||
+          canDownload?.call() == false) {
+        return 0;
+      }
       final count = await session.download(
           context.read<DownloadManagerCubit>(), videos,
-          container: options.container);
-      if (context.mounted && session.isCurrent) {
+          container: options.container, canStart: canDownload);
+      if (context.mounted &&
+          session.isCurrent &&
+          canDownload?.call() != false) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
             content:
                 Text('${locals.downloadQueued}: ${locals.nVideos(count)}')));
@@ -599,7 +1042,8 @@ class _MusicLibraryActionsState extends State<MusicLibraryActions> {
     setState(() => _busy = true);
     try {
       await MusicLibraryActions._apply(context, session, action, videos,
-          source.localPlaylistId, source.onPlay, downloads);
+          source.localPlaylistId, source.onPlay, downloads,
+          inPlayer: source.inPlayer);
     } catch (_) {
       if (mounted && session.isCurrent) _showActionError(context);
     } finally {
@@ -699,9 +1143,13 @@ class _SaveMusicDialog extends StatefulWidget {
   final MusicLibrarySession session;
   final List<Video> videos;
   final bool creating;
+  final bool Function()? canSave;
 
   const _SaveMusicDialog(
-      {required this.session, required this.videos, this.creating = false});
+      {required this.session,
+      required this.videos,
+      this.creating = false,
+      this.canSave});
 
   @override
   State<_SaveMusicDialog> createState() => _SaveMusicDialogState();
@@ -802,6 +1250,10 @@ class _SaveMusicDialogState extends State<_SaveMusicDialog> {
 
   Future<void> _save([String? playlistId]) async {
     if (_saving || !widget.session.isCurrent) return;
+    if (widget.canSave?.call() == false) {
+      Navigator.of(context).pop(false);
+      return;
+    }
     if (playlistId == null && _name.text.trim().isEmpty) return;
     setState(() {
       _saving = true;

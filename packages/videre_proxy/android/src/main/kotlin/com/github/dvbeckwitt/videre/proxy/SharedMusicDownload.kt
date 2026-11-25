@@ -6,6 +6,7 @@ import android.os.Build
 import android.os.Environment
 import android.provider.DocumentsContract
 import android.provider.MediaStore
+import java.io.FileNotFoundException
 import java.io.IOException
 
 /** Public Android music files that Videre created. SAF documents use their own grant checks. */
@@ -63,6 +64,28 @@ object SharedMusicDownload {
         Row.MISSING, Row.MOVED -> false
         Row.PENDING -> throw IOException()
         Row.PUBLISHED -> true
+    }
+
+    /** MediaStore's indexed size can lag behind the bytes already written to a pending item. */
+    fun documentSize(context: Context, uri: Uri): Long? {
+        when (row(context, uri)) {
+            Row.MISSING -> return 0L
+            Row.MOVED -> return null
+            else -> Unit
+        }
+        val bytes = try {
+            context.contentResolver.openFileDescriptor(uri, "r")?.use {
+                it.statSize.takeIf { size -> size >= 0L }
+            }
+        } catch (_: FileNotFoundException) {
+            null
+        }
+        // The user can move or remove a song while the descriptor is being opened.
+        return when (row(context, uri)) {
+            Row.MISSING -> 0L
+            Row.MOVED -> null
+            else -> bytes
+        }
     }
 
     /** Moving a song releases it from Downloads. Keep the location check atomic with deletion. */

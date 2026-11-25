@@ -6,21 +6,26 @@ import 'package:clipious/content_filter/community_filter.dart';
 import 'package:clipious/content_filter/community_filter_widgets.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/downloads/services/download_playback_source.dart';
+import 'package:clipious/downloads/services/explicit_music_download.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' show isTv;
 import 'package:clipious/music/models/local_music_track.dart';
 import 'package:clipious/music/models/music_artist.dart';
 import 'package:clipious/music/models/music_artist_page.dart';
+import 'package:clipious/music/models/music_catalog_search.dart';
 import 'package:clipious/music/models/music_collection.dart';
 import 'package:clipious/music/models/music_library_entry.dart';
-import 'package:clipious/music/models/music_playlist.dart';
 import 'package:clipious/music/models/music_track.dart';
+import 'package:clipious/music/models/on_device_music_entry.dart';
 import 'package:clipious/music/models/song_artwork.dart';
 import 'package:clipious/music/services/local_music_library.dart';
 import 'package:clipious/music/services/music_catalog_service.dart';
+import 'package:clipious/music/services/music_library_search.dart';
 import 'package:clipious/music/views/components/community_music_artwork.dart';
+import 'package:clipious/music/views/components/music_collection_panes.dart';
 import 'package:clipious/music/views/components/music_library_actions.dart';
+import 'package:clipious/music/views/components/music_library_search_results.dart';
 import 'package:clipious/music/views/components/music_player.dart';
 import 'package:clipious/music/views/components/music_selection_feedback.dart';
 import 'package:clipious/music/views/components/music_playlist_resume.dart';
@@ -28,6 +33,8 @@ import 'package:clipious/music/views/components/music_sponsor_notice.dart';
 import 'package:clipious/music/views/components/music_sound_sheet.dart';
 import 'package:clipious/music/views/components/music_track_results.dart';
 import 'package:clipious/network/content_link.dart';
+import 'package:clipious/network/network_proxy.dart';
+import 'package:clipious/network/socks_proxy.dart';
 import 'package:clipious/player/models/media_event.dart';
 import 'package:clipious/player/models/local_music_playback.dart';
 import 'package:clipious/player/models/playback_queue.dart';
@@ -36,6 +43,7 @@ import 'package:clipious/player/states/player.dart';
 import 'package:clipious/player/views/components/backend_recovery_notice.dart';
 import 'package:clipious/player/views/components/video_retry_notice.dart';
 import 'package:clipious/player/views/components/playlist_loading_notice.dart';
+import 'package:clipious/player/views/components/player_modal_back_handler.dart';
 import 'package:clipious/playlists/models/playlist_reference.dart';
 import 'package:clipious/playlists/models/playlist.dart';
 import 'package:clipious/playlists/views/components/playlist_information.dart';
@@ -44,8 +52,10 @@ import 'package:clipious/recommendations/recommendation_service.dart';
 import 'package:clipious/router.dart';
 import 'package:clipious/search/views/components/pasted_link_dialog.dart';
 import 'package:clipious/service.dart' show VideoLoadObserver;
+import 'package:clipious/settings/models/db/settings.dart' show browsingCountry;
 import 'package:clipious/settings/models/errors/invidious_service_error.dart';
 import 'package:clipious/settings/states/settings.dart';
+import 'package:clipious/utils.dart' show DeviceType, getDeviceType;
 import 'package:clipious/utils/models/image_object.dart';
 import 'package:clipious/utils/motion.dart';
 import 'package:clipious/utils/views/components/thumbnail.dart';
@@ -57,10 +67,55 @@ import 'package:clipious/videos/views/components/offline_video_thumbnail.dart';
 import 'package:clipious/videos/views/components/video_watch_progress.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show listEquals;
+import 'package:flutter/semantics.dart' show CustomSemanticsAction;
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
-enum _MusicSearch { songs, artists, playlists }
+enum _MusicSearchSource { online, library }
+
+String? get _searchCountry => db.getSettings(browsingCountry)?.value;
+
+class _OnlineSearchListing {
+  _OnlineSearchListing(this.query, this.type, {required this.paginated})
+      : country = _searchCountry,
+        proxy = NetworkProxy.instance.config;
+
+  final String query;
+  final MusicCatalogSearchType type;
+  final bool paginated;
+  final String? country;
+  final SocksProxyConfig proxy;
+  final hits = <MusicCatalogSearchHit>[];
+  final _seenHits = <String>{};
+  final _seenRaw = <String>{};
+  int nextPage = 1;
+  int _unidentifiedPages = 0;
+  bool hasMore = true;
+  bool failed = false;
+  Object? pending;
+
+  bool get connectionCurrent =>
+      country == _searchCountry &&
+      !NetworkProxy.instance.isChanging &&
+      identical(proxy, NetworkProxy.instance.config);
+
+  void accept(MusicCatalogSearchPage page) {
+    hits.addAll(paginated
+        ? page.hits.where((hit) => _seenHits.add(hit.key))
+        : page.hits);
+    final rawSize = _seenRaw.length;
+    _seenRaw.addAll(page.rawKeys);
+    final madeProgress = _seenRaw.length > rawSize;
+    // A raw page can consist entirely of entries without usable identities.
+    // Permit those pages to advance, but bound a stream of unprovable progress.
+    _unidentifiedPages = page.rawKeys.isEmpty ? _unidentifiedPages + 1 : 0;
+    hasMore = hasMore &&
+        page.rawCount > 0 &&
+        (madeProgress || (page.rawKeys.isEmpty && _unidentifiedPages < 3));
+    nextPage++;
+    failed = false;
+  }
+}
 
 class _ArtistReleaseListing {
   final releases = <String, MusicCollection>{};
@@ -75,6 +130,7 @@ class MusicScreen extends StatefulWidget {
   final String? videoId;
   final List<MusicArtistCredit> artistCredits;
   final List<Video> queue;
+  final String? queueTitle;
   final int startIndex;
   final String? playlistId;
   final String? artistId;
@@ -87,6 +143,7 @@ class MusicScreen extends StatefulWidget {
       this.videoId,
       this.artistCredits = const [],
       this.queue = const [],
+      this.queueTitle,
       this.startIndex = 0,
       this.playlistId,
       this.artistId,
@@ -101,7 +158,8 @@ class MusicScreen extends StatefulWidget {
       {required bool television}) {
     final player = context.read<PlayerCubit>();
     if (television) {
-      Navigator.of(context).push(_TvPlayingArtistRoute(id, player));
+      unawaited(openPlayingSource(context, MusicScreen(artistId: id),
+          television: true));
     } else {
       // The phone player overlays Main's nested pages as their sibling.
       final router = context.router;
@@ -112,27 +170,110 @@ class MusicScreen extends StatefulWidget {
     }
   }
 
+  /// Cover the player with a browsable route while keeping its decoder mounted.
+  static Future<void> openPlayingSource(BuildContext context, Widget page,
+      {required bool television}) async {
+    final app = context.read<AppCubit>();
+    final session = app.state;
+    if (session.globalLoading ||
+        session.sessionRecoveryRequired ||
+        session.profileId != db.profileId) {
+      return;
+    }
+    final player = context.read<PlayerCubit>();
+    await Navigator.of(context, rootNavigator: !television)
+        .push<void>(_PlayingMusicSourceRoute(page, player, app, session));
+  }
+
   static Future<void> playLocalTracks(
       BuildContext context, List<LocalMusicTrack> tracks,
-      {int startIndex = 0}) async {
+      {int startIndex = 0, String? queueTitle}) async {
     if (tracks.isEmpty || startIndex < 0 || startIndex >= tracks.length) return;
-    if (isTv) {
+    final route = ModalRoute.of(context);
+    if (isTv && route is! _PlayingMusicSourceRoute) {
       await Navigator.of(context).push<void>(MaterialPageRoute(
           builder: (_) => _MusicTvPlayer(
-              videos: const [], localTracks: tracks, startIndex: startIndex)));
+              videos: const [],
+              localTracks: tracks,
+              queueTitle: queueTitle,
+              startIndex: startIndex)));
     } else {
-      await context
-          .read<PlayerCubit>()
-          .playLocalMusic(tracks, startIndex: startIndex);
+      final player = context.read<PlayerCubit>();
+      final failure = route is _PlayingMusicSourceRoute
+          ? player.musicSelectionFailureRevision.value
+          : null;
+      await player.playLocalMusic(tracks,
+          startIndex: startIndex, queueTitle: queueTitle);
+      if (route is _PlayingMusicSourceRoute &&
+          context.mounted &&
+          !player.isClosed &&
+          route.isCurrent &&
+          player.musicSelectionFailureRevision.value == failure &&
+          player.isLocalMusicSession &&
+          localMusicTrackId(player.state.currentQueueId ?? '') ==
+              tracks[startIndex].playbackId) {
+        route.navigator!.pop();
+      }
     }
+  }
+
+  static Future<void> playOnDeviceTracks(
+      BuildContext context, List<OnDeviceMusicEntry> tracks,
+      {int startIndex = 0,
+      String? queueTitle,
+      bool Function()? isCurrent}) async {
+    if (startIndex < 0 ||
+        startIndex >= tracks.length ||
+        isCurrent?.call() == false) {
+      return;
+    }
+    final route = ModalRoute.of(context);
+    if (isTv && route is! _PlayingMusicSourceRoute) {
+      await Navigator.of(context).push<void>(MaterialPageRoute(
+          builder: (_) => _MusicTvPlayer(
+              videos: const [],
+              onDeviceTracks: tracks,
+              onDeviceMusicIsCurrent: isCurrent,
+              queueTitle: queueTitle,
+              startIndex: startIndex)));
+      return;
+    }
+    final player = context.read<PlayerCubit>();
+    final failure = player.musicSelectionFailureRevision.value;
+    await player.playOnDeviceMusic(tracks,
+        startIndex: startIndex, queueTitle: queueTitle, isCurrent: isCurrent);
+    if (route is! _PlayingMusicSourceRoute ||
+        !context.mounted ||
+        player.isClosed ||
+        !route.isCurrent ||
+        isCurrent?.call() == false ||
+        player.musicSelectionFailureRevision.value != failure ||
+        player.state.mediaEvent.state == MediaState.error) {
+      return;
+    }
+    final playing = player.state.offlineCurrentlyPlaying;
+    final chosen = tracks[startIndex];
+    if (playing == null) return;
+    final track = chosen.deviceTrack;
+    final matches = track != null
+        ? localMusicTrackId(playing.videoId) == track.playbackId
+        : playing.videoId == chosen.download!.videoId &&
+            playing.explicitMusicDownload ==
+                musicDownloadFileFingerprint(
+                    chosen.download!, chosen.downloadFileProof!);
+    if (matches) route.navigator!.pop();
   }
 
   static Future<void> playTracks(BuildContext context, List<Video> videos,
           {PlaylistReference? reference,
+          String? queueTitle,
           int? startIndex,
           Duration startAt = Duration.zero}) =>
       _playTracks(context, videos.map(_songEntry).toList(),
-          reference: reference, startIndex: startIndex, startAt: startAt);
+          reference: reference,
+          queueTitle: queueTitle,
+          startIndex: startIndex,
+          startAt: startAt);
 
   static Video _songEntry(Video video) => video.musicMetadata != null
       ? video
@@ -142,31 +283,34 @@ class MusicScreen extends StatefulWidget {
 
   static Future<void> _playTracks(BuildContext context, List<Video> videos,
       {PlaylistReference? reference,
+      String? queueTitle,
       int? startIndex,
       required Duration startAt,
       ModalRoute<dynamic>? songLauncher,
       bool Function()? isCurrent}) async {
     if (videos.isEmpty) return;
     if (reference != null && reference.profileId != db.profileId) return;
-    final artistRoute = ModalRoute.of(context);
-    if (isTv && artistRoute is! _TvPlayingArtistRoute) {
+    final sourceRoute = ModalRoute.of(context);
+    if (isTv && sourceRoute is! _PlayingMusicSourceRoute) {
       await Navigator.of(context).push<void>(MaterialPageRoute(
           builder: (_) => _MusicTvPlayer(
               videos: videos,
               reference: reference,
+              queueTitle: queueTitle,
               startIndex: startIndex ?? 0,
               startAt: startAt)));
       return;
     }
     final player = context.read<PlayerCubit>();
     final returnRoute = songLauncher ??
-        (artistRoute is _TvPlayingArtistRoute ? artistRoute : null);
+        (sourceRoute is _PlayingMusicSourceRoute ? sourceRoute : null);
     final before = player.state;
     final failure =
         returnRoute == null ? null : player.musicSelectionFailureRevision.value;
     final playback = reference == null
         ? player.playVideo(videos,
             fromMusic: true,
+            queueTitle: queueTitle,
             audio: true,
             startAt: startAt,
             startIndex: startIndex)
@@ -247,13 +391,21 @@ class MusicScreen extends StatefulWidget {
 }
 
 class MusicScreenState extends State<MusicScreen> {
-  final _search = TextEditingController();
+  final _onlineSearch = TextEditingController();
+  final _librarySearch = TextEditingController();
   final _queryFocus = FocusNode();
+  final _librarySearchScroll = ScrollController();
+  final _searchScrollScope = Object();
+  _MusicSearchSource _searchSource = _MusicSearchSource.online;
+  bool _visitedLibrarySearch = false;
+  int _searchIntentRevision = 0;
+  int _searchSessionRevision = 0;
+  int _onlineResultRevision = 0;
+  int _libraryResultRevision = 0;
   VoidCallback? _shortcutBack;
-  _MusicSearch _type = _MusicSearch.songs;
-  List<MusicTrack> _songs = [];
-  List<MusicArtist> _artists = [];
-  List<MusicPlaylist> _playlists = [];
+  MusicCatalogSearchType _type = MusicCatalogSearchType.songs;
+  MusicLibrarySearchType _libraryType = MusicLibrarySearchType.all;
+  _OnlineSearchListing? _onlineListing;
   MusicCollection? _collection;
   MusicArtistPage? _artistPage;
   _ArtistReleaseListing? _artistReleases;
@@ -265,15 +417,19 @@ class MusicScreenState extends State<MusicScreen> {
   })>[];
   bool _loading = false;
   bool _browseRequest = false;
+  bool _returningToOrigin = false;
   bool _retryingSong = false;
   Object? _failure;
-  bool _searched = false;
-  String? _submittedQuery;
   MusicTrack? _resolvedSong;
   bool _showCommunityHidden = false;
   bool _starting = false;
   int _playRequest = 0;
-  ({List<Video> videos, int startIndex, Duration startAt})? _tvSong;
+  ({
+    List<Video> videos,
+    int startIndex,
+    Duration startAt,
+    String? queueTitle
+  })? _tvSong;
   int _generation = 0;
   int? _abandonedSongRequest;
   Future<void> Function()? _retry;
@@ -281,11 +437,76 @@ class MusicScreenState extends State<MusicScreen> {
   bool get _hasBrowsePage =>
       _collection != null || _artistPage != null || _browseHistory.isNotEmpty;
 
+  bool get _canSwitchSearchSource =>
+      widget.embedded &&
+      !isTv &&
+      !_hasDirectBrowseLink &&
+      widget.videoId == null;
+
+  bool get _searchingLibrary =>
+      _canSwitchSearchSource && _searchSource == _MusicSearchSource.library;
+
+  bool get _searched => _onlineListing != null;
+
+  TextEditingController get _search =>
+      _searchingLibrary ? _librarySearch : _onlineSearch;
+
+  void _selectSearchSource(_MusicSearchSource source) {
+    if (source == _searchSource) return;
+    _searchIntentRevision++;
+    setState(() {
+      _searchSource = source;
+      if (source == _MusicSearchSource.library) {
+        _visitedLibrarySearch = true;
+        _onlineListing?.pending = null;
+      }
+    });
+  }
+
+  void _submitActiveSearch() {
+    if (_searchingLibrary) {
+      _queryFocus.unfocus();
+    } else {
+      unawaited(_submit(learn: true));
+    }
+  }
+
+  void _selectOnlineType(MusicCatalogSearchType type) {
+    if (_searchingLibrary || _type == type) return;
+    setState(() {
+      _type = type;
+      _onlineListing?.pending = null;
+    });
+    // A pasted address needs a submission before changing result types can
+    // search its text.
+    final query = _onlineSearch.text.trim();
+    if (query.isNotEmpty &&
+        (query == _onlineListing?.query ||
+            ContentLink.completeWebAddress(query) == null)) {
+      unawaited(_submit());
+    }
+  }
+
+  void _selectLibraryType(MusicLibrarySearchType type) {
+    if (!_searchingLibrary || _libraryType == type) return;
+    setState(() {
+      _libraryType = type;
+      _libraryResultRevision++;
+    });
+  }
+
+  void _searchInputChanged(String _) {
+    if (_searchingLibrary &&
+        _librarySearchScroll.hasClients &&
+        _librarySearchScroll.offset != 0) {
+      _librarySearchScroll.jumpTo(0);
+    }
+  }
+
   void focusSearch({VoidCallback? onBack}) {
     if (onBack != null) setState(() => _shortcutBack = onBack);
     if (_hasBrowsePage || _browseRequest) {
-      _browseHistory.clear();
-      _backToSearch();
+      _backToSearch(clearHistory: true);
     }
     if (_queryFocus.hasFocus) {
       // Android's Back button can hide the IME while the field keeps focus.
@@ -296,20 +517,30 @@ class MusicScreenState extends State<MusicScreen> {
   }
 
   void leaveSearch() {
-    if (_shortcutBack != null) setState(() => _shortcutBack = null);
+    _searchIntentRevision++;
+    if (_shortcutBack != null || _onlineListing?.pending != null) {
+      setState(() {
+        _shortcutBack = null;
+        _onlineListing?.pending = null;
+      });
+    }
   }
 
   // A direct catalog link has no search results to return to. Preserve in-page
   // history first; submitting a search establishes a new local destination.
+  bool get _hasDirectBrowseLink =>
+      widget.artistId != null || widget.playlistId != null;
+
   bool get _returnToOrigin =>
       _hasBrowsePage &&
       !_searched &&
       _browseHistory.isEmpty &&
-      (widget.artistId != null || widget.playlistId != null);
+      _hasDirectBrowseLink;
 
   @override
   void initState() {
     super.initState();
+    NetworkProxy.instance.addBeforeApply(_retireOnlinePagination);
     _loading = widget.videoId != null &&
         widget.playlistId == null &&
         _sameSession(context.read<AppCubit>().state);
@@ -331,6 +562,7 @@ class MusicScreenState extends State<MusicScreen> {
       // Clearing every route argument has no replacement request to invalidate
       // the old one. Revoke it before opening the new destination either way.
       _generation++;
+      _onlineListing?.pending = null;
       _tvSong = null;
       _resolvedSong = null;
       _loading = false;
@@ -344,8 +576,11 @@ class MusicScreenState extends State<MusicScreen> {
   @override
   void dispose() {
     _generation++;
+    NetworkProxy.instance.removeBeforeApply(_retireOnlinePagination);
     _artistReleaseCooldown?.cancel();
-    _search.dispose();
+    _onlineSearch.dispose();
+    _librarySearch.dispose();
+    _librarySearchScroll.dispose();
     _queryFocus.dispose();
     super.dispose();
   }
@@ -365,21 +600,25 @@ class MusicScreenState extends State<MusicScreen> {
 
   void _clearForSession() {
     _generation++;
+    _searchIntentRevision++;
+    _searchSessionRevision++;
+    if (_canSwitchSearchSource) {
+      _onlineSearch.clear();
+      _librarySearch.clear();
+      _type = MusicCatalogSearchType.songs;
+      _libraryType = MusicLibrarySearchType.all;
+    }
     _artistReleaseCooldown?.cancel();
     _artistReleaseCooldown = null;
     setState(() {
       _loading = false;
       _retryingSong = false;
       _failure = null;
-      _searched = false;
-      _submittedQuery = null;
+      _onlineListing = null;
       _resolvedSong = null;
       _showCommunityHidden = false;
       _starting = false;
       _tvSong = null;
-      _songs = [];
-      _artists = [];
-      _playlists = [];
       _collection = null;
       _artistPage = null;
       _artistReleases = null;
@@ -396,8 +635,10 @@ class MusicScreenState extends State<MusicScreen> {
     } else if (widget.artistId != null) {
       await _openArtist(widget.artistId!);
     } else if (widget.initialQuery?.trim().isNotEmpty == true) {
-      _search.text = widget.initialQuery!.trim();
-      _type = _MusicSearch.songs;
+      _searchIntentRevision++;
+      _searchSource = _MusicSearchSource.online;
+      _onlineSearch.text = widget.initialQuery!.trim();
+      _type = MusicCatalogSearchType.songs;
       await _submit();
     }
   }
@@ -409,6 +650,7 @@ class MusicScreenState extends State<MusicScreen> {
     if (!_sameSession(session)) return;
     final generation = ++_generation;
     setState(() {
+      if (browse) _onlineListing?.pending = null;
       // Back must restore the source even while the destination is loading
       // or showing its retry action.
       if (browse && (_collection != null || _artistPage != null)) {
@@ -444,18 +686,20 @@ class MusicScreenState extends State<MusicScreen> {
   }
 
   Future<void> _submit({bool learn = false, String? retryQuery}) async {
-    final query = retryQuery ?? _search.text.trim();
-    if (query.isEmpty) return;
+    final query = retryQuery ?? _onlineSearch.text.trim();
+    if (_searchingLibrary || query.isEmpty) return;
     final app = context.read<AppCubit>();
     final session = app.state;
     if (!_sameSession(session)) return;
+    final intent = _searchIntentRevision;
     FocusManager.instance.primaryFocus?.unfocus();
     if (learn && ContentLink.completeWebAddress(query) != null) {
       if (!isPastedLinkSourceActive(context)) return;
       final generation = _generation;
       bool current() =>
           _active(generation, session) &&
-          _search.text.trim() == query &&
+          intent == _searchIntentRevision &&
+          _onlineSearch.text.trim() == query &&
           isPastedLinkSourceActive(context);
       final action = await app.submitPastedAppLink(query,
           music: true,
@@ -467,43 +711,124 @@ class MusicScreenState extends State<MusicScreen> {
     // Only an explicit text-field/button submission is a preference signal.
     // Initial routes, filter changes and retries reuse the query without
     // treating it as another search by the person.
-    if (learn) unawaited(_learnSearch(query, session));
-    final type = _type;
+    if (learn) unawaited(_learnSearch(query, session, intent));
+    final listing =
+        _OnlineSearchListing(query, _type, paginated: _canSwitchSearchSource);
     setState(() {
-      _searched = true;
-      _submittedQuery = query;
+      _onlineListing = listing;
+      _onlineResultRevision++;
       _showCommunityHidden = false;
       _collection = null;
       _artistPage = null;
       _artistReleases = null;
       _browseHistory.clear();
-      _songs = [];
-      _artists = [];
-      _playlists = [];
     });
     await _run((generation, session) async {
-      if (type == _MusicSearch.songs) {
-        final songs = await musicCatalogService.searchSongs(query);
-        if (_active(generation, session)) setState(() => _songs = songs);
-      } else if (type == _MusicSearch.artists) {
-        final artists = await musicCatalogService.searchArtists(query);
-        if (_active(generation, session)) setState(() => _artists = artists);
-      } else {
-        final playlists = await musicCatalogService.searchPlaylists(query);
-        if (_active(generation, session)) {
-          setState(() => _playlists = playlists);
+      bool ownsResults() =>
+          _active(generation, session) &&
+          identical(_onlineListing, listing) &&
+          _type == listing.type;
+      try {
+        final page = listing.paginated
+            ? await musicCatalogService.searchPage(query, listing.type, 1,
+                isCurrent: () => ownsResults() && listing.connectionCurrent)
+            : MusicCatalogSearchPage(
+                hits: await _legacySearch(query, listing.type), rawKeys: []);
+        if (!ownsResults()) return;
+        if (!listing.connectionCurrent) {
+          throw const MusicCatalogException(
+              'The music connection changed. Retry the request.');
         }
+        setState(() => listing.accept(page));
+      } catch (_) {
+        if (ownsResults()) rethrow;
       }
     }, () => _submit(retryQuery: query));
   }
 
-  Future<void> _learnSearch(String query, AppState session) async {
+  Future<List<MusicCatalogSearchHit>> _legacySearch(
+          String query, MusicCatalogSearchType type) async =>
+      switch (type) {
+        MusicCatalogSearchType.songs =>
+          (await musicCatalogService.searchSongs(query))
+              .map(MusicCatalogSongHit.new)
+              .toList(),
+        MusicCatalogSearchType.channels =>
+          (await musicCatalogService.searchArtists(query))
+              .map(MusicCatalogChannelHit.new)
+              .toList(),
+        MusicCatalogSearchType.playlists =>
+          (await musicCatalogService.searchPlaylists(query))
+              .map(MusicCatalogPlaylistHit.new)
+              .toList(),
+        MusicCatalogSearchType.all => throw const MusicCatalogUnsupported(),
+      };
+
+  Future<void> _retireOnlinePagination() async {
+    final listing = _onlineListing;
+    if (!mounted || listing == null || !listing.hasMore) return;
+    setState(() {
+      listing.hasMore = false;
+      listing.pending = null;
+    });
+  }
+
+  Future<void> _loadMore(_OnlineSearchListing listing) async {
+    if (!mounted) return;
+    final session = context.read<AppCubit>().state;
+    final route = ModalRoute.of(context);
+    final generation = _generation;
+    final intent = _searchIntentRevision;
+    bool ownsResults() =>
+        _active(generation, session) &&
+        intent == _searchIntentRevision &&
+        identical(_onlineListing, listing) &&
+        _type == listing.type &&
+        _canSwitchSearchSource &&
+        !_searchingLibrary &&
+        !_loading &&
+        !_hasBrowsePage &&
+        TickerMode.of(context) &&
+        route?.isCurrent != false;
+    if (!ownsResults() || !listing.hasMore || listing.pending != null) return;
+    if (!listing.connectionCurrent) {
+      await _retireOnlinePagination();
+      return;
+    }
+    final request = Object();
+    bool current() =>
+        ownsResults() &&
+        identical(listing.pending, request) &&
+        listing.connectionCurrent;
+    setState(() {
+      listing.pending = request;
+    });
+    try {
+      final page = await musicCatalogService.searchPage(
+          listing.query, listing.type, listing.nextPage,
+          isCurrent: current);
+      if (current()) setState(() => listing.accept(page));
+    } catch (_) {
+      if (current()) setState(() => listing.failed = true);
+    } finally {
+      if (mounted &&
+          identical(_onlineListing, listing) &&
+          identical(listing.pending, request)) {
+        setState(() {
+          listing.pending = null;
+          if (!listing.connectionCurrent) listing.hasMore = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _learnSearch(String query, AppState session, int intent) async {
     final recommendations =
         RecommendationService.forProfile(db, session.profileId);
     try {
       await recommendations.recordSearch(query, RecommendationDomain.music);
     } catch (_) {
-      if (mounted && _sameSession(session)) {
+      if (mounted && intent == _searchIntentRevision && _sameSession(session)) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
             content: Text(AppLocalizations.of(context)!.recommendationError)));
       }
@@ -648,11 +973,15 @@ class MusicScreenState extends State<MusicScreen> {
           ? widget.queue.map(MusicScreen._songEntry).toList()
           : [resolved];
       if (fromShelf) {
-        videos[index] =
-            resolved.copyWith(queueEntryId: videos[index].queueEntryId);
+        final occurrence = videos[index];
+        videos[index] = resolved.copyWith(
+            queueEntryId: occurrence.queueEntryId,
+            musicMetadata: resolved.musicMetadata
+                ?.withAlbumFrom(occurrence.musicMetadata));
       }
       await _playVideos(videos,
           startIndex: fromShelf ? index : null,
+          queueTitle: fromShelf ? widget.queueTitle : null,
           startAt: startAt,
           songLauncher: route);
     }, () => _openSong(id, startAt: startAt));
@@ -696,6 +1025,7 @@ class MusicScreenState extends State<MusicScreen> {
         artistCredits: credits,
         uploaderChannelUrl: saved.authorUrl,
         albumTitle: music.album,
+        albumPlaylistId: music.albumPlaylistId,
         durationSeconds: saved.lengthSeconds,
         isArtTrack: music.isArtTrack,
         thumbnails: artwork,
@@ -705,13 +1035,18 @@ class MusicScreenState extends State<MusicScreen> {
 
   Future<void> _play(List<MusicTrack> tracks,
           {PlaylistReference? reference,
+          String? queueTitle,
           int? startIndex,
           Duration startAt = Duration.zero}) =>
       _playVideos(tracks.map((track) => track.toVideo()).toList(),
-          reference: reference, startIndex: startIndex, startAt: startAt);
+          reference: reference,
+          queueTitle: queueTitle,
+          startIndex: startIndex,
+          startAt: startAt);
 
   Future<void> _playVideos(List<Video> videos,
       {PlaylistReference? reference,
+      String? queueTitle,
       int? startIndex,
       Duration startAt = Duration.zero,
       ModalRoute<dynamic>? songLauncher}) async {
@@ -719,16 +1054,25 @@ class MusicScreenState extends State<MusicScreen> {
     if (videos.isEmpty || !_sameSession(session)) return;
     if (songLauncher != null && isTv) {
       // This route owns the TV player and returns directly to its caller.
-      setState(() => _tvSong =
-          (videos: videos, startIndex: startIndex ?? 0, startAt: startAt));
+      setState(() => _tvSong = (
+            videos: videos,
+            startIndex: startIndex ?? 0,
+            startAt: startAt,
+            queueTitle: queueTitle
+          ));
       return;
     }
     final request = ++_playRequest;
     final generation = _generation;
-    bool current() => request == _playRequest && _active(generation, session);
+    final intent = _searchIntentRevision;
+    bool current() =>
+        request == _playRequest &&
+        intent == _searchIntentRevision &&
+        _active(generation, session);
     try {
       await MusicScreen._playTracks(context, videos,
           reference: reference,
+          queueTitle: queueTitle,
           startIndex: startIndex,
           startAt: startAt,
           songLauncher: songLauncher,
@@ -743,9 +1087,10 @@ class MusicScreenState extends State<MusicScreen> {
     }
   }
 
-  void _backToSearch() {
+  void _backToSearch({bool clearHistory = false}) {
     _generation++;
     setState(() {
+      if (clearHistory) _browseHistory.clear();
       if (_browseHistory.isNotEmpty) {
         final previous = _browseHistory.removeLast();
         _collection = previous.collection;
@@ -762,6 +1107,41 @@ class MusicScreenState extends State<MusicScreen> {
       _failure = null;
       _retry = null;
     });
+  }
+
+  bool _canReturnToBrowseCaller(ModalRoute<Object?>? route) =>
+      !_searched &&
+      _hasDirectBrowseLink &&
+      !widget.embedded &&
+      _shortcutBack == null &&
+      route != null &&
+      !route.isFirst;
+
+  Future<void> _returnToBrowseRoot(
+      ModalRoute<Object?>? route, AppState session, int generation) async {
+    bool current() =>
+        _active(generation, session) &&
+        TickerMode.of(context) &&
+        identical(ModalRoute.of(context), route) &&
+        route?.isCurrent != false;
+
+    if (_returningToOrigin || !_hasBrowsePage || !current()) return;
+    if (!_canReturnToBrowseCaller(route)) {
+      _backToSearch(clearHistory: true);
+      return;
+    }
+
+    // Retain the displayed detail while this route's own PopScope updates.
+    // Other scopes can still veto the pop, and a newly opened route stays put.
+    setState(() => _returningToOrigin = true);
+    try {
+      await WidgetsBinding.instance.endOfFrame;
+      if (!current() || !_canReturnToBrowseCaller(route)) return;
+      await route!.navigator?.maybePop();
+      if (!route.isActive) _generation++;
+    } finally {
+      if (mounted) setState(() => _returningToOrigin = false);
+    }
   }
 
   Future<void> _resumeListening() async {
@@ -816,20 +1196,30 @@ class MusicScreenState extends State<MusicScreen> {
             onPressed: _starting ? null : _resumeListening,
             icon: const Icon(Icons.play_arrow),
             label: Text(locals.musicResume));
-        if (saved.offlineIds.contains(saved.currentId)) {
-          if (isLocalMusicPlaybackId(saved.currentId)) {
-            final library = LocalMusicLibrary.instance;
-            unawaited(library.initialize());
-            return ListenableBuilder(
-                listenable: library,
-                builder: (context, _) => library
-                            .acceptsSessionSelection(saved.localSelectionId) &&
-                        (!library.loaded ||
-                            localMusicTrackForPlayback(saved.currentId) != null)
-                    ? resume
-                    : const SizedBox.shrink());
+        if (isLocalMusicPlaybackId(saved.currentId) &&
+            saved.offlineIds.contains(saved.currentId)) {
+          final library = LocalMusicLibrary.instance;
+          unawaited(library.initialize());
+          return ListenableBuilder(
+              listenable: library,
+              builder: (context, _) => library
+                          .acceptsSessionSelection(saved.localSelectionId) &&
+                      (!library.loaded ||
+                          localMusicTrackForPlayback(saved.currentId) != null)
+                  ? resume
+                  : const SizedBox.shrink());
+        }
+        final downloadId = saved.currentSavedDownloadId;
+        if (downloadId != null) {
+          final fingerprint = saved.offlineFingerprints[saved.currentId];
+          if (fingerprint != null) {
+            return readyMusicDownload(db, downloadId,
+                        fingerprint: fingerprint) !=
+                    null
+                ? resume
+                : const SizedBox.shrink();
           }
-          final offline = db.getDownloadByVideoId(saved.currentId);
+          final offline = db.getDownloadByVideoId(downloadId);
           if (offline?.downloadComplete == true &&
               offline?.musicMetadata != null) {
             return resume;
@@ -837,7 +1227,11 @@ class MusicScreenState extends State<MusicScreen> {
         }
         return saved.videos.any((video) =>
                 playbackQueueId(video) == saved.currentId &&
-                video.musicMetadata != null)
+                video.musicMetadata != null &&
+                (video.explicitMusicDownload == null ||
+                    readyMusicDownload(db, video.videoId,
+                            fingerprint: video.explicitMusicDownload) !=
+                        null))
             ? resume
             : const SizedBox.shrink();
       });
@@ -847,6 +1241,7 @@ class MusicScreenState extends State<MusicScreen> {
       child: images.isEmpty
           ? const Icon(Icons.music_note)
           : Thumbnail(
+              musicArtwork: true,
               images: images,
               instanceOnly: true,
               decoration: BoxDecoration(borderRadius: BorderRadius.circular(8)),
@@ -877,11 +1272,12 @@ class MusicScreenState extends State<MusicScreen> {
   Widget _song(List<MusicTrack> queue, int index,
       {bool numbered = true,
       PlaylistReference? reference,
+      String? queueTitle,
       List<CommunityMatch> matches = const []}) {
     final track = queue[index];
     final row = numbered ? '$index' : 'search-$index';
-    Future<void> play() =>
-        _play(queue, reference: reference, startIndex: index);
+    Future<void> play() => _play(queue,
+        reference: reference, queueTitle: queueTitle, startIndex: index);
     return ListTile(
       key: ValueKey('music-song-$row-${track.videoId}'),
       leading: !numbered
@@ -918,14 +1314,70 @@ class MusicScreenState extends State<MusicScreen> {
     );
   }
 
+  Widget _libraryResults() {
+    final session = context.read<AppCubit>().state;
+    final intent = _searchIntentRevision;
+    final type = _libraryType;
+    final revision = _libraryResultRevision;
+    bool current() =>
+        _sameSession(session) &&
+        intent == _searchIntentRevision &&
+        _searchingLibrary;
+    return ValueListenableBuilder<TextEditingValue>(
+      key: ValueKey(_searchSessionRevision),
+      valueListenable: _librarySearch,
+      builder: (context, draft, _) => MusicLibrarySearchResults(
+        query: draft.text,
+        type: type,
+        active: _searchingLibrary && TickerMode.of(context),
+        controller: _librarySearchScroll,
+        searchFocusNode: _queryFocus,
+        scrollKey: PageStorageKey((
+          _searchScrollScope,
+          _searchSessionRevision,
+          _MusicSearchSource.library,
+          revision,
+        )),
+        isSessionCurrent: current,
+        isCurrent: () =>
+            current() &&
+            _libraryResultRevision == revision &&
+            _librarySearch.text == draft.text,
+      ),
+    );
+  }
+
   Widget _results() {
+    final online = _searchingLibrary
+        ? null
+        : KeyedSubtree(
+            key: const ValueKey('music-search-online-viewport'),
+            child: _onlineResults(),
+          );
+    if (!_canSwitchSearchSource || !_visitedLibrarySearch) return online!;
+    // Keep verified file results ready when returning to Library. The inactive
+    // adapter has no attached list that navigation reselect could scroll.
+    return Stack(fit: StackFit.expand, children: [
+      if (online != null) online,
+      Offstage(
+        key: const ValueKey('music-search-library-source'),
+        offstage: !_searchingLibrary,
+        child: KeyedSubtree(
+          key: const ValueKey('music-search-library-viewport'),
+          child: _libraryResults(),
+        ),
+      ),
+    ]);
+  }
+
+  Widget _onlineResults() {
     final locals = AppLocalizations.of(context)!;
     if (_loading) {
       return const Center(child: CircularProgressIndicator());
     }
     if (_failure != null) {
       return Center(
-        child: Padding(
+        child: SingleChildScrollView(
           padding: const EdgeInsets.all(24),
           child: Column(mainAxisSize: MainAxisSize.min, children: [
             Text(locals.musicCatalogError, textAlign: TextAlign.center),
@@ -942,9 +1394,10 @@ class MusicScreenState extends State<MusicScreen> {
     if (collection != null) return _collectionResults(collection);
     final artistPage = _artistPage;
     if (artistPage != null) return _artistResults(artistPage);
-    if (!_searched) {
+    final listing = _onlineListing;
+    if (listing == null) {
       return Center(
-        child: Padding(
+        child: SingleChildScrollView(
           padding: const EdgeInsets.all(24),
           child: Column(mainAxisSize: MainAxisSize.min, children: [
             Text(locals.musicInvidiousSearchStart, textAlign: TextAlign.center),
@@ -956,42 +1409,88 @@ class MusicScreenState extends State<MusicScreen> {
         ),
       );
     }
-    if (_type == _MusicSearch.songs) {
-      if (_songs.isEmpty) return Center(child: Text(locals.musicNoResults));
-      return ListenableBuilder(
-        listenable: communityFilters.changes,
-        builder: (_, __) {
-          final results =
-              musicTrackResults(_songs, showHidden: _showCommunityHidden);
-          final queue = [for (final (track, _) in results.visible) track];
-          final hasNotice = results.hidden > 0;
-          return ListView.builder(
-            itemCount: results.visible.length + (hasNotice ? 1 : 0),
-            itemBuilder: (_, index) {
-              if (hasNotice && index == 0) {
-                return CommunityHiddenNotice(
-                  count: results.hidden,
-                  showing: _showCommunityHidden,
-                  onToggle: () => setState(
-                      () => _showCommunityHidden = !_showCommunityHidden),
-                );
-              }
-              final trackIndex = index - (hasNotice ? 1 : 0);
-              return _song(queue, trackIndex,
-                  numbered: false, matches: results.visible[trackIndex].$2);
-            },
-          );
-        },
-      );
+    final scrollKey = PageStorageKey((
+      _searchScrollScope,
+      _searchSessionRevision,
+      _onlineResultRevision,
+      _type
+    ));
+    if (listing.type != _type) {
+      return Center(child: Text(locals.musicNoResults));
     }
-    if (_type == _MusicSearch.artists) {
-      if (_artists.isEmpty) return Center(child: Text(locals.musicNoResults));
-      return ListView.builder(
-          itemCount: _artists.length,
-          itemBuilder: (_, index) {
-            final artist = _artists[index];
+    return ListenableBuilder(
+      listenable: communityFilters.changes,
+      builder: (_, __) => _onlineListingView(listing, scrollKey, locals),
+    );
+  }
+
+  Widget _onlineListingView(
+      _OnlineSearchListing listing, Key scrollKey, AppLocalizations locals) {
+    final hits = listing.hits;
+    final mixed = listing.type == MusicCatalogSearchType.all;
+    final songsOnly = listing.type == MusicCatalogSearchType.songs;
+    final songs = musicTrackResults(
+      [for (final hit in hits.whereType<MusicCatalogSongHit>()) hit.track],
+      showHidden: _showCommunityHidden,
+    );
+    final queue = [for (final (track, _) in songs.visible) track];
+    final songIndexes = {
+      if (mixed)
+        for (var index = 0; index < queue.length; index++)
+          queue[index].videoId: index,
+    };
+    final visible = songsOnly
+        ? [for (final track in queue) MusicCatalogSongHit(track)]
+        : [
+            for (final hit in hits)
+              if (hit is! MusicCatalogSongHit ||
+                  songIndexes.containsKey(hit.id))
+                hit,
+          ];
+    final canContinue = _canSwitchSearchSource &&
+        listing.paginated &&
+        listing.hasMore &&
+        listing.connectionCurrent;
+    if (visible.isEmpty && songs.hidden == 0 && !canContinue) {
+      return Center(child: Text(locals.musicNoResults));
+    }
+    final headers = <Widget>[
+      if (songs.hidden > 0)
+        CommunityHiddenNotice(
+          count: songs.hidden,
+          showing: _showCommunityHidden,
+          onToggle: () =>
+              setState(() => _showCommunityHidden = !_showCommunityHidden),
+        ),
+      if (visible.isNotEmpty && mixed)
+        Semantics(
+            header: true, child: _sectionTitle(locals.musicSearchTopResult)),
+      if (visible.isEmpty && songs.hidden == 0)
+        Padding(
+          padding: const EdgeInsets.all(16),
+          child: Text(locals.musicNoResults, textAlign: TextAlign.center),
+        ),
+    ];
+    return ListView.builder(
+      key: scrollKey,
+      itemCount: headers.length + visible.length + (canContinue ? 1 : 0),
+      itemBuilder: (_, index) {
+        if (index < headers.length) return headers[index];
+        final row = index - headers.length;
+        if (row == visible.length) return _onlinePageFooter(listing, locals);
+        final hit = visible[row];
+        switch (hit) {
+          case MusicCatalogSongHit():
+            final songIndex = songsOnly ? row : songIndexes[hit.id]!;
+            return _song(queue, songIndex,
+                numbered: false,
+                queueTitle: locals.search,
+                matches: songs.visible[songIndex].$2);
+          case MusicCatalogChannelHit(:final artist):
             return ListTile(
+                key: listing.paginated ? ValueKey(hit.key) : null,
                 leading: ChannelAvatar(
+                    musicArtwork: true,
                     name: artist.name,
                     images: artist.thumbnails,
                     size: 56,
@@ -999,131 +1498,192 @@ class MusicScreenState extends State<MusicScreen> {
                 title: Text(artist.name),
                 trailing: const Icon(Icons.chevron_right),
                 onTap: () => _openArtist(artist.id));
-          });
-    }
-    if (_playlists.isEmpty) return Center(child: Text(locals.musicNoResults));
-    return ListView.builder(
-        itemCount: _playlists.length,
-        itemBuilder: (_, index) {
-          final playlist = _playlists[index];
-          return ListTile(
-              leading: _artwork(playlist.thumbnails),
-              title: Text(playlist.title),
-              subtitle: playlist.author == null ? null : Text(playlist.author!),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () => _openCollection(playlist.id));
-        });
+          case MusicCatalogPlaylistHit(:final playlist):
+            return ListTile(
+                key: listing.paginated ? ValueKey(hit.key) : null,
+                leading: _artwork(playlist.thumbnails),
+                title: Text(playlist.title),
+                subtitle:
+                    playlist.author == null ? null : Text(playlist.author!),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => _openCollection(playlist.id));
+        }
+      },
+    );
   }
+
+  Widget _onlinePageFooter(
+          _OnlineSearchListing listing, AppLocalizations locals) =>
+      Padding(
+        key: const ValueKey('music-search-page-footer'),
+        padding: const EdgeInsets.all(12),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: 48),
+          child: Center(
+            child: listing.pending != null
+                ? Semantics(
+                    liveRegion: true,
+                    child: CircularProgressIndicator(
+                        semanticsLabel: locals.musicSearchLoadingMore),
+                  )
+                : TextButton(
+                    onPressed: () => unawaited(_loadMore(listing)),
+                    child:
+                        Text(listing.failed ? locals.retry : locals.loadMore),
+                  ),
+          ),
+        ),
+      );
 
   Widget _collectionResults(MusicCollection collection) {
     final locals = AppLocalizations.of(context)!;
+    final session = context.read<AppCubit>().state;
+    final videos = collection.tracks.map((track) => track.toVideo()).toList();
     final reference = PlaylistReference(
         kind: PlaylistSourceKind.public,
         playlistId: collection.id,
+        displayTitle: collection.title,
         profileId: db.profileId);
-    return ListView(children: [
-      Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          _artwork(collection.thumbnails),
-          const SizedBox(height: 12),
-          Text(collection.title, style: Theme.of(context).textTheme.titleLarge),
-          _artistByline(
-              collection.artists,
-              MusicArtistCredit.fromCatalog(
-                  collection.artists, collection.artistLinks)),
-          PlaylistInformation(
-              playlist: Playlist(
-                  title: collection.title,
-                  playlistId: collection.id,
-                  author: collection.artists.join(', '),
-                  videoCount: collection.videoCount ?? collection.tracks.length,
-                  updated: collection.updated,
-                  videos: collection.tracks
-                      .map((track) => track.toVideo())
-                      .toList()),
-              reference: reference,
-              enabled: !_starting),
-          const SizedBox(height: 12),
-          FilledButton.icon(
-              key: const ValueKey('music-play-all'),
-              onPressed: collection.tracks.isEmpty
-                  ? null
-                  : () => _play(collection.tracks, reference: reference),
-              icon: const Icon(Icons.play_arrow),
-              label: Text(locals.musicPlayAll)),
-          MusicPlaylistResume(
-              reference: reference,
-              videos:
-                  collection.tracks.map((track) => track.toVideo()).toList(),
-              enabled: !_starting,
-              onPlay: (index, position) => _play(collection.tracks,
-                  reference: reference, startIndex: index, startAt: position)),
-          const SizedBox(height: 8),
-          MusicBookmarkButton(
-              entry: MusicLibraryEntry.collection(collection, album: false)),
-          MusicLibraryActions(
-              videos:
-                  collection.tracks.map((track) => track.toVideo()).toList(),
-              compact: false),
-        ]),
+    final details = Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        _artwork(collection.thumbnails),
+        const SizedBox(height: 12),
+        Text(collection.title, style: Theme.of(context).textTheme.titleLarge),
+        _artistByline(
+            collection.artists,
+            MusicArtistCredit.fromCatalog(
+                collection.artists, collection.artistLinks)),
+        PlaylistInformation(
+            playlist: Playlist(
+                title: collection.title,
+                playlistId: collection.id,
+                author: collection.artists.join(', '),
+                videoCount: collection.videoCount ?? collection.tracks.length,
+                updated: collection.updated,
+                videos: videos),
+            reference: reference,
+            enabled: !_starting),
+        const SizedBox(height: 12),
+        FilledButton.icon(
+            key: const ValueKey('music-play-all'),
+            onPressed: collection.tracks.isEmpty
+                ? null
+                : () => _play(collection.tracks, reference: reference),
+            icon: const Icon(Icons.play_arrow),
+            label: Text(locals.musicPlayAll)),
+        MusicPlaylistResume(
+            reference: reference,
+            videos: videos,
+            enabled: !_starting,
+            onPlay: (index, position) => _play(collection.tracks,
+                reference: reference, startIndex: index, startAt: position)),
+        const SizedBox(height: 8),
+        MusicBookmarkButton(
+            entry: MusicLibraryEntry.collection(collection, album: false)),
+        MusicLibraryActions(videos: videos, compact: false),
+      ]),
+    );
+    return MusicCollectionPanes(
+      detailsKey: PageStorageKey((
+        'music-catalog-collection-details',
+        session.profileId,
+        session.sessionRevision,
+        collection.id
+      )),
+      details: details,
+      buildTracks: (_, split) => ListView(
+        key: PageStorageKey((
+          'music-catalog-collection-tracks',
+          session.profileId,
+          session.sessionRevision,
+          collection.id
+        )),
+        children: [
+          if (!split) details,
+          if (collection.tracks.isEmpty)
+            Padding(
+                padding: const EdgeInsets.all(24),
+                child: Text(locals.musicEmptyCollection)),
+          for (var i = 0; i < collection.tracks.length; i++)
+            _song(collection.tracks, i, reference: reference),
+        ],
       ),
-      if (collection.tracks.isEmpty)
-        Padding(
-            padding: const EdgeInsets.all(24),
-            child: Text(locals.musicEmptyCollection)),
-      for (var i = 0; i < collection.tracks.length; i++)
-        _song(collection.tracks, i, reference: reference),
-    ]);
+    );
   }
 
   Widget _artistResults(MusicArtistPage artistPage) {
     final locals = AppLocalizations.of(context)!;
-    return ListView(children: [
-      Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          ChannelAvatar(
-              name: artistPage.artist.name,
-              instanceOnly: true,
-              images: artistPage.artist.thumbnails,
-              size: 56),
-          const SizedBox(height: 12),
-          Text(artistPage.artist.name,
-              style: Theme.of(context).textTheme.titleLarge),
-          MusicBookmarkButton(
-              entry: MusicLibraryEntry.artist(artistPage.artist)),
-          if (artistPage.description case final String description)
-            Padding(
-              padding: const EdgeInsets.only(top: 8),
-              child: Text(description,
-                  maxLines: 6, overflow: TextOverflow.ellipsis),
-            ),
-        ]),
-      ),
-      if (_artistReleases case final listing?)
-        ..._artistReleaseTiles(artistPage.artist.id, listing),
-      if (artistPage.songs.isNotEmpty) ...[
-        _sectionTitle(locals.musicChannelUploads),
-        Align(
-          alignment: Alignment.centerLeft,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: FilledButton.icon(
-                key: const ValueKey('music-play-artist-songs'),
-                onPressed: () => _play(artistPage.songs),
-                icon: const Icon(Icons.play_arrow),
-                label: Text(locals.musicPlayAll)),
+    final session = context.read<AppCubit>().state;
+    final details = Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        ChannelAvatar(
+            musicArtwork: true,
+            name: artistPage.artist.name,
+            instanceOnly: true,
+            images: artistPage.artist.thumbnails,
+            size: 56),
+        const SizedBox(height: 12),
+        Text(artistPage.artist.name,
+            style: Theme.of(context).textTheme.titleLarge),
+        MusicBookmarkButton(entry: MusicLibraryEntry.artist(artistPage.artist)),
+        if (artistPage.description case final String description)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child:
+                Text(description, maxLines: 6, overflow: TextOverflow.ellipsis),
           ),
-        ),
-        for (var i = 0; i < artistPage.songs.length; i++)
-          _song(artistPage.songs, i),
-      ],
-      if (artistPage.songs.isEmpty)
-        Padding(
-            padding: const EdgeInsets.all(24),
-            child: Text(locals.musicArtistEmpty)),
-    ]);
+      ]),
+    );
+    final releases = _artistReleases == null
+        ? const <Widget>[]
+        : _artistReleaseTiles(artistPage.artist.id, _artistReleases!);
+    final playAll = Align(
+      alignment: AlignmentDirectional.centerStart,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        child: FilledButton.icon(
+            key: const ValueKey('music-play-artist-songs'),
+            onPressed: () =>
+                _play(artistPage.songs, queueTitle: artistPage.artist.name),
+            icon: const Icon(Icons.play_arrow),
+            label: Text(locals.musicPlayAll)),
+      ),
+    );
+    return MusicCollectionPanes(
+      detailsKey: PageStorageKey((
+        'music-catalog-artist-details',
+        session.profileId,
+        session.sessionRevision,
+        artistPage.artist.id
+      )),
+      details: Column(children: [
+        details,
+        if (artistPage.songs.isNotEmpty) playAll,
+        ...releases,
+      ]),
+      buildTracks: (_, split) => ListView(
+        key: PageStorageKey((
+          'music-catalog-artist-tracks',
+          session.profileId,
+          session.sessionRevision,
+          artistPage.artist.id
+        )),
+        children: [
+          if (!split) ...[details, ...releases],
+          if (artistPage.songs.isNotEmpty) ...[
+            _sectionTitle(locals.musicChannelUploads),
+            if (!split) playAll,
+            for (var i = 0; i < artistPage.songs.length; i++)
+              _song(artistPage.songs, i, queueTitle: artistPage.artist.name),
+          ] else
+            Padding(
+                padding: const EdgeInsets.all(24),
+                child: Text(locals.musicArtistEmpty)),
+        ],
+      ),
+    );
   }
 
   List<Widget> _artistReleaseTiles(
@@ -1140,6 +1700,7 @@ class MusicScreenState extends State<MusicScreen> {
               ? const SizedBox.square(
                   dimension: 48, child: Icon(Icons.album_outlined))
               : Thumbnail(
+                  musicArtwork: true,
                   width: 48,
                   height: 48,
                   instanceOnly: true,
@@ -1183,12 +1744,51 @@ class MusicScreenState extends State<MusicScreen> {
       padding: const EdgeInsets.all(16),
       child: Text(title, style: Theme.of(context).textTheme.titleMedium));
 
-  String _searchLabel(_MusicSearch search, AppLocalizations locals) =>
+  String _searchLabel(MusicCatalogSearchType search, AppLocalizations locals) =>
       switch (search) {
-        _MusicSearch.songs => locals.musicSongs,
-        _MusicSearch.artists => locals.channels,
-        _MusicSearch.playlists => locals.musicPlaylists,
+        MusicCatalogSearchType.all => locals.musicSearchAll,
+        MusicCatalogSearchType.songs => locals.musicSongs,
+        MusicCatalogSearchType.channels => locals.channels,
+        MusicCatalogSearchType.playlists => locals.musicPlaylists,
       };
+
+  String _librarySearchLabel(
+          MusicLibrarySearchType search, AppLocalizations locals) =>
+      switch (search) {
+        MusicLibrarySearchType.all => locals.musicSearchAll,
+        MusicLibrarySearchType.songs => locals.musicSongs,
+        MusicLibrarySearchType.playlists => locals.musicPlaylists,
+      };
+
+  Widget _searchFilters<T>(
+    List<T> types, {
+    required T selected,
+    required String Function(T) label,
+    required ValueChanged<T> select,
+  }) {
+    final colors = Theme.of(context).colorScheme;
+    return SingleChildScrollView(
+      key: const ValueKey('music-search-filters'),
+      scrollDirection: Axis.horizontal,
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      child: Row(children: [
+        for (final type in types)
+          Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: ChoiceChip(
+              label: Text(label(type)),
+              selected: selected == type,
+              backgroundColor: colors.surfaceContainerHigh,
+              selectedColor: colors.secondaryContainer,
+              side: BorderSide.none,
+              shape: const StadiumBorder(),
+              showCheckmark: false,
+              onSelected: (_) => select(type),
+            ),
+          ),
+      ]),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1213,17 +1813,31 @@ class MusicScreenState extends State<MusicScreen> {
         }
       }
     }
-    return BlocListener<AppCubit, AppState>(
-      listenWhen: (before, after) =>
-          before.profileId != after.profileId ||
-          before.sessionRevision != after.sessionRevision ||
-          before.server != after.server ||
-          (!before.globalLoading && after.globalLoading) ||
-          (!before.sessionRecoveryRequired && after.sessionRecoveryRequired),
-      listener: (context, state) => _clearForSession(),
+    return MultiBlocListener(
+      listeners: [
+        BlocListener<AppCubit, AppState>(
+          listenWhen: (before, after) =>
+              before.profileId != after.profileId ||
+              before.sessionRevision != after.sessionRevision ||
+              before.server != after.server ||
+              (!before.globalLoading && after.globalLoading) ||
+              (!before.sessionRecoveryRequired &&
+                  after.sessionRecoveryRequired),
+          listener: (context, state) => _clearForSession(),
+        ),
+        if (context.read<SettingsCubit?>() != null)
+          BlocListener<SettingsCubit, SettingsState>(
+            listener: (context, state) {
+              if (_onlineListing?.country != _searchCountry) {
+                unawaited(_retireOnlinePagination());
+              }
+            },
+          ),
+      ],
       child: switch (_tvSong) {
         final song? => _MusicTvPlayer(
             videos: song.videos,
+            queueTitle: song.queueTitle,
             startIndex: song.startIndex,
             startAt: song.startAt),
         null when widget.videoId != null && widget.playlistId == null =>
@@ -1278,6 +1892,48 @@ class MusicScreenState extends State<MusicScreen> {
     );
   }
 
+  Widget _browseUp(BuildContext context, AppLocalizations locals) {
+    final route = ModalRoute.of(context);
+    final session = context.read<AppCubit>().state;
+    final generation = _generation;
+    final upLabel = _browseHistory.isEmpty && !_returnToOrigin
+        ? locals.musicBackToSearch
+        : MaterialLocalizations.of(context).backButtonTooltip;
+    final rootLabel = _canReturnToBrowseCaller(route)
+        ? locals.musicReturnToPreviousScreen
+        : _searched
+            ? locals.musicReturnToSearchResults
+            : locals.musicBackToSearch;
+    void returnToRoot() =>
+        unawaited(_returnToBrowseRoot(route, session, generation));
+    return MergeSemantics(
+      child: Semantics(
+        customSemanticsActions: {
+          CustomSemanticsAction(label: rootLabel): returnToRoot,
+        },
+        child: GestureDetector(
+          excludeFromSemantics: true,
+          onLongPress: returnToRoot,
+          child: Tooltip(
+            message: upLabel,
+            triggerMode: TooltipTriggerMode.manual,
+            child: IconButton(
+              key: const ValueKey('music-browser-up'),
+              onPressed: () {
+                if (_returnToOrigin) {
+                  Navigator.of(context).maybePop();
+                } else {
+                  _backToSearch();
+                }
+              },
+              icon: const Icon(Icons.arrow_back),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _browser(BuildContext context) {
     final locals = AppLocalizations.of(context)!;
     final colors = Theme.of(context).colorScheme;
@@ -1285,9 +1941,10 @@ class MusicScreenState extends State<MusicScreen> {
         borderRadius: BorderRadius.circular(32), borderSide: BorderSide.none);
     return PopScope(
       canPop: !TickerMode.of(context) ||
-          (_shortcutBack == null && (!_hasBrowsePage || _returnToOrigin)),
+          (_shortcutBack == null &&
+              (!_hasBrowsePage || _returnToOrigin || _returningToOrigin)),
       onPopInvokedWithResult: (didPop, _) {
-        if (didPop || !TickerMode.of(context)) return;
+        if (didPop || _returningToOrigin || !TickerMode.of(context)) return;
         if (_hasBrowsePage && !_returnToOrigin) {
           _backToSearch();
         } else {
@@ -1303,21 +1960,7 @@ class MusicScreenState extends State<MusicScreen> {
               ? null
               : AppBar(
                   title: Text(locals.music),
-                  leading: !_hasBrowsePage
-                      ? null
-                      : IconButton(
-                          tooltip: _browseHistory.isEmpty && !_returnToOrigin
-                              ? locals.musicBackToSearch
-                              : MaterialLocalizations.of(context)
-                                  .backButtonTooltip,
-                          onPressed: () {
-                            if (_returnToOrigin) {
-                              Navigator.of(context).maybePop();
-                            } else {
-                              _backToSearch();
-                            }
-                          },
-                          icon: const Icon(Icons.arrow_back)),
+                  leading: _hasBrowsePage ? _browseUp(context, locals) : null,
                 ),
           body: SafeArea(
             child: Padding(
@@ -1326,76 +1969,115 @@ class MusicScreenState extends State<MusicScreen> {
                       horizontal: TvOverscan.horizontal,
                       vertical: TvOverscan.vertical)
                   : EdgeInsets.zero,
-              child: Column(children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-                  child: TextField(
-                    key: const ValueKey('music-search'),
-                    controller: _search,
-                    focusNode: _queryFocus,
-                    textInputAction: TextInputAction.search,
-                    onSubmitted: (_) => _submit(learn: true),
-                    decoration: InputDecoration(
-                        hintText: locals.musicInvidiousSearchHint,
-                        filled: true,
-                        fillColor: colors.surfaceContainerHigh,
-                        border: searchOutline,
-                        focusedBorder: searchOutline.copyWith(
-                            borderSide: BorderSide(color: colors.primary)),
-                        contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 20, vertical: 14),
-                        suffixIcon: IconButton(
-                            autofocus: isTv,
-                            tooltip: locals.search,
-                            onPressed: () => _submit(learn: true),
-                            icon: const Icon(Icons.search))),
+              child: LayoutBuilder(builder: (context, constraints) {
+                Widget controls =
+                    Column(mainAxisSize: MainAxisSize.min, children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+                    child: TextField(
+                      key: const ValueKey('music-search'),
+                      controller: _search,
+                      focusNode: _queryFocus,
+                      textInputAction: TextInputAction.search,
+                      onChanged: _searchInputChanged,
+                      onSubmitted: (_) => _submitActiveSearch(),
+                      decoration: InputDecoration(
+                          hintText: _searchingLibrary
+                              ? locals.musicSearchLibraryHint
+                              : locals.musicInvidiousSearchHint,
+                          filled: true,
+                          fillColor: colors.surfaceContainerHigh,
+                          border: searchOutline,
+                          focusedBorder: searchOutline.copyWith(
+                              borderSide: BorderSide(color: colors.primary)),
+                          contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 20, vertical: 14),
+                          suffixIcon: IconButton(
+                              autofocus: isTv,
+                              tooltip: locals.search,
+                              onPressed: _submitActiveSearch,
+                              icon: const Icon(Icons.search))),
+                    ),
                   ),
-                ),
-                if (isTv)
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 16),
-                        child: _resumeAction()),
-                  )
-                else
-                  _resumeAction(),
-                if (!_hasBrowsePage)
-                  SingleChildScrollView(
-                    key: const ValueKey('music-search-filters'),
-                    scrollDirection: Axis.horizontal,
-                    padding: const EdgeInsets.symmetric(horizontal: 12),
-                    child: Row(children: [
-                      for (final type in _MusicSearch.values)
-                        Padding(
-                          padding: const EdgeInsets.only(right: 8),
-                          child: ChoiceChip(
-                              label: Text(_searchLabel(type, locals)),
-                              selected: _type == type,
-                              backgroundColor: colors.surfaceContainerHigh,
-                              selectedColor: colors.secondaryContainer,
-                              side: BorderSide.none,
-                              shape: const StadiumBorder(),
-                              showCheckmark: false,
-                              onSelected: (_) {
-                                if (_type == type) return;
-                                setState(() => _type = type);
-                                // A pasted address needs a submission before
-                                // changing result types can search its text.
-                                final query = _search.text.trim();
-                                if (query.isNotEmpty &&
-                                    (query == _submittedQuery ||
-                                        ContentLink.completeWebAddress(query) ==
-                                            null)) {
-                                  _submit();
-                                }
-                              }),
+                  if (_canSwitchSearchSource &&
+                      !_hasBrowsePage &&
+                      !(_browseRequest && _loading))
+                    Align(
+                      alignment: AlignmentDirectional.centerStart,
+                      child: SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        padding: const EdgeInsets.fromLTRB(12, 0, 12, 4),
+                        child: SegmentedButton<_MusicSearchSource>(
+                          showSelectedIcon: false,
+                          segments: [
+                            ButtonSegment(
+                              value: _MusicSearchSource.online,
+                              label: Text(locals.musicSearchOnlineSource,
+                                  key: const ValueKey(
+                                      'music-search-source-online')),
+                            ),
+                            ButtonSegment(
+                              value: _MusicSearchSource.library,
+                              label: Text(locals.musicLibrary,
+                                  key: const ValueKey(
+                                      'music-search-source-library')),
+                            ),
+                          ],
+                          selected: {_searchSource},
+                          onSelectionChanged: (sources) =>
+                              _selectSearchSource(sources.single),
                         ),
-                    ]),
-                  ),
-                const SizedBox(height: 8),
-                Expanded(child: _results()),
-              ]),
+                      ),
+                    ),
+                  if (isTv)
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 16),
+                          child: _resumeAction()),
+                    )
+                  else
+                    _resumeAction(),
+                  if (!_hasBrowsePage)
+                    if (_searchingLibrary)
+                      _searchFilters(
+                        MusicLibrarySearchType.values,
+                        selected: _libraryType,
+                        label: (type) => _librarySearchLabel(type, locals),
+                        select: _selectLibraryType,
+                      )
+                    else
+                      _searchFilters(
+                        [
+                          MusicCatalogSearchType.songs,
+                          if (_canSwitchSearchSource)
+                            MusicCatalogSearchType.all,
+                          MusicCatalogSearchType.channels,
+                          MusicCatalogSearchType.playlists,
+                        ],
+                        selected: _type,
+                        label: (type) => _searchLabel(type, locals),
+                        select: _selectOnlineType,
+                      ),
+                  const SizedBox(height: 8),
+                ]);
+                if (widget.embedded && getDeviceType() == DeviceType.phone) {
+                  // Reserve room for results whenever the query controls fit.
+                  // In a short viewport the remaining controls can scroll.
+                  final minimumQueryHeight =
+                      MediaQuery.textScalerOf(context).scale(16) + 52;
+                  final resultsSpace =
+                      (constraints.maxHeight - minimumQueryHeight)
+                          .clamp(0.0, 64.0);
+                  controls = ConstrainedBox(
+                    constraints: BoxConstraints(
+                        maxHeight: constraints.maxHeight - resultsSpace),
+                    child: SingleChildScrollView(child: controls),
+                  );
+                }
+                return Column(
+                    children: [controls, Expanded(child: _results())]);
+              }),
             ),
           ),
         ),
@@ -1404,19 +2086,46 @@ class MusicScreenState extends State<MusicScreen> {
   }
 }
 
-/// Keep TV audio mounted under the artist page. Choosing a track reuses its
-/// player and returns to it, just as Back does after browsing.
-class _TvPlayingArtistRoute extends MaterialPageRoute<void> {
-  _TvPlayingArtistRoute(String artistId, PlayerCubit player)
-      : super(
-            builder: (_) => BlocProvider.value(
-                value: player, child: MusicScreen(artistId: artistId)));
+/// The source route shares the player that opened it, including on TV.
+class _PlayingMusicSourceRoute extends MaterialPageRoute<void> {
+  _PlayingMusicSourceRoute(
+      Widget page, PlayerCubit player, AppCubit app, AppState session)
+      : super(builder: (_) {
+          return MultiBlocProvider(
+            providers: [
+              BlocProvider.value(value: player),
+              BlocProvider.value(value: app),
+            ],
+            child: BlocBuilder<AppCubit, AppState>(builder: (context, state) {
+              final sameSession = !state.globalLoading &&
+                  !state.sessionRecoveryRequired &&
+                  state.profileId == db.profileId &&
+                  state.profileId == session.profileId &&
+                  state.sessionRevision == session.sessionRevision &&
+                  state.server == session.server;
+              return PlayerModalBackHandler(
+                priority: 5,
+                onBack: () => unawaited(Navigator.of(context).maybePop()),
+                child: sameSession
+                    ? page
+                    : Scaffold(
+                        appBar: AppBar(),
+                        body: Center(
+                            child: Text(AppLocalizations.of(context)!
+                                .musicSourceUnavailable))),
+              );
+            }),
+          );
+        });
 }
 
 /// TV routes own their player, as the TV home does not mount the phone player.
 class _MusicTvPlayer extends StatelessWidget {
   final List<Video> videos;
+  final String? queueTitle;
   final List<LocalMusicTrack>? localTracks;
+  final List<OnDeviceMusicEntry>? onDeviceTracks;
+  final bool Function()? onDeviceMusicIsCurrent;
   final bool resumeSession;
   final PlaylistReference? reference;
   final int startIndex;
@@ -1424,7 +2133,10 @@ class _MusicTvPlayer extends StatelessWidget {
 
   const _MusicTvPlayer(
       {required this.videos,
+      this.queueTitle,
       this.localTracks,
+      this.onDeviceTracks,
+      this.onDeviceMusicIsCurrent,
       this.resumeSession = false,
       this.reference,
       this.startIndex = 0,
@@ -1440,6 +2152,9 @@ class _MusicTvPlayer extends StatelessWidget {
           resume: resumeSession,
           fromMusic: true,
           initialLocalMusic: localTracks,
+          initialOnDeviceMusic: onDeviceTracks,
+          initialOnDeviceMusicIsCurrent: onDeviceMusicIsCurrent,
+          initialQueueTitle: queueTitle,
           playlistReference: reference,
           startIndex: startIndex,
           playlistAudio: true),
@@ -1455,18 +2170,29 @@ class _MusicTvPlayer extends StatelessWidget {
               builder: (context, state) {
                 final player = context.read<PlayerCubit>();
                 final tracks = localTracks;
+                final onDevice = onDeviceTracks;
+                final saved = player.savedSession;
+                final pinned = saved != null &&
+                    saved.offlineFingerprints.containsKey(saved.currentId);
                 if (state.offlineCurrentlyPlaying == null &&
                     (tracks != null ||
+                        onDevice != null ||
                         resumeSession &&
-                            isLocalMusicPlaybackId(
-                                player.savedSession?.currentId))) {
+                            (isLocalMusicPlaybackId(saved?.currentId) ||
+                                pinned))) {
                   if (state.isClosing ||
                       state.mediaEvent.state == MediaState.error) {
                     return _MusicPlaybackFailure(
-                        onRetry: tracks == null
-                            ? player.resumeSession
-                            : () => player.playLocalMusic(tracks,
-                                startIndex: startIndex));
+                        onRetry: onDevice != null
+                            ? () => player.playOnDeviceMusic(onDevice,
+                                startIndex: startIndex,
+                                queueTitle: queueTitle,
+                                isCurrent: onDeviceMusicIsCurrent)
+                            : tracks == null
+                                ? player.resumeSession
+                                : () => player.playLocalMusic(tracks,
+                                    startIndex: startIndex,
+                                    queueTitle: queueTitle));
                   }
                   return const Center(child: CircularProgressIndicator());
                 }
@@ -1477,6 +2203,7 @@ class _MusicTvPlayer extends StatelessWidget {
                           ? player.resumeSession
                           : () => reference == null
                               ? player.playVideo(videos,
+                                  queueTitle: queueTitle,
                                   fromMusic: true,
                                   audio: true,
                                   startAt: startAt,

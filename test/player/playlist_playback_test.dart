@@ -28,6 +28,7 @@ import 'package:clipious/videos/models/sponsor_segment_types.dart';
 import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:easy_debounce/easy_throttle.dart';
+import 'package:flutter_bloc/flutter_bloc.dart' show Change;
 import 'package:flutter_test/flutter_test.dart';
 
 import '../test_app_cubit.dart';
@@ -36,6 +37,7 @@ import '../test_settings_cubit.dart';
 
 class _MetadataService extends Service {
   final requests = <String>[];
+  final musicRequests = <String>[];
   final playlistRequests = <int>[];
   final playlistPages = <int, Playlist>{};
   String? heldVideoId;
@@ -58,6 +60,19 @@ class _MetadataService extends Service {
       void Function(BackendPlayback request)? onBackendRequest,
       VideoLoadObserver? loadObserver}) async {
     requests.add(videoId);
+    return _metadata(videoId);
+  }
+
+  @override
+  Future<Video> getMusicVideo(String videoId,
+      {Server? serverOverride,
+      void Function(BackendPlayback request)? onBackendRequest,
+      VideoLoadObserver? loadObserver}) async {
+    musicRequests.add(videoId);
+    return _metadata(videoId);
+  }
+
+  Future<Video> _metadata(String videoId) async {
     if (videoId == heldVideoId && heldMetadata != null) {
       heldRequested?.complete();
       return heldMetadata!.future;
@@ -73,8 +88,31 @@ class _MetadataService extends Service {
 class _MediaSessionPlayer extends PlayerCubit {
   _MediaSessionPlayer(super.initialState, super.settings);
 
+  Completer<void>? completionStarted;
+  Completer<void>? releaseCompletion;
+  void Function(MediaCommand)? onNewCommand;
+
   @override
   Future<void> onReady() async {}
+
+  @override
+  void onChange(Change<PlayerState> change) {
+    super.onChange(change);
+    final command = change.nextState.mediaCommand;
+    if (command != null &&
+        !identical(command, change.currentState.mediaCommand)) {
+      onNewCommand?.call(command);
+    }
+  }
+
+  @override
+  Future<void> saveProgress(int timeInSeconds) async {
+    if (timeInSeconds == 100 && releaseCompletion != null) {
+      if (!completionStarted!.isCompleted) completionStarted!.complete();
+      await releaseCompletion!.future;
+    }
+    await super.saveProgress(timeInSeconds);
+  }
 }
 
 class _Pages extends PlaylistLoadSession {
@@ -675,6 +713,284 @@ void main() {
         player.appendPlaylistVideos(ordered,
             reference: reference, generation: generation),
         isFalse);
+  });
+
+  test('Music keeps foreground playback across both mixed queue boundaries',
+      () async {
+    await settings.setSongTransitionMode(SongTransitionMode.pause);
+    await settings.setSongTransitionSeconds(5);
+    await player.close();
+    player = _MediaSessionPlayer(PlayerState.init(null), settings);
+    player.audioSession = await AudioSession.instance;
+    final handler = app_main.mediaHandler = MediaHandler(player);
+    const song = Video(
+        videoId: 'song',
+        lengthSeconds: 100,
+        adaptiveFormats: [],
+        formatStreams: [],
+        musicMetadata: MusicMetadata(title: 'Song', artist: 'Artist'));
+    const untagged = Video(
+        videoId: 'manual', queueEntryId: 'ordinary-copy', lengthSeconds: 100);
+    const last = Video(
+        videoId: 'last',
+        queueEntryId: 'music-copy',
+        lengthSeconds: 100,
+        musicMetadata: MusicMetadata(title: 'Last', artist: 'Artist'));
+    await player.playVideo([song], audio: true, fromMusic: true);
+    player.queueVideos([untagged, last]);
+    player.setEvent(
+        const MediaEvent(state: MediaState.playing, type: MediaEventType.play));
+    expect(handler.playbackState.value.playing, isTrue);
+    expect(player.state.playQueue, ['ordinary-copy', 'music-copy']);
+
+    for (final target in [untagged, last]) {
+      final targetId = playbackQueueId(target);
+      expect(player.automaticMusicSuccessor, isNull);
+      if (target == last) {
+        // An earlier ordinary skip must not suppress automatic EOF traversal.
+        EasyThrottle.throttle(
+            skipToVideoThrottleName, const Duration(seconds: 5), () {});
+      }
+      metadata.heldVideoId = target.videoId;
+      metadata.heldMetadata = Completer<Video>();
+      metadata.heldRequested = Completer<void>();
+      final next =
+          player.stream.firstWhere((s) => s.currentQueueId == targetId);
+      player.setEvent(const MediaEvent(state: MediaState.completed));
+      await metadata.heldRequested!.future.timeout(const Duration(seconds: 2));
+      final duringLoad = handler.playbackState.value;
+      final fadesIn = player.isAutomaticMusicHandoffTo(targetId);
+      metadata.heldMetadata!
+          .complete(target.copyWith(adaptiveFormats: [], formatStreams: []));
+      await next.timeout(const Duration(seconds: 2));
+
+      expect(player.state.isAudio, isTrue);
+      expect(fadesIn, isFalse);
+      expect(player.isAutomaticMusicHandoffTo(targetId), isFalse);
+      expect(duringLoad.processingState, AudioProcessingState.buffering,
+          reason: 'While loading ${target.videoId}');
+      expect(duringLoad.playing, isTrue,
+          reason: 'While loading ${target.videoId}');
+      player.setEvent(const MediaEvent(
+          state: MediaState.playing, type: MediaEventType.play));
+      expect(handler.playbackState.value.processingState,
+          AudioProcessingState.ready);
+      expect(handler.playbackState.value.playing, isTrue);
+    }
+    expect(metadata.requests, ['manual']);
+    expect(metadata.musicRequests, ['last']);
+    expect(player.state.playedVideos, ['song', 'ordinary-copy']);
+    expect(player.state.playQueue, isEmpty);
+  });
+
+  group('Music repeat at EOF across a temporary focus loss', () {
+    final loss = AudioInterruptionEvent(true, AudioInterruptionType.pause);
+    final gain = AudioInterruptionEvent(false, AudioInterruptionType.pause);
+    const completed = MediaEvent(state: MediaState.completed);
+    const paused =
+        MediaEvent(state: MediaState.ready, type: MediaEventType.pause);
+    late _MediaSessionPlayer session;
+    late MediaHandler handler;
+    late List<MediaCommand> commands;
+    void Function(MediaCommand)? onNewCommand;
+    late String occurrence;
+
+    setUp(() async {
+      await player.close();
+      player = session = _MediaSessionPlayer(PlayerState.init(null), settings);
+      player.audioSession = await AudioSession.instance;
+      app_main.mediaHandler = handler = MediaHandler(player);
+      await player.playPlaylist([
+        entries.first.copyWith(
+            musicMetadata: const MusicMetadata(title: 'Song', artist: 'Artist'),
+            adaptiveFormats: const [],
+            formatStreams: const []),
+      ],
+          reference: reference,
+          audio: true,
+          fromMusic: true,
+          startAt: const Duration(seconds: 20));
+      player.setEvent(const MediaEvent(
+          state: MediaState.playing, type: MediaEventType.play));
+      occurrence = player.state.currentQueueId!;
+      commands = [];
+      onNewCommand = null;
+      session.onNewCommand = (command) {
+        commands.add(command);
+        onNewCommand?.call(command);
+      };
+    });
+
+    Future<void> interruptAtEnd({required bool beforeEnd}) async {
+      session.completionStarted = Completer<void>();
+      final release = session.releaseCompletion = Completer<void>();
+      addTearDown(() {
+        if (!release.isCompleted) release.complete();
+      });
+      if (beforeEnd) {
+        player.handleAudioInterruption(loss);
+        player.setEvent(paused);
+      }
+      player.setEvent(completed);
+      await session.completionStarted!.future
+          .timeout(const Duration(seconds: 2));
+      if (!beforeEnd) {
+        player.handleAudioInterruption(loss);
+        player.setEvent(paused);
+      }
+      release.complete();
+      await Future<void>.delayed(Duration.zero);
+      expect(player.state.currentQueueId, occurrence);
+      expect(player.state.position, const Duration(seconds: 20));
+      expect(commands, isEmpty);
+      expect(handler.playbackState.value.playing, isFalse);
+    }
+
+    for (final repeat in [PlayerRepeat.repeatOne, PlayerRepeat.repeatAll]) {
+      for (final beforeEnd in [true, false]) {
+        test('$repeat recovers once (focus loss before EOF=$beforeEnd)',
+            () async {
+          await settings.setRepeatMode(repeat);
+          await interruptAtEnd(beforeEnd: beforeEnd);
+          final replayType = repeat == PlayerRepeat.repeatOne
+              ? MediaCommandType.play
+              : MediaCommandType.switchVideo;
+          final generation = player.backendPlaybackGeneration;
+          final replay = Completer<void>();
+          // Queue state emissions can carry the initial switch command while
+          // the new source loads. Wait for the recorder to see a new command.
+          onNewCommand = (command) {
+            if (command.type == replayType && !replay.isCompleted) {
+              replay.complete();
+            }
+          };
+          player.handleAudioInterruption(gain);
+          player.handleAudioInterruption(gain);
+          await replay.future.timeout(const Duration(seconds: 2));
+
+          expect(player.state.currentQueueId, occurrence);
+          expect(player.state.playQueue, isEmpty);
+          expect(player.state.playedVideos, isEmpty);
+          final types = commands.map((command) => command.type);
+          if (repeat == PlayerRepeat.repeatOne) {
+            expect(types, [MediaCommandType.seek, MediaCommandType.play]);
+            expect(player.state.position, Duration.zero);
+            expect(player.backendPlaybackGeneration, generation);
+          } else {
+            expect(types, [MediaCommandType.switchVideo]);
+            expect(player.backendPlaybackGeneration, generation + 1);
+            final switching = commands.single.value as SwitchVideoValue;
+            expect(switching.startAt, Duration.zero);
+            expect(playbackQueueId(switching.video), occurrence);
+          }
+        });
+      }
+
+      for (final change in [
+        'Pause',
+        'Stop',
+        'permanent focus loss',
+        'repeat disabled',
+        'autoplay disabled',
+        'paused replacement',
+      ]) {
+        test('$repeat stays stopped on focus gain after $change', () async {
+          await settings.setRepeatMode(repeat);
+          await interruptAtEnd(beforeEnd: true);
+          switch (change) {
+            case 'Pause':
+              await handler.pause();
+            case 'Stop':
+              await handler.stop();
+            case 'permanent focus loss':
+              player.handleAudioInterruption(
+                  AudioInterruptionEvent(true, AudioInterruptionType.unknown));
+            case 'repeat disabled':
+              await settings.setRepeatMode(PlayerRepeat.noRepeat);
+            case 'autoplay disabled':
+              await settings.setAutoplayQueue(false);
+            case 'paused replacement':
+              await player.playVideo([
+                const Video(
+                    videoId: 'replacement',
+                    lengthSeconds: 100,
+                    adaptiveFormats: [],
+                    formatStreams: [],
+                    musicMetadata:
+                        MusicMetadata(title: 'Replacement', artist: 'Artist')),
+              ], audio: true, playing: false, fromMusic: true);
+          }
+          await Future<void>.delayed(Duration.zero);
+          commands.clear();
+          final current = player.state.currentQueueId;
+          final position = player.state.position;
+
+          player.handleAudioInterruption(gain);
+          await Future<void>.delayed(Duration.zero);
+          expect(commands, isEmpty);
+          expect(player.state.currentQueueId, current);
+          expect(player.state.position, position);
+          expect(player.state.isPlaying, isFalse);
+          expect(handler.playbackState.value.playing, isFalse);
+        });
+      }
+    }
+  });
+
+  group('temporary audio focus at Music EOF', () {
+    setUp(() async {
+      await settings.setSongTransitionMode(SongTransitionMode.pause);
+      await settings.setSongTransitionSeconds(1);
+      final songs = [
+        for (final id in ['a', 'b', 'c'])
+          Video(
+              videoId: id,
+              lengthSeconds: 100,
+              adaptiveFormats: const [],
+              formatStreams: const [],
+              musicMetadata: MusicMetadata(title: id, artist: 'Artist')),
+      ];
+      await player.playVideo(songs, audio: true, fromMusic: true);
+      player.setEvent(const MediaEvent(
+          state: MediaState.playing, type: MediaEventType.play));
+    });
+
+    for (final focusBeforeEnd in [true, false]) {
+      test(
+          'resumes the next occurrence once (focus before EOF=$focusBeforeEnd)',
+          () async {
+        final loss = AudioInterruptionEvent(true, AudioInterruptionType.pause);
+        if (focusBeforeEnd) player.handleAudioInterruption(loss);
+        player.setEvent(const MediaEvent(state: MediaState.completed));
+        if (!focusBeforeEnd) player.handleAudioInterruption(loss);
+        await Future<void>.delayed(const Duration(milliseconds: 1050));
+        expect(player.state.currentQueueId, 'a');
+        expect(player.state.playQueue, ['b', 'c']);
+        expect(player.state.playedVideos, isEmpty);
+
+        final next = player.stream.firstWhere((s) => s.currentQueueId == 'b');
+        player.handleAudioInterruption(
+            AudioInterruptionEvent(false, AudioInterruptionType.pause));
+        await next.timeout(const Duration(seconds: 3));
+        expect(player.state.playedVideos, ['a']);
+        expect(player.state.playQueue, ['c']);
+      });
+    }
+
+    test('an explicit pause cancels the pending advance on focus gain',
+        () async {
+      player.setEvent(const MediaEvent(state: MediaState.completed));
+      player.handleAudioInterruption(
+          AudioInterruptionEvent(true, AudioInterruptionType.pause));
+      player.pause();
+      player.handleAudioInterruption(
+          AudioInterruptionEvent(false, AudioInterruptionType.pause));
+      await Future<void>.delayed(const Duration(milliseconds: 1050));
+      expect(player.requestedPlaying, isFalse);
+      expect(player.state.currentQueueId, 'a');
+      expect(player.state.playedVideos, isEmpty);
+      expect(player.state.playQueue, ['b', 'c']);
+    });
   });
 
   for (final latePage in [false, true]) {

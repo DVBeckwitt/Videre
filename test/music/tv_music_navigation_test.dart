@@ -289,6 +289,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(settings.state.homeContentMode, HomeContentMode.music);
     expect(find.byType(MusicHomePage), findsOneWidget);
+    expect(find.byKey(const ValueKey('music-destination-bar')), findsNothing);
     expect(modeDestination(HomeContentMode.videos), findsOneWidget);
 
     final home = musicMenuIcon(MusicDestination.home);

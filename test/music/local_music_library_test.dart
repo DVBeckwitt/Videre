@@ -2,8 +2,10 @@ import 'dart:async';
 
 import 'package:clipious/music/models/local_music_track.dart';
 import 'package:clipious/music/services/local_music_library.dart';
+import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:sembast/sembast_memory.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -87,6 +89,26 @@ void main() {
   tearDown(() {
     library.dispose();
     messenger.setMockMethodCallHandler(channel, null);
+  });
+
+  test(
+      'album navigation metadata is optional and does not alter track identity',
+      () {
+    final source = Uri.parse(tree);
+    final original = LocalMusicTrack.fromDocument(doc, source)!;
+    final key = 'c' * 64;
+    final tagged = LocalMusicTrack.fromDocument(
+        {...doc, 'albumKey': key, 'albumArtist': 'Compilation'}, source)!;
+    expect(tagged.albumKey, key);
+    expect(tagged.albumArtist, 'Compilation');
+    expect(tagged.playbackId, original.playbackId);
+    expect(original.albumKey, isNull);
+    for (final value in ['content://private/path', 42, 'f' * 65]) {
+      final track =
+          LocalMusicTrack.fromDocument({...doc, 'albumKey': value}, source)!;
+      expect(track.playbackId, original.playbackId);
+      expect(track.albumKey, isNull);
+    }
   });
 
   test('fresh installs and cancellation never scan or grant access', () async {
@@ -364,6 +386,171 @@ void main() {
     expect(library.acceptsSessionSelection('a'), isTrue);
   });
 
+  test('recording exclusion is opt-in and requires a positive MediaStore label',
+      () async {
+    final database = await SembastSqfDb.createInMemory();
+    addTearDown(database.close);
+    library.dispose();
+    library = LocalMusicLibrary(visibilityDatabase: () => database);
+    const system = 'content://media/external/audio/media';
+    saved = {'uri': system, 'name': 'Android music library'};
+    final indexed = {
+      ...doc,
+      'uri': 'content://media/external_primary/audio/media/1',
+      'isRecording': true,
+    };
+    scan = () async => [
+          indexed,
+          {
+            'uri': '$system/2',
+            'title': 'Voice memo',
+            'fileName': 'Voice memo.mp3',
+            'isMusic': false,
+          },
+          {'uri': '$system/3', 'title': 'Untagged audio', 'isRecording': null},
+          {...indexed, 'uri': '$system/4', 'isRecording': false},
+          {...indexed, 'uri': '$system/5', 'isRecording': 'true'},
+        ];
+    await library.refresh();
+    final recording = library.tracks.first;
+    expect(recording.isRecording, isTrue);
+    expect(library.tracks.skip(1).every((track) => !track.isRecording), isTrue);
+    final safClaim = LocalMusicTrack.fromDocument(
+        {...doc, 'isRecording': true}, Uri.parse(tree));
+    expect(safClaim!.isRecording, isFalse);
+    expect(library.excludesRecordings, isFalse);
+    expect(library.visibleTracks, hasLength(5));
+
+    await library.setExcludeRecordings(true);
+    expect(library.excludesRecordings, isTrue);
+    expect(library.excludedTracks.map((track) => track.uri), [recording.uri]);
+    expect(library.visibleTracks.map((track) => track.uri),
+        ['$system/2', '$system/3', '$system/4', '$system/5']);
+    expect(library.visibleTrackById(recording.playbackId), isNull);
+    expect(library.trackById(recording.playbackId), same(recording));
+    expect(library.containsUri(recording.uri), isTrue);
+    expect(library.hiddenTracks, isEmpty);
+
+    await library.setExcludeRecordings(false);
+    expect(library.excludedTracks, isEmpty);
+    expect(library.visibleTracks, hasLength(5));
+    expect(calls.where((method) => method == 'listTracks'), hasLength(1));
+  });
+
+  test(
+      'folder ancestry and exact Keep overrides survive reopen for one profile',
+      () async {
+    final factory = newDatabaseFactoryMemory();
+    const path = 'device-music-exclusions';
+    var database = SembastSqfDb(await factory.openDatabase(path));
+    addTearDown(() => database.close());
+    await database.getProfiles();
+    final owner = database.profileId;
+    final other = await database.createProfile('Another listener');
+    library.dispose();
+    library = LocalMusicLibrary(visibilityDatabase: () => database);
+    saved = folder;
+    final selectedFolder = {'key': 'a' * 64, 'label': 'Music / Voice'};
+    final nestedFolder = {'key': 'b' * 64, 'label': 'Music / Voice / Drafts'};
+    final nearFolder = {'key': 'c' * 64, 'label': 'Music / VoiceArchive'};
+    final sameLabelFolder = {'key': 'd' * 64, 'label': 'Music / Voice'};
+    const childUri = '$tree/document/opaque-a4';
+    const siblingUri = '$tree/document/opaque-f1';
+    const sameLabelUri = '$tree/document/opaque-c9';
+    const unprovenUri = '$tree/document/opaque-e6';
+    final selected = {
+      ...doc,
+      'visibilityKey': 'e' * 64,
+      'folderLocations': [selectedFolder],
+    };
+    final descendantsAndOtherFiles = [
+      {
+        ...doc,
+        'uri': childUri,
+        'visibilityKey': 'f' * 64,
+        'folderLocations': [selectedFolder, nestedFolder],
+      },
+      {
+        ...doc,
+        'uri': siblingUri,
+        'folderLocations': [nearFolder]
+      },
+      {
+        ...doc,
+        'uri': sameLabelUri,
+        'folderLocations': [sameLabelFolder]
+      },
+      {
+        ...doc,
+        'uri': unprovenUri,
+        'folderLocations': [
+          selectedFolder,
+          {'label': 'Unverified folder'},
+        ],
+      },
+    ];
+    scan = () async => [selected, ...descendantsAndOtherFiles];
+    await library.refresh();
+    final original = library.tracks.first;
+    final location = original.folderLocations.single;
+    expect(library.tracks.last.folderLocations, isEmpty);
+    expect(library.visibleTracks, hasLength(5));
+
+    await library.setFolderExcluded(location, true);
+    expect(library.isFolderExcluded(location), isTrue);
+    expect(library.excludedTracks.map((track) => track.uri), [uri, childUri]);
+    const unaffected = [siblingUri, sameLabelUri, unprovenUri];
+    expect(library.visibleTracks.map((track) => track.uri), unaffected);
+    expect(library.canKeepExcludedTrack(original), isTrue);
+    await library.setExclusionOverride(original, true);
+    expect(library.hasExclusionOverride(original), isTrue);
+    expect(
+        library.visibleTracks.map((track) => track.uri), [uri, ...unaffected]);
+    expect(library.excludedTracks.single.uri, childUri);
+    await library.setExcludeRecordings(true);
+
+    library.dispose();
+    await database.close();
+    database = SembastSqfDb(await factory.openDatabase(path));
+    await database.getProfiles();
+    library = LocalMusicLibrary(visibilityDatabase: () => database);
+    await library.refresh();
+    final reopened = library.trackById(original.playbackId)!;
+    expect(library.excludesRecordings, isTrue);
+    expect(library.isFolderExcluded(location), isTrue);
+    expect(library.hasExclusionOverride(reopened), isTrue);
+    expect(
+        library.visibleTracks.map((track) => track.uri), [uri, ...unaffected]);
+
+    await database.useProfile(other.id);
+    library.visibilityProfileChanged();
+    expect(library.excludesRecordings, isFalse);
+    expect(library.isFolderExcluded(location), isFalse);
+    expect(library.hasExclusionOverride(reopened), isFalse);
+    expect(library.visibleTracks, hasLength(5));
+    await database.useProfile(owner);
+    library.visibilityProfileChanged();
+
+    final hidden = (await library.hideTrack(reopened))!;
+    expect(library.visibleTrackById(reopened.playbackId), isNull);
+    expect(library.trackById(reopened.playbackId), same(reopened));
+    expect(library.hiddenTracks.single.id, hidden.id);
+    await library.restoreTrack(hidden);
+    expect(library.visibleTrackById(reopened.playbackId), same(reopened));
+
+    scan = () async => [
+          {...selected, 'visibilityKey': '0' * 64},
+          ...descendantsAndOtherFiles,
+        ];
+    await library.refresh();
+    final replacement = library.tracks.first;
+    expect(replacement.uri, uri);
+    expect(library.hasExclusionOverride(replacement), isFalse);
+    expect(library.visibleTracks.map((track) => track.uri), unaffected);
+    await library.setFolderExcluded(location, false);
+    expect(library.visibleTracks, hasLength(5));
+  });
+
   test('denying the Android library preserves a selected folder', () async {
     saved = folder;
     await library.refresh();
@@ -397,5 +584,127 @@ void main() {
     expect(library.containsUri(uri), isFalse);
     expect(library.trackById(original.playbackId)?.uri, newUri);
     expect(library.tracks.single.title, 'Title');
+  });
+
+  test('device visibility survives database and library reopen per profile',
+      () async {
+    final factory = newDatabaseFactoryMemory();
+    const path = 'hidden-device-music';
+    var database = SembastSqfDb(await factory.openDatabase(path));
+    addTearDown(() => database.close());
+    await database.getProfiles();
+    final originalProfile = database.profileId;
+    final other = await database.createProfile('Another listener');
+    library.dispose();
+    library = LocalMusicLibrary(visibilityDatabase: () => database);
+
+    saved = folder;
+    const copyUri = '$tree/document/primary%3AMusic%2Fcopy.flac';
+    scan = () async => [
+          {...doc, 'visibilityKey': 'a' * 64},
+          {...doc, 'uri': copyUri, 'visibilityKey': 'b' * 64},
+        ];
+    await library.refresh();
+    final original = library.tracks.first;
+    expect(library.tracks.map((track) => track.title), ['Title', 'Title']);
+    final hidden = (await library.hideTrack(original))!;
+    expect(library.visibleTracks.map((track) => track.uri), [copyUri]);
+    expect(library.hiddenTracks.single.title, 'Title');
+    expect(library.trackById(original.playbackId), same(original));
+    expect(library.containsUri(uri), isTrue);
+
+    library.dispose();
+    await database.close();
+    database = SembastSqfDb(await factory.openDatabase(path));
+    await database.getProfiles();
+    library = LocalMusicLibrary(visibilityDatabase: () => database);
+    await library.refresh();
+    expect(library.visibleTracks.map((track) => track.uri), [copyUri]);
+    expect(library.hiddenTracks.single.id, hidden.id);
+    expect(library.hiddenTracks.single.isAvailable, isTrue);
+
+    final storedHidden = library.hiddenTracks.single;
+    await database.useProfile(other.id);
+    library.visibilityProfileChanged();
+    expect(library.visibleTracks.map((track) => track.uri), [uri, copyUri]);
+    expect(library.hiddenTracks, isEmpty);
+    expect(await library.restoreTrack(storedHidden), isFalse);
+    final otherHidden = (await library.hideTrack(library.tracks.last))!;
+    expect(library.visibleTracks.map((track) => track.uri), [uri]);
+
+    await database.useProfile(originalProfile);
+    library.visibilityProfileChanged();
+    expect(library.visibleTracks.map((track) => track.uri), [copyUri]);
+    expect(await library.restoreTrack(otherHidden), isFalse);
+    expect(await library.restoreTrack(library.hiddenTracks.single), isTrue);
+    expect(library.hiddenTracks, isEmpty);
+    expect(library.visibleTracks.map((track) => track.uri), [uri, copyUri]);
+    expect(calls, isNot(contains('forgetFolder')));
+  });
+
+  test(
+      'hiding survives a verified rename and grant loss without hiding a replacement',
+      () async {
+    final database = await SembastSqfDb.createInMemory();
+    addTearDown(database.close);
+    library.dispose();
+    library = LocalMusicLibrary(visibilityDatabase: () => database);
+    saved = folder;
+    final proof = 'a' * 64;
+    final originalDocument = {
+      ...doc,
+      'canRename': true,
+      'fileName': 'track.flac',
+      'visibilityKey': proof,
+    };
+    const unverifiedUri = '$tree/document/unverified';
+    final unverifiedDocument = {...doc, 'uri': unverifiedUri};
+    scan = () async => [originalDocument, unverifiedDocument];
+    await library.refresh();
+    final original = library.tracks.first;
+    expect(library.canHideTrack(library.tracks.last), isFalse);
+    expect(await library.hideTrack(library.tracks.last), isNull);
+    expect(await library.hideTrack(original), isNotNull);
+
+    const newUri = '$tree/document/primary%3AMusic%2Fnew.flac';
+    final renamedDocument = {
+      ...originalDocument,
+      'uri': newUri,
+      'identityUri': uri,
+      'fileName': 'new.flac',
+    };
+    renamed = renamedDocument;
+    expect(await library.renameTrack(original, 'new.flac'), isTrue);
+    expect(library.hiddenTracks.single.fileName, 'new.flac');
+    expect(library.visibleTracks.map((track) => track.uri), [unverifiedUri]);
+    expect(library.trackById(original.playbackId)?.uri, newUri);
+    expect(library.containsUri(newUri), isTrue);
+
+    checkAccess = () async => false;
+    await library.revalidate();
+    expect(library.unavailable, isTrue);
+    expect(library.hiddenTracks.single.isAvailable, isFalse);
+    expect(library.visibleTracks, isEmpty);
+    expect(library.trackById(original.playbackId), isNull);
+
+    choice = folder;
+    checkAccess = () async => true;
+    scan = () async => [renamedDocument, unverifiedDocument];
+    expect(await library.chooseFolder(), isTrue);
+    expect(library.hiddenTracks.single.isAvailable, isTrue);
+    expect(library.visibleTracks.map((track) => track.uri), [unverifiedUri]);
+
+    scan = () async => [
+          {...renamedDocument, 'visibilityKey': 'b' * 64},
+          unverifiedDocument,
+        ];
+    await library.refresh();
+    expect(library.hiddenTracks.single.isAvailable, isFalse);
+    expect(library.visibleTracks.map((track) => track.uri),
+        [newUri, unverifiedUri]);
+    expect(await library.restoreTrack(library.hiddenTracks.single), isTrue);
+    expect(library.hiddenTracks, isEmpty);
+    expect(library.visibleTracks.map((track) => track.uri),
+        [newUri, unverifiedUri]);
   });
 }

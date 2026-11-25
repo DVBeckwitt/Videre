@@ -20,6 +20,7 @@ class MusicTrack {
   final String? uploaderChannelId;
   final String? uploaderChannelUrl;
   final String? albumId;
+  String? get albumPlaylistId => validMusicAlbumPlaylistId(albumId);
   final String? albumTitle;
   final int? durationSeconds;
 
@@ -40,6 +41,7 @@ class MusicTrack {
       artist: names.join(', '),
       artistCredits: artistCredits,
       album: albumTitle,
+      albumPlaylistId: albumPlaylistId,
       thumbnails: songCovers(thumbnails),
       isArtTrack: isArtTrack,
     );
@@ -58,14 +60,16 @@ class MusicTrack {
     List<MusicArtistCredit> artistCredits = const [],
     this.uploaderChannelId,
     this.uploaderChannelUrl,
-    this.albumId,
+    String? albumId,
+    String? albumPlaylistId,
     this.albumTitle,
     this.durationSeconds,
     this.thumbnails = const [],
     this.videoThumbnails = const [],
     this.isArtTrack = false,
     this.playbackVideo,
-  })  : _artists = artists,
+  })  : albumId = albumPlaylistId ?? albumId,
+        _artists = artists,
         _artistLinks = artistLinks,
         _savedCredits = artistCredits;
 

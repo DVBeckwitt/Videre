@@ -144,6 +144,10 @@ sealed class Video with _$Video implements ShareLinks, IdedVideo {
       @JsonKey(includeFromJson: false, includeToJson: false)
       @Default(false)
       bool downloadPlaybackOnly,
+      // An explicit saved song remains local in a catalog-owned queue.
+      // Only PlaybackSession persists the fingerprint.
+      @JsonKey(includeFromJson: false, includeToJson: false)
+      String? explicitMusicDownload,
       String? viewCountText}) = _Video;
 
   const Video._();
@@ -241,6 +245,7 @@ sealed class Video with _$Video implements ShareLinks, IdedVideo {
             artist: songArtist,
             artistCredits: artistCredits,
             album: album,
+            albumPlaylistId: music.albumPlaylistId,
             thumbnails: music.thumbnails,
             isArtTrack: artTrack,
           );

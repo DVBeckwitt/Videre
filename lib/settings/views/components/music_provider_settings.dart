@@ -6,13 +6,16 @@ import '../../../app/states/app.dart';
 import '../../../downloads/models/music_download_format.dart';
 import '../../../globals.dart';
 import '../../../l10n/generated/app_localizations.dart';
+import '../../../main.dart' show isTv;
 import '../../../music/models/music_cover_corners.dart';
+import '../../../music/models/music_mini_player_preferences.dart';
 import '../../../music/models/song_transition.dart';
 import '../../../music/services/music_community_cover_preferences.dart';
 import '../../../music/services/music_lyrics_preferences.dart';
 import '../../../player/models/music_audio_quality.dart';
 import '../../../utils.dart' show selectKeys;
 import '../../states/settings.dart';
+import 'music_artwork_cache_settings.dart';
 
 class MusicProviderSettings extends StatelessWidget {
   const MusicProviderSettings({super.key});
@@ -27,6 +30,39 @@ class MusicProviderSettings extends StatelessWidget {
     final settings = context.read<SettingsCubit>();
     final quality = context.select(
         (SettingsCubit settings) => settings.state.musicStreamingQuality);
+    final (miniLayout, miniShortcut, artworkSwipe, artworkDoubleTapSeek) =
+        context.select((SettingsCubit settings) => (
+              settings.state.musicMiniPlayerLayout,
+              settings.state.musicMiniPlayerShortcut,
+              settings.state.musicArtworkSwipe,
+              settings.state.musicArtworkDoubleTapSeek,
+            ));
+    final app = context.watch<AppCubit>().state;
+    bool canChangeArtworkGesture() {
+      final current = context.read<AppCubit>().state;
+      return db.profileId == app.profileId &&
+          current.profileId == app.profileId &&
+          current.sessionRevision == app.sessionRevision &&
+          !current.globalLoading &&
+          !current.sessionRecoveryRequired;
+    }
+
+    ValueChanged<bool>? onArtworkGestureChanged(
+        Future<void> Function(bool) save) {
+      if (!canChangeArtworkGesture()) return null;
+      return (enabled) async {
+        if (!canChangeArtworkGesture()) return;
+        try {
+          await save(enabled);
+        } catch (_) {
+          if (context.mounted && canChangeArtworkGesture()) {
+            ScaffoldMessenger.of(context)
+                .showSnackBar(SnackBar(content: Text(locals.error)));
+          }
+        }
+      };
+    }
+
     String modeLabel(SongTransitionMode value) => switch (value) {
           SongTransitionMode.seamless => locals.musicTransitionSeamless,
           SongTransitionMode.pause => locals.musicTransitionPause,
@@ -48,6 +84,55 @@ class MusicProviderSettings extends StatelessWidget {
         optionKey: (value) => ValueKey('music-streaming-quality-${value.name}'),
         save: settings.setMusicStreamingQuality,
       ),
+      if (!isTv) ...[
+        _MusicChoice<MusicMiniPlayerLayout>(
+          tileKey: const ValueKey('music-mini-player-layout-setting'),
+          icon: Icons.view_compact_outlined,
+          title: locals.musicMiniPlayerLayout,
+          values: MusicMiniPlayerLayout.values,
+          read: () => miniLayout,
+          label: (value) => switch (value) {
+            MusicMiniPlayerLayout.automatic => locals.downloadAutomatic,
+            MusicMiniPlayerLayout.compact => locals.musicMiniPlayerCompact,
+            MusicMiniPlayerLayout.transport => locals.musicMiniPlayerTransport,
+          },
+          optionKey: (value) =>
+              ValueKey('music-mini-player-layout-${value.name}'),
+          save: settings.setMusicMiniPlayerLayout,
+        ),
+        _MusicChoice<MusicMiniPlayerShortcut>(
+          tileKey: const ValueKey('music-mini-player-shortcut-setting'),
+          icon: Icons.touch_app_outlined,
+          title: locals.musicMiniPlayerShortcut,
+          values: MusicMiniPlayerShortcut.values,
+          read: () => miniShortcut,
+          label: (value) => switch (value) {
+            MusicMiniPlayerShortcut.automatic => locals.downloadAutomatic,
+            MusicMiniPlayerShortcut.next => locals.musicMiniPlayerNext,
+            MusicMiniPlayerShortcut.repeat => locals.musicMiniPlayerRepeat,
+            MusicMiniPlayerShortcut.shuffle => locals.musicShuffle,
+          },
+          optionKey: (value) =>
+              ValueKey('music-mini-player-shortcut-${value.name}'),
+          save: settings.setMusicMiniPlayerShortcut,
+        ),
+        SwitchListTile(
+          key: const ValueKey('music-artwork-swipe-setting'),
+          secondary: const Icon(Icons.swipe_outlined),
+          title: Text(locals.musicArtworkSwipe),
+          value: artworkSwipe,
+          onChanged: onArtworkGestureChanged(settings.setMusicArtworkSwipe),
+        ),
+        SwitchListTile(
+          key: const ValueKey('music-artwork-double-tap-seek-setting'),
+          secondary: const Icon(Icons.touch_app_outlined),
+          title: Text(locals.musicArtworkDoubleTapSeek),
+          subtitle: Text(locals.musicArtworkDoubleTapSeekHelp),
+          value: artworkDoubleTapSeek,
+          onChanged:
+              onArtworkGestureChanged(settings.setMusicArtworkDoubleTapSeek),
+        ),
+      ],
       _MusicChoice<SongTransitionMode>(
         tileKey: const ValueKey('music-transition-setting'),
         icon: Icons.multitrack_audio_rounded,
@@ -96,6 +181,7 @@ class MusicProviderSettings extends StatelessWidget {
         read: isCommunityCoverArtEnabled,
         write: setCommunityCoverArtEnabled,
       ),
+      const MusicArtworkCacheSettings(),
       _MusicChoice<MusicCoverCorners>(
         tileKey: const ValueKey('music-cover-corners-setting'),
         icon: Icons.crop_square_outlined,

@@ -23,7 +23,9 @@ import '../../home/models/db/home_layout.dart';
 import '../../home/models/phone_navigation.dart';
 import '../../home/models/content_mode.dart';
 import '../../home/models/home_tabs_layout.dart';
+import '../../music/models/music_download_order.dart';
 import '../../music/models/music_layout.dart';
+import '../../music/models/music_mini_player_preferences.dart';
 import '../../music/models/song_transition.dart';
 import '../../player/models/music_audio_quality.dart';
 import '../../player/models/playback_pitch.dart';
@@ -561,6 +563,33 @@ class SettingsCubit extends Cubit<SettingsState> {
   Future<void> setMusicLayout(MusicLayout layout) =>
       _saveSettingInOrder(musicLayoutSettingName, layout.encode);
 
+  Future<void> setMusicDownloadOrder(MusicDownloadOrder order) =>
+      _saveSettingInOrder(musicDownloadOrderSettingName, order.encode);
+
+  Future<void> updateMusicDownloadOrder(
+          {MusicDownloadSortField? field, bool? descending}) =>
+      _saveSettingInOrder(musicDownloadOrderSettingName, () {
+        final current = state.musicDownloadOrder;
+        return MusicDownloadOrder(
+                field: field ?? current.field,
+                descending: descending ?? current.descending)
+            .encode();
+      });
+
+  Future<void> setMusicArtworkSwipe(bool enabled) =>
+      _saveSettingInOrder(musicArtworkSwipeSettingName, enabled.toString);
+
+  Future<void> setMusicArtworkDoubleTapSeek(bool enabled) =>
+      _saveSettingInOrder(
+          musicArtworkDoubleTapSeekSettingName, enabled.toString);
+
+  Future<void> setMusicMiniPlayerLayout(MusicMiniPlayerLayout layout) =>
+      _saveSettingInOrder(musicMiniPlayerLayoutSettingName, () => layout.name);
+
+  Future<void> setMusicMiniPlayerShortcut(MusicMiniPlayerShortcut shortcut) =>
+      _saveSettingInOrder(
+          musicMiniPlayerShortcutSettingName, () => shortcut.name);
+
   Future<void> setHomeTabsLayout(HomeTabsLayout layout) async {
     final owner = db.forProfile(db.profileId);
     final session = appCubit.state.sessionRevision;
@@ -726,6 +755,9 @@ sealed class SettingsState with _$SettingsState {
 
   bool get playerShuffleMode => _get(playerShuffle)?.value == "true";
 
+  bool get musicQueueLocked =>
+      _get(musicQueueLockedSettingName)?.value == 'true';
+
   PlayerRepeat get playerRepeatMode =>
       PlayerRepeat.values[int.parse(_get(playerRepeat)?.value ?? '0')];
 
@@ -851,6 +883,27 @@ sealed class SettingsState with _$SettingsState {
 
   MusicLayout get musicLayout =>
       MusicLayout.decode(_get(musicLayoutSettingName)?.value);
+
+  MusicDownloadOrder get musicDownloadOrder =>
+      MusicDownloadOrder.fromStorage(
+          _get(musicDownloadOrderSettingName)?.value) ??
+      const MusicDownloadOrder();
+
+  bool get musicArtworkSwipe =>
+      _get(musicArtworkSwipeSettingName)?.value != 'false';
+
+  bool get musicArtworkDoubleTapSeek =>
+      _get(musicArtworkDoubleTapSeekSettingName)?.value == 'true';
+
+  MusicMiniPlayerLayout get musicMiniPlayerLayout =>
+      MusicMiniPlayerLayout.fromStorage(
+          _get(musicMiniPlayerLayoutSettingName)?.value) ??
+      MusicMiniPlayerLayout.automatic;
+
+  MusicMiniPlayerShortcut get musicMiniPlayerShortcut =>
+      MusicMiniPlayerShortcut.fromStorage(
+          _get(musicMiniPlayerShortcutSettingName)?.value) ??
+      MusicMiniPlayerShortcut.automatic;
 
   HomeContentMode get homeContentMode =>
       _get(homeContentModeSettingName)?.value == HomeContentMode.music.name

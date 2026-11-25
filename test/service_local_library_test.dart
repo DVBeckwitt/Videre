@@ -57,6 +57,8 @@ void main() {
       lengthSeconds: 300,
     );
     await library.addVideoToPlaylist(id, video.videoId, video: video);
+    final entryId = (await library.getUserPlaylist(id)).videos.single.indexId;
+    expect(entryId, allOf(isNotNull, isNotEmpty, isNot(video.videoId)));
 
     library = Service(httpClient: client);
     final restored = await library.getUserPlaylist(id);
@@ -64,7 +66,7 @@ void main() {
     expect(restored.videoCount, 1);
     expect(restored.videos.single.title, video.title);
     expect(restored.videos.single.lengthSeconds, video.lengthSeconds);
-    expect(restored.videos.single.indexId, video.videoId);
+    expect(restored.videos.single.indexId, entryId);
     expect(db.getSettings(localPlaylistsSetting), isNotNull);
     expect((await library.getPublicPlaylists(id)).videos.single.videoId,
         video.videoId);
@@ -72,6 +74,10 @@ void main() {
     await library.deleteUserPlaylistVideo(id, video.videoId);
     expect((await library.getUserPlaylist(id)).videos, isEmpty);
     expect((await library.getUserPlaylist(id)).videoCount, 0);
+    await library.addVideoToPlaylist(id, video.videoId, video: video);
+    final readdedEntry = (await library.getUserPlaylist(id)).videos.single;
+    expect(readdedEntry.videoId, video.videoId);
+    expect(readdedEntry.indexId, allOf(isNotNull, isNotEmpty, isNot(entryId)));
     await library.deleteUserPlaylist(id);
     expect((await library.getUserPlaylists()).map((p) => p.playlistId),
         isNot(contains(id)));

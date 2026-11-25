@@ -5,17 +5,21 @@ import 'package:just_audio/just_audio.dart';
 
 import '../downloads/models/downloaded_video.dart';
 import '../downloads/services/download_playback_source.dart';
+import '../downloads/services/download_storage.dart';
+import '../downloads/services/explicit_music_download.dart';
 import '../extensions.dart';
 import '../globals.dart';
 import '../network/media_companion.dart';
 import '../network/network_proxy.dart';
 import '../videos/models/adaptive_format.dart';
+import '../videos/models/ided_video.dart';
 import '../videos/models/video.dart';
 import 'media_source.dart';
 import 'models/backend_playback.dart';
 import 'models/local_music_playback.dart';
 import 'models/music_audio_quality.dart';
 import 'models/playback_cache_identity.dart';
+import 'models/watch_audio_track.dart';
 
 /// The same ordered, admitted renditions are used for playback and preloading.
 typedef AudioPlaybackSources = ({
@@ -25,7 +29,16 @@ typedef AudioPlaybackSources = ({
   Set<MusicAudioQuality> qualities,
   Map<AudioSource, MusicAudioQuality> sourceQualities,
   MusicStreamingQuality streamingQuality,
+  List<WatchAudioTrack> watchTracks,
+  Map<AudioSource, String> watchTrackIds,
 });
+
+String? explicitAudioDownloadFingerprint(IdedVideo? entry) => switch (entry) {
+      Video(:final explicitMusicDownload) ||
+      DownloadedVideo(:final explicitMusicDownload) =>
+        explicitMusicDownload,
+      _ => null,
+    };
 
 bool audioPlaybackRouteIsCurrent(BackendPlayback route) {
   final selected = db.getAccount(route.preferredServer.accountId);
@@ -65,16 +78,54 @@ Future<AudioPlaybackSources?> resolveAudioPlaybackSources({
   MusicAudioQuality? qualityPreference,
   MusicStreamingQuality? streamingQualityOverride,
   BackendPlayback? qualityRoute,
+  WatchAudioPreference? watchAudio,
   bool skipDownload = false,
+  bool verifyPinnedCompletion = true,
   void Function()? onBlockedMediaOrigin,
 }) async {
   final sources = <AudioSource>[];
   final qualities = <MusicAudioQuality>{};
   final sourceQualities = <AudioSource, MusicAudioQuality>{};
+  final watchTrackIds = <AudioSource, String>{};
+  List<WatchAudioTrack> watchTracks = const [];
   BackendPlayback? playbackRoute;
   BackendPlayback? menuRoute;
   var streamingQuality = MusicStreamingQuality.auto;
-  if (isLocalMusicPlaybackId(offlineVideo?.videoId)) {
+  final entry = offlineVideo ?? video;
+  final fingerprint = explicitAudioDownloadFingerprint(entry);
+  if (entry != null && fingerprint != null) {
+    if (!isCurrent()) return null;
+    final database = db;
+    if (offlineVideo != null && offlineVideo.profileId != database.profileId) {
+      throw StateError('Saved Music download belongs to another profile');
+    }
+    final id = entry.videoId;
+    final saved = readyMusicDownload(database, id, fingerprint: fingerprint);
+    if (saved == null) throw StateError('Saved Music download unavailable');
+    final proof = pinnedMusicDownloadFileProof(fingerprint);
+    if (proof != null) {
+      final available = await DownloadStorage()
+          .musicFileProof(saved, verifyCompletion: verifyPinnedCompletion);
+      if (!isCurrent() || !identical(database, db)) return null;
+      if (available != proof) {
+        throw StateError('Saved Music file is unavailable or was replaced');
+      }
+    }
+    final path = await saved.effectivePath;
+    if (!isCurrent() || !identical(database, db)) return null;
+    if (readyMusicDownload(database, id, fingerprint: fingerprint) == null) {
+      throw StateError('Saved Music download changed');
+    }
+    final uri = saved.storageUri == null ? Uri.file(path) : Uri.tryParse(path);
+    if (uri == null ||
+        !(uri.scheme == 'content' && uri.host.isNotEmpty ||
+            uri.scheme == 'file' && uri.host.isEmpty && uri.hasAbsolutePath)) {
+      throw StateError('Saved Music download has no local file');
+    }
+    // A document's name can resemble a streaming manifest. Always open the
+    // selected file as a single progressive audio source.
+    sources.add(ProgressiveAudioSource(uri));
+  } else if (isLocalMusicPlaybackId(offlineVideo?.videoId)) {
     final track = localMusicTrackForPlayback(offlineVideo!.videoId);
     if (track == null || offlineVideo.profileId != db.profileId) {
       throw StateError('Local music file is unavailable');
@@ -119,7 +170,7 @@ Future<AudioPlaybackSources?> resolveAudioPlaybackSources({
             ? mediaCompanionContext(selectedServer)
             : null;
     if (video == null) return null;
-    final music = video.musicMetadata != null;
+    final music = watchAudio == null && video.musicMetadata != null;
     if (music) {
       menuRoute = playbackRoute;
       streamingQuality =
@@ -135,27 +186,35 @@ Future<AudioPlaybackSources?> resolveAudioPlaybackSources({
             sessionId: sessionId,
             isCurrent: isCurrent);
     if (!isCurrent()) return null;
-    if (local != null) {
-      sources.add(AudioSource.uri(Uri.parse(local.uri),
-          playbackCache: local.playbackCache));
-    }
-    final combined = (video.formatStreams ?? [])
-        .where((stream) => !stream.isLegacyHd720)
-        .toList()
-        .reversed
-        .map((stream) => stream.url);
     var blockedMediaOrigin = false;
     String? admit(String candidate) =>
         proxiedPlaybackMediaUrl(candidate, selectedServer,
             onBlockedMediaOrigin: () => blockedMediaOrigin = true);
 
     final audioByUrl = <String, AdaptiveFormat>{};
+    final watchMetadata = <String, List<AudioTrack?>>{};
+    void rememberTrack(String url, AudioTrack? track) {
+      if (watchAudio != null) {
+        (watchMetadata[url] ??= []).add(track);
+      }
+    }
+
     final adaptive = (video.adaptiveFormats ?? <AdaptiveFormat>[])
         .where((format) => format.type.startsWith('audio/'))
         .sortByReversed((format) => int.tryParse(format.bitrate ?? '') ?? 0);
     for (final format in adaptive) {
       final url = admit(format.url);
-      if (url != null) audioByUrl.putIfAbsent(url, () => format);
+      if (url == null) continue;
+      audioByUrl.putIfAbsent(url, () => format);
+      rememberTrack(url, format.audioTrack);
+    }
+    final combined = <String>{};
+    for (final stream in (video.formatStreams ?? []).reversed) {
+      if (stream.isLegacyHd720) continue;
+      final url = admit(stream.url);
+      if (url == null) continue;
+      combined.add(url);
+      rememberTrack(url, stream.audioTrack);
     }
     // Bitrate changes must keep the same audio language. Untagged
     // streams are the original/default track on ordinary instances.
@@ -181,15 +240,37 @@ Future<AudioPlaybackSources?> resolveAudioPlaybackSources({
     }
     // Audio playback should not depend on a combined video stream.
     // Keep combined formats as a fallback for missing usable audio.
-    final candidates = {
-      if (qualityPreference != null)
-        for (final entry in qualityByUrl.entries)
-          if (entry.value == qualityPreference) entry.key,
-      if (streamingQuality == MusicStreamingQuality.dataSaver)
-        ...qualityByUrl.keys.toList().reversed,
-      ...audioByUrl.keys,
-      ...combined.map(admit).whereType<String>(),
-    };
+    final watchPlan = watchAudio == null
+        ? null
+        : _watchSources(watchAudio, audioByUrl.keys, combined, watchMetadata);
+    final candidates = watchPlan?.urls ??
+        {
+          if (qualityPreference != null)
+            for (final entry in qualityByUrl.entries)
+              if (entry.value == qualityPreference) entry.key,
+          if (streamingQuality == MusicStreamingQuality.dataSaver)
+            ...qualityByUrl.keys.toList().reversed,
+          ...audioByUrl.keys,
+          ...combined,
+        };
+    if (watchPlan != null) watchTracks = watchPlan.tracks;
+    if (local != null) {
+      final download = local.playbackCache['download'];
+      final remote = download is Map ? download['remoteUri'] : null;
+      final useDownloadOnly = video.downloadPlaybackOnly &&
+          watchAudio?.trackId == null &&
+          watchAudio?.progressiveUrl == null;
+      // Ordinary Watch can use an opportunistic local copy when its proven
+      // remote rendition is among the chosen track's admitted candidates.
+      if (watchPlan == null || useDownloadOnly || candidates.contains(remote)) {
+        final source = AudioSource.uri(Uri.parse(local.uri),
+            playbackCache: local.playbackCache);
+        sources.add(source);
+        if (watchPlan?.trackIds[remote] case final id?) {
+          watchTrackIds[source] = id;
+        }
+      }
+    }
     for (final url in candidates) {
       final source = AudioSource.uri(Uri.parse(url),
           headers: mediaHeaders(server, url),
@@ -204,6 +285,7 @@ Future<AudioPlaybackSources?> resolveAudioPlaybackSources({
       sources.add(source);
       final quality = qualityByUrl[url];
       if (quality != null) sourceQualities[source] = quality;
+      if (watchPlan?.trackIds[url] case final id?) watchTrackIds[source] = id;
       if (sources.length >= 10) break;
     }
     if (sources.isEmpty && blockedMediaOrigin) onBlockedMediaOrigin?.call();
@@ -215,5 +297,74 @@ Future<AudioPlaybackSources?> resolveAudioPlaybackSources({
     qualities: qualities,
     sourceQualities: sourceQualities,
     streamingQuality: streamingQuality,
+    watchTracks: watchTracks,
+    watchTrackIds: watchTrackIds,
   );
+}
+
+({Set<String> urls, Map<String, String> trackIds, List<WatchAudioTrack> tracks})
+    _watchSources(WatchAudioPreference preference, Iterable<String> adaptive,
+        Set<String> progressive, Map<String, List<AudioTrack?>> metadata) {
+  final ids = <String, String>{};
+  final defaults = <String>{};
+  final labels = <String, Set<String>>{};
+  for (final entry in metadata.entries) {
+    final candidates = entry.value.map(watchAudioTrackId).toSet();
+    // Signed URLs described by contradictory metadata cannot prove a track.
+    if (candidates.length != 1 || candidates.single == null) continue;
+    final id = candidates.single!;
+    ids[entry.key] = id;
+    for (final track in entry.value.whereType<AudioTrack>()) {
+      if (track.audioIsDefault) defaults.add(id);
+      final label = track.displayName.trim();
+      if (label.isNotEmpty && label != id) (labels[id] ??= {}).add(label);
+    }
+  }
+  final groups = ids.values.toSet();
+  final tracks = [
+    for (final entry in labels.entries)
+      (id: entry.key, label: (entry.value.toList()..sort()).first),
+  ]..sort((a, b) {
+      final labels = a.label.toLowerCase().compareTo(b.label.toLowerCase());
+      return labels == 0 ? a.id.compareTo(b.id) : labels;
+    });
+
+  final prior = preference.progressiveUrl;
+  final exact = progressive.contains(prior) ? prior : null;
+  Set<String> forTrack(String id) => {
+        ...adaptive.where((url) => ids[url] == id),
+        ...progressive.where((url) => ids[url] == id),
+      };
+
+  final requested = preference.trackId;
+  final selected = groups.contains(requested) ? requested : ids[exact];
+  if (selected != null) {
+    return (urls: forTrack(selected), trackIds: ids, tracks: tracks);
+  }
+  if (exact != null) {
+    // A live muxed choice with unreported language is the only source proven
+    // to contain the same audio. Do not mix later attempts with other dubs.
+    return (urls: {exact}, trackIds: ids, tracks: tracks);
+  }
+  final defaultId = defaults.singleOrNull;
+  if (defaultId != null) {
+    return (urls: forTrack(defaultId), trackIds: ids, tracks: tracks);
+  }
+  if (groups.isEmpty) {
+    return (urls: {...adaptive, ...progressive}, trackIds: ids, tracks: tracks);
+  }
+  final unknownAudio = adaptive.where((url) => !ids.containsKey(url));
+  final sole = groups.singleOrNull;
+  if (sole != null && unknownAudio.isEmpty) {
+    return (urls: forTrack(sole), trackIds: ids, tracks: tracks);
+  }
+  final unknownVideo = progressive.where((url) => !ids.containsKey(url));
+  // An unlabeled muxed stream is a better fallback for ambiguous alternates.
+  // If every rendition is tagged, choose one stable ID and retry within it.
+  final fallback = unknownVideo.isNotEmpty
+      ? unknownVideo.toSet()
+      : unknownAudio.isNotEmpty
+          ? unknownAudio.toSet()
+          : forTrack((groups.toList()..sort()).first);
+  return (urls: fallback, trackIds: ids, tracks: tracks);
 }

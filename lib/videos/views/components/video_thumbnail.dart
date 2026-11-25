@@ -7,6 +7,7 @@ class VideoThumbnailView extends StatelessWidget {
   final List<String> thumbnails;
   final List<ImageObject>? images;
   final List<ImageObject>? musicThumbnails;
+  final bool musicArtwork;
   final Widget? child;
   final BoxDecoration? decoration;
 
@@ -16,6 +17,7 @@ class VideoThumbnailView extends StatelessWidget {
       required this.thumbnails,
       this.images,
       this.musicThumbnails,
+      this.musicArtwork = false,
       this.child,
       this.decoration});
 
@@ -37,6 +39,7 @@ class VideoThumbnailView extends StatelessWidget {
           fit: StackFit.expand,
           children: [
             Thumbnail(
+              musicArtwork: musicArtwork,
               thumbnails: thumbnails,
               images: hasMusicArtwork ? musicThumbnails : images,
               decoration: shape,

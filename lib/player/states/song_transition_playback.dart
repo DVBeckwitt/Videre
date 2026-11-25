@@ -283,7 +283,7 @@ class _SongTransitionPlayback {
     try {
       // A manual reservation or an earlier audible overlap may have owned
       // this decoder while the user changed the streaming default.
-      if (entry is Video) {
+      if (entry is Video && entry.explicitMusicDownload == null) {
         owner._refreshStandbyQuality(
             slot, MusicStreamingQuality.forDatabase(db));
       }
@@ -321,7 +321,9 @@ class _SongTransitionPlayback {
       // For a short successor, leave room to promote it before its own EOF.
       if (remainingMs <= 0 ||
           nextDuration == null ||
-          remainingMs >= nextDuration.inMilliseconds / tuning.speed) {
+          remainingMs >= nextDuration.inMilliseconds / tuning.speed ||
+          (explicitAudioDownloadFingerprint(entry) != null &&
+              !slot.matches(entry))) {
         if (current()) stop();
         return;
       }

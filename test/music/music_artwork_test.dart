@@ -3,9 +3,11 @@ import 'dart:ui' as ui;
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/music/models/music_track.dart';
+import 'package:clipious/music/services/music_artwork_cache.dart';
 import 'package:clipious/music/views/components/music_catalog_cards.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/utils/models/image_object.dart';
+import 'package:clipious/utils/invidious_image.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/utils/views/components/channel_avatar.dart';
 import 'package:clipious/utils/views/components/selected_server.dart';
@@ -14,6 +16,7 @@ import 'package:clipious/videos/views/components/video_thumbnail.dart';
 import 'package:file/file.dart';
 import 'package:file/memory.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart' as cache;
 import 'package:flutter_test/flutter_test.dart';
@@ -39,6 +42,19 @@ class _ArtworkCache extends Fake implements cache.BaseCacheManager {
   }
 }
 
+class _MusicCache extends Fake implements MusicArtworkCache {
+  _MusicCache(this.manager);
+
+  final cache.BaseCacheManager manager;
+  final profiles = <String>{};
+
+  @override
+  cache.BaseCacheManager catalogManager(String profileId) {
+    profiles.add(profileId);
+    return manager;
+  }
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   const sourceUrl = 'https://lh3.googleusercontent.com/album=w512-h512';
@@ -49,6 +65,7 @@ void main() {
   late File artwork;
   late cache.BaseCacheManager previousCache;
   late _ArtworkCache imageCache;
+  late _MusicCache musicCache;
 
   setUpAll(() async {
     final recorder = ui.PictureRecorder();
@@ -68,6 +85,7 @@ void main() {
     db = await SembastSqfDb.createInMemory();
     previousCache = CachedNetworkImageProvider.defaultCacheManager;
     imageCache = _ArtworkCache(artwork);
+    musicCache = _MusicCache(imageCache);
     CachedNetworkImageProvider.defaultCacheManager = imageCache;
     PaintingBinding.instance.imageCache.clear();
     PaintingBinding.instance.imageCache.clearLiveImages();
@@ -87,10 +105,12 @@ void main() {
         onOpen: () {},
       );
 
-  Widget thumbnail(String url, {bool useInvidiousProxy = false}) =>
+  Widget thumbnail(String url,
+          {bool useInvidiousProxy = false, bool musicArtwork = false}) =>
       SizedBox.square(
         dimension: 56,
         child: Thumbnail(
+          musicArtwork: musicArtwork,
           images: [ImageObject(null, url, 512, 512)],
           decoration: const BoxDecoration(),
           useInvidiousProxy: useInvidiousProxy,
@@ -98,18 +118,20 @@ void main() {
       );
 
   Future<void> show(WidgetTester tester, Widget child) async {
-    await tester.pumpWidget(MaterialApp(
-      home: Scaffold(
-        body: RepaintBoundary(
-          key: boundaryKey,
-          child: SizedBox(
-            width: 400,
-            height: 400,
-            child: Align(alignment: Alignment.topLeft, child: child),
+    await tester.pumpWidget(RepositoryProvider<MusicArtworkCache>.value(
+        value: musicCache,
+        child: MaterialApp(
+          home: Scaffold(
+            body: RepaintBoundary(
+              key: boundaryKey,
+              child: SizedBox(
+                width: 400,
+                height: 400,
+                child: Align(alignment: Alignment.topLeft, child: child),
+              ),
+            ),
           ),
-        ),
-      ),
-    ));
+        )));
     for (var attempt = 0; attempt < 20; attempt++) {
       await tester.runAsync(
           () => Future<void>.delayed(const Duration(milliseconds: 10)));
@@ -168,6 +190,73 @@ void main() {
     expect(find.byIcon(Icons.error_outline), findsNothing);
     expect(find.byType(CircularProgressIndicator), findsNothing);
   }
+
+  testWidgets(
+      'Music and Video can load the same instance image into separate caches',
+      (tester) async {
+    await selectServer(tester);
+    final ordinaryCache = _ArtworkCache(artwork);
+    CachedNetworkImageProvider.defaultCacheManager = ordinaryCache;
+    await show(
+        tester,
+        Row(children: [
+          thumbnail(sourceUrl, useInvidiousProxy: true, musicArtwork: true),
+          thumbnail(sourceUrl, useInvidiousProxy: true),
+        ]));
+    final widgets =
+        tester.widgetList<CachedNetworkImage>(find.byType(CachedNetworkImage));
+    final music =
+        widgets.singleWhere((image) => image.cacheManager == imageCache);
+    final video = widgets.singleWhere((image) => image.cacheManager == null);
+    const url = 'https://instance.example/ggpht/album=w512-h512';
+    expect(music.imageUrl, url);
+    expect(video.imageUrl, url);
+    final owner = await tester.runAsync(db.getCurrentlySelectedServer);
+    expect(video.cacheKey, invidiousImageCacheKey(url, owner!));
+    expect(music.cacheKey, 'music-artwork:${video.cacheKey}');
+    expect(music.memCacheWidth, video.memCacheWidth);
+    expect(music.memCacheHeight, video.memCacheHeight);
+    expect(imageCache.requests.single.url, ordinaryCache.requests.single.url);
+    expect(imageCache.requests.single.headers,
+        ordinaryCache.requests.single.headers);
+    expect(imageCache.requests.single.headers,
+        containsPair('X-Test', 'music-artwork'));
+    expect(musicCache.profiles, {db.profileId});
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets(
+      'public Music artwork uses its profile cache and a stale scope cannot request it',
+      (tester) async {
+    const url = 'https://art.example/picture.png';
+    await selectServer(tester);
+    final first = db.profileId;
+    await show(tester, thumbnail(url, musicArtwork: true));
+    final original =
+        tester.widget<CachedNetworkImage>(find.byType(CachedNetworkImage));
+    expect(original.imageUrl, url);
+    expect(original.httpHeaders, isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.runAsync(() async {
+      final other = await db.createProfile('Other');
+      await db.useProfile(other.id);
+      final selected = server.copyWith(profileId: other.id);
+      await db.upsertServer(selected);
+      await db.useServer(selected);
+    });
+    await show(tester, thumbnail(url, musicArtwork: true));
+    final other =
+        tester.widget<CachedNetworkImage>(find.byType(CachedNetworkImage));
+    expect(other.imageUrl, url);
+    expect(other.cacheKey, isNot(original.cacheKey));
+    expect(imageCache.requests, hasLength(2));
+    expect(musicCache.profiles, {first, db.profileId});
+    await show(tester,
+        ServerScope(server: server, child: thumbnail(url, musicArtwork: true)));
+    expect(find.byType(CachedNetworkImage), findsNothing);
+    expect(imageCache.requests, hasLength(2));
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
 
   testWidgets('channel avatar paints its private image instead of the initial',
       (tester) async {

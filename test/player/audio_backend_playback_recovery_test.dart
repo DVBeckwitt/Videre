@@ -9,14 +9,17 @@ import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/downloads/models/download_formats.dart';
 import 'package:clipious/downloads/models/download_playback_provenance.dart';
 import 'package:clipious/downloads/services/download_playback_source.dart';
+import 'package:clipious/downloads/services/explicit_music_download.dart';
 import 'package:crypto/crypto.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/main.dart' as app_main;
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/music/services/local_music_library.dart';
+import 'package:clipious/music/models/music_content_advisory.dart';
 import 'package:clipious/player/models/local_music_playback.dart';
 import 'package:clipious/music/views/components/music_audio_quality_button.dart';
+import 'package:clipious/player/audio_playback_sources.dart';
 import 'package:clipious/player/models/music_audio_quality.dart';
 import 'package:clipious/media_handler.dart';
 import 'package:clipious/network/gateway_context.dart';
@@ -25,6 +28,7 @@ import 'package:clipious/network/nerdvpn_origin.dart';
 import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/player/models/media_command.dart';
 import 'package:clipious/player/models/media_event.dart';
+import 'package:clipious/player/models/playback_queue.dart';
 import 'package:clipious/player/states/audio_player.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/service.dart';
@@ -41,6 +45,8 @@ import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:clipious/videos/models/sponsor_segment.dart';
 import 'package:clipious/videos/models/sponsor_segment_types.dart';
+import 'package:flutter/foundation.dart'
+    show debugDefaultTargetPlatformOverride;
 import 'package:flutter/services.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -58,6 +64,13 @@ class _HeldServerDb extends IDbClient {
   final selected = Completer<Server>();
 
   _HeldServerDb(this.delegate);
+
+  @override
+  String get profileId => delegate.profileId;
+
+  @override
+  DownloadedVideo? getDownloadByVideoId(String id) =>
+      delegate.getDownloadByVideoId(id);
 
   @override
   Future<Server> getCurrentlySelectedServer() {
@@ -165,6 +178,8 @@ class _NativeAudio implements AudioPlayer {
   Object? progressError;
   int progressCalls = 0;
   final progressSamples = <NativePlaybackProgress?>[];
+  final advisorySources = <AudioSource>[];
+  Future<int?> Function(AudioSource source)? readAdvisory;
 
   @override
   ProcessingState get processingState => nativeProcessingState;
@@ -183,6 +198,12 @@ class _NativeAudio implements AudioPlayer {
     await progressGate?.future;
     if (progressError != null) throw progressError!;
     return sample;
+  }
+
+  @override
+  Future<int?> getCurrentFileAdvisory(AudioSource source) async {
+    advisorySources.add(source);
+    return readAdvisory?.call(source);
   }
 
   @override
@@ -441,7 +462,7 @@ void main() {
     return audio;
   }
 
-  Future<Video> savedAudio() async {
+  Future<Video> savedAudio({AudioTrack? track}) async {
     final format = AdaptiveFormat(
         null,
         '128000',
@@ -455,7 +476,8 @@ void main() {
         'webm',
         'opus',
         null,
-        null);
+        null,
+        audioTrack: track);
     final video =
         _video('saved-song', preferred).copyWith(adaptiveFormats: [format]);
     final download = DownloadedVideo(
@@ -465,6 +487,7 @@ void main() {
         accountId: preferred.accountId,
         audioOnly: true,
         container: DownloadContainer.webm,
+        audioTrackId: track?.id,
         lengthSeconds: 120,
         quality: 'audio',
         downloadComplete: true,
@@ -495,6 +518,147 @@ void main() {
     expect(retryService.metadataCalls, 0);
     expect(retryService.retryCalls, 0);
   });
+
+  test('Watch uses a saved rendition only when it proves the chosen track',
+      () async {
+    const english =
+        AudioTrack(id: 'en', displayName: 'English', audioIsDefault: true);
+    const french = AudioTrack(id: 'fr', displayName: 'French');
+    final saved = await savedAudio(track: english);
+    final dub = _adaptive('${preferred.url}/other-language')
+      ..audioTrack = french;
+    final video =
+        saved.copyWith(adaptiveFormats: [...saved.adaptiveFormats!, dub]);
+    Future<AudioPlaybackSources> open(String trackId) async =>
+        (await resolveAudioPlaybackSources(
+            video: video,
+            offlineVideo: null,
+            sessionId: 'watch-language-download',
+            watchAudio: (trackId: trackId, progressiveUrl: null),
+            isCurrent: () => true))!;
+
+    final matching = await open(english.id);
+    expect((matching.sources.first as UriAudioSource).uri.scheme, 'file');
+    expect(matching.watchTrackIds.values, everyElement(english.id));
+
+    final alternate = await open(french.id);
+    expect(
+        (alternate.sources.single as UriAudioSource).uri.toString(), dub.url);
+    expect(alternate.watchTrackIds.values, [french.id]);
+  });
+
+  const explicitFile = DownloadedVideo(
+      videoId: 'explicit-audio',
+      title: 'Local copy',
+      musicMetadata: MusicMetadata(title: 'Local copy', artist: 'Artist'),
+      lengthSeconds: 120,
+      quality: 'audio',
+      audioOnly: true,
+      accountId: 'original-download-account',
+      storageUri: 'content://documents/music/track.m3u8',
+      downloadComplete: true);
+  Video explicitSong(DownloadedVideo file) =>
+      _video(file.videoId, preferred).copyWith(
+          musicMetadata: file.musicMetadata,
+          explicitMusicDownload: musicDownloadFingerprint(file));
+
+  for (final document in [true, false]) {
+    test(
+        'explicit Music download resolves one progressive file without an account (SAF=$document)',
+        () async {
+      final file =
+          document ? explicitFile : explicitFile.copyWith(storageUri: null);
+      final expected = document
+          ? Uri.parse(file.storageUri!)
+          : Uri.file(await file.effectivePath);
+      await db.upsertDownload(file);
+      final video = explicitSong(file);
+      final originalDb = db;
+      final observed = _HeldServerDb(originalDb)..selected.complete(preferred);
+      db = observed;
+      try {
+        Future<AudioPlaybackSources?> resolve() => resolveAudioPlaybackSources(
+            video: video,
+            offlineVideo: null,
+            sessionId: 'explicit',
+            skipDownload: true,
+            isCurrent: () => true);
+        final plan = (await resolve())!;
+        final source = plan.sources.single as ProgressiveAudioSource;
+        expect(source.uri, expected);
+        expect(source.headers, isNull);
+        expect(source.mediaCompanions, isNull);
+        expect(source.playbackCache, isNull);
+        expect(plan.menuRoute, isNull);
+        expect(plan.playbackRoute, isNull);
+        expect(plan.qualities, isEmpty);
+        await originalDb.upsertDownload(file.copyWith(accountId: 'other'));
+        await expectLater(resolve(), throwsStateError);
+        expect(observed.requested.isCompleted, isFalse);
+      } finally {
+        db = originalDb;
+      }
+    });
+  }
+
+  test('explicit Music download retries the local file after a native error',
+      () async {
+    await db.upsertDownload(explicitFile);
+    final native = _NativeAudio()..errors.add(_retryable());
+    final audio = create(native, video: explicitSong(explicitFile));
+    await audio.playVideo(false, startAt: const Duration(seconds: 21));
+    expect(native.sources, hasLength(1));
+    expect(player.events.last.state, MediaState.error);
+    final reloaded = audio.stream
+        .firstWhere((state) => !state.loading && state.error == null);
+    audio.handleCommand(const MediaCommand(MediaCommandType.play));
+    await reloaded.timeout(const Duration(seconds: 5));
+    expect(native.sources, hasLength(2));
+    expect(
+        native.sources
+            .cast<ProgressiveAudioSource>()
+            .map((s) => s.uri.toString()),
+        everyElement(explicitFile.storageUri));
+    expect(retryService.metadataCalls, 0);
+    expect(retryService.retryCalls, 0);
+    expect(player.refreshCalls, 0);
+    expect(player.musicAudioQuality, isNull);
+  });
+
+  for (final offline in [false, true]) {
+    test(
+        'explicit Music download withdrawn during native setup stays silent (offline queue=$offline)',
+        () async {
+      await db.upsertDownload(explicitFile);
+      final loading = Completer<void>();
+      final gate = Completer<void>();
+      final native = _NativeAudio()
+        ..loadGate = gate
+        ..onLoad = loading.complete;
+      final audio = offline
+          ? create(native,
+              offlineVideo: explicitFile.copyWith(
+                  explicitMusicDownload:
+                      musicDownloadFingerprint(explicitFile)))
+          : create(native, video: explicitSong(explicitFile));
+      final opening = audio.playVideo(offline, startAt: Duration.zero);
+      await loading.future.timeout(const Duration(seconds: 5));
+      await db.deleteDownload(explicitFile);
+      gate.complete();
+      await opening;
+      expect(native.playCalls, 0);
+      expect(native.sources, hasLength(1));
+      expect(player.events.last.state, MediaState.error);
+      await db.upsertDownload(explicitFile.copyWith(accountId: 'replacement'));
+      await audio.playVideo(offline, startAt: Duration.zero);
+      expect(native.sources, hasLength(1));
+      expect(native.playCalls, 0);
+      expect(player.events.last.state, MediaState.error);
+      expect(retryService.metadataCalls, 0);
+      expect(retryService.retryCalls, 0);
+      expect(player.refreshCalls, 0);
+    });
+  }
 
   test('unavailable saved audio tries the original network source once',
       () async {
@@ -795,6 +959,64 @@ void main() {
     });
   }
 
+  for (final scenario in [
+    'gain while loading',
+    'gain after admission',
+    'user pause before gain',
+    'permanent loss before gain',
+  ]) {
+    test('Music successor opens during a temporary focus loss: $scenario',
+        () async {
+      final native = _NativeAudio();
+      final first = _video('first', preferred).copyWith(
+          musicMetadata: const MusicMetadata(title: 'First', artist: 'Artist'));
+      final next = _video('next', preferred).copyWith(
+          musicMetadata: const MusicMetadata(title: 'Next', artist: 'Artist'));
+      final audio = create(native, video: first);
+      await audio.playVideo(false);
+      expect(native.playCalls, 1);
+
+      // The parent has started resolving the next occurrence, but its switch
+      // command has not reached the previous decoder when Android takes focus.
+      player.requestedSwitches++;
+      void focus(bool begin, AudioInterruptionType type) {
+        final event = AudioInterruptionEvent(begin, type);
+        player.handleAudioInterruption(event);
+        audio.handleAudioInterruption(event);
+      }
+
+      focus(true, AudioInterruptionType.pause);
+      await native.pause();
+      final loading = Completer<void>();
+      native.onLoad = loading.complete;
+      native.loadGate = Completer<void>();
+      player.emit(player.state.copyWith(currentlyPlaying: next));
+      audio.switchVideo(next);
+      await loading.future.timeout(const Duration(seconds: 3));
+      expect(native.playCalls, 1);
+      expect((native.sources.last as UriAudioSource).uri.path, '/next.mp4');
+      if (scenario == 'gain while loading') {
+        focus(false, AudioInterruptionType.pause);
+        expect(native.playCalls, 1);
+      }
+      native.loadGate!.complete();
+      await _flush();
+      if (scenario != 'gain while loading') {
+        expect(audio.state.loading, isFalse);
+        expect(native.nativePlaying, isFalse);
+        if (scenario == 'user pause before gain') player.pause();
+        if (scenario == 'permanent loss before gain') {
+          focus(true, AudioInterruptionType.unknown);
+        }
+        focus(false, AudioInterruptionType.pause);
+        await _flush();
+      }
+      final resumes = scenario.startsWith('gain');
+      expect(native.nativePlaying, resumes);
+      expect(native.playCalls, resumes ? 2 : 1);
+    });
+  }
+
   test('audio refresh completed during duck is not left paused at duck end',
       () async {
     final native = _NativeAudio();
@@ -1075,6 +1297,70 @@ void main() {
     expect(audio.state.error, isNull);
   });
 
+  test('local music advisory stays with the admitted queue occurrence',
+      () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    const music = MusicMetadata(title: 'Same title', artist: 'Artist');
+    DownloadedVideo file(String id) => DownloadedVideo(
+        videoId: id,
+        title: music.title,
+        lengthSeconds: 120,
+        quality: 'audio',
+        audioOnly: true,
+        musicMetadata: music,
+        storageUri: 'content://fixture/audio/$id');
+    final first = file('first');
+    final second = file('second');
+    final unknown = file('unknown');
+    const position = Duration(seconds: 19);
+    final previous = Completer<int?>();
+    final native = _NativeAudio()
+      ..readAdvisory =
+          (source) async => switch ((source as UriAudioSource).uri.path) {
+                '/audio/first' => await previous.future,
+                '/audio/second' => 2,
+                _ => 0,
+              };
+    final audio = create(native, offlineVideo: first);
+    void show(DownloadedVideo entry) {
+      player.emit(player.state.copyWith(
+          currentlyPlaying: null,
+          offlineCurrentlyPlaying: entry,
+          offlineVideos: [first, second, unknown],
+          isHidden: false,
+          startAt: position));
+    }
+
+    show(first);
+    await audio.playVideo(true, startAt: position);
+    expect(native.nativePlaying, isTrue);
+    expect(player.musicContentAdvisory.value, isNull);
+    expect(identical(native.sources.single, native.advisorySources.single),
+        isTrue);
+
+    show(second);
+    audio.switchToOfflineVideo(second);
+    await _flush();
+    final selected = (
+      queueId: playbackQueueId(second),
+      generation: player.backendPlaybackGeneration,
+      advisory: MusicContentAdvisory.clean,
+    );
+    expect(player.musicContentAdvisory.value, selected);
+    previous.complete(1);
+    await _flush();
+    expect(player.musicContentAdvisory.value, selected);
+    expect(native.nativePlaying, isTrue);
+    expect(native.sourcePositions.last, position);
+
+    show(unknown);
+    audio.switchToOfflineVideo(unknown);
+    await _flush();
+    expect(player.musicContentAdvisory.value, isNull);
+    expect(native.sources.length, 3);
+  });
+
   testWidgets(
       'a missing native observation cannot block typed failure recovery',
       (tester) async {
@@ -1240,6 +1526,121 @@ void main() {
     expect(player.musicAudioQuality!.effective?.bitrate, 128000);
     expect(player.musicAudioQuality!.selected, isNull);
     expect(native.nativePlaying, isFalse);
+  });
+
+  Video multilingualWatch() => _video('watch', preferred).copyWith(
+        adaptiveFormats: [
+          _adaptive('${preferred.url}/dub', bitrate: '256000')
+            ..audioTrack = const AudioTrack(id: 'es.1', displayName: 'Spanish'),
+          _adaptive('${preferred.url}/original')
+            ..audioTrack = const AudioTrack(
+                id: 'en.1', displayName: 'English', audioIsDefault: true),
+        ],
+      );
+
+  test('Watch audio selection preserves queue, seeks and Pause across reload',
+      () async {
+    final video = multilingualWatch();
+    final queue = [video, _video('next', preferred)];
+    final native = _NativeAudio();
+    final audio = create(native, video: video);
+    player.emit(player.state.copyWith(videos: queue, isHidden: false));
+    await audio.playVideo(false, startAt: const Duration(seconds: 16));
+
+    expect((native.sources.single as UriAudioSource).uri.path, '/original');
+    expect(audio.selectedWatchAudioTrackId, 'en.1');
+    expect(audio.watchAudioTracks.map((track) => track.id),
+        unorderedEquals(['en.1', 'es.1']));
+    expect(player.musicAudioQuality, isNull);
+
+    final mounting = Completer<void>();
+    final gate = Completer<void>();
+    native.onLoad = mounting.complete;
+    native.loadGate = gate;
+    native.nativePosition = const Duration(seconds: 24);
+    final switching = audio.selectWatchAudioTrack('es.1');
+    await mounting.future;
+    expect((native.sources.last as UriAudioSource).uri.path, '/dub');
+    expect(native.sourcePositions.last, const Duration(seconds: 24));
+    expect(await audio.selectWatchAudioTrack('en.1'), isFalse);
+    audio.pause();
+    audio.seek(const Duration(seconds: 27));
+    gate.complete();
+    expect(await switching, isTrue);
+    expect(native.nativePosition, const Duration(seconds: 27));
+    expect(native.nativePlaying, isFalse);
+    expect(audio.selectedWatchAudioTrackId, 'es.1');
+    expect(player.state.videos, queue);
+    expect(player.state.currentQueueId, playbackQueueId(video));
+
+    native.onLoad = null;
+    native.loadGate = null;
+    player.refreshedVideo = video.copyWith(adaptiveFormats: [
+      _adaptive('${preferred.url}/refreshed-other', bitrate: '320000')
+        ..audioTrack = const AudioTrack(
+            id: 'fr.1', displayName: 'French', audioIsDefault: true),
+      _adaptive('${preferred.url}/refreshed-dub')
+        ..audioTrack = const AudioTrack(id: 'es.1', displayName: 'Spanish'),
+    ]);
+    audio.onPlaybackError(_retryable());
+    await _flush();
+    expect(player.refreshCalls, 1);
+    expect((native.sources.last as UriAudioSource).uri.path, '/refreshed-dub');
+    expect(audio.selectedWatchAudioTrackId, 'es.1');
+    expect(native.nativePosition, const Duration(seconds: 27));
+    expect(native.nativePlaying, isFalse);
+  });
+
+  test('a failed Watch alternate reopens the previous track at its playhead',
+      () async {
+    final native = _NativeAudio();
+    final audio = create(native, video: multilingualWatch());
+    player.emit(player.state.copyWith(isHidden: false));
+    const position = Duration(seconds: 34);
+    await audio.playVideo(false, startAt: position);
+    expect(native.nativePlaying, isTrue);
+    native.errors.add(_retryable());
+
+    expect(await audio.selectWatchAudioTrack('es.1'), isFalse);
+    expect(native.sources.map((source) => (source as UriAudioSource).uri.path),
+        ['/original', '/dub', '/original']);
+    expect(native.sourcePositions, [position, position, position]);
+    expect(native.nativePlaying, isTrue);
+    expect(audio.selectedWatchAudioTrackId, 'en.1');
+    expect(audio.state.error, isNull);
+    expect(retryService.retryCalls, 0);
+    expect(await audio.selectWatchAudioTrack('unverified'), isFalse);
+    expect(native.sources, hasLength(3));
+  });
+
+  test('an alternate rejected before mount still delivers deferred transport',
+      () async {
+    final native = _NativeAudio();
+    final audio = create(native, video: multilingualWatch());
+    player.emit(player.state.copyWith(isHidden: false));
+    await audio.playVideo(false, startAt: const Duration(seconds: 34));
+    audio.pause();
+    final database = db;
+    final held = _HeldServerDb(database);
+    db = held;
+    try {
+      final switching = audio.selectWatchAudioTrack('es.1');
+      await held.requested.future.timeout(const Duration(seconds: 5));
+      const position = Duration(seconds: 48);
+      audio.seek(position);
+      audio.play();
+      expect(native.seeks, isEmpty);
+      expect(native.nativePlaying, isFalse);
+
+      held.selected.complete(preferred.copyWith(url: 'https://other.example'));
+      expect(await switching, isFalse);
+      expect(native.sources, hasLength(1));
+      expect(native.nativePosition, position);
+      expect(native.nativePlaying, isTrue);
+      expect(audio.selectedWatchAudioTrackId, 'en.1');
+    } finally {
+      db = database;
+    }
   });
 
   test('unavailable Music quality falls back and reports the actual rendition',

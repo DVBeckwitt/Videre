@@ -37,6 +37,9 @@ class LocalMusicPlugin : FlutterPlugin, ActivityAware, PluginRegistry.ActivityRe
     private var systemPicker: MethodChannel.Result? = null
     private var rename: RenameOperation? = null
     private var scan: CancellationSignal? = null
+    // Written and read only by the catalog worker. A scan signal is cancelled
+    // on the main thread as soon as new source work supersedes it.
+    private var completedCatalog: CompletedCatalog? = null
     private val worker = Executors.newSingleThreadExecutor()
     private val accessWorker = Executors.newSingleThreadExecutor()
     private val sourceRevision = AtomicLong()
@@ -44,6 +47,10 @@ class LocalMusicPlugin : FlutterPlugin, ActivityAware, PluginRegistry.ActivityRe
     private val preferences get() = context.getSharedPreferences("videre_local_music", Context.MODE_PRIVATE)
     private val systemSource get() = MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
     private val renameArchive get() = LocalMusicRenameArchive(File(context.noBackupFilesDir, "music-rename-events.json"))
+
+    private data class CompletedCatalog(
+        val tree: String, val selection: String?, val revision: Long, val signal: CancellationSignal,
+    )
 
     private class RenameOperation(
         val source: Uri,
@@ -87,7 +94,9 @@ class LocalMusicPlugin : FlutterPlugin, ActivityAware, PluginRegistry.ActivityRe
                         false -> throw SecurityException()
                         true -> try {
                             val source = Uri.parse(tree)
-                            catalog(source, preferences.getString("selectionId", null)).tracks(source, signal) { batch ->
+                            val selection = preferences.getString("selectionId", null)
+                            val revision = sourceRevision.get()
+                            val tracks = catalog(source, selection).tracks(source, signal) { batch ->
                                 if (scanId != null) {
                                     main.post {
                                         if (scan === signal && !signal.isCanceled) {
@@ -96,6 +105,9 @@ class LocalMusicPlugin : FlutterPlugin, ActivityAware, PluginRegistry.ActivityRe
                                     }
                                 }
                             }
+                            val completed = CompletedCatalog(tree, selection, revision, signal)
+                            if (catalogCurrent(completed)) completedCatalog = completed
+                            tracks
                         } catch (cancelled: OperationCanceledException) {
                             throw cancelled
                         } catch (_: Exception) {
@@ -106,6 +118,23 @@ class LocalMusicPlugin : FlutterPlugin, ActivityAware, PluginRegistry.ActivityRe
                             throw ProviderTemporarilyUnavailable()
                         }
                     }
+                }
+            }
+            "matchDownloadTracks" -> run(result) {
+                val source = completedCatalog ?: return@run null
+                if (source.tree != call.argument<String>("treeUri") ||
+                    source.selection != call.argument<String>("selectionId") ||
+                    !catalogCurrent(source)) return@run null
+                val slots = call.argument<List<*>>("files") ?: return@run null
+                if (slots.size > 64) return@run null
+                try {
+                    if (checkFolderAccess(source.tree, source.signal) != true) return@run null
+                    val candidates = slots.mapNotNull(LocalMusicDownloadCandidate::parse)
+                    val matches = catalog(Uri.parse(source.tree), source.selection)
+                        .matchDownloads(Uri.parse(source.tree), candidates, source.signal)
+                    matches.takeIf { catalogCurrent(source) && checkFolderAccess(source.tree, source.signal) == true }
+                } catch (_: OperationCanceledException) {
+                    null
                 }
             }
             "renameTrack" -> beginRename(call, result)
@@ -138,6 +167,13 @@ class LocalMusicPlugin : FlutterPlugin, ActivityAware, PluginRegistry.ActivityRe
             }
             else -> result.notImplemented()
         }
+    }
+
+    private fun catalogCurrent(catalog: CompletedCatalog): Boolean {
+        if (catalog.signal.isCanceled || catalog.revision != sourceRevision.get()) return false
+        val saved = preferences.all
+        return catalog.tree == saved["uri"] && catalog.selection == saved["selectionId"] &&
+            saved["needsReapproval"] != true
     }
 
     private fun pickFolder(initial: String?, result: MethodChannel.Result) {
@@ -541,7 +577,8 @@ class LocalMusicPlugin : FlutterPlugin, ActivityAware, PluginRegistry.ActivityRe
 
     private fun catalog(source: Uri, selectionId: String?): LocalMusicCatalog {
         val key = cacheKey(source, selectionId)
-        return LocalMusicCatalog(context, coverDirectory(key), indexFile(key))
+        val visibilityAliases = File(context.noBackupFilesDir, "music-visibility-${cacheKey(source, null)}.json")
+        return LocalMusicCatalog(context, coverDirectory(key), indexFile(key), visibilityAliases)
     }
 
     private fun activeRenameEvents(): List<Map<String, String>> {

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui' show SemanticsAction, SemanticsRole;
 
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/content_filter/community_filter.dart';
@@ -14,6 +15,7 @@ import 'package:clipious/music/models/local_music_track.dart';
 import 'package:clipious/music/services/local_music_library.dart';
 import 'package:clipious/music/models/music_artist.dart';
 import 'package:clipious/music/models/music_artist_page.dart';
+import 'package:clipious/music/models/music_catalog_search.dart';
 import 'package:clipious/music/models/music_collection.dart';
 import 'package:clipious/music/models/music_library_entry.dart';
 import 'package:clipious/music/models/music_playlist.dart';
@@ -21,6 +23,7 @@ import 'package:clipious/music/models/music_track.dart';
 import 'package:clipious/music/services/music_catalog_service.dart';
 import 'package:clipious/music/services/music_library_service.dart';
 import 'package:clipious/music/views/screens/music.dart';
+import 'package:clipious/music/views/screens/music_library.dart';
 import 'package:clipious/music/views/components/community_music_artwork.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/player/models/backend_playback.dart';
@@ -29,7 +32,7 @@ import 'package:clipious/player/models/playback_session.dart';
 import 'package:clipious/playlists/models/playlist.dart';
 import 'package:clipious/playlists/models/playlist_reference.dart';
 import 'package:clipious/playlists/services/playlist_load_session.dart';
-import 'package:clipious/service.dart' show VideoLoadObserver;
+import 'package:clipious/service.dart' show Service, VideoLoadObserver;
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/models/db/server.dart';
@@ -43,6 +46,7 @@ import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:clipious/videos/models/sponsor_segment.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/semantics.dart' show CustomSemanticsAction;
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -70,7 +74,18 @@ const second = MusicTrack(
 
 class _Catalog extends MusicCatalogService {
   final searches = <String>[];
+  final artistSearches = <String>[];
+  final playlistSearches = <String>[];
+  final pageRequests = <({
+    String query,
+    MusicCatalogSearchType type,
+    int page,
+    bool Function()? isCurrent,
+    Completer<MusicCatalogSearchPage> response,
+  })>[];
+  bool paginate = false;
   final responses = <Completer<List<MusicTrack>>>[];
+  List<MusicArtist> artistResults = const [artist];
   // Create this in the requesting widget's async zone, not setUp's outer zone.
   late var song = Completer<MusicTrack>();
   VideoLoadObserver? songObserver;
@@ -97,6 +112,24 @@ class _Catalog extends MusicCatalogService {
   }
 
   @override
+  Future<MusicCatalogSearchPage> searchPage(
+      String query, MusicCatalogSearchType type, int page,
+      {bool Function()? isCurrent}) {
+    if (!paginate) {
+      return super.searchPage(query, type, page, isCurrent: isCurrent);
+    }
+    final response = Completer<MusicCatalogSearchPage>();
+    pageRequests.add((
+      query: query,
+      type: type,
+      page: page,
+      isCurrent: isCurrent,
+      response: response,
+    ));
+    return response.future;
+  }
+
+  @override
   Future<List<MusicTrack>> getTrendingSongs() async => [first, second];
 
   @override
@@ -106,13 +139,19 @@ class _Catalog extends MusicCatalogService {
   }
 
   @override
-  Future<List<MusicArtist>> searchArtists(String query) async => [artist];
+  Future<List<MusicArtist>> searchArtists(String query) async {
+    artistSearches.add(query);
+    return artistResults;
+  }
 
   @override
-  Future<List<MusicPlaylist>> searchPlaylists(String query) async => [
-        const MusicPlaylist(
-            id: 'PLpublic', title: 'Public playlist', author: 'Curator'),
-      ];
+  Future<List<MusicPlaylist>> searchPlaylists(String query) async {
+    playlistSearches.add(query);
+    return const [
+      MusicPlaylist(
+          id: 'PLpublic', title: 'Public playlist', author: 'Curator'),
+    ];
+  }
 
   @override
   Future<MusicArtistPage> getArtist(String id) {
@@ -141,11 +180,17 @@ class _Catalog extends MusicCatalogService {
   }
 }
 
+MusicCatalogSearchPage _page(List<MusicCatalogSearchHit> hits,
+        {List<String>? rawKeys}) =>
+    MusicCatalogSearchPage(
+        hits: hits, rawKeys: rawKeys ?? [for (final hit in hits) hit.key]);
+
 class _Player extends TestPlayerCubit {
   final calls = <({
     List<Video> videos,
     bool? audio,
     Duration? startAt,
+    String? queueTitle,
     int? startIndex
   })>[];
 
@@ -204,12 +249,14 @@ class _Player extends TestPlayerCubit {
       Duration? startAt,
       bool? playing,
       int? startIndex,
+      String? queueTitle,
       bool fromMusic = false}) async {
     _selectionRevision++;
     calls.add((
       videos: videos,
       audio: audio,
       startAt: startAt,
+      queueTitle: queueTitle,
       startIndex: startIndex
     ));
     if (holdSelections) {
@@ -235,6 +282,7 @@ class _Player extends TestPlayerCubit {
       videos: entries,
       audio: audio,
       startAt: startAt,
+      queueTitle: reference.displayTitle,
       startIndex: startIndex
     ));
   }
@@ -242,17 +290,34 @@ class _Player extends TestPlayerCubit {
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  late Service previousService;
   late MusicCatalogService previousCatalog;
   late _Catalog catalog;
   late TestAppCubit app;
   late TestSettingsCubit settings;
   late _Player player;
 
+  setUpAll(() async {
+    const channel = MethodChannel('com.github.dvbeckwitt.videre/local_music');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(channel, (_) async => null);
+    try {
+      // The permission-free search fixtures share the app's library singleton.
+      // Complete its one-time startup on the same clock as fixture setup.
+      await LocalMusicLibrary.instance.initialize();
+    } finally {
+      messenger.setMockMethodCallHandler(channel, null);
+    }
+  });
+
   setUp(() async {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(const MethodChannel('videre/recommendations'),
             (_) async => throw MissingPluginException());
     isTv = false;
+    previousService = service;
+    service = Service();
     db = await SembastSqfDb.createInMemory();
     previousCatalog = musicCatalogService;
     musicCatalogService = catalog = _Catalog();
@@ -273,6 +338,7 @@ void main() {
     await settings.close();
     await app.close();
     await db.close();
+    service = previousService;
   });
 
   Future<void> show(WidgetTester tester,
@@ -446,6 +512,8 @@ void main() {
     expect(played.videoId, first.videoId);
     expect(played.musicMetadata!.thumbnails, isEmpty);
     expect(player.calls.single.audio, isTrue);
+    expect(player.calls.single.queueTitle,
+        AppLocalizations.of(tester.element(result))!.search);
   });
 
   testWidgets('historical song album labels do not offer album navigation',
@@ -474,6 +542,471 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Second song'), findsOneWidget);
     expect(find.text('First song'), findsNothing);
+  });
+
+  testWidgets('unified search restores each source draft and results viewport',
+      (tester) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(800, 720);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(tester.view.resetPhysicalSize);
+    final library = MusicLibraryService.forProfile(db, db.profileId);
+    await tester.runAsync(() => library.importSongs([
+          for (var i = 0; i < 35; i++)
+            MusicLibraryEntry(
+              kind: MusicLibraryKind.song,
+              id: 'saved${i.toString().padLeft(6, '0')}',
+              title: 'Démo recording $i',
+            ),
+        ]));
+    catalog.artistResults = [
+      for (var i = 0; i < 35; i++)
+        MusicArtist(
+            id: 'UC${i.toString().padLeft(22, 'A')}', name: 'Artist $i'),
+    ];
+    await show(tester, screen: const MusicScreen(embedded: true));
+    await tester.pumpAndSettle();
+    const channels = 'Channels';
+    final channelFilter = find.widgetWithText(ChoiceChip, channels);
+    final field = find.byKey(const ValueKey('music-search'));
+    final online = find.byKey(const ValueKey('music-search-source-online'));
+    final local = find.byKey(const ValueKey('music-search-source-library'));
+    final onlineView =
+        find.byKey(const ValueKey('music-search-online-viewport'));
+    final libraryView =
+        find.byKey(const ValueKey('music-search-library-viewport'));
+    ScrollPosition position(Finder view) => tester
+        .state<ScrollableState>(
+            find.descendant(of: view, matching: find.byType(Scrollable)).first)
+        .position;
+
+    await tester.tap(channelFilter);
+    await search(tester, 'artists');
+    await tester.pumpAndSettle();
+    expect(find.text('Artist 0'), findsOneWidget);
+    await tester.drag(onlineView, const Offset(0, -380));
+    await tester.pumpAndSettle();
+    final onlineOffset = position(onlineView).pixels;
+    expect(onlineOffset, greaterThan(180));
+
+    await tester.tap(local);
+    await tester.pumpAndSettle();
+    expect(tester.widget<TextField>(field).controller!.text, isEmpty);
+    expect(channelFilter, findsNothing);
+    expect(onlineView, findsNothing);
+    await search(tester, 'demo');
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Démo recording'), findsWidgets);
+    await tester.drag(libraryView, const Offset(0, -260));
+    await tester.pumpAndSettle();
+    final libraryOffset = position(libraryView).pixels;
+    expect(libraryOffset, greaterThan(125));
+
+    await tester.tap(online);
+    await tester.pumpAndSettle();
+    expect(tester.widget<TextField>(field).controller!.text, 'artists');
+    expect(tester.widget<ChoiceChip>(channelFilter).selected, isTrue);
+    expect(position(onlineView).pixels, closeTo(onlineOffset, 1));
+    expect(libraryView, findsNothing);
+    final retainedLibrary = find.byKey(
+        const ValueKey('music-search-library-viewport'),
+        skipOffstage: false);
+    expect(retainedLibrary, findsOneWidget);
+    expect(
+        find.descendant(
+            of: retainedLibrary,
+            matching: find.byType(Scrollable, skipOffstage: false),
+            skipOffstage: false),
+        findsNothing);
+    await tester.tap(local);
+    await tester.pumpAndSettle();
+    expect(tester.widget<TextField>(field).controller!.text, 'demo');
+    expect(position(libraryView).pixels, closeTo(libraryOffset, 1));
+    expect(tester.widget<TextField>(field).focusNode!.hasFocus, isFalse);
+    expect(tester.testTextInput.isVisible, isFalse);
+
+    final songs = find.widgetWithText(ChoiceChip, 'Songs');
+    await tester.tap(songs);
+    await tester.pumpAndSettle();
+    expect(tester.widget<ChoiceChip>(songs).selected, isTrue);
+    expect(position(libraryView).pixels, 0);
+    await tester.drag(libraryView, const Offset(0, -210));
+    await tester.pumpAndSettle();
+    final songsOffset = position(libraryView).pixels;
+    expect(songsOffset, greaterThan(100));
+    await tester.tap(online);
+    await tester.pumpAndSettle();
+    expect(tester.widget<ChoiceChip>(channelFilter).selected, isTrue);
+    expect(position(onlineView).pixels, closeTo(onlineOffset, 1));
+    await tester.tap(local);
+    await tester.pumpAndSettle();
+    expect(tester.widget<ChoiceChip>(songs).selected, isTrue);
+    expect(position(libraryView).pixels, closeTo(songsOffset, 1));
+    expect(catalog.artistSearches, ['artists']);
+    expect(catalog.searches, isEmpty);
+  });
+
+  testWidgets(
+      'Library type filters keep saved songs and local playlists distinct',
+      (tester) async {
+    final playlistId = await tester.runAsync(() async {
+      final library = MusicLibraryService.forProfile(db, db.profileId);
+      await library.save(const MusicLibraryEntry(
+          kind: MusicLibraryKind.song,
+          id: 'firstsong01',
+          title: 'Saved rehearsal'));
+      final id = (await service.createPlayList('Rehearsal mix', 'local'))!;
+      await library.markLocalPlaylist(id);
+      return id;
+    });
+    await show(tester, screen: const MusicScreen(embedded: true));
+    final online = find.byKey(const ValueKey('music-search-source-online'));
+    final local = find.byKey(const ValueKey('music-search-source-library'));
+    final field = find.byKey(const ValueKey('music-search'));
+    final all = find.widgetWithText(ChoiceChip, 'All');
+    final songs = find.widgetWithText(ChoiceChip, 'Songs');
+    final playlists = find.widgetWithText(ChoiceChip, 'Playlists');
+    final channels = find.widgetWithText(ChoiceChip, 'Channels');
+    final saved = find.widgetWithText(ListTile, 'Saved rehearsal');
+    final mix = find.widgetWithText(ListTile, 'Rehearsal mix');
+
+    await tester.tap(channels);
+    await search(tester, 'artist');
+    await tester.pumpAndSettle();
+    expect(find.text('Artist'), findsOneWidget);
+    expect(tester.widget<ChoiceChip>(all).selected, isFalse);
+    expect(tester.widget<ChoiceChip>(channels).selected, isTrue);
+    await tester.tap(local);
+    await tester.pump();
+    await search(tester, 'rehearsal');
+    await tester.pumpAndSettle();
+    expect(tester.widget<ChoiceChip>(all).selected, isTrue);
+    expect(saved, findsOneWidget);
+    expect(mix, findsOneWidget);
+    expect(channels, findsNothing);
+
+    // An old row can still be in the render tree before the filter rebuilds.
+    // It must not launch, even if that song belongs to the selected type too.
+    final oldSongTap = tester.widget<ListTile>(saved).onTap!;
+    await tester.tap(songs);
+    oldSongTap();
+    await tester.pumpAndSettle();
+    expect(player.calls, isEmpty);
+    expect(saved, findsOneWidget);
+    expect(mix, findsNothing);
+    await tester.tap(saved);
+    await tester.pumpAndSettle();
+    expect(player.calls.single.videos.single.videoId, 'firstsong01');
+
+    await tester.tap(playlists);
+    await tester.pumpAndSettle();
+    expect(saved, findsNothing);
+    expect(mix, findsOneWidget);
+    await tester.tap(mix);
+    await tester.pumpAndSettle();
+    final page = tester.widget<MusicLibraryPage>(find.byType(MusicLibraryPage));
+    expect(page.source?.playlistId, playlistId);
+    expect(find.text('Rehearsal mix'), findsOneWidget);
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    expect(tester.widget<ChoiceChip>(playlists).selected, isTrue);
+    expect(tester.widget<TextField>(field).controller!.text, 'rehearsal');
+    expect(mix, findsOneWidget);
+
+    await tester.tap(online);
+    await tester.pumpAndSettle();
+    expect(tester.widget<ChoiceChip>(channels).selected, isTrue);
+    expect(tester.widget<TextField>(field).controller!.text, 'artist');
+    expect(find.text('Artist'), findsOneWidget);
+    await tester.tap(local);
+    await tester.pumpAndSettle();
+    expect(tester.widget<ChoiceChip>(playlists).selected, isTrue);
+    expect(mix, findsOneWidget);
+    expect(catalog.artistSearches, ['artist']);
+    expect(catalog.searches, isEmpty);
+    expect(catalog.playlistSearches, isEmpty);
+    expect(catalog.playlistRequests, isEmpty);
+
+    app.setGlobalLoading(true);
+    await tester.pump();
+    app.setGlobalLoading(false);
+    await tester.pumpAndSettle();
+    expect(tester.widget<ChoiceChip>(all).selected, isTrue);
+    expect(tester.widget<TextField>(field).controller!.text, isEmpty);
+  });
+
+  testWidgets(
+      'playing a Library result clears search focus with the IME hidden',
+      (tester) async {
+    await tester.runAsync(() => MusicLibraryService.forProfile(db, db.profileId)
+        .save(const MusicLibraryEntry(
+            kind: MusicLibraryKind.song,
+            id: 'firstsong01',
+            title: 'Saved rehearsal')));
+    await show(tester, screen: const MusicScreen(embedded: true));
+    await tester.tap(find.byKey(const ValueKey('music-search-source-library')));
+    await tester.pump();
+    final field = find.byKey(const ValueKey('music-search'));
+    await tester.enterText(field, 'rehearsal');
+    tester.testTextInput.hide();
+    await tester.pumpAndSettle();
+
+    final search = tester.widget<TextField>(field);
+    expect(search.focusNode!.hasFocus, isTrue);
+    expect(tester.testTextInput.isVisible, isFalse);
+    expect(MediaQuery.viewInsetsOf(tester.element(field)).bottom, isZero);
+
+    final hit = find.widgetWithText(ListTile, 'Saved rehearsal');
+    await tester.tap(hit);
+    await tester.pumpAndSettle();
+
+    expect(search.focusNode!.hasFocus, isFalse);
+    expect(tester.testTextInput.isVisible, isFalse);
+    expect(search.controller!.text, 'rehearsal');
+    expect(hit, findsOneWidget);
+    expect(player.calls.single.videos.single.videoId, 'firstsong01');
+    expect(player.calls.single.audio, isTrue);
+  });
+
+  testWidgets('only the newest Online response survives a Library source visit',
+      (tester) async {
+    await tester.runAsync(() => MusicLibraryService.forProfile(db, db.profileId)
+        .save(const MusicLibraryEntry(
+            kind: MusicLibraryKind.song,
+            id: 'offlinelane',
+            title: 'Offline library marker')));
+    await show(tester, screen: const MusicScreen(embedded: true));
+    final online = find.byKey(const ValueKey('music-search-source-online'));
+    final local = find.byKey(const ValueKey('music-search-source-library'));
+    final marker = find.text('Offline library marker');
+    await search(tester, 'older');
+    await tester.tap(local);
+    await tester.pump();
+    await search(tester, 'library marker');
+    await tester.pumpAndSettle();
+    expect(marker, findsOneWidget);
+    final songs = find.widgetWithText(ChoiceChip, 'Songs');
+    await tester.tap(songs);
+    await tester.pumpAndSettle();
+    expect(marker, findsOneWidget);
+
+    await tester.tap(online);
+    await tester.pump();
+    await search(tester, 'newer');
+    await tester.tap(local);
+    await tester.pumpAndSettle();
+    expect(marker, findsOneWidget);
+    expect(tester.widget<ChoiceChip>(songs).selected, isTrue);
+    catalog.responses[1].complete([second]);
+    await tester.pumpAndSettle();
+    expect(marker, findsOneWidget);
+    expect(find.text('Second song'), findsNothing);
+    catalog.responses[0].complete([first]);
+    await tester.pumpAndSettle();
+    expect(marker, findsOneWidget);
+    expect(find.text('First song'), findsNothing);
+
+    await tester.tap(online);
+    await tester.pumpAndSettle();
+    expect(find.text('newer'), findsOneWidget);
+    expect(find.text('Second song'), findsOneWidget);
+    expect(find.text('First song'), findsNothing);
+    expect(marker, findsNothing);
+    expect(catalog.searches, ['older', 'newer']);
+  });
+
+  testWidgets('Online All keeps provider order and skips a hidden Top result',
+      (tester) async {
+    await tester.runAsync(installCommunityMusicFilters);
+    catalog.paginate = true;
+    await show(tester, screen: const MusicScreen(embedded: true));
+    final songs = find.widgetWithText(ChoiceChip, 'Songs');
+    final all = find.widgetWithText(ChoiceChip, 'All');
+    expect(tester.widget<ChoiceChip>(songs).selected, isTrue);
+    await tester.tap(all);
+    await search(tester, 'provider order');
+    expect(catalog.pageRequests.single.type, MusicCatalogSearchType.all);
+    catalog.pageRequests.single.response.complete(_page(const [
+      MusicCatalogSongHit(MusicTrack(
+          videoId: 'hiddenmusic',
+          title: 'Listed song',
+          uploaderChannelId: musicListedUploader)),
+      MusicCatalogPlaylistHit(
+          MusicPlaylist(id: 'PLpublic', title: 'Provider playlist')),
+      MusicCatalogSongHit(first),
+      MusicCatalogChannelHit(
+          MusicArtist(id: 'UCartist', name: 'Ranked channel')),
+      MusicCatalogSongHit(second),
+    ]));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Listed song'), findsNothing);
+    expect(find.text('Top result'), findsOneWidget);
+    final positions = [
+      for (final title in [
+        'Top result',
+        'Provider playlist',
+        'First song',
+        'Ranked channel',
+        'Second song',
+      ])
+        tester.getTopLeft(find.text(title)).dy,
+    ];
+    expect(positions, orderedEquals([...positions]..sort()));
+    expect(positions.toSet(), hasLength(positions.length));
+    expect(find.text('Provider playlist'), findsOneWidget);
+    await tester.tap(find.text('First song'));
+    await tester.pumpAndSettle();
+    expect(player.calls.single.videos.map((video) => video.videoId),
+        [first.videoId, second.videoId]);
+    expect(player.calls.single.startIndex, 0);
+  });
+
+  testWidgets('Online pagination retries in place and ends on a repeated page',
+      (tester) async {
+    catalog.paginate = true;
+    await show(tester, screen: const MusicScreen(embedded: true));
+    await search(tester, 'pages');
+    catalog.pageRequests.single.response
+        .complete(_page(const [MusicCatalogSongHit(first)]));
+    await tester.pumpAndSettle();
+    final view = find.byKey(const ValueKey('music-search-online-viewport'));
+    final scrollable =
+        find.descendant(of: view, matching: find.byType(Scrollable));
+    final before = tester.state<ScrollableState>(scrollable);
+    final loadMore = find.widgetWithText(TextButton, 'Load more');
+    final retry = find.widgetWithText(TextButton, 'Retry');
+    final firstSong = find.text('First song');
+    await tester.tap(loadMore);
+    await tester.pump();
+    expect(firstSong, findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    expect(catalog.pageRequests.last.page, 2);
+    catalog.pageRequests.last.response.completeError(StateError('try again'));
+    await tester.pumpAndSettle();
+    expect(firstSong, findsOneWidget);
+    expect(retry, findsOneWidget);
+    expect(tester.state<ScrollableState>(scrollable), same(before));
+
+    await tester.tap(retry);
+    await tester.pump();
+    expect(catalog.pageRequests.map((request) => request.page), [1, 2, 2]);
+    catalog.pageRequests.last.response.complete(
+        _page(const [MusicCatalogSongHit(first), MusicCatalogSongHit(second)]));
+    await tester.pumpAndSettle();
+    expect(firstSong, findsOneWidget);
+    expect(find.text('Second song'), findsOneWidget);
+    expect(tester.state<ScrollableState>(scrollable), same(before));
+    expect(tester.getTopLeft(firstSong).dy,
+        lessThan(tester.getTopLeft(find.text('Second song')).dy));
+
+    await tester.tap(loadMore);
+    await tester.pump();
+    expect(catalog.pageRequests.last.page, 3);
+    const unpainted = 'songs:unpainted01';
+    catalog.pageRequests.last.response
+        .complete(_page([], rawKeys: [unpainted]));
+    await tester.pumpAndSettle();
+    expect(loadMore, findsOneWidget);
+    await tester.tap(loadMore);
+    await tester.pump();
+    expect(catalog.pageRequests.last.page, 4);
+    catalog.pageRequests.last.response
+        .complete(_page([], rawKeys: [unpainted]));
+    await tester.pumpAndSettle();
+    expect(loadMore, findsNothing);
+    expect(find.text('Second song'), findsOneWidget);
+    expect(
+        catalog.pageRequests.every((request) =>
+            request.query == 'pages' &&
+            request.type == MusicCatalogSearchType.songs),
+        isTrue);
+  });
+
+  testWidgets('changing Online type or query retires pending pagination',
+      (tester) async {
+    catalog.paginate = true;
+    await show(tester, screen: const MusicScreen(embedded: true));
+    await search(tester, 'old query');
+    catalog.pageRequests.single.response
+        .complete(_page(const [MusicCatalogSongHit(first)]));
+    await tester.pumpAndSettle();
+    final loadMore = find.widgetWithText(TextButton, 'Load more');
+    await tester.tap(loadMore);
+    await tester.pump();
+    final outdatedSongAppend = catalog.pageRequests.last;
+
+    await tester.tap(find.widgetWithText(ChoiceChip, 'Channels'));
+    await tester.pump();
+    expect(outdatedSongAppend.isCurrent!(), isFalse);
+    expect(catalog.pageRequests.last.type, MusicCatalogSearchType.channels);
+    expect(catalog.pageRequests.last.page, 1);
+    catalog.pageRequests.last.response.complete(_page(const [
+      MusicCatalogChannelHit(
+          MusicArtist(id: 'UCold', name: 'Previous channel')),
+    ]));
+    outdatedSongAppend.response
+        .complete(_page(const [MusicCatalogSongHit(second)]));
+    await tester.pumpAndSettle();
+    expect(find.text('Previous channel'), findsOneWidget);
+    expect(find.text('Second song'), findsNothing);
+    await tester.tap(loadMore);
+    await tester.pump();
+    final outdatedChannelAppend = catalog.pageRequests.last;
+    expect(outdatedChannelAppend.page, 2);
+
+    await search(tester, 'new query');
+    expect(outdatedChannelAppend.isCurrent!(), isFalse);
+    expect(catalog.pageRequests.last.query, 'new query');
+    expect(catalog.pageRequests.last.page, 1);
+    catalog.pageRequests.last.response.complete(_page(const [
+      MusicCatalogChannelHit(MusicArtist(id: 'UCfresh', name: 'Fresh channel')),
+    ]));
+    outdatedChannelAppend.response.complete(_page(const [
+      MusicCatalogChannelHit(MusicArtist(id: 'UCstale', name: 'Stale channel')),
+    ]));
+    await tester.pumpAndSettle();
+    expect(find.text('Previous channel'), findsNothing);
+    expect(find.text('Stale channel'), findsNothing);
+    expect(find.text('Fresh channel'), findsOneWidget);
+    expect(loadMore, findsOneWidget);
+  });
+
+  testWidgets('Online collection Back restores the pending page action',
+      (tester) async {
+    catalog.paginate = true;
+    await show(tester, screen: const MusicScreen(embedded: true));
+    await tester.tap(find.widgetWithText(ChoiceChip, 'Playlists'));
+    await search(tester, 'playlists');
+    catalog.pageRequests.single.response.complete(_page(const [
+      MusicCatalogPlaylistHit(
+          MusicPlaylist(id: 'PLpublic', title: 'Search collection')),
+    ]));
+    await tester.pumpAndSettle();
+    final loadMore = find.widgetWithText(TextButton, 'Load more');
+    await tester.tap(loadMore);
+    await tester.pump();
+    final abandoned = catalog.pageRequests.last;
+    await tester.tap(find.text('Search collection'));
+    await tester.pumpAndSettle();
+    expect(abandoned.isCurrent!(), isFalse);
+    expect(find.text('Public playlist'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('music-browser-up')));
+    await tester.pumpAndSettle();
+    expect(find.text('Search collection'), findsOneWidget);
+    await tester.tap(loadMore);
+    await tester.pump();
+    expect(catalog.pageRequests.map((request) => request.page), [1, 2, 2]);
+    abandoned.response.complete(_page(const [
+      MusicCatalogPlaylistHit(
+          MusicPlaylist(id: 'PLabandoned', title: 'Abandoned result')),
+    ]));
+    catalog.pageRequests.last.response.complete(_page(const []));
+    await tester.pumpAndSettle();
+    expect(find.text('Abandoned result'), findsNothing);
+    expect(loadMore, findsNothing);
+    expect(find.text('Search collection'), findsOneWidget);
   });
 
   testWidgets('failed catalog search can retry and show an empty result',
@@ -581,7 +1114,15 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Save to playlist'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Watch Later'));
+    await tester.runAsync(() async {
+      await tester.tap(find.text('Watch Later'));
+      await Future.doWhile(() async {
+        await Future<void>.delayed(const Duration(milliseconds: 1));
+        return !service.getLocalPlaylists().any((playlist) =>
+            playlist.playlistId == localWatchLaterId &&
+            playlist.videos.any((video) => video.videoId == first.videoId));
+      }).timeout(const Duration(seconds: 5));
+    });
     await tester.pumpAndSettle();
     final playlist = service
         .getLocalPlaylists()
@@ -1207,6 +1748,298 @@ void main() {
     expect(find.byType(MusicScreen), findsNothing);
   });
 
+  testWidgets(
+      'tablet artist panes scroll independently and restore the browse origin',
+      (tester) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(1100, 760);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(tester.view.resetPhysicalSize);
+    final tracks = List.generate(
+        40,
+        (index) => MusicTrack(
+            videoId: 'tablet${index.toString().padLeft(5, '0')}',
+            title: 'Tablet song $index',
+            artists: const ['Artist']));
+    final releases = List.generate(
+        24,
+        (index) => MusicCollection(
+            id: 'OLAK5uy_tablet_release_$index', title: 'Release $index'));
+    catalog.pendingArtist = Completer<MusicArtistPage>()
+      ..complete(MusicArtistPage(
+          artist: artist, description: 'Tablet artist summary', songs: tracks));
+    catalog.releasePages[null] = MusicArtistReleases(releases: releases);
+    catalog.collection = const MusicCollection(
+        id: 'OLAK5uy_tablet_release_12',
+        title: 'Nested tablet release',
+        tracks: [first, second]);
+    player.commitSelection([first.toVideo(), second.toVideo()], 1, mini: true);
+    final listening = player.state;
+
+    await show(tester, screen: const Scaffold(body: Text('Browse origin')));
+    final navigator = Navigator.of(tester.element(find.text('Browse origin')));
+    unawaited(navigator.push<void>(
+        MaterialPageRoute(builder: (_) => MusicScreen(artistId: artist.id))));
+    await tester.pumpAndSettle();
+
+    final details = find.byKey(const ValueKey('music-collection-details-pane'));
+    final list = find.byKey(const ValueKey('music-collection-tracks-pane'));
+    double position(Finder pane) => tester
+        .state<ScrollableState>(
+            find.descendant(of: pane, matching: find.byType(Scrollable)).first)
+        .position
+        .pixels;
+    expect(tester.getRect(details).right, lessThan(tester.getRect(list).left));
+    for (final (pane, label) in [
+      (details, 'Collection details'),
+      (list, 'Collection tracks'),
+    ]) {
+      final semantics = tester.getSemantics(pane).getSemanticsData();
+      expect(semantics.label, label);
+      expect(semantics.role, SemanticsRole.region);
+    }
+    expect(
+        find.descendant(
+            of: details, matching: find.text('Tablet artist summary')),
+        findsOneWidget);
+    expect(find.descendant(of: list, matching: find.text('Tablet song 0')),
+        findsOneWidget);
+
+    await tester.drag(list, const Offset(0, -480));
+    await tester.pumpAndSettle();
+    final trackOffset = position(list);
+    expect(trackOffset, greaterThan(200));
+    expect(position(details), 0);
+    final release =
+        find.byKey(const ValueKey('music-release-OLAK5uy_tablet_release_12'));
+    await tester.ensureVisible(release);
+    await tester.pumpAndSettle();
+    final detailsOffset = position(details);
+    expect(detailsOffset, greaterThan(200));
+    expect(position(list), trackOffset);
+
+    await tester.tap(release);
+    await tester.pumpAndSettle();
+    expect(
+        find.descendant(
+            of: details, matching: find.text('Nested tablet release')),
+        findsOneWidget);
+    expect(find.descendant(of: list, matching: find.text('First song')),
+        findsOneWidget);
+    final up = find.byKey(const ValueKey('music-browser-up'));
+    await tester.tap(up);
+    await tester.pumpAndSettle();
+    expect(position(details), closeTo(detailsOffset, 1));
+    expect(position(list), closeTo(trackOffset, 1));
+    await tester.longPress(up);
+    await tester.pumpAndSettle();
+    expect(find.text('Browse origin'), findsOneWidget);
+    expect(find.byType(MusicScreen), findsNothing);
+    expect(catalog.artistRequests, [artist.id]);
+    expect(catalog.playlistRequests, [releases[12].id]);
+    expect(player.state, same(listening));
+    expect(player.calls, isEmpty);
+  });
+
+  testWidgets('catalog panes fit large text and follow RTL reading order',
+      (tester) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(960, 740);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(tester.view.resetPhysicalSize);
+    catalog.collection = MusicCollection(
+      id: 'PLpublic',
+      title: 'Public playlist',
+      tracks: [
+        first,
+        for (var index = 0; index < 30; index++)
+          MusicTrack(
+              videoId: 'fit${index.toString().padLeft(8, '0')}',
+              title: 'Catalog track $index'),
+      ],
+    );
+    await show(tester, screen: Builder(builder: (context) {
+      return MediaQuery(
+        data: MediaQuery.of(context).copyWith(textScaler: TextScaler.linear(2)),
+        child: const Directionality(
+          textDirection: TextDirection.rtl,
+          child: MusicScreen(playlistId: 'PLpublic'),
+        ),
+      );
+    }));
+    await tester.pumpAndSettle();
+    final details = find.byKey(const ValueKey('music-collection-details-pane'));
+    final tracks = find.byKey(const ValueKey('music-collection-tracks-pane'));
+    final scroll =
+        find.descendant(of: tracks, matching: find.byType(Scrollable)).first;
+    final viewport = tester.state<ScrollableState>(scroll);
+    final playAll = find.byKey(const ValueKey('music-play-all'));
+    expect(tester.getRect(details).left,
+        greaterThan(tester.getRect(tracks).right));
+    expect(find.descendant(of: details, matching: playAll), findsOneWidget);
+    expect(find.descendant(of: tracks, matching: find.text('First song')),
+        findsOneWidget);
+    expect(tester.takeException(), isNull);
+
+    await tester.drag(tracks, const Offset(0, -260));
+    await tester.pumpAndSettle();
+    final offset = viewport.position.pixels;
+    expect(offset, greaterThan(100));
+
+    tester.view.physicalSize = const Size(570, 900);
+    await tester.pumpAndSettle();
+    expect(details, findsNothing);
+    expect(tester.state<ScrollableState>(scroll), same(viewport));
+    expect(viewport.position.pixels, closeTo(offset, 1));
+    viewport.position.jumpTo(0);
+    await tester.pumpAndSettle();
+    expect(find.descendant(of: tracks, matching: playAll), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    expect(catalog.playlistRequests, ['PLpublic']);
+  });
+
+  testWidgets(
+      'holding catalog Up skips to retained Search and drops a late album',
+      (tester) async {
+    const query = 'retained artist query';
+    const release = MusicCollection(
+      id: 'OLAK5uy_browse_release',
+      title: 'Artist release',
+      tracks: [first, second],
+    );
+    catalog.releasePages[null] = const MusicArtistReleases(releases: [release]);
+    catalog.collection = release;
+    player.commitSelection([first.toVideo(), second.toVideo()], 1, mini: true);
+    final listening = player.state;
+    await show(tester, screen: const Scaffold(body: Text('Search origin')));
+    final navigator = Navigator.of(tester.element(find.text('Search origin')));
+    unawaited(navigator.push<void>(
+        MaterialPageRoute(builder: (_) => const MusicScreen(embedded: true))));
+    await tester.pumpAndSettle();
+    final channels = find.widgetWithText(ChoiceChip, 'Channels');
+    await tester.tap(channels);
+    await search(tester, query);
+    await tester.pumpAndSettle();
+    expect(catalog.artistSearches, [query]);
+    await tester.tap(find.text(artist.name));
+    await tester.pumpAndSettle();
+    expect(find.text('Artist description'), findsOneWidget);
+    final entry =
+        find.byKey(const ValueKey('music-release-OLAK5uy_browse_release'));
+    await tester.ensureVisible(entry);
+    await tester.tap(entry);
+    await tester.pumpAndSettle();
+    final up = find.byKey(const ValueKey('music-browser-up'));
+    expect(find.byKey(const ValueKey('music-play-all')), findsOneWidget);
+    final data = tester.getSemantics(up).getSemanticsData();
+    expect(data.hasAction(SemanticsAction.tap), isTrue);
+    expect(
+        data.customSemanticsActionIds!
+            .map((id) => CustomSemanticsAction.getAction(id)?.label),
+        contains('Return to Music search results'));
+    await tester.tap(up);
+    await tester.pumpAndSettle();
+    expect(find.text('Artist description'), findsOneWidget);
+    expect(find.byKey(const ValueKey('music-play-all')), findsNothing);
+    expect(find.text('Search origin'), findsNothing);
+
+    final lateAlbum = catalog.pendingPlaylist = Completer<MusicCollection>();
+    await tester.ensureVisible(entry);
+    await tester.tap(entry);
+    await tester.pump();
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    expect(up.hitTestable(), findsOneWidget);
+    await tester.longPress(up);
+    await tester.pumpAndSettle();
+    final field =
+        tester.widget<TextField>(find.byKey(const ValueKey('music-search')));
+    expect(field.controller!.text, query);
+    expect(field.focusNode!.hasFocus, isFalse);
+    expect(tester.testTextInput.isVisible, isFalse);
+    expect(tester.widget<ChoiceChip>(channels).selected, isTrue);
+    expect(find.widgetWithText(ListTile, artist.name), findsOneWidget);
+    expect(find.text('Artist description'), findsNothing);
+    expect(find.text('Search origin'), findsNothing);
+    expect(up, findsNothing);
+    expect(catalog.artistSearches, [query]);
+    expect(catalog.artistRequests, [artist.id]);
+    expect(catalog.releaseRequests, [null]);
+    expect(catalog.playlistRequests, [release.id, release.id]);
+    expect(player.state, same(listening));
+
+    lateAlbum.complete(const MusicCollection(
+        id: 'OLAK5uy_browse_release', title: 'Discarded late album'));
+    await tester.pumpAndSettle();
+    expect(find.text('Discarded late album'), findsNothing);
+    expect(find.widgetWithText(ListTile, artist.name), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(find.text('Search origin'), findsOneWidget);
+    expect(player.state, same(listening));
+    expect(player.calls, isEmpty);
+  });
+
+  testWidgets(
+      'holding Up from directly opened details returns one route to playback',
+      (tester) async {
+    const release = MusicCollection(
+        id: 'OLAK5uy_direct_release', title: 'Direct release', tracks: [first]);
+    catalog.releasePages[null] = const MusicArtistReleases(releases: [release]);
+    catalog.collection = release;
+    player.commitSelection([first.toVideo(), second.toVideo()], 1);
+    final listening = player.state;
+    await show(tester, screen: const Scaffold(body: Text('Outside playback')));
+    final navigator =
+        Navigator.of(tester.element(find.text('Outside playback')));
+    unawaited(navigator.push<void>(MaterialPageRoute(
+      builder: (context) => Scaffold(
+        body: TextButton(
+          onPressed: () => unawaited(MusicScreen.openPlayingSource(
+              context, const MusicScreen(artistId: 'UCartist'),
+              television: false)),
+          child: const Text('Open currently playing source'),
+        ),
+      ),
+    )));
+    await tester.pumpAndSettle();
+    final origin = find.text('Open currently playing source');
+    final releaseRow =
+        find.byKey(const ValueKey('music-release-OLAK5uy_direct_release'));
+    final up = find.byKey(const ValueKey('music-browser-up'));
+    for (final useAccessibilityAction in [false, true]) {
+      await tester.tap(origin);
+      await tester.pumpAndSettle();
+      expect(find.text('Artist description'), findsOneWidget);
+      await tester.ensureVisible(releaseRow);
+      await tester.tap(releaseRow);
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('music-play-all')), findsOneWidget);
+      final node = tester.getSemantics(up);
+      final data = node.getSemanticsData();
+      expect(data.hasAction(SemanticsAction.tap), isTrue);
+      final returnAction = data.customSemanticsActionIds!.singleWhere((id) =>
+          CustomSemanticsAction.getAction(id)?.label ==
+          'Return to previous screen');
+      if (useAccessibilityAction) {
+        node.owner!
+            .performAction(node.id, SemanticsAction.customAction, returnAction);
+      } else {
+        await tester.longPress(up);
+      }
+      await tester.pumpAndSettle();
+      expect(find.byType(MusicScreen), findsNothing);
+      expect(origin, findsOneWidget);
+      expect(find.text('Outside playback'), findsNothing);
+      expect(navigator.canPop(), isTrue);
+      expect(player.state, same(listening));
+      expect(player.calls, isEmpty);
+    }
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(find.text('Outside playback'), findsOneWidget);
+  });
+
   testWidgets('searching from a direct detail keeps Back to search behavior',
       (tester) async {
     await show(tester, screen: const Scaffold(body: Text('Origin')));
@@ -1252,6 +2085,8 @@ void main() {
     expect(player.calls.last.videos.map((v) => v.videoId),
         [first.videoId, second.videoId]);
     expect(player.calls.last.startIndex, 1);
+    expect(player.calls.map((call) => call.queueTitle),
+        [artist.name, artist.name]);
     await tester.binding.handlePopRoute();
     await tester.pumpAndSettle();
     expect(find.text('Artist description'), findsNothing);
@@ -1582,18 +2417,30 @@ void main() {
     const song =
         LocalMusicTrack(uri: '$tree/document/recording', title: 'Recording');
     final scans = <Completer<List<Object?>>>[];
+    final platformCalls = <String>[];
     var accessible = true;
+    var rejectedAccessChecks = 0;
+    var selectingFolder = true;
     final messenger =
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
     const audioSession = MethodChannel('com.ryanheise.audio_session');
-    messenger.setMockMethodCallHandler(audioSession, (_) async => null);
+    messenger.setMockMethodCallHandler(audioSession, (call) async {
+      platformCalls.add('audio session ${call.method}');
+      return null;
+    });
     messenger.setMockMethodCallHandler(channel, (call) async {
+      platformCalls.add('local library ${call.method}');
       switch (call.method) {
         case 'getFolder':
+        case 'pickFolder':
           return {'uri': tree, 'name': 'Music', 'selectionId': 'current'};
         case 'checkFolderAccess':
+          if (!accessible) rejectedAccessChecks++;
           return accessible;
         case 'listTracks':
+          if (selectingFolder) {
+            throw PlatformException(code: 'SCAN_INTERRUPTED');
+          }
           final scan = Completer<List<Object?>>();
           scans.add(scan);
           return scan.future;
@@ -1609,6 +2456,26 @@ void main() {
       messenger.setMockMethodCallHandler(channel, null);
       isTv = false;
     });
+    // Choose the grant explicitly because an earlier Library search can have
+    // initialized the singleton before this fixture installs its native mock.
+    // An interrupted first scan leaves the grant usable for the lazy Resume.
+    final chosen = await tester.runAsync(() => LocalMusicLibrary.instance
+        .chooseFolder()
+        .timeout(const Duration(seconds: 3)));
+    expect(chosen, isTrue);
+    selectingFolder = false;
+    expect(LocalMusicLibrary.instance.loaded, isFalse);
+    expect(scans, isEmpty);
+
+    Future<void> pumpUntil(bool Function() observed) async {
+      await tester.pump();
+      for (var attempt = 0; attempt < 10 && !observed(); attempt++) {
+        await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+      expect(observed(), isTrue, reason: 'Platform calls $platformCalls');
+    }
+
     await tester.runAsync(() => db.saveSetting(SettingsValue(
         playbackSessionSetting,
         PlaybackSession(
@@ -1621,9 +2488,8 @@ void main() {
     await show(tester);
     await tester.pump();
     await tester.tap(find.text('Resume listening'));
-    await tester.runAsync(() => tester.pump());
+    await pumpUntil(() => scans.length == 1);
     await tester.pump(const Duration(milliseconds: 400));
-    expect(scans, hasLength(1));
     expect(find.byType(CircularProgressIndicator), findsOneWidget);
     expect(find.text('Retry'), findsNothing);
     await tester.runAsync(() async {
@@ -1633,8 +2499,7 @@ void main() {
     await tester.pump();
     expect(find.text('Retry'), findsOneWidget);
     await tester.tap(find.text('Retry'));
-    await tester.pump();
-    expect(scans, hasLength(2));
+    await pumpUntil(() => scans.length == 2);
     expect(find.text('Retry'), findsNothing);
     await tester.runAsync(() async {
       scans.last.completeError(PlatformException(code: 'FOLDER_UNAVAILABLE'));
@@ -1644,7 +2509,8 @@ void main() {
     expect(find.text('Retry'), findsOneWidget);
     accessible = false;
     await tester.tap(find.text('Retry'));
-    await tester.pump();
+    await pumpUntil(() =>
+        rejectedAccessChecks == 1 && find.text('Retry').evaluate().isNotEmpty);
     expect(scans, hasLength(2));
     expect(find.byType(CircularProgressIndicator), findsNothing);
     expect(find.text('Retry'), findsOneWidget);
@@ -1711,6 +2577,38 @@ void main() {
     expect(player.resumes, 1);
     expect(player.calls, isEmpty);
     expect(player.savedSession?.currentId, 'entry-second');
+  });
+
+  testWidgets(
+      'music resume recognizes a repeated saved download by its source ID',
+      (tester) async {
+    final repeated = '${first.videoId}#1';
+    await tester.runAsync(() async {
+      await db.upsertDownload(DownloadedVideo(
+          videoId: first.videoId,
+          title: first.title,
+          musicMetadata: first.toVideo().musicMetadata,
+          downloadComplete: true,
+          audioOnly: true,
+          lengthSeconds: 180,
+          quality: 'Audio'));
+      await db.saveSetting(SettingsValue(
+          playbackSessionSetting,
+          PlaybackSession(
+                  offlineIds: [first.videoId, repeated],
+                  currentId: repeated,
+                  played: [first.videoId],
+                  seconds: 42,
+                  audio: true)
+              .encode()));
+    });
+    await show(tester);
+    await tester.tap(find.text('Resume listening'));
+    await tester.pumpAndSettle();
+    expect(player.resumes, 1);
+    expect(player.savedSession?.currentId, repeated);
+    expect(player.savedSession?.seconds, 42);
+    expect(player.calls, isEmpty);
   });
 
   testWidgets(

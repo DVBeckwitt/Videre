@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:clipious/downloads/models/download_formats.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/downloads/models/music_download_format.dart';
+import 'package:clipious/downloads/services/download_mux.dart';
 import 'package:clipious/downloads/states/download_manager.dart';
 import 'package:clipious/downloads/services/download_rename.dart';
 import 'package:clipious/downloads/services/download_storage.dart';
@@ -977,6 +978,7 @@ void main() {
       await nextPreference.save(db);
       final encoderInputs = <List<int>>[];
       final encoderCodecs = <String?>[];
+      final encoderArguments = <List<String>>[];
       manager = DownloadManagerCubit(const DownloadManagerState(), _Player(),
           encodeMusic: ({
         required input,
@@ -989,6 +991,12 @@ void main() {
         final bytes = await File(input).readAsBytes();
         encoderInputs.add(bytes);
         encoderCodecs.add(sourceCodec);
+        encoderArguments.add(musicMuxArguments(
+            input: input,
+            output: output,
+            video: video,
+            inputFormat: inputFormat,
+            sourceCodec: sourceCodec));
         await File(output).writeAsBytes([7, ...bytes]);
       });
       await manager.addDownloads([]);
@@ -1015,6 +1023,13 @@ void main() {
         expect(encoderInputs, [bytes]);
         expect(encoderCodecs,
             [expected == DownloadContainer.mp4 ? 'aac' : 'opus']);
+        expect(
+            encoderArguments.single,
+            containsAllInOrder([
+              '-f',
+              expected == DownloadContainer.mp4 ? 'mov' : 'matroska',
+              '-i'
+            ]));
       }
       final extension = switch (outputFormat) {
         null => 'webm',
@@ -1756,6 +1771,189 @@ void main() {
 
     expect(db.getDownloadByVideoId(video.videoId), isNull);
     expect(manager.state.videos, isEmpty);
+  });
+
+  group('deleteMusicSelection', () {
+    final song = video.copyWith(
+        audioOnly: true,
+        musicMetadata: const MusicMetadata(title: 'Song', artist: 'Artist'),
+        musicFormat: MusicDownloadFormat.mp3,
+        downloadComplete: true);
+
+    test(
+        'removes completed, failed and paused Music jobs and keeps exported copies',
+        () async {
+      const exported = 'content://documents/exports/song.mp3';
+      final complete = song.copyWith(
+          folderUri: folder,
+          storageUri: document,
+          exportedMusic: const ExportedMusicCopy(
+              folder, exported, MusicDownloadFormat.mp3,
+              complete: true));
+      final failed = song.copyWith(
+          videoId: 'failed', downloadComplete: false, downloadFailed: true);
+      final paused = song.copyWith(videoId: 'paused', downloadComplete: false);
+      final spoken = paused.copyWith(videoId: 'speech', musicMetadata: null);
+      for (final entry in [complete, failed, paused, spoken]) {
+        await db.upsertDownload(entry);
+      }
+      await manager.pauseDownload(paused);
+      final removedDocuments = <String>[];
+      messenger.setMockMethodCallHandler(storageChannel, (call) async {
+        expect(call.method, 'deleteDocument');
+        removedDocuments.add(call.arguments['uri'] as String);
+        return null;
+      });
+      final refreshed = complete.copyWith(
+          musicMetadata:
+              const MusicMetadata(title: 'Renamed', artist: 'Artist'));
+      await db.upsertDownload(refreshed);
+
+      expect(
+          await manager.deleteMusicSelection(
+              manager.captureMusicDeletion(
+                  [complete, failed, paused, paused, spoken]),
+              isCurrent: () => true),
+          3);
+      expect(removedDocuments, [document]);
+      expect(manager.state.pausedVideoIds, isEmpty);
+      expect(db.getAllDownloads().map((v) => v.videoId), [spoken.videoId]);
+    });
+
+    test('rechecks each persisted identity after the previous removal',
+        () async {
+      final first = song.copyWith(folderUri: folder, storageUri: document);
+      final next = song.copyWith(
+          videoId: 'next',
+          folderUri: folder,
+          storageUri: 'content://documents/previous');
+      final later = song.copyWith(videoId: 'later');
+      await db.upsertDownload(first);
+      await db.upsertDownload(next);
+      await db.upsertDownload(later);
+      final replacement =
+          next.copyWith(storageUri: 'content://documents/replacement');
+      messenger.setMockMethodCallHandler(storageChannel, (call) async {
+        expect(call.arguments['uri'], document);
+        await db.upsertDownload(replacement);
+        return null;
+      });
+
+      expect(
+          await manager.deleteMusicSelection(
+              manager.captureMusicDeletion([
+                first,
+                next,
+                later.copyWith(profileId: 'other'),
+                later.copyWith(videoId: 'gone')
+              ]),
+              isCurrent: () => true),
+          1);
+      expect(db.getDownloadByVideoId(next.videoId)?.storageUri,
+          replacement.storageUri);
+      expect(db.getDownloadByVideoId(later.videoId), isNotNull);
+    });
+
+    test('stops when ownership changes and a failed removal can be retried',
+        () async {
+      final failed = song.copyWith(folderUri: folder, storageUri: document);
+      final completed = song.copyWith(
+          videoId: 'completed',
+          folderUri: folder,
+          storageUri: 'content://documents/completed');
+      final remaining = song.copyWith(videoId: 'remaining');
+      for (final entry in [failed, completed, remaining]) {
+        await db.upsertDownload(entry);
+      }
+      var current = true;
+      messenger.setMockMethodCallHandler(storageChannel, (call) async {
+        if (call.arguments['uri'] == document) {
+          throw PlatformException(code: 'DOWNLOAD_STORAGE');
+        }
+        current = false;
+        return null;
+      });
+
+      expect(
+          await manager.deleteMusicSelection(
+              manager.captureMusicDeletion([failed, completed, remaining]),
+              isCurrent: () => current),
+          1);
+      expect(db.getDownloadByVideoId(failed.videoId), isNotNull);
+      expect(db.getDownloadByVideoId(completed.videoId), isNull);
+      expect(db.getDownloadByVideoId(remaining.videoId), isNotNull);
+
+      messenger.setMockMethodCallHandler(storageChannel, (_) async => null);
+      expect(
+          await manager.deleteMusicSelection(
+              manager.captureMusicDeletion([failed, remaining]),
+              isCurrent: () => true),
+          2);
+      expect(db.getAllDownloads(), isEmpty);
+    });
+
+    test('a confirmed private job cannot remove an identical re-added job',
+        () async {
+      final catalog =
+          Video(videoId: 'private-song', musicMetadata: song.musicMetadata);
+      Future<bool> enqueue() =>
+          manager.addDownload(catalog.videoId, audioOnly: true, video: catalog);
+      expect(await enqueue(), isTrue);
+      final first = db.getDownloadByVideoId(catalog.videoId)!;
+      final approval = manager.captureMusicDeletion([first]);
+      await manager.deleteVideo(first);
+      expect(await enqueue(), isTrue);
+      final replacement = db.getDownloadByVideoId(catalog.videoId)!;
+      expect(replacement.storageUri, isNull);
+      expect(replacement.toJson(), first.toJson());
+
+      expect(
+          await manager.deleteMusicSelection(approval, isCurrent: () => true),
+          0);
+      expect(db.getDownloadByVideoId(catalog.videoId), isNotNull);
+      expect(
+          await manager.deleteMusicSelection(
+              manager.captureMusicDeletion([replacement]),
+              isCurrent: () => true),
+          1);
+    });
+
+    test('an active job resumes after its removal approval expires', () async {
+      final pending = song.copyWith(downloadComplete: false);
+      await db.upsertDownload(pending);
+      final started = Completer<void>();
+      final restarted = Completer<void>();
+      final metadata = Completer<Video>();
+      service = _DownloadService((_) {
+        if (!started.isCompleted) {
+          started.complete();
+        } else {
+          restarted.complete();
+        }
+        return metadata.future;
+      });
+      await manager.setWifiOnly(false);
+      await started.future.timeout(const Duration(seconds: 2));
+      final original =
+          manager.state.downloadProgresses[pending.videoId]!.cancelToken;
+      final current = db.getDownloadByVideoId(pending.videoId)!;
+      final approval = manager.captureMusicDeletion([current]);
+      try {
+        expect(
+            await manager.deleteMusicSelection(approval,
+                isCurrent: () => !original.isCancelled),
+            0);
+        await restarted.future.timeout(const Duration(seconds: 2));
+        expect(
+            manager.state.downloadProgresses[pending.videoId]!.cancelToken
+                .isCancelled,
+            isFalse);
+        expect(db.getDownloadByVideoId(pending.videoId), isNotNull);
+      } finally {
+        await manager.setWifiOnly(true);
+        metadata.complete(Video(videoId: pending.videoId));
+      }
+    });
   });
 
   test('a failed deletion does not leave the download permanently blocked',

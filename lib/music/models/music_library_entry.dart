@@ -19,6 +19,7 @@ class MusicLibraryEntry {
   final String subtitle;
   final List<MusicArtistCredit> artistCredits;
   final String? album;
+  final String? albumPlaylistId;
   final int? durationSeconds;
   final List<ImageObject> thumbnails;
   final bool usesVideoThumbnails;
@@ -42,6 +43,7 @@ class MusicLibraryEntry {
     this.subtitle = '',
     this.artistCredits = const [],
     this.album,
+    this.albumPlaylistId,
     this.durationSeconds,
     this.thumbnails = const [],
     this.usesVideoThumbnails = false,
@@ -78,6 +80,7 @@ class MusicLibraryEntry {
         subtitle: metadata.artist,
         artistCredits: metadata.artistCredits,
         album: metadata.album,
+        albumPlaylistId: metadata.albumPlaylistId,
         durationSeconds: video.lengthSeconds,
         isArtTrack: metadata.isArtTrack,
         usesVideoThumbnails: useFrames,
@@ -118,6 +121,7 @@ class MusicLibraryEntry {
             artist: subtitle,
             artistCredits: artistCredits,
             album: album,
+            albumPlaylistId: albumPlaylistId,
             thumbnails: covers,
             isArtTrack: isArtTrack));
   }
@@ -131,6 +135,9 @@ class MusicLibraryEntry {
           'artistCredits':
               artistCredits.map((credit) => credit.toJson()).toList(),
         if (album != null) 'album': album,
+        if (kind == MusicLibraryKind.song &&
+            validMusicAlbumPlaylistId(albumPlaylistId) != null)
+          'albumPlaylistId': albumPlaylistId,
         if (durationSeconds != null) 'durationSeconds': durationSeconds,
         'thumbnails': thumbnails.map((image) => image.toJson()).toList(),
         if (usesVideoThumbnails) 'usesVideoThumbnails': true,
@@ -181,6 +188,9 @@ class MusicLibraryEntry {
             ? MusicArtistCredit.parseList(value['artistCredits'])
             : const [],
         album: _text(value['album']),
+        albumPlaylistId: kind == MusicLibraryKind.song
+            ? validMusicAlbumPlaylistId(value['albumPlaylistId'])
+            : null,
         durationSeconds: duration is int && duration >= 0 && duration <= 604800
             ? duration
             : null,

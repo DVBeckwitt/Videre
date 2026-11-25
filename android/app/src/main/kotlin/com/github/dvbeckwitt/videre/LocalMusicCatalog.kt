@@ -10,12 +10,14 @@ import android.net.Uri
 import android.os.Build
 import android.os.CancellationSignal
 import android.os.Environment
+import android.os.OperationCanceledException
 import android.os.SystemClock
 import android.provider.DocumentsContract
 import android.provider.DocumentsContract.Document
 import android.provider.MediaStore
 import android.provider.MediaStore.Audio.Media as Audio
 import android.system.Os
+import android.system.OsConstants
 import android.util.Base64
 import android.util.Log
 import java.io.ByteArrayOutputStream
@@ -27,9 +29,12 @@ import java.util.ArrayDeque
 import java.util.Locale
 import java.util.UUID
 
-internal class LocalMusicCatalog(private val context: Context, cache: File, indexFile: File) {
+internal class LocalMusicCatalog(
+    private val context: Context, cache: File, indexFile: File, visibilityAliasFile: File,
+) {
     private val artwork = LocalMusicCovers(cache)
     private val index = LocalMusicIndex(indexFile)
+    private val visibilityArchive = LocalMusicVisibilityAliasArchive(visibilityAliasFile)
 
     fun tracks(
         source: Uri,
@@ -39,6 +44,7 @@ internal class LocalMusicCatalog(private val context: Context, cache: File, inde
         val started = SystemClock.elapsedRealtime()
         val sourceKey = source.toString()
         val snapshot = index.read(sourceKey)
+        val visibilityAliases = visibilityArchive.read()
         val scanned = linkedMapOf<String, LocalMusicRow>()
         // A path-based provider can reuse the old URI after a rename. Reserve
         // the ID for the renamed song until it actually leaves this library.
@@ -47,6 +53,9 @@ internal class LocalMusicCatalog(private val context: Context, cache: File, inde
                 if (row.identityKey == null) put(row.identityUri ?: row.uri, row.uri)
             }
         }
+        val reservedVisibility = snapshot.tracks.values.mapNotNull { row ->
+            row.visibilityAlias?.let { it to row.uri }
+        }.toMap()
         val batch = TrackBatch(publish)
         val coverRepairs = LocalMusicCoverRepairs()
         val scanTime = System.currentTimeMillis()
@@ -55,7 +64,7 @@ internal class LocalMusicCatalog(private val context: Context, cache: File, inde
         val held = mutableSetOf<String>()
 
         fun publishDiscovered(row: LocalMusicRow) {
-            val value = channelValue(row)
+            val value = channelValue(row, sourceKey)
             coverRepairs.consider(row, value["artPath"] != null)
             batch.add(value)
         }
@@ -71,12 +80,20 @@ internal class LocalMusicCatalog(private val context: Context, cache: File, inde
                     draft.metadata
                 },
             )
-            val identified = when {
-                previous != null -> row.inheritsIdentity(previous)
+            val indexed = when {
+                previous != null -> row.inheritsIdentity(previous).inheritsVisibility(previous)
                 draft.uri in reserved && reserved[draft.uri] != draft.uri ->
                     row.copy(identityKey = newIdentityKey())
                 else -> row
+            }.let {
+                val aliasOwner = it.visibilityKey?.let(reservedVisibility::get)
+                if (aliasOwner != null && aliasOwner != it.uri) {
+                    // Reusing the old URI must not reuse a key still owned by
+                    // the other, renamed file even if revision values repeat.
+                    it.copy(visibilityAlias = newIdentityKey())
+                } else it
             }
+            val identified = visibilityAliases.resolve(indexed) { descriptorVisibilityProof(Uri.parse(indexed.uri), signal) }
             scanned[identified.uri] = identified
             // Wait for the complete listing before choosing a recovery match.
             // A provisional identity would briefly describe the wrong file.
@@ -121,9 +138,21 @@ internal class LocalMusicCatalog(private val context: Context, cache: File, inde
                 scanned[match.uri] = match.inheritsIdentity(previous).copy(
                     addedMs = previous.addedMs,
                     firstSeen = previous.firstSeen,
-                )
+                ).inheritsVisibility(previous, confirmedRename = match.matchesRevision(previous))
+                val matchedVisibility = scanned[match.uri]?.visibilityKey
+                if (old != null && old.uri != match.uri && matchedVisibility != null &&
+                    scanned[old.uri]?.visibilityKey == matchedVisibility) {
+                    scanned[old.uri] = scanned.getValue(old.uri).copy(visibilityAlias = newIdentityKey())
+                }
                 changes.addAll(uriChanges(rename, match.uri))
             } else if (!originalStillPresent) {
+                if (old != null && targets.isNotEmpty() && old.visibilityKey == previous.visibilityKey) {
+                    // The journal cannot establish which candidate owns the
+                    // old proof. Let the unresolved source remain visible.
+                    scanned[old.uri] = scanned.getValue(old.uri).copy(
+                        visibilityProof = null, visibilityAlias = null,
+                    )
+                }
                 pending.add(rename)
             }
         }
@@ -149,12 +178,11 @@ internal class LocalMusicCatalog(private val context: Context, cache: File, inde
             signal.throwIfCanceled()
             val row = entry.value
             val previous = snapshot.tracks[row.uri]
-            if (previous?.metadata == null || !row.matchesRevision(previous) ||
-                row.identityKey != previous.identityKey) {
+            if (row.needsTagRead(previous)) {
                 ++reads
                 val metadata = readMetadata(Uri.parse(row.uri), row.metadata)
                 entry.setValue(row.copy(metadata = metadata))
-                batch.add(channelValue(entry.value))
+                batch.add(channelValue(entry.value, sourceKey))
             }
         }
         var coverReads = 0
@@ -173,11 +201,23 @@ internal class LocalMusicCatalog(private val context: Context, cache: File, inde
             "tracks=${scanned.size} tagReads=$reads coverReads=$coverReads elapsedMs=${SystemClock.elapsedRealtime() - started}")
         return scanned.values.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) {
             it.metadata?.title ?: fallbackTitle(it.fileName)
-        }).map(::channelValue)
+        }).map { channelValue(it, sourceKey) }
     }
 
     fun indexedTrack(source: Uri, uri: Uri): Map<String, Any?>? =
-        index.read(source.toString()).tracks[uri.toString()]?.let(::channelValue)
+        index.read(source.toString()).tracks[uri.toString()]?.let { channelValue(it, source.toString()) }
+
+    fun matchDownloads(
+        source: Uri, downloads: List<LocalMusicDownloadCandidate>, signal: CancellationSignal,
+    ): Map<String, List<String>> {
+        val matcher = LocalMusicDownloadMatcher(context, source, index.read(source.toString()).tracks, signal)
+        return buildMap {
+            for (download in downloads) {
+                val matches = matcher.match(download)
+                if (matches.isNotEmpty()) put(download.key, matches)
+            }
+        }
+    }
 
     fun prepareRename(source: Uri, uri: Uri, name: String) {
         val key = source.toString()
@@ -185,7 +225,12 @@ internal class LocalMusicCatalog(private val context: Context, cache: File, inde
         val row = snapshot.tracks[uri.toString()] ?: throw IOException()
         val pending = snapshot.pending.filterNot { it.previous.uri == row.uri }
         val equivalent = if (key == SYSTEM_URI) externalStorageDocument(uri)?.toString() else null
-        val rename = PendingLocalMusicRename(UUID.randomUUID().toString(), row, name, equivalent)
+        // Compare the provider's current instance with the indexed one before
+        // this journal authorizes transferring visibility to a changed URI.
+        val verified = visibilityArchive.read().resolve(
+            row.copy(visibilityProof = readVisibilityProof(source, uri)).inheritsVisibility(row),
+        ) { descriptorVisibilityProof(uri) }
+        val rename = PendingLocalMusicRename(UUID.randomUUID().toString(), verified, name, equivalent)
         index.write(key, snapshot.copy(pending = pending + rename))
     }
 
@@ -200,18 +245,37 @@ internal class LocalMusicCatalog(private val context: Context, cache: File, inde
         val key = source.toString()
         val snapshot = index.read(key)
         val previous = snapshot.tracks[oldUri.toString()] ?: throw IOException()
-        val updated = previous.copy(uri = newUri.toString(), fileName = name)
-            .inheritsIdentity(previous)
+        val recorded = snapshot.pending.firstOrNull { it.previous.uri == previous.uri }
+        val updated = previous.copy(
+            uri = newUri.toString(),
+            fileName = name,
+            visibilityProof = readVisibilityProof(source, newUri),
+        ).inheritsIdentity(previous).inheritsVisibility(
+            recorded?.previous ?: previous, confirmedRename = recorded != null,
+        )
         val tracks = snapshot.tracks.toMutableMap().apply {
             remove(previous.uri)
             put(updated.uri, updated)
         }
         val pending = snapshot.pending.filterNot { it.previous.uri == previous.uri }
-        val rename = snapshot.pending.firstOrNull { it.previous.uri == previous.uri }
+        val rename = recorded
             ?: PendingLocalMusicRename(UUID.randomUUID().toString(), previous, name)
         val changes = snapshot.unacknowledged + uriChanges(rename, updated.uri)
         index.write(key, LocalMusicSnapshot(tracks, pending, changes))
-        return channelValue(updated)
+        if (recorded != null && (updated.visibilityProof != recorded.previous.visibilityProof || oldUri != newUri)) {
+            val provider = updated.visibilityProof
+            val visibility = updated.visibilityKey
+            if (provider != null && visibility != null) {
+                descriptorVisibilityProof(newUri)?.let { file ->
+                    try {
+                        visibilityArchive.retain(LocalMusicVisibilityAlias(visibility, provider, file))
+                    } catch (_: IOException) {
+                        // A visibility archive failure cannot roll back an actual rename.
+                    }
+                }
+            }
+        }
+        return channelValue(updated, key)
     }
 
     private fun uriChanges(rename: PendingLocalMusicRename, newUri: String): List<LocalMusicUriChange> =
@@ -299,14 +363,19 @@ internal class LocalMusicCatalog(private val context: Context, cache: File, inde
 
     fun clearIndex() = index.clear()
 
+    private data class ScannedFolder(val id: String, val locations: List<LocalMusicFolderLocation>)
+
     private fun scanFolder(tree: Uri, signal: CancellationSignal, collect: (LocalMusicRow) -> Unit) {
         val root = DocumentsContract.getTreeDocumentId(tree)
-        val directories = ArrayDeque<String>()
+        val source = tree.toString()
+        val directories = ArrayDeque<ScannedFolder>()
         val seen = hashSetOf(root)
-        directories.add(root)
+        val rootLabel = rootFolderName(tree, root, signal)
+        directories.add(ScannedFolder(root, listOfNotNull(safMusicFolderLocation(source, root, rootLabel, null))))
         while (directories.isNotEmpty()) {
             signal.throwIfCanceled()
-            val id = directories.removeFirst()
+            val folder = directories.removeFirst()
+            val id = folder.id
             val children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, id)
             val cursor = try {
                 context.contentResolver.query(children, arrayOf(
@@ -324,24 +393,33 @@ internal class LocalMusicCatalog(private val context: Context, cache: File, inde
                     it.extras.containsKey(DocumentsContract.EXTRA_ERROR)) throw IOException()
                 while (it.moveToNext()) {
                     signal.throwIfCanceled()
-                    val child = it.getString(0) ?: continue
+                    val child = it.getString(0)?.takeIf(String::isNotBlank) ?: continue
                     if (!seen.add(child)) continue
                     val name = it.getString(1)?.takeIf(String::isNotBlank) ?: continue
                     val mime = it.getString(2).orEmpty()
                     if (mime == Document.MIME_TYPE_DIR) {
-                        directories.addLast(child)
+                        val location = if (folder.locations.size in 1 until MAX_LOCAL_MUSIC_FOLDER_DEPTH &&
+                            it.getType(1) == Cursor.FIELD_TYPE_STRING)
+                            safMusicFolderLocation(source, child, name, folder.locations.last()) else null
+                        directories.addLast(ScannedFolder(child,
+                            location?.let { folder.locations + it } ?: emptyList()))
                     } else if (isAudio(mime, name)) {
                         val flags = it.numeric(Document.COLUMN_FLAGS) ?: 0L
+                        val uri = DocumentsContract.buildDocumentUriUsingTree(tree, child).toString()
+                        val modified = it.numeric(Document.COLUMN_LAST_MODIFIED)?.takeIf { value -> value > 0 }
+                        val size = it.numeric(Document.COLUMN_SIZE)
                         collect(LocalMusicRow(
-                            uri = DocumentsContract.buildDocumentUriUsingTree(tree, child).toString(),
+                            uri = uri,
                             fileName = name,
                             addedMs = 0,
-                            modifiedMs = it.numeric(Document.COLUMN_LAST_MODIFIED)?.takeIf { value -> value > 0 },
-                            sizeBytes = it.numeric(Document.COLUMN_SIZE),
+                            modifiedMs = modified,
+                            sizeBytes = size,
                             firstSeen = true,
                             canRename = flags and Document.FLAG_SUPPORTS_RENAME.toLong() != 0L,
                             parentDocumentId = id,
                             parentKey = id,
+                            visibilityProof = documentVisibilityProof(uri, modified, size),
+                            folderLocations = folder.locations,
                         ))
                     }
                 }
@@ -349,10 +427,26 @@ internal class LocalMusicCatalog(private val context: Context, cache: File, inde
         }
     }
 
+    private fun rootFolderName(tree: Uri, root: String, signal: CancellationSignal): String? = try {
+        val document = DocumentsContract.buildDocumentUriUsingTree(tree, root)
+        context.contentResolver.query(document, arrayOf(Document.COLUMN_DISPLAY_NAME), null, null, null, signal)
+            ?.use {
+                if (it.extras.getBoolean(DocumentsContract.EXTRA_LOADING, false) ||
+                    it.extras.containsKey(DocumentsContract.EXTRA_ERROR) ||
+                    !it.moveToFirst() || it.getType(0) != Cursor.FIELD_TYPE_STRING) null
+                else it.getString(0)
+            }
+    } catch (cancelled: OperationCanceledException) {
+        throw cancelled
+    } catch (_: Exception) {
+        // The display label is optional, and discovering media does not depend on it.
+        null
+    }
+
     private fun scanMediaStore(source: Uri, signal: CancellationSignal, collect: (LocalMusicRow) -> Unit) {
         val columns = mutableListOf(
             Audio._ID, Audio.DISPLAY_NAME, Audio.MIME_TYPE, Audio.SIZE, Audio.DATE_ADDED,
-            Audio.DATE_MODIFIED, Audio.TITLE, Audio.ARTIST, Audio.ALBUM, Audio.DURATION,
+            Audio.DATE_MODIFIED, Audio.TITLE, Audio.ARTIST, Audio.ALBUM, Audio.ALBUM_ID, Audio.DURATION,
         )
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             columns.add(MediaStore.MediaColumns.VOLUME_NAME)
@@ -361,9 +455,17 @@ internal class LocalMusicCatalog(private val context: Context, cache: File, inde
             @Suppress("DEPRECATION")
             columns.add(MediaStore.MediaColumns.DATA)
         }
-        val cursor = context.contentResolver.query(source, columns.toTypedArray(), null, null, null, signal)
-            ?: throw IOException()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            columns.add(MediaStore.MediaColumns.GENERATION_ADDED)
+        }
+        val versions = mutableMapOf<String, String?>()
+        val locationsByVolume = mutableMapOf<String, MutableMap<String, List<LocalMusicFolderLocation>>>()
+        val cursor = queryMediaStore(source, columns, signal)
         cursor.use {
+            val recordingColumn =
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) it.getColumnIndex(Audio.IS_RECORDING) else -1
+            val volumeColumn = it.getColumnIndex(MediaStore.MediaColumns.VOLUME_NAME)
+            val pathColumn = it.getColumnIndex(MediaStore.MediaColumns.RELATIVE_PATH)
             while (it.moveToNext()) {
                 signal.throwIfCanceled()
                 val id = it.numeric(Audio._ID) ?: continue
@@ -372,25 +474,47 @@ internal class LocalMusicCatalog(private val context: Context, cache: File, inde
                 val added = mediaStoreTime(it.numeric(MediaStore.MediaColumns.DATE_ADDED))
                 val collection: Uri
                 val parent: String?
+                val volume: String
+                val locations: List<LocalMusicFolderLocation>
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    val volume = it.string(MediaStore.MediaColumns.VOLUME_NAME) ?: continue
+                    volume = it.string(MediaStore.MediaColumns.VOLUME_NAME) ?: continue
                     collection = Audio.getContentUri(volume)
                     parent = "$volume:${it.string(MediaStore.MediaColumns.RELATIVE_PATH).orEmpty()}"
+                    val relative = if (pathColumn >= 0 && volumeColumn >= 0 &&
+                        it.getType(pathColumn) == Cursor.FIELD_TYPE_STRING &&
+                        it.getType(volumeColumn) == Cursor.FIELD_TYPE_STRING) it.getString(pathColumn) else null
+                    locations = if (relative == null) emptyList() else
+                        locationsByVolume.getOrPut(volume) { mutableMapOf() }.getOrPut(relative) {
+                            mediaMusicFolderLocations(volume, relative)
+                        }
                 } else {
+                    volume = "external"
                     collection = source
                     @Suppress("DEPRECATION")
                     parent = it.string(MediaStore.MediaColumns.DATA)?.let { path -> File(path).parent }
+                    locations = emptyList()
                 }
+                if (!versions.containsKey(volume)) versions[volume] = mediaVersion(volume)
+                val uri = ContentUris.withAppendedId(collection, id).toString()
+                val modified = mediaStoreTime(it.numeric(Audio.DATE_MODIFIED))
+                val size = it.numeric(Audio.SIZE)
                 collect(LocalMusicRow(
-                    uri = ContentUris.withAppendedId(collection, id).toString(),
+                    uri = uri,
                     fileName = name,
                     addedMs = added ?: 0L,
-                    modifiedMs = mediaStoreTime(it.numeric(MediaStore.MediaColumns.DATE_MODIFIED)),
-                    sizeBytes = it.numeric(MediaStore.MediaColumns.SIZE),
+                    modifiedMs = modified,
+                    sizeBytes = size,
                     firstSeen = added == null,
                     canRename = true,
                     parentDocumentId = null,
                     parentKey = parent,
+                    mediaAlbumId = it.numeric(Audio.ALBUM_ID),
+                    visibilityProof = mediaVisibilityProof(uri, versions[volume],
+                        it.numeric(MediaStore.MediaColumns.GENERATION_ADDED), added, modified, size),
+                    isRecording = recordingColumn >= 0 && it.getType(recordingColumn).let { type ->
+                        positiveRecordingFlag(type, if (type == Cursor.FIELD_TYPE_INTEGER) it.getLong(recordingColumn) else null)
+                    },
+                    folderLocations = locations,
                     metadata = LocalMusicMetadata(
                         title = it.string(Audio.TITLE)
                             ?.takeUnless { text -> text == fallbackTitle(name) || text == name },
@@ -403,15 +527,86 @@ internal class LocalMusicCatalog(private val context: Context, cache: File, inde
         }
     }
 
+    private fun queryMediaStore(source: Uri, columns: List<String>, signal: CancellationSignal): Cursor {
+        val resolver = context.contentResolver
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            // Some platform providers reject an optional column even on API 31+.
+            val recordingCursor = try {
+                resolver.query(source, (columns + Audio.IS_RECORDING).toTypedArray(), null, null, null, signal)
+            } catch (cancelled: OperationCanceledException) {
+                throw cancelled
+            } catch (denied: SecurityException) {
+                throw denied
+            } catch (_: RuntimeException) {
+                null
+            }
+            if (recordingCursor != null) return recordingCursor
+        }
+        return resolver.query(source, columns.toTypedArray(), null, null, null, signal) ?: throw IOException()
+    }
+
+    private fun mediaVersion(volume: String): String? = try {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) MediaStore.getVersion(context, volume)
+        else MediaStore.getVersion(context)
+    } catch (_: RuntimeException) {
+        // A disconnected volume no longer provides identity.
+        null
+    }
+
+    private fun readVisibilityProof(source: Uri, uri: Uri): String? = try {
+        val resolver = context.contentResolver
+        if (source.toString() == SYSTEM_URI) {
+            val volume = uri.pathSegments.first()
+            val version = mediaVersion(volume)
+            val columns = mutableListOf(Audio.DATE_ADDED, Audio.DATE_MODIFIED, Audio.SIZE)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                columns.add(MediaStore.MediaColumns.GENERATION_ADDED)
+            }
+            resolver.query(uri, columns.toTypedArray(), null, null, null)?.use {
+                if (!it.moveToFirst()) return@use null
+                mediaVisibilityProof(uri.toString(), version, it.numeric(MediaStore.MediaColumns.GENERATION_ADDED),
+                    mediaStoreTime(it.numeric(Audio.DATE_ADDED)), mediaStoreTime(it.numeric(Audio.DATE_MODIFIED)),
+                    it.numeric(Audio.SIZE))
+            }
+        } else {
+            val columns = arrayOf(Document.COLUMN_LAST_MODIFIED, Document.COLUMN_SIZE)
+            resolver.query(uri, columns, null, null, null)?.use {
+                if (!it.moveToFirst()) return@use null
+                documentVisibilityProof(uri.toString(), it.numeric(Document.COLUMN_LAST_MODIFIED),
+                    it.numeric(Document.COLUMN_SIZE))
+            }
+        }
+    } catch (_: RuntimeException) {
+        null
+    }
+
+    private fun descriptorVisibilityProof(uri: Uri, signal: CancellationSignal? = null): String? = try {
+        context.contentResolver.openFileDescriptor(uri, "r", signal)?.use { descriptor ->
+            val stat = Os.fstat(descriptor.fileDescriptor)
+            if (!OsConstants.S_ISREG(stat.st_mode) || stat.st_ino == 0L ||
+                stat.st_nlink == 0L || stat.st_size <= 0L || stat.st_ctime <= 0L) return@use null
+            val changeNanos =
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) stat.st_ctim.tv_nsec else 0L
+            localMusicVisibilityFingerprint("rename-descriptor", stat.st_dev.toString(), stat.st_ino.toString(),
+                stat.st_ctime.toString(), changeNanos.toString(), stat.st_size.toString())
+        }
+    } catch (cancelled: OperationCanceledException) {
+        throw cancelled
+    } catch (_: Exception) {
+        null
+    }
+
     private fun readMetadata(uri: Uri, prior: LocalMusicMetadata?): LocalMusicMetadata {
-        var metadata = prior ?: LocalMusicMetadata(null, null, null, 0L)
+        var metadata = prior?.copy(albumArtistRead = true) ?: LocalMusicMetadata(null, null, null, 0L)
         try {
             readMedia(uri) { retriever ->
                 fun tag(key: Int) = retriever.extractMetadata(key)?.trim()?.takeIf(String::isNotEmpty)?.take(1024)
                 metadata = metadata.copy(
                     title = tag(MediaMetadataRetriever.METADATA_KEY_TITLE),
                     artist = tag(MediaMetadataRetriever.METADATA_KEY_ARTIST) ?: prior?.artist,
-                    album = tag(MediaMetadataRetriever.METADATA_KEY_ALBUM) ?: prior?.album,
+                    album = localAlbumTag(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM)
+                        ?: prior?.album),
+                    albumArtist = localAlbumTag(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUMARTIST)),
                     durationMs = tag(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
                         ?.coerceAtLeast(0L) ?: prior?.durationMs ?: 0L,
                 )
@@ -447,8 +642,8 @@ internal class LocalMusicCatalog(private val context: Context, cache: File, inde
         }
     }
 
-    private fun channelValue(row: LocalMusicRow): Map<String, Any?> =
-        row.channelValue(row.metadata?.cover?.let(artwork::path))
+    private fun channelValue(row: LocalMusicRow, source: String): Map<String, Any?> =
+        row.channelValue(row.metadata?.cover?.let(artwork::path), source)
 
     private fun Cursor.numeric(name: String): Long? {
         val index = getColumnIndex(name)
@@ -493,6 +688,31 @@ internal class LocalMusicCatalog(private val context: Context, cache: File, inde
 
         internal fun mediaStoreTime(seconds: Long?): Long? =
             seconds?.takeIf { it in 1..(Long.MAX_VALUE / 1000) }?.times(1000)
+
+        // Some SAF providers use paths as document IDs. Require provider
+        // revision and size as well as the selected tree's document ID.
+        internal fun documentVisibilityProof(uri: String, modified: Long?, size: Long?): String? =
+            if (modified != null && modified > 0 && size != null && size > 0)
+                localMusicVisibilityFingerprint("document", uri, modified.toString(), size.toString())
+            else null
+
+        internal fun mediaVisibilityProof(
+            uri: String, version: String?, generation: Long?, added: Long?, modified: Long?, size: Long?,
+        ): String? {
+            if (version.isNullOrBlank()) return null
+            // A generation is meaningful only within the same database version and volume.
+            if (generation != null && generation > 0) {
+                return localMusicVisibilityFingerprint("media-generation", uri, version, generation.toString(),
+                    modified.orEmpty(), size.orEmpty())
+            }
+            if (added == null || added <= 0 || modified == null || modified <= 0 || size == null || size <= 0) {
+                return null
+            }
+            return localMusicVisibilityFingerprint("media-legacy", uri, version, added.toString(), modified.toString(),
+                size.toString())
+        }
+
+        private fun Long?.orEmpty() = this?.toString().orEmpty()
 
         private fun newIdentityKey(): String =
             MessageDigest.getInstance("SHA-256").digest(UUID.randomUUID().toString().toByteArray())

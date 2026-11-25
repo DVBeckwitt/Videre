@@ -6,10 +6,27 @@ Opening Music does not contact `music.youtube.com`. It does not sign in to a
 Google account or synchronize a Google library.
 
 Music has its own **Home**, **Search**, and **Library** destinations. On a
-phone, open **Music** from the main navigation. While Music is selected, the
-bottom **Search** button opens Music Search and focuses its search field.
-From a video tab the same button opens video search. Music Search finds songs,
-channels, and public playlists through the selected Invidious instance.
+phone, open **Music** from the main navigation. The three Music buttons sit
+above the app-wide row, with the mini player above both rows. Tap **Search**
+to focus Music Search. The keyboard temporarily hides the rows, which return
+when it closes. From a video tab, the app-wide **Search** opens video search.
+In phone Music Search, choose **Online** or **Library** above the results.
+Online finds songs, channels, and public playlists through the selected
+Invidious instance. Library matches the active profile’s saved songs, Music
+playlists, playable completed Music downloads, and authorized device tracks.
+Library works offline and matches accents either way, so `cafe` can find
+`Café`. Hidden and excluded files stay out of the results. Choose **All**,
+**Songs**, or **Playlists** in Library. Each source keeps its query, type
+filter, and place in its results when you switch.
+
+Choose **All** in Online to see songs, channels, and playlists together in
+the instance's order. The first visible item appears under **Top result**.
+Select **Load more** at the end of the results to fetch the next page. If
+that page fails, **Retry** fetches it again and keeps the results you already
+have on screen.
+
+Tap the selected Music destination again to return to the top. Search keeps
+its query, and Library keeps its current filter and selection.
 
 To move **Music** or **Search** in the main phone navigation, open **Settings →
 Browsing → Customize app sections**. You can also choose Music as your startup tab.
@@ -26,6 +43,10 @@ For a recognized content ID on an unfamiliar host, choose **Open on current
 instance** to open it through your selected server, or **Search as text** to
 search for the address.
 
+On a Music catalog artist, album or playlist page, tap the back arrow to go
+up one level. Hold it to return directly to your Music Search results, or to
+the page that opened a direct link.
+
 ## Home and Search
 
 **Home** shows saved music, listening history, and recommendations. While Music
@@ -33,6 +54,11 @@ Home is open, Videre asks your selected Invidious instance for Discover songs
 and prepares selections for saved artists and genres. The **Discover music**
 shortcut appears when it can take you to songs. Artist and genre choices
 appear as their tracks become available. Select one to see its prepared list.
+
+On touch screens, pull down from the top of **Music Home** to refresh the
+current Discover selection, the regional chart, and releases from saved
+artists. Music keeps playing during the refresh, and a failed request keeps
+the previous results for that section.
 
 While Music Home is visible, it also checks the first page of your regional
 chart, or the worldwide chart where no regional playlist is available. It
@@ -144,6 +170,10 @@ it does not claim to load an endless radio stream. Public playlist pagination
 merges overlapping pages by source position while retaining repeated recordings
 at different positions.
 
+On a wide tablet, a collection opens with its information and actions beside
+the track list. Scroll each pane independently. Back returns to the previous
+Music page. On narrower screens, the information and tracks share one page.
+
 Selecting a track in a public or local playlist keeps the full playlist in the
 queue, including earlier tracks and repeated occurrences. **Resume playlist**
 returns to that playlist's last occurrence and exact timestamp, independently
@@ -161,13 +191,70 @@ In the expanded Music player, tap a linked artist name to open that artist’s
 Music page while the song continues. Songs with only an artist name display it
 as plain text.
 
+Long song titles wrap across lines. At large text sizes, scroll Now Playing to
+read the complete title and reach the controls. The displayed title, artist
+and known source follow the selected song when you skip. Reduced or disabled
+motion makes that change immediate.
+
+On Android, Now Playing shows **Explicit** or **Clean** when the playing
+MP4 or M4A file carries a recognized content advisory. Untagged files and
+tracks from the current online catalog have no badge.
+
+Open **Song actions** in Now Playing for **Add to playlist**, **Open artist**
+when Videre has an identified artist, and the other actions for the current
+song. **Remove from** names the local playlist when Videre can verify the
+playing entry's membership. It removes that membership while playback continues.
+
+Tap the source under the song credits to reopen its playlist or album. Choose
+**Open album** or **Open playlist** when both destinations are available. Back
+returns to the player and the same playback session. For indexed device music,
+hold the mini player’s title or artwork to open its album at the current song.
+
 When a song has a matching music video, tap **Video** beside **Lyrics** to
 watch it in the artwork area. Tap **Cover** to switch back. Both views share
 the song’s audio, playback position and queue. Videre can use the playing
 upload itself or find an official video for the same recording on your
 selected instance. Local songs and audio-only downloads keep their artwork.
 
-Swipe the artwork or mini player to move to an adjacent song in the queue.
+On a phone, tap the mini player or swipe up on it to open **Now Playing**.
+In Music settings, choose **Mini-player layout** and **Mini-player shortcut**.
+**Automatic** keeps the usual layout. **Compact** puts Save beside Play for
+catalog songs when there is room. **Transport** puts playback controls next to
+Play. You can assign **Next**, **Repeat**, or **Shuffle** to the shortcut.
+**More** keeps extra actions available on narrow displays.
+Tap **Queue** at the bottom of Now Playing or swipe up on the same strip.
+Swipe down on the queue header or press Back to return to Now Playing.
+Swipe down on the Now Playing header to return to the mini player.
+On wide touch layouts, the queue stays beside Now Playing.
+The queue shows its source when available, the song count and the combined
+duration of the displayed entries. Repeated songs count each time they appear.
+If some durations are missing or a playlist is still loading, **Known duration**
+shows the sum of the entries with a known length.
+The queue stays in place when the next playing row is already visible. If the
+row is offscreen, the list waits for an active scroll or drag to finish before
+revealing it. Tap **Jump to current song** in the queue to return to that row.
+Each queue row has a song menu, including the current song and rows in a
+locked queue. The lock protects moving and removing entries. Use **Select all**
+and **Deselect all** to change a selection without leaving selection mode.
+With at least two upcoming songs and the queue unlocked, use **Sort upcoming**
+to order the next tracks by title or artist in either direction, including
+while Shuffle is on. Ties stay in playback order, and the current song keeps
+its position. **Resume listening** in Music Search restores the saved order.
+**Play next** and **Add to queue** copy selected catalog songs or device files
+into the queue in the order shown, without interrupting the song that's playing.
+
+Tap the cover to play or pause. Swipe the artwork or mini player to move
+to an adjacent song in the queue. The full cover shows the neighboring song
+as you pull it into view. A short, slow drag returns to the current song.
+On phone and tablet, the expanded cover grows while playing and shrinks while
+paused. The whole artwork frame remains touchable. With reduced or disabled
+motion, the cover changes size immediately.
+Turn off **Swipe artwork to change songs** in Music settings to use the cover
+without horizontal track changes. The mini player keeps its swipe gestures.
+Turn on **Double-tap artwork to seek** to skip back on the cover's left half
+or skip forward on its right half. On songs that can seek, the gesture uses
+your selected seek interval. A single tap plays or pauses after the
+double-tap window.
 While a song plays, Videre prepares the next and previous songs and buffers
 their opening audio. With queue autoplay enabled, the next song uses the same
 buffer when the current song ends. If you swipe before a song is ready, the
@@ -215,6 +302,17 @@ and tablets, **Downloads**. Use **Save song**, **Save channel**, or **Save playl
 to bookmark items in the active Videre profile. Bookmarks do not download audio.
 You can remove a bookmark from Library or its detail page.
 
+In Library's **Songs** tab, tap **Search saved songs** to find bookmarks by
+title or artist in grid or list view. A matching song plays at its place in
+the full collection, in the current sort order. Back closes search and
+restores your previous browse position.
+
+Hold a saved song or choose **Select songs** to pick several songs in either
+layout. During a search, **Select all** selects the matches. The selection
+menu offers playback, shuffle, queue, playlist and download actions. Playback
+and queue additions follow the current sort order unless you choose Shuffle.
+Closing selection returns to the same query and position.
+
 Album bookmarks from earlier versions remain stored and included in backups for
 import/export compatibility, but are hidden from the active library. Their
 YouTube Music album browse IDs are not opened. Existing local playlists,
@@ -224,8 +322,19 @@ Use **Save to playlist** on a song or collection to choose or create a playlist
 on this device. Collections are added in order; existing songs are not duplicated.
 Library's Playlists filter includes these local Music playlists and bookmarked
 public playlists. Local playlist pages show their Music tracks and provide
-**Play all**, **Resume playlist**, and collection actions. Use **Remove from
-playlist** in a song's Music actions to remove it from that local playlist.
+**Play all**, **Resume playlist**, and collection actions. Use **Search
+playlist** to find songs by title or artist as you type. Selecting a match
+starts it at its original place in the full Music queue. Back closes the
+search and restores the previous scroll position.
+
+Hold a song or tap **Select songs** to pick several songs. In search,
+**Select all** picks the matches, and **Deselect all** clears the selection
+without leaving it. Actions for selected songs can start a new queue, shuffle
+it, add the selection to an active Music queue, save the songs to a playlist,
+or download eligible audio. Play and queue actions keep playlist order unless
+you choose Shuffle. Back closes selection first and returns to the same query.
+Use **Remove from playlist** in a song's Music actions to remove it from that
+local playlist.
 These operations belong to the active Videre profile. Switching profiles closes
 an open save dialog and stops any remaining collection operation.
 
@@ -250,8 +359,18 @@ limits fails without partially changing the destination library.
 **Download audio** queues songs through Videre's existing download manager on
 phones and tablets. Downloaded Music retains its labels and can play offline.
 Library's Downloads filter shows Music downloads for the active profile, with
-progress, pause, resume, and retry controls. Select a completed download to play
-it offline.
+progress, pause, resume, and retry controls. Use **Search downloads** to find
+tracks by title or artist, including jobs that are still downloading. Playing
+a completed match starts at its place in the full completed-download queue.
+Hold a download or choose **Select songs** to select several jobs. **Select
+all** selects the current matches. Play, Shuffle and the queue actions use
+completed files from the selection. **Remove downloads** asks for confirmation
+with the selected job count and applies to completed and incomplete downloads.
+Use **Sort by** to choose Default order, Title, Artist, Album or Duration,
+then Ascending or Descending. The active profile remembers both choices.
+Playback follows the displayed order. The Downloads header summarizes the
+lengths of completed files and shows **Known duration** when only some
+lengths are available.
 The Wi-Fi preference, retry, and profile ownership rules apply. TV does not
 offer downloads.
 
@@ -269,18 +388,49 @@ choose a shared folder when prompted. Under **Settings → Download folders**,
 of **Video downloads**. Changes apply to new downloads. To share an existing
 private song, open **Downloads** and choose **Export a copy of this song**.
 
-**Music → Library → On this device** plays audio already on your device.
-Local playback starts off. **Choose a folder** grants access to that folder and
-its subfolders. **Use Android music library** asks for audio permission and
-shows files indexed by Android. The selected source is available across Videre
-profiles. Videre keeps a device-local index and loads tags and artwork in the
-background. You can play songs while the library updates.
+**Music → Library → On this device** combines playable Music downloads from
+the active profile with audio indexed from your device. Private downloads can
+play here before you grant device-audio access. **Downloads** remains the
+place to pause, retry, export, or remove downloads.
+
+**Choose a folder** grants access to that folder and its subfolders. **Use
+Android music library** asks for audio permission and shows files indexed by
+Android. The selected device source is available across Videre profiles.
+Videre keeps a device-local index and loads tags and artwork in the background.
+You can play songs while the library updates.
+
+If Android verifies that an indexed row and a completed download point to the
+same file, the device row represents both. Separate files with identical tags
+remain separate. Hiding that device row also hides its verified download alias
+from **On this device**.
+
+Search as you type by title, filename, artist or album. Choose **Artists**
+or **Albums** to narrow the list using the indexed tags. Starting a song
+plays the filtered order at that moment. Changes to the search do not
+rearrange music already playing.
 
 Use **Sort** to choose the field and direction. When Android cannot provide
 the date a file was added, Videre uses the date it first discovered the file.
+Standalone downloads with no indexed date appear after dated files in date sorts.
 The song menu offers **Rename file** for supported files, with an Android write
 prompt when required. This changes the filename and preserves embedded tags.
 Forgetting the library leaves your audio files in place.
+
+Choose **Hide from this library** in a device song’s menu to leave it out of
+browsing and search for the active Videre profile. Use **Undo** immediately,
+or open **Hidden files** in **On this device** and choose **Restore** later.
+Hiding leaves the audio file, its permissions, and any existing queue entries
+in place.
+
+Open **Library exclusions** in **On this device** to turn on **Hide voice
+recordings** or exclude a listed folder and its subfolders. On Android 12 and
+later, the Android music library can identify voice recordings. Audio without
+that classification stays visible unless a folder rule applies.
+
+Open **Excluded files** and choose **Keep in library** to recover an individual
+file with a verified identity. Its song menu offers **Remove keep override**.
+Library exclusions apply per profile and affect new queues built from visible
+rows. Music already queued can continue playing.
 
 Tap a song to play the displayed list from that song. **Play next** inserts
 the song after the current track and **Add to queue** appends it. Either action
@@ -354,6 +504,14 @@ Now Playing stops queued lookups and drops late results. Turning the option off
 returns Music to the Invidious artwork. The configured Videre proxy applies to
 both providers.
 [MusicBrainz API](https://musicbrainz.org/doc/MusicBrainz_API) · [Cover Art Archive](https://musicbrainz.org/doc/Cover_Art_Archive/API)
+
+**Settings → YT Music → Music artwork cache** shows how much space the active
+profile uses for online catalog and Community artwork, including images still
+loading. Choose a **Storage limit** from 16 to 512 MiB. The default is 128 MiB.
+Videre removes older cached artwork as space is needed. **Clear Music artwork
+cache** releases stored images and cancels pending artwork for that profile.
+Music can cache new artwork requests afterward. Saved songs keep their
+artwork, and audio continues playing during Clear.
 
 Expand Music Now Playing and tap **Lyrics** on the cover artwork to look up
 synced or plain lyrics from LRCLIB. The first lookup asks you to enable the

@@ -1,5 +1,6 @@
 import 'package:clipious/music/models/music_artist.dart';
 import 'package:clipious/music/models/music_artist_page.dart';
+import 'package:clipious/music/models/music_catalog_search.dart';
 import 'package:clipious/music/models/music_collection.dart';
 import 'package:clipious/music/models/music_library_entry.dart';
 import 'package:clipious/music/models/music_playlist.dart';
@@ -48,6 +49,45 @@ abstract class MusicCatalogService {
 
   Future<List<MusicPlaylist>> searchPlaylists(String query) async =>
       throw const MusicCatalogUnsupported();
+
+  /// One ordered search page. An adapter that only supplies typed results can
+  /// still support page one of those types through the original methods.
+  Future<MusicCatalogSearchPage> searchPage(
+    String query,
+    MusicCatalogSearchType type,
+    int page, {
+    bool Function()? isCurrent,
+  }) async {
+    if (page < 1) throw ArgumentError.value(page, 'page');
+    void check() {
+      if (isCurrent?.call() == false) {
+        throw const MusicCatalogException('The music request was cancelled.');
+      }
+    }
+
+    check();
+    final text = query.trim();
+    if (text.isEmpty || page > 1) {
+      return const MusicCatalogSearchPage(hits: [], rawKeys: []);
+    }
+    final List<MusicCatalogSearchHit> hits = switch (type) {
+      MusicCatalogSearchType.all => throw const MusicCatalogUnsupported(),
+      MusicCatalogSearchType.songs =>
+        (await searchSongs(text)).map(MusicCatalogSongHit.new).toList(),
+      MusicCatalogSearchType.channels =>
+        (await searchArtists(text)).map(MusicCatalogChannelHit.new).toList(),
+      MusicCatalogSearchType.playlists =>
+        (await searchPlaylists(text)).map(MusicCatalogPlaylistHit.new).toList(),
+    };
+    check();
+    final seen = <String>{};
+    return MusicCatalogSearchPage(hits: [
+      for (final hit in hits)
+        if (seen.add(hit.key)) hit
+    ], rawKeys: [
+      for (final hit in hits) hit.key
+    ]);
+  }
 
   Future<List<MusicTrack>> getTrendingSongs() async =>
       throw const MusicCatalogUnsupported();

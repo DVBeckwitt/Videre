@@ -354,7 +354,8 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves>
     unawaited(_prepareNextMix());
   }
 
-  Future<void> _open(MusicTrack track, Iterable<MusicTrack> tracks) async {
+  Future<void> _open(
+      MusicTrack track, Iterable<MusicTrack> tracks, String queueTitle) async {
     if (!_current) return;
     final songs = _recommendations.eligibleMusic(tracks);
     final index = songs.indexWhere((song) => song.videoId == track.videoId);
@@ -363,17 +364,19 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves>
         videoId: track.videoId,
         artistCredits: songs[index].artistCredits,
         queue: [for (final song in songs) song.toVideo()],
+        queueTitle: queueTitle,
         startIndex: index));
   }
 
   Future<void> _openQuickPick(MusicTrack track) async {
     final tracks = _picks.map((pick) => pick.item);
-    if (!isTv || !_current) return _open(track, tracks);
+    final title = AppLocalizations.of(context)!.musicQuickPicks;
+    if (!isTv || !_current) return _open(track, tracks, title);
     final origin = ModalRoute.of(context);
     final slot =
         _picks.indexWhere((pick) => pick.item.videoId == track.videoId);
     if (slot < 0) return;
-    await _open(track, tracks);
+    await _open(track, tracks, title);
     await WidgetsBinding.instance.endOfFrame;
     // Playback can change the order or remove the played song while this
     // route is covered. Wait for the active ranking and its rows to mount.
@@ -405,8 +408,8 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves>
           .toList()
       : const [];
 
-  Future<void> _playShelf(List<MusicTrack> tracks, {String? from}) async {
-    final songs = _eligible(tracks);
+  Future<void> _playShelf(_LocalShelf shelf, {String? from}) async {
+    final songs = _eligible(shelf.tracks);
     if (songs.isEmpty) return;
     final index =
         from == null ? 0 : songs.indexWhere((track) => track.videoId == from);
@@ -414,7 +417,7 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves>
     try {
       await MusicScreen.playTracks(
           context, [for (final track in songs) track.toVideo()],
-          startIndex: index);
+          queueTitle: shelf.title, startIndex: index);
     } catch (_) {
       if (mounted && _current) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -555,7 +558,7 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves>
             key: ValueKey('music-${shelf.id}-play'),
             tooltip: locals.musicPlayAll,
             icon: const Icon(Icons.play_arrow_rounded),
-            onPressed: () => _playShelf(shelf.tracks),
+            onPressed: () => _playShelf(shelf),
           ),
           IconButton(
             key: ValueKey('music-${shelf.id}-view'),
@@ -578,11 +581,11 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves>
             showPlayIndicator: true,
             badge: MusicLibraryActions(
                 videos: [song.toVideo()],
-                onPlay: () => _playShelf(shelf.tracks, from: song.videoId)),
-            onOpen: () => _playShelf(shelf.tracks, from: song.videoId),
+                onPlay: () => _playShelf(shelf, from: song.videoId)),
+            onOpen: () => _playShelf(shelf, from: song.videoId),
             onLongPress: () => MusicLibraryActions.showSongMenu(
                 context, song.toVideo(),
-                onPlay: () => _playShelf(shelf.tracks, from: song.videoId)),
+                onPlay: () => _playShelf(shelf, from: song.videoId)),
           );
         },
       ),
@@ -646,7 +649,8 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves>
             itemCount: _history.length,
             itemBuilder: (context, index) {
               final track = _history[index];
-              Future<void> open() => _open(track, _history);
+              Future<void> open() =>
+                  _open(track, _history, locals.musicKeepListening);
               return MusicCatalogCard(
                 key: ValueKey('music-keep-listening-${track.videoId}'),
                 title: track.title,
@@ -922,6 +926,7 @@ class _QuickPickRow extends StatelessWidget {
                       child: const Icon(Icons.music_note_rounded),
                     )
                   : Thumbnail(
+                      musicArtwork: true,
                       images: images,
                       decoration: BoxDecoration(
                           borderRadius: BorderRadius.circular(6))))),

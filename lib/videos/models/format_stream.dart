@@ -1,8 +1,10 @@
 import 'package:json_annotation/json_annotation.dart';
 
+import 'adaptive_format.dart';
+
 part 'format_stream.g.dart';
 
-@JsonSerializable()
+@JsonSerializable(explicitToJson: true)
 class FormatStream {
   String url;
   String itag;
@@ -13,9 +15,12 @@ class FormatStream {
   String? qualityLabel;
   String? resolution;
   String? size;
+  @JsonKey(fromJson: AudioTrack.fromJson)
+  AudioTrack? audioTrack;
 
   FormatStream(this.url, this.itag, this.type, this.quality, this.container,
-      this.encoding, this.qualityLabel, this.resolution, this.size);
+      this.encoding, this.qualityLabel, this.resolution, this.size,
+      {this.audioTrack});
 
   /// The retired combined 720p stream can still appear in instance metadata.
   /// Adaptive 720p video is represented by AdaptiveFormat, not this format.

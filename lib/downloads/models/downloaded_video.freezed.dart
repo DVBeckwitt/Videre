@@ -14,7 +14,15 @@ T _$identity<T>(T value) => value;
 
 /// @nodoc
 mixin _$DownloadedVideo {
-  String get videoId;
+  String
+      get videoId; // Identifies a playback occurrence only. Database records and file paths
+// always use the original videoId.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  String?
+      get queueEntryId; // An explicit collection action pins this occurrence to a rendition.
+// Only the playback session stores this fingerprint.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  String? get explicitMusicDownload;
   String get title;
   String get profileId;
   String? get accountId;
@@ -59,6 +67,10 @@ mixin _$DownloadedVideo {
         (other.runtimeType == runtimeType &&
             other is DownloadedVideo &&
             (identical(other.videoId, videoId) || other.videoId == videoId) &&
+            (identical(other.queueEntryId, queueEntryId) ||
+                other.queueEntryId == queueEntryId) &&
+            (identical(other.explicitMusicDownload, explicitMusicDownload) ||
+                other.explicitMusicDownload == explicitMusicDownload) &&
             (identical(other.title, title) || other.title == title) &&
             (identical(other.profileId, profileId) ||
                 other.profileId == profileId) &&
@@ -107,6 +119,8 @@ mixin _$DownloadedVideo {
   int get hashCode => Object.hashAll([
         runtimeType,
         videoId,
+        queueEntryId,
+        explicitMusicDownload,
         title,
         profileId,
         accountId,
@@ -133,7 +147,7 @@ mixin _$DownloadedVideo {
 
   @override
   String toString() {
-    return 'DownloadedVideo(videoId: $videoId, title: $title, profileId: $profileId, accountId: $accountId, author: $author, authorUrl: $authorUrl, musicMetadata: $musicMetadata, sponsorSegments: $sponsorSegments, downloadComplete: $downloadComplete, downloadFailed: $downloadFailed, authenticationRequired: $authenticationRequired, storageFailed: $storageFailed, folderUri: $folderUri, storageUri: $storageUri, playbackProvenance: $playbackProvenance, audioOnly: $audioOnly, musicFormat: $musicFormat, exportedMusic: $exportedMusic, container: $container, audioTrackId: $audioTrackId, captionLabel: $captionLabel, lengthSeconds: $lengthSeconds, quality: $quality)';
+    return 'DownloadedVideo(videoId: $videoId, queueEntryId: $queueEntryId, explicitMusicDownload: $explicitMusicDownload, title: $title, profileId: $profileId, accountId: $accountId, author: $author, authorUrl: $authorUrl, musicMetadata: $musicMetadata, sponsorSegments: $sponsorSegments, downloadComplete: $downloadComplete, downloadFailed: $downloadFailed, authenticationRequired: $authenticationRequired, storageFailed: $storageFailed, folderUri: $folderUri, storageUri: $storageUri, playbackProvenance: $playbackProvenance, audioOnly: $audioOnly, musicFormat: $musicFormat, exportedMusic: $exportedMusic, container: $container, audioTrackId: $audioTrackId, captionLabel: $captionLabel, lengthSeconds: $lengthSeconds, quality: $quality)';
   }
 }
 
@@ -145,6 +159,10 @@ abstract mixin class $DownloadedVideoCopyWith<$Res> {
   @useResult
   $Res call(
       {String videoId,
+      @JsonKey(includeFromJson: false, includeToJson: false)
+      String? queueEntryId,
+      @JsonKey(includeFromJson: false, includeToJson: false)
+      String? explicitMusicDownload,
       String title,
       String profileId,
       String? accountId,
@@ -184,6 +202,8 @@ class _$DownloadedVideoCopyWithImpl<$Res>
   @override
   $Res call({
     Object? videoId = null,
+    Object? queueEntryId = freezed,
+    Object? explicitMusicDownload = freezed,
     Object? title = null,
     Object? profileId = null,
     Object? accountId = freezed,
@@ -212,6 +232,14 @@ class _$DownloadedVideoCopyWithImpl<$Res>
           ? _self.videoId
           : videoId // ignore: cast_nullable_to_non_nullable
               as String,
+      queueEntryId: freezed == queueEntryId
+          ? _self.queueEntryId
+          : queueEntryId // ignore: cast_nullable_to_non_nullable
+              as String?,
+      explicitMusicDownload: freezed == explicitMusicDownload
+          ? _self.explicitMusicDownload
+          : explicitMusicDownload // ignore: cast_nullable_to_non_nullable
+              as String?,
       title: null == title
           ? _self.title
           : title // ignore: cast_nullable_to_non_nullable
@@ -309,6 +337,9 @@ class _$DownloadedVideoCopyWithImpl<$Res>
 class _DownloadedVideo extends DownloadedVideo implements IdedVideo {
   const _DownloadedVideo(
       {required this.videoId,
+      @JsonKey(includeFromJson: false, includeToJson: false) this.queueEntryId,
+      @JsonKey(includeFromJson: false, includeToJson: false)
+      this.explicitMusicDownload,
       required this.title,
       this.profileId = 'default',
       this.accountId,
@@ -339,6 +370,16 @@ class _DownloadedVideo extends DownloadedVideo implements IdedVideo {
 
   @override
   final String videoId;
+// Identifies a playback occurrence only. Database records and file paths
+// always use the original videoId.
+  @override
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  final String? queueEntryId;
+// An explicit collection action pins this occurrence to a rendition.
+// Only the playback session stores this fingerprint.
+  @override
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  final String? explicitMusicDownload;
   @override
   final String title;
   @override
@@ -422,6 +463,10 @@ class _DownloadedVideo extends DownloadedVideo implements IdedVideo {
         (other.runtimeType == runtimeType &&
             other is _DownloadedVideo &&
             (identical(other.videoId, videoId) || other.videoId == videoId) &&
+            (identical(other.queueEntryId, queueEntryId) ||
+                other.queueEntryId == queueEntryId) &&
+            (identical(other.explicitMusicDownload, explicitMusicDownload) ||
+                other.explicitMusicDownload == explicitMusicDownload) &&
             (identical(other.title, title) || other.title == title) &&
             (identical(other.profileId, profileId) ||
                 other.profileId == profileId) &&
@@ -470,6 +515,8 @@ class _DownloadedVideo extends DownloadedVideo implements IdedVideo {
   int get hashCode => Object.hashAll([
         runtimeType,
         videoId,
+        queueEntryId,
+        explicitMusicDownload,
         title,
         profileId,
         accountId,
@@ -496,7 +543,7 @@ class _DownloadedVideo extends DownloadedVideo implements IdedVideo {
 
   @override
   String toString() {
-    return 'DownloadedVideo(videoId: $videoId, title: $title, profileId: $profileId, accountId: $accountId, author: $author, authorUrl: $authorUrl, musicMetadata: $musicMetadata, sponsorSegments: $sponsorSegments, downloadComplete: $downloadComplete, downloadFailed: $downloadFailed, authenticationRequired: $authenticationRequired, storageFailed: $storageFailed, folderUri: $folderUri, storageUri: $storageUri, playbackProvenance: $playbackProvenance, audioOnly: $audioOnly, musicFormat: $musicFormat, exportedMusic: $exportedMusic, container: $container, audioTrackId: $audioTrackId, captionLabel: $captionLabel, lengthSeconds: $lengthSeconds, quality: $quality)';
+    return 'DownloadedVideo(videoId: $videoId, queueEntryId: $queueEntryId, explicitMusicDownload: $explicitMusicDownload, title: $title, profileId: $profileId, accountId: $accountId, author: $author, authorUrl: $authorUrl, musicMetadata: $musicMetadata, sponsorSegments: $sponsorSegments, downloadComplete: $downloadComplete, downloadFailed: $downloadFailed, authenticationRequired: $authenticationRequired, storageFailed: $storageFailed, folderUri: $folderUri, storageUri: $storageUri, playbackProvenance: $playbackProvenance, audioOnly: $audioOnly, musicFormat: $musicFormat, exportedMusic: $exportedMusic, container: $container, audioTrackId: $audioTrackId, captionLabel: $captionLabel, lengthSeconds: $lengthSeconds, quality: $quality)';
   }
 }
 
@@ -510,6 +557,10 @@ abstract mixin class _$DownloadedVideoCopyWith<$Res>
   @useResult
   $Res call(
       {String videoId,
+      @JsonKey(includeFromJson: false, includeToJson: false)
+      String? queueEntryId,
+      @JsonKey(includeFromJson: false, includeToJson: false)
+      String? explicitMusicDownload,
       String title,
       String profileId,
       String? accountId,
@@ -549,6 +600,8 @@ class __$DownloadedVideoCopyWithImpl<$Res>
   @pragma('vm:prefer-inline')
   $Res call({
     Object? videoId = null,
+    Object? queueEntryId = freezed,
+    Object? explicitMusicDownload = freezed,
     Object? title = null,
     Object? profileId = null,
     Object? accountId = freezed,
@@ -577,6 +630,14 @@ class __$DownloadedVideoCopyWithImpl<$Res>
           ? _self.videoId
           : videoId // ignore: cast_nullable_to_non_nullable
               as String,
+      queueEntryId: freezed == queueEntryId
+          ? _self.queueEntryId
+          : queueEntryId // ignore: cast_nullable_to_non_nullable
+              as String?,
+      explicitMusicDownload: freezed == explicitMusicDownload
+          ? _self.explicitMusicDownload
+          : explicitMusicDownload // ignore: cast_nullable_to_non_nullable
+              as String?,
       title: null == title
           ? _self.title
           : title // ignore: cast_nullable_to_non_nullable

@@ -7,6 +7,8 @@ import org.json.JSONObject
 import java.io.File
 import java.io.FileNotFoundException
 import java.io.IOException
+import java.math.BigInteger
+import java.security.MessageDigest
 
 internal data class LocalMusicRow(
     val uri: String,
@@ -21,22 +23,59 @@ internal data class LocalMusicRow(
     val identityUri: String? = null,
     val identityKey: String? = null,
     val metadata: LocalMusicMetadata? = null,
+    val mediaAlbumId: Long? = null,
+    val visibilityProof: String? = null,
+    val visibilityAlias: String? = null,
+    val isRecording: Boolean = false,
+    val folderLocations: List<LocalMusicFolderLocation> = emptyList(),
 ) {
+    val visibilityKey get() = visibilityProof?.let { visibilityAlias ?: it }
+
     fun matchesRevision(previous: LocalMusicRow): Boolean =
         modifiedMs != null && sizeBytes != null &&
             modifiedMs == previous.modifiedMs && sizeBytes == previous.sizeBytes
+
+    fun needsTagRead(previous: LocalMusicRow?): Boolean =
+        previous?.metadata?.albumArtistRead != true || !matchesRevision(previous) ||
+            identityKey != previous.identityKey
 
     fun inheritsIdentity(previous: LocalMusicRow) = copy(
         identityUri = (previous.identityUri ?: previous.uri).takeUnless { it == uri },
         identityKey = previous.identityKey,
     )
 
-    fun channelValue(artPath: String? = null): Map<String, Any?> = mapOf(
+    fun inheritsVisibility(previous: LocalMusicRow, confirmedRename: Boolean = false) = copy(
+        visibilityAlias = previous.visibilityKey?.takeIf {
+            visibilityProof != null && it != visibilityProof &&
+                (visibilityProof == previous.visibilityProof || confirmedRename)
+        },
+    )
+
+    // MediaStore album IDs belong to a volume. SAF has no album entity: the
+    // actual traversed parent plus both album tags identify a local grouping.
+    fun albumKey(source: String): String? {
+        val album = localAlbumTag(metadata?.album) ?: return null
+        val parts = if (source == LocalMusicCatalog.SYSTEM_URI) {
+            val id = mediaAlbumId?.takeIf { it > 0 } ?: return null
+            listOf(source, uri.substringBeforeLast('/'), id.toString())
+        } else {
+            val parent = parentDocumentId?.takeIf { it.isNotBlank() } ?: return null
+            val artist = localAlbumTag(metadata?.albumArtist) ?: return null
+            listOf(source, parent, artist, album)
+        }
+        val input = parts.joinToString("") { "${it.length}:$it" }.toByteArray(Charsets.UTF_8)
+        val digest = MessageDigest.getInstance("SHA-256").digest(input)
+        return BigInteger(1, digest).toString(16).padStart(64, '0')
+    }
+
+    fun channelValue(artPath: String? = null, source: String? = null): Map<String, Any?> = mapOf(
         "uri" to uri,
         "fileName" to fileName,
         "title" to (metadata?.title ?: LocalMusicCatalog.fallbackTitle(fileName)),
         "artist" to metadata?.artist,
         "album" to metadata?.album,
+        "albumArtist" to metadata?.albumArtist,
+        "albumKey" to source?.let(::albumKey),
         "durationMs" to (metadata?.durationMs ?: 0L),
         "artPath" to artPath,
         "addedMs" to addedMs,
@@ -47,6 +86,9 @@ internal data class LocalMusicRow(
         "parentDocumentId" to parentDocumentId,
         "identityUri" to identityUri,
         "identityKey" to identityKey,
+        "visibilityKey" to visibilityKey,
+        "isRecording" to isRecording,
+        "folderLocations" to folderLocations.map { it.channelValue },
     )
 
     fun toJson(): JSONObject = JSONObject(channelValue()).apply {
@@ -54,9 +96,16 @@ internal data class LocalMusicRow(
         remove("title")
         remove("artist")
         remove("album")
+        remove("albumArtist")
+        remove("albumKey")
         remove("durationMs")
+        remove("visibilityKey")
         put("metadata", metadata?.toJson())
         put("parentKey", parentKey)
+        put("mediaAlbumId", mediaAlbumId)
+        put("visibilityProof", visibilityProof)
+        put("visibilityAlias", visibilityAlias)
+        put("folderLocations", JSONArray(folderLocations.map { JSONObject(it.channelValue) }))
     }
 
     companion object {
@@ -73,6 +122,11 @@ internal data class LocalMusicRow(
             identityUri = json.stringOrNull("identityUri"),
             identityKey = json.stringOrNull("identityKey"),
             metadata = json.optJSONObject("metadata")?.let(LocalMusicMetadata::fromJson),
+            mediaAlbumId = json.longOrNull("mediaAlbumId"),
+            visibilityProof = json.stringOrNull("visibilityProof"),
+            visibilityAlias = json.stringOrNull("visibilityAlias"),
+            isRecording = json.opt("isRecording") == true,
+            folderLocations = LocalMusicFolderLocation.fromJson(json.optJSONArray("folderLocations")),
         )
     }
 }
@@ -83,10 +137,13 @@ internal data class LocalMusicMetadata(
     val album: String?,
     val durationMs: Long,
     val cover: String? = null,
+    val albumArtist: String? = null,
+    val albumArtistRead: Boolean = true,
 ) {
     fun toJson(): JSONObject = JSONObject()
         .put("title", title).put("artist", artist).put("album", album)
         .put("durationMs", durationMs).put("cover", cover)
+        .apply { if (albumArtistRead) put("albumArtist", albumArtist ?: JSONObject.NULL) }
 
     companion object {
         fun fromJson(json: JSONObject): LocalMusicMetadata = LocalMusicMetadata(
@@ -95,8 +152,16 @@ internal data class LocalMusicMetadata(
             json.stringOrNull("album"),
             json.getLong("durationMs"),
             json.stringOrNull("cover"),
+            json.stringOrNull("albumArtist"),
+            // Refresh legacy tags once without losing dates, track IDs or the rename journal.
+            json.has("albumArtist"),
         )
     }
+}
+
+internal fun localAlbumTag(text: String?): String? = text?.trim()?.takeIf {
+    it.isNotEmpty() && it.length <= 1024 && !it.equals("<unknown>", ignoreCase = true) &&
+        it.none(Char::isISOControl)
 }
 
 internal data class PendingLocalMusicRename(

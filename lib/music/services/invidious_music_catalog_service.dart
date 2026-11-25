@@ -1,9 +1,11 @@
 import 'dart:convert';
 
+import 'package:clipious/channels/models/channel.dart';
 import 'package:clipious/content_filter/community_filter.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/music/models/music_artist.dart';
 import 'package:clipious/music/models/music_artist_page.dart';
+import 'package:clipious/music/models/music_catalog_search.dart';
 import 'package:clipious/music/models/music_charts.dart';
 import 'package:clipious/music/models/music_collection.dart';
 import 'package:clipious/music/models/music_library_entry.dart';
@@ -16,6 +18,7 @@ import 'package:clipious/music/services/music_video_match.dart';
 import 'package:clipious/music/services/music_video_source.dart';
 import 'package:clipious/network/network_proxy.dart';
 import 'package:clipious/player/models/backend_playback.dart';
+import 'package:clipious/playlists/models/playlist.dart';
 import 'package:clipious/playlists/models/playlist_reference.dart';
 import 'package:clipious/search/models/search_type.dart';
 import 'package:clipious/service.dart';
@@ -25,6 +28,7 @@ import 'package:clipious/utils/invidious_image.dart';
 import 'package:clipious/utils/models/image_object.dart';
 import 'package:clipious/utils/video_post_processing.dart'
     show privateVideoString;
+import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:clipious/videos/models/video.dart';
 
 /// Music browsing through the selected Invidious instance's standard API.
@@ -93,7 +97,7 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
 
   MusicTrack _track(
       Video video, Map<String, List<ImageObject>> savedCovers, Server server,
-      {Video? playbackVideo}) {
+      {Video? playbackVideo, String? albumPlaylistId, String? albumTitle}) {
     if (!_videoId.hasMatch(video.videoId) ||
         video.title == null ||
         video.title!.trim().isEmpty) {
@@ -118,7 +122,8 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
           ? null
           : Uri(pathSegments: ['', '@$uploaderHandle']).toString(),
       durationSeconds: video.lengthSeconds,
-      albumTitle: video.stockArtTrackAlbum,
+      albumPlaylistId: albumPlaylistId,
+      albumTitle: albumTitle ?? video.stockArtTrackAlbum,
       thumbnails: savedCovers[video.videoId] ?? const [],
       videoThumbnails: stockSongThumbnails(video.videoId, video.videoThumbnails,
           instanceUrl: server.url),
@@ -146,11 +151,7 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
     return _inSession((api, server, check) async =>
         (await api.searchMusic(query.trim(), SearchType.channel, server, check))
             .channels
-            .map((channel) => MusicArtist(
-                  id: channel.authorId,
-                  name: channel.author,
-                  thumbnails: channel.authorThumbnails,
-                ))
+            .map(_searchArtist)
             .toList());
   }
 
@@ -160,13 +161,115 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
     return _inSession((api, server, check) async => (await api.searchMusic(
             query.trim(), SearchType.playlist, server, check))
         .playlists
-        .map((playlist) => MusicPlaylist(
-              id: playlist.playlistId,
-              title: playlist.title,
-              author: playlist.author,
-              thumbnails: _playlistPreview(playlist.videos, server),
-            ))
+        .map((playlist) => _searchPlaylist(playlist, server))
         .toList());
+  }
+
+  static MusicArtist _searchArtist(Channel channel) => MusicArtist(
+        id: channel.authorId,
+        name: channel.author,
+        thumbnails: channel.authorThumbnails,
+      );
+
+  MusicPlaylist _searchPlaylist(Playlist playlist, Server server,
+          {String? id}) =>
+      MusicPlaylist(
+        id: id ?? playlist.playlistId,
+        title: playlist.title,
+        author: playlist.author,
+        thumbnails: _playlistPreview(playlist.videos, server),
+      );
+
+  @override
+  Future<MusicCatalogSearchPage> searchPage(
+    String query,
+    MusicCatalogSearchType type,
+    int page, {
+    bool Function()? isCurrent,
+  }) async {
+    if (page < 1) throw ArgumentError.value(page, 'page');
+    _requireCurrentDiscovery(isCurrent);
+    final text = query.trim();
+    if (text.isEmpty) {
+      return const MusicCatalogSearchPage(hits: [], rawKeys: []);
+    }
+    final searchType = switch (type) {
+      MusicCatalogSearchType.all => SearchType.all,
+      MusicCatalogSearchType.songs => SearchType.video,
+      MusicCatalogSearchType.channels => SearchType.channel,
+      MusicCatalogSearchType.playlists => SearchType.playlist,
+    };
+    return _inSession((api, server, checkSession) async {
+      Future<void> check() => _checkDiscovery(checkSession, isCurrent);
+      final rows = await api.searchMusicPage(text, searchType, page,
+          server: server, beforeRequest: check);
+      await check();
+      final hits = <String, MusicCatalogSearchHit>{};
+      final rawKeys = <String>[];
+      final covers = _savedCovers(server);
+      for (final row in rows) {
+        if (row is! Map<String, Object?>) continue;
+        final identity = _searchIdentity(row);
+        if (identity == null) continue;
+        final (kind, id) = identity;
+        final key = MusicCatalogSearchHit.keyFor(kind, id);
+        rawKeys.add(key);
+        if (hits.containsKey(key) ||
+            (type != MusicCatalogSearchType.all && type != kind)) {
+          continue;
+        }
+        try {
+          switch (kind) {
+            case MusicCatalogSearchType.songs:
+              final video = Video.fromJson(row);
+              if (video.title?.trim().isNotEmpty == true &&
+                  video.title != privateVideoString) {
+                hits[key] = MusicCatalogSongHit(_track(video, covers, server));
+              }
+            case MusicCatalogSearchType.channels:
+              final channel = Channel.fromJson(row);
+              if (channel.author.trim().isNotEmpty) {
+                hits[key] = MusicCatalogChannelHit(_searchArtist(channel));
+              }
+            case MusicCatalogSearchType.playlists:
+              final playlist = Playlist.fromJson(row);
+              if (playlist.title.trim().isNotEmpty) {
+                hits[key] = MusicCatalogPlaylistHit(
+                    _searchPlaylist(playlist, server, id: id));
+              }
+            case MusicCatalogSearchType.all:
+              break;
+          }
+        } on TypeError {
+          // An isolated malformed row cannot hide the rest of the wire page.
+          continue;
+        } on FormatException {
+          continue;
+        }
+      }
+      await check();
+      return MusicCatalogSearchPage(
+          hits: hits.values.toList(), rawKeys: rawKeys, rawCount: rows.length);
+    });
+  }
+
+  static (MusicCatalogSearchType, String)? _searchIdentity(
+      Map<String, Object?> row) {
+    switch (row) {
+      case {'type': 'video', 'videoId': final String id}
+          when _videoId.hasMatch(id):
+        return (MusicCatalogSearchType.songs, id);
+      case {'type': 'channel', 'authorId': final String id}
+          when _channelId.hasMatch(id):
+        return (MusicCatalogSearchType.channels, id);
+      case {'type': 'playlist', 'playlistId': final String rawId}:
+        final id = rawId.startsWith('VL') ? rawId.substring(2) : rawId;
+        return _playlistId.hasMatch(id)
+            ? (MusicCatalogSearchType.playlists, id)
+            : null;
+      default:
+        return null;
+    }
   }
 
   // Do not override getTrendingSongs. Invidious's trending endpoint can ignore
@@ -800,6 +903,9 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
       }
       final first =
           await api.getMusicPlaylistPage(playlistId, 1, server, check);
+      final albumId = validMusicAlbumPlaylistId(playlistId);
+      final albumTitle =
+          albumId != null && first.title.trim().isNotEmpty ? first.title : null;
       var page = first;
       var hasFilteredEntries = false;
       final tracks = <MusicTrack>[];
@@ -826,7 +932,8 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
         for (final video in page.videos) {
           final identity = playlistSourceEntryId(video);
           if (identity == null || identities.add(identity)) {
-            tracks.add(_track(video, covers, server));
+            tracks.add(_track(video, covers, server,
+                albumPlaylistId: albumId, albumTitle: albumTitle));
           }
         }
         // Invidious pages can overlap. Filtered entries have already lost their

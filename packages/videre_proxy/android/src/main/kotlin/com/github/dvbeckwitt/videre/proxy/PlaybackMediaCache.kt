@@ -90,7 +90,8 @@ object PlaybackMediaCache {
         val companions = mediaCompanions?.let { MediaCompanions.parse(it, sourceUri) }
         val downloaded = DownloadedRenditionDescriptor.parse(values?.get("download"), sourceUri)
         require(companions == null || downloaded == null) { "Companion streaming requires a network source." }
-        val identity = values?.let { PlaybackCacheIdentity.parse(it, downloaded?.remoteUri ?: sourceUri, companions) }
+        val networkUri = if (downloaded == null) sourceUri else downloaded.remoteUri
+        val identity = values?.let { PlaybackCacheIdentity.parse(it, networkUri, companions) }
         val rendition = downloaded?.let { DownloadedRendition(context.applicationContext, checkNotNull(identity), it) }
         val admittedRequest = admittedRequest(request, values?.get("adaptiveVod"))
         val gateway = companions?.gateway ?: identity?.gateway

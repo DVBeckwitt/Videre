@@ -1,8 +1,11 @@
 import 'dart:convert';
+import 'dart:io';
 import 'package:clipious/home/models/home_tabs_layout.dart';
 import 'package:clipious/home/models/phone_navigation.dart';
+import 'package:clipious/music/models/music_artwork_cache.dart';
 import 'package:clipious/music/models/music_layout.dart';
 import 'package:clipious/music/models/music_library_entry.dart';
+import 'package:clipious/music/services/music_catalog_artwork_cache.dart';
 import 'package:clipious/music/services/music_library_service.dart';
 
 import 'package:clipious/offline_subscriptions/models/offline_subscription.dart';
@@ -26,6 +29,9 @@ import 'package:clipious/videos/models/db/progress.dart';
 import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:clipious/videos/services/watch_history.dart';
+import 'package:flutter/services.dart' show MethodChannel;
+import 'package:flutter_cache_manager/flutter_cache_manager.dart'
+    show Config, JsonCacheInfoRepository;
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -459,6 +465,75 @@ void main() {
       expect(target.getSettings('playback-session')?.value, 'keep session');
     });
   }
+
+  test('only canonical Music artwork cache limits travel with a profile',
+      () async {
+    const key = musicArtworkCacheLimitSettingName;
+    final person = await target.createProfile('Listener');
+    final destination = target.forProfile(person.id);
+    await target.saveSetting(SettingsValue(key, '32'));
+    for (final size in ['16', '32', '64', '128', '256', '512']) {
+      await source.saveSetting(SettingsValue(key, size));
+      final backup = UserBackup.parse((await source.exportBackup()).encode());
+      final exported =
+          backup.sections['settings']!.singleWhere((row) => row['name'] == key);
+      expect(exported['value'], size);
+      await destination.restoreBackup(backup, replace: true);
+      expect(destination.getSettings(key)?.value, size);
+      expect(target.getSettings(key)?.value, '32');
+    }
+    for (final invalid in ['0', '17', '1024', '016', '64.0', ' 128']) {
+      final setting = SettingsValue(key, invalid);
+      await source.saveSetting(setting);
+      final exported = await source.exportBackup();
+      expect(exported.sections['settings']!.map((row) => row['name']),
+          isNot(contains(key)));
+      final raw = jsonDecode(exported.encode()) as Map<String, dynamic>;
+      expect(
+          () => UserBackup.parse(jsonEncode({
+                ...raw,
+                'settings': [
+                  ...exported.sections['settings']!,
+                  setting.toJson()
+                ]
+              })),
+          throwsFormatException);
+    }
+  });
+
+  test(
+      'viewing online Music artwork adds no cache files or URLs to the portable backup',
+      () async {
+    TestWidgetsFlutterBinding.ensureInitialized();
+    final directory =
+        await Directory.systemTemp.createTemp('videre-backup-artwork-');
+    const paths = MethodChannel('plugins.flutter.io/path_provider');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(paths, (_) async => directory.path);
+    final cache = MusicCatalogArtworkCache(source.profileId,
+        configFactory: (namespace) => Config(namespace,
+            repo: JsonCacheInfoRepository.withFile(
+                File('${directory.path}/catalog.json'))));
+    addTearDown(() async {
+      await cache.dispose();
+      messenger.setMockMethodCallHandler(paths, null);
+      await directory.delete(recursive: true);
+    });
+    await source
+        .saveSetting(SettingsValue(musicArtworkCacheLimitSettingName, '256'));
+    final before = (await source.exportBackup()).encode();
+    const url =
+        'https://artwork.example/private/album-cover.png?signature=cache-only';
+    final bytes = base64Decode(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=');
+    final manager = cache.manager;
+    final file = await manager.putFile(url, bytes, fileExtension: 'png');
+    expect(await file.readAsBytes(), bytes);
+    expect((await manager.getFileFromCache(url))?.originalUrl, url);
+    expect((await cache.entries()).single.bytes, bytes.length);
+    expect((await source.exportBackup()).encode(), before);
+  });
 
   test('sanitized Music artwork remains canonical through backup round trips',
       () async {

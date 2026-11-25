@@ -2,7 +2,9 @@ import 'package:clipious/utils/motion.dart';
 import 'dart:math' as math;
 
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:clipious/app/states/app.dart';
 import 'package:clipious/globals.dart';
+import 'package:clipious/music/services/music_artwork_cache.dart';
 import 'package:clipious/network/youtube_privacy.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/utils/invidious_image.dart';
@@ -33,6 +35,9 @@ class Thumbnail extends StatelessWidget {
   /// contains an independently supported image provider.
   final bool instanceOnly;
 
+  /// Keep on-screen Music artwork in the owning profile's catalog cache.
+  final bool musicArtwork;
+
   const Thumbnail(
       {super.key,
       this.child,
@@ -41,19 +46,31 @@ class Thumbnail extends StatelessWidget {
       this.images,
       this.useInvidiousProxy = true,
       this.instanceOnly = false,
+      this.musicArtwork = false,
       required this.decoration,
       this.width,
       this.height});
 
   @override
   Widget build(BuildContext context) {
-    if (!useInvidiousProxy && !instanceOnly) return _build(context, null);
+    if (!useInvidiousProxy &&
+        !instanceOnly &&
+        (!musicArtwork || (images ?? thumbnails ?? const []).isEmpty)) {
+      return _build(context, null);
+    }
     return SelectedServerBuilder(builder: _build);
   }
 
-  Widget _build(BuildContext context, Server? server) {
+  Widget _build(BuildContext context, Server? owner) {
+    final server = useInvidiousProxy || instanceOnly ? owner : null;
+    final wrongMusicProfile = musicArtwork &&
+        (owner == null ||
+            owner.profileId != db.profileId ||
+            context.select<AppCubit?, bool>((app) =>
+                app != null && app.state.profileId != owner.profileId));
     ColorScheme colors = Theme.of(context).colorScheme;
-    return (useInvidiousProxy || instanceOnly) && server == null
+    return wrongMusicProfile ||
+            ((useInvidiousProxy || instanceOnly) && server == null)
         ? Container(
             decoration: decoration,
             width: width,
@@ -96,7 +113,8 @@ class Thumbnail extends StatelessWidget {
               return seen.add(resolved);
             }).toList();
             return BlocProvider(
-              key: ValueKey(Object.hash(server, Object.hashAll(urls))),
+              key: ValueKey(
+                  Object.hash(owner, musicArtwork, Object.hashAll(urls))),
               create: (context) => ThumbnailCubit(ThumbnailState(urls: urls)),
               child: BlocBuilder<ThumbnailCubit, ThumbnailState>(
                   builder: (context, state) {
@@ -112,9 +130,16 @@ class Thumbnail extends StatelessWidget {
                   final url = server == null
                       ? state.selected!
                       : invidiousImageUrl(state.selected!, server)!;
-                  final cacheKey = server == null
+                  final imageKey = server == null
                       ? url
                       : invidiousImageCacheKey(url, server);
+                  // Instance keys already contain their account and profile.
+                  // Public URLs need a profile namespace in Flutter's image cache.
+                  final cacheKey = !musicArtwork
+                      ? imageKey
+                      : imageKey == url
+                          ? 'music-artwork:${owner!.profileId}:$imageKey'
+                          : 'music-artwork:$imageKey';
                   final source = images
                       ?.where((image) => image.url == state.selected)
                       .firstOrNull;
@@ -142,6 +167,11 @@ class Thumbnail extends StatelessWidget {
                   return CachedNetworkImage(
                     key: ValueKey(cacheKey),
                     cacheKey: cacheKey,
+                    cacheManager: musicArtwork
+                        ? (context.read<MusicArtworkCache?>() ??
+                                musicArtworkCache)
+                            .catalogManager(owner!.profileId)
+                        : null,
                     httpHeaders: server?.headersForUrl(url),
                     memCacheWidth: decodeWidth,
                     memCacheHeight: decodeHeight,

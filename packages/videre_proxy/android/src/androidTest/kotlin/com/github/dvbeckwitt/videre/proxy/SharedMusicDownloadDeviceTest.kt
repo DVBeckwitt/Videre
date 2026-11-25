@@ -10,6 +10,7 @@ import java.util.UUID
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
@@ -35,17 +36,31 @@ class SharedMusicDownloadDeviceTest {
         var removed = false
         var failure: Throwable? = null
         try {
+            checkNotNull(resolver.openOutputStream(uri)).close()
+            assertEquals(0L, SharedMusicDownload.documentSize(context, uri))
             checkNotNull(resolver.openOutputStream(uri)).use { it.write(bytes) }
+            assertEquals(bytes.size.toLong(), SharedMusicDownload.documentSize(context, uri))
+            assertThrows(LocalDownloadUnavailable::class.java) {
+                DownloadDocumentIntegrity.probe(context, uri.toString(), SharedMusicDownload.COLLECTION, "default", "fixture")
+            }
             values.clear()
             values.put(MediaStore.MediaColumns.IS_PENDING, 0)
             assertEquals(1, resolver.update(uri, values, null, null))
             assertTrue(SharedMusicDownload.exportExists(context, uri))
+            assertEquals(bytes.size.toLong(), SharedMusicDownload.documentSize(context, uri))
+            val identity = DownloadDocumentIntegrity.probe(
+                context, uri.toString(), SharedMusicDownload.COLLECTION, "default", "fixture")
+            assertEquals(bytes.size.toLong(), identity.byteLength)
 
             values.clear()
             values.put(MediaStore.MediaColumns.RELATIVE_PATH, "Music/")
             assertEquals(1, resolver.update(uri, values, null, null))
             assertFalse(SharedMusicDownload.exportExists(context, uri))
+            assertNull(SharedMusicDownload.documentSize(context, uri))
             assertThrows(SecurityException::class.java) { SharedMusicDownload.pending(context, uri) }
+            assertThrows(LocalDownloadUnavailable::class.java) {
+                DownloadDocumentIntegrity.probe(context, uri.toString(), SharedMusicDownload.COLLECTION, "default", "fixture")
+            }
             SharedMusicDownload.deleteAtDestination(context, uri)
             assertArrayEquals(bytes, checkNotNull(resolver.openInputStream(uri)).use { it.readBytes() })
 
@@ -53,6 +68,7 @@ class SharedMusicDownloadDeviceTest {
             assertEquals(1, resolver.update(uri, values, null, null))
             SharedMusicDownload.deleteAtDestination(context, uri)
             assertFalse(SharedMusicDownload.exportExists(context, uri))
+            assertEquals(0L, SharedMusicDownload.documentSize(context, uri))
             removed = true
         } catch (error: Throwable) {
             failure = error

@@ -72,6 +72,31 @@ void main() {
       expect(saved.played, ['video']);
     });
 
+    test('mark unwatched resets a repeated saved download by its source ID',
+        () async {
+      const session = PlaybackSession(
+          offlineIds: ['video', 'next', 'video#1'],
+          currentId: 'video#1',
+          seconds: 80,
+          audio: true,
+          played: ['video'],
+          next: ['next']);
+      await database
+          .saveSetting(SettingsValue(playbackSessionSetting, session.encode()));
+      PlaybackSession saved() => PlaybackSession.decode(
+          database.getSettings(playbackSessionSetting)?.value)!;
+
+      await repository.mark('next', false);
+      expect(saved().seconds, 80);
+      await repository.mark('video', false);
+      final reset = saved();
+      expect(reset.seconds, 0);
+      expect(reset.currentId, session.currentId);
+      expect(reset.offlineIds, session.offlineIds);
+      expect(reset.played, session.played);
+      expect(reset.next, session.next);
+    });
+
     test('mark watched preserves a real partial resume position', () async {
       await database.saveProgress(Progress(0.4, 'partial'));
       await repository.mark('partial', true, account: account);

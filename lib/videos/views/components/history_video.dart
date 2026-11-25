@@ -43,7 +43,8 @@ Future<void> openHistoryEntry(
     return;
   }
   try {
-    await MusicScreen.playTracks(context, [video]);
+    await MusicScreen.playTracks(context, [video],
+        queueTitle: AppLocalizations.of(context)!.history);
   } catch (_) {
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -77,6 +78,7 @@ class HistoryVideoView extends StatelessWidget {
             firstChild: const CompactVideoPlaceHolder(),
             secondChild: state.cachedVid != null
                 ? CompactVideo(
+                    musicArtwork: source == HistorySource.music,
                     onTap: () => openHistoryEntry(
                         context, source, state.cachedVid!.toVideo(),
                         television: false),
