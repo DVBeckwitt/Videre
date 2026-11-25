@@ -26,6 +26,7 @@ _Playlist _$PlaylistFromJson(Map<String, dynamic> json) => _Playlist(
               ?.map((e) => Video.fromJson(e as Map<String, dynamic>))
               .toList() ??
           const [],
+      localEditLocked: json['localEditLocked'] as bool? ?? false,
     );
 
 Map<String, dynamic> _$PlaylistToJson(_Playlist instance) => <String, dynamic>{
@@ -42,4 +43,5 @@ Map<String, dynamic> _$PlaylistToJson(_Playlist instance) => <String, dynamic>{
       'isListed': instance.isListed,
       'updated': instance.updated,
       'videos': instance.videos,
+      'localEditLocked': instance.localEditLocked,
     };

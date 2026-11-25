@@ -373,15 +373,17 @@ void main() {
     expect(find.text('Intro'), findsNothing);
     expect(find.text('Étoile du matin'), findsNothing);
     expect(find.text('Untagged copy'), findsNothing);
-    final source = assignPlaylistEntryIds(playlist.videos);
+    final source = service
+        .getLocalPlaylists()
+        .singleWhere((item) => item.playlistId == playlist.playlistId)
+        .videos;
     final secondCopy = find.byKey(ValueKey(source.last.queueEntryId!));
     await tester.ensureVisible(secondCopy);
     await tester.tap(secondCopy);
     await tester.pumpAndSettle();
     expect(player.source?.playlistId, playlist.playlistId);
-    final songs = playlist.videos.where((entry) => entry.musicMetadata != null);
     final queue = assignPlaylistEntryIds(player.online);
-    final expected = assignPlaylistEntryIds(songs);
+    final expected = source.where((entry) => entry.musicMetadata != null);
     expect(queue.map((entry) => entry.queueEntryId),
         expected.map((entry) => entry.queueEntryId));
     expect(player.start, 3);

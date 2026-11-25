@@ -27,6 +27,7 @@ mixin _$Playlist {
   bool? get isListed;
   int? get updated;
   List<Video> get videos;
+  bool get localEditLocked;
   @JsonKey(includeToJson: false, includeFromJson: false)
   int get removedByFilter;
 
@@ -66,6 +67,8 @@ mixin _$Playlist {
                 other.isListed == isListed) &&
             (identical(other.updated, updated) || other.updated == updated) &&
             const DeepCollectionEquality().equals(other.videos, videos) &&
+            (identical(other.localEditLocked, localEditLocked) ||
+                other.localEditLocked == localEditLocked) &&
             (identical(other.removedByFilter, removedByFilter) ||
                 other.removedByFilter == removedByFilter));
   }
@@ -87,11 +90,12 @@ mixin _$Playlist {
       isListed,
       updated,
       const DeepCollectionEquality().hash(videos),
+      localEditLocked,
       removedByFilter);
 
   @override
   String toString() {
-    return 'Playlist(type: $type, title: $title, playlistId: $playlistId, author: $author, authordId: $authordId, authorUrl: $authorUrl, authorThumbnails: $authorThumbnails, description: $description, videoCount: $videoCount, viewCount: $viewCount, isListed: $isListed, updated: $updated, videos: $videos, removedByFilter: $removedByFilter)';
+    return 'Playlist(type: $type, title: $title, playlistId: $playlistId, author: $author, authordId: $authordId, authorUrl: $authorUrl, authorThumbnails: $authorThumbnails, description: $description, videoCount: $videoCount, viewCount: $viewCount, isListed: $isListed, updated: $updated, videos: $videos, localEditLocked: $localEditLocked, removedByFilter: $removedByFilter)';
   }
 }
 
@@ -114,6 +118,7 @@ abstract mixin class $PlaylistCopyWith<$Res> {
       bool? isListed,
       int? updated,
       List<Video> videos,
+      bool localEditLocked,
       @JsonKey(includeToJson: false, includeFromJson: false)
       int removedByFilter});
 }
@@ -143,6 +148,7 @@ class _$PlaylistCopyWithImpl<$Res> implements $PlaylistCopyWith<$Res> {
     Object? isListed = freezed,
     Object? updated = freezed,
     Object? videos = null,
+    Object? localEditLocked = null,
     Object? removedByFilter = null,
   }) {
     return _then(_self.copyWith(
@@ -198,6 +204,10 @@ class _$PlaylistCopyWithImpl<$Res> implements $PlaylistCopyWith<$Res> {
           ? _self.videos
           : videos // ignore: cast_nullable_to_non_nullable
               as List<Video>,
+      localEditLocked: null == localEditLocked
+          ? _self.localEditLocked
+          : localEditLocked // ignore: cast_nullable_to_non_nullable
+              as bool,
       removedByFilter: null == removedByFilter
           ? _self.removedByFilter
           : removedByFilter // ignore: cast_nullable_to_non_nullable
@@ -223,6 +233,7 @@ class _Playlist implements Playlist {
       this.isListed,
       this.updated,
       final List<Video> videos = const [],
+      this.localEditLocked = false,
       @JsonKey(includeToJson: false, includeFromJson: false)
       this.removedByFilter = 0})
       : _authorThumbnails = authorThumbnails,
@@ -273,6 +284,9 @@ class _Playlist implements Playlist {
   }
 
   @override
+  @JsonKey()
+  final bool localEditLocked;
+  @override
   @JsonKey(includeToJson: false, includeFromJson: false)
   final int removedByFilter;
 
@@ -317,6 +331,8 @@ class _Playlist implements Playlist {
                 other.isListed == isListed) &&
             (identical(other.updated, updated) || other.updated == updated) &&
             const DeepCollectionEquality().equals(other._videos, _videos) &&
+            (identical(other.localEditLocked, localEditLocked) ||
+                other.localEditLocked == localEditLocked) &&
             (identical(other.removedByFilter, removedByFilter) ||
                 other.removedByFilter == removedByFilter));
   }
@@ -338,11 +354,12 @@ class _Playlist implements Playlist {
       isListed,
       updated,
       const DeepCollectionEquality().hash(_videos),
+      localEditLocked,
       removedByFilter);
 
   @override
   String toString() {
-    return 'Playlist(type: $type, title: $title, playlistId: $playlistId, author: $author, authordId: $authordId, authorUrl: $authorUrl, authorThumbnails: $authorThumbnails, description: $description, videoCount: $videoCount, viewCount: $viewCount, isListed: $isListed, updated: $updated, videos: $videos, removedByFilter: $removedByFilter)';
+    return 'Playlist(type: $type, title: $title, playlistId: $playlistId, author: $author, authordId: $authordId, authorUrl: $authorUrl, authorThumbnails: $authorThumbnails, description: $description, videoCount: $videoCount, viewCount: $viewCount, isListed: $isListed, updated: $updated, videos: $videos, localEditLocked: $localEditLocked, removedByFilter: $removedByFilter)';
   }
 }
 
@@ -367,6 +384,7 @@ abstract mixin class _$PlaylistCopyWith<$Res>
       bool? isListed,
       int? updated,
       List<Video> videos,
+      bool localEditLocked,
       @JsonKey(includeToJson: false, includeFromJson: false)
       int removedByFilter});
 }
@@ -396,6 +414,7 @@ class __$PlaylistCopyWithImpl<$Res> implements _$PlaylistCopyWith<$Res> {
     Object? isListed = freezed,
     Object? updated = freezed,
     Object? videos = null,
+    Object? localEditLocked = null,
     Object? removedByFilter = null,
   }) {
     return _then(_Playlist(
@@ -451,6 +470,10 @@ class __$PlaylistCopyWithImpl<$Res> implements _$PlaylistCopyWith<$Res> {
           ? _self._videos
           : videos // ignore: cast_nullable_to_non_nullable
               as List<Video>,
+      localEditLocked: null == localEditLocked
+          ? _self.localEditLocked
+          : localEditLocked // ignore: cast_nullable_to_non_nullable
+              as bool,
       removedByFilter: null == removedByFilter
           ? _self.removedByFilter
           : removedByFilter // ignore: cast_nullable_to_non_nullable

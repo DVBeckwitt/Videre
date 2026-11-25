@@ -2881,11 +2881,14 @@ class Service {
   }
 
   Future<void> _updateLocalPlaylists(bool Function(List<Playlist>) update,
-      {IDbClient? database}) {
+      {IDbClient? database, String? unlockingPlaylistId}) {
     final owner = database ?? db.forProfile(db.profileId);
     String? apply(String? stored) {
       final playlists = _localPlaylistsFromSetting(stored);
-      if (!update(playlists)) return null;
+      if (!_applyLocalPlaylistUpdate(playlists, update,
+          unlockingPlaylistId: unlockingPlaylistId)) {
+        return null;
+      }
       return jsonEncode(playlists.map((p) => p.toJson()).toList());
     }
 
@@ -2898,6 +2901,91 @@ class Service {
       await owner.saveSetting(SettingsValue(localPlaylistsSetting, value));
     });
   }
+
+  static bool _applyLocalPlaylistUpdate(
+      List<Playlist> playlists, bool Function(List<Playlist>) update,
+      {String? unlockingPlaylistId}) {
+    final locked =
+        playlists.where((playlist) => playlist.isEditLocked).toList();
+    if (!update(playlists)) return false;
+    if (locked.isEmpty) return true;
+
+    final updated = {
+      for (final playlist in playlists) playlist.playlistId: playlist
+    };
+    for (final before in locked) {
+      final allowed = before.playlistId == unlockingPlaylistId
+          ? before.copyWith(localEditLocked: false)
+          : before;
+      if (updated[before.playlistId] != allowed) {
+        throw StateError('Playlist editing is locked');
+      }
+    }
+    return true;
+  }
+
+  Future<bool> setLocalPlaylistEditLocked(PlaylistReference source,
+      {required bool locked, required bool Function() isCurrent}) async {
+    if (!_canEditLocalPlaylist(source)) return false;
+    final owner = db.forProfile(source.profileId);
+    var found = false;
+    await _updateLocalPlaylists((playlists) {
+      if (!_canEditLocalPlaylist(source) || !isCurrent()) return false;
+      final index = playlists
+          .indexWhere((p) => p.isLocal && p.playlistId == source.playlistId);
+      if (index < 0) return false;
+      found = true;
+      final playlist = playlists[index];
+      if (playlist.isEditLocked == locked) return false;
+      playlists[index] = playlist.copyWith(localEditLocked: locked);
+      return true;
+    }, database: owner, unlockingPlaylistId: locked ? null : source.playlistId);
+    return found;
+  }
+
+  /// Commit a permutation only if the draft still describes the stored list.
+  Future<bool> reorderLocalPlaylist(PlaylistReference source,
+      {required List<String> expectedOrder,
+      required List<String> order,
+      required bool Function() isCurrent}) async {
+    if (!_canEditLocalPlaylist(source)) return false;
+    final expected = List.of(expectedOrder);
+    final proposed = List.of(order);
+    if (listEquals(expected, proposed) ||
+        proposed.length != expected.length ||
+        proposed.toSet().length != expected.length) {
+      return false;
+    }
+
+    final owner = db.forProfile(source.profileId);
+    var moved = false;
+    await _updateLocalPlaylists((playlists) {
+      if (!_canEditLocalPlaylist(source) || !isCurrent()) return false;
+      final index = playlists
+          .indexWhere((p) => p.isLocal && p.playlistId == source.playlistId);
+      if (index < 0) return false;
+      final playlist = playlists[index];
+      if (playlist.isEditLocked ||
+          !listEquals(expected,
+              playlist.videos.map((video) => video.indexId).toList())) {
+        return false;
+      }
+      final byId = {for (final video in playlist.videos) video.indexId: video};
+      if (!proposed.every(byId.containsKey)) return false;
+      playlists[index] = playlist.copyWith(
+        videos: [for (final id in proposed) byId[id]!],
+        updated: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      );
+      moved = true;
+      return true;
+    }, database: owner);
+    return moved;
+  }
+
+  bool _canEditLocalPlaylist(PlaylistReference source) =>
+      source.kind == PlaylistSourceKind.local &&
+      source.playlistId != localWatchLaterId &&
+      source.matchesOwner(db);
 
   Future<ChannelPlaylists> getChannelPlaylists(String channelId,
       {String? continuation}) async {

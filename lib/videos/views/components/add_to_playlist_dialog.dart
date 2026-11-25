@@ -108,7 +108,7 @@ class _AddToPlaylistDialogState extends State<AddToPlaylistDialog> {
               bool inPlaylist =
                   p.videos.any((element) => element.videoId == widget.videoId);
               return FilledButton.tonal(
-                  onPressed: inPlaylist || saving
+                  onPressed: inPlaylist || saving || p.isEditLocked
                       ? null
                       : () => addToPlaylist(context, p.playlistId),
                   child: Row(
@@ -131,7 +131,12 @@ class _AddToPlaylistDialogState extends State<AddToPlaylistDialog> {
                           Text(p.playlistId == localWatchLaterId
                               ? locals.watchLater
                               : p.title),
-                          Text(p.isLocal ? locals.onDevice : locals.onServer,
+                          Text(
+                              p.isEditLocked
+                                  ? locals.musicPlaylistLocked
+                                  : p.isLocal
+                                      ? locals.onDevice
+                                      : locals.onServer,
                               style: Theme.of(context).textTheme.labelSmall),
                         ],
                       )),

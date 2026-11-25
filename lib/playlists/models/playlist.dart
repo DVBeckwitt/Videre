@@ -14,6 +14,8 @@ const localWatchLaterId = 'local:watch-later';
 
 extension LocalPlaylist on Playlist {
   bool get isLocal => playlistId.startsWith('local:');
+  bool get isEditLocked =>
+      isLocal && playlistId != localWatchLaterId && localEditLocked;
 }
 
 @freezed
@@ -32,6 +34,7 @@ sealed class Playlist with _$Playlist {
       bool? isListed,
       int? updated,
       @Default([]) List<Video> videos,
+      @Default(false) bool localEditLocked,
       @JsonKey(includeToJson: false, includeFromJson: false)
       @Default(0)
       int removedByFilter}) = _Playlist;

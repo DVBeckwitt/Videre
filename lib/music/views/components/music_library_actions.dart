@@ -777,7 +777,7 @@ class MusicLibraryActions extends StatefulWidget {
             value: _LibraryAction.timeline,
             child: Text(locals.musicListeningTimeline)),
       ],
-      if (title != null)
+      if (title != null && playlist?.isEditLocked == false)
         PopupMenuItem(
             key: const ValueKey('music-player-remove-from-playlist'),
             value: _LibraryAction.removeFromPlaylist,
@@ -1316,12 +1316,15 @@ class _SaveMusicDialogState extends State<_SaveMusicDialog> {
                 in widget.creating ? <Playlist>[] : widget.session.playlists)
               ListTile(
                 enabled: !_saving &&
+                    !playlist.isEditLocked &&
                     !widget.videos.every((video) => playlist.videos
                         .any((saved) => saved.videoId == video.videoId)),
                 title: Text(playlist.playlistId == localWatchLaterId
                     ? locals.watchLater
                     : playlist.title),
-                subtitle: Text(locals.onDevice),
+                subtitle: Text(playlist.isEditLocked
+                    ? locals.musicPlaylistLocked
+                    : locals.onDevice),
                 onTap: () => _save(playlist.playlistId),
               ),
             if (_creating)

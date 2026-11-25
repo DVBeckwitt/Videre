@@ -21,6 +21,7 @@ import 'package:clipious/music/views/components/music_download_storage_summary.d
 import 'package:clipious/music/views/components/music_duration_label.dart';
 import 'package:clipious/music/views/components/music_library_actions.dart';
 import 'package:clipious/music/views/components/local_music_folder.dart';
+import 'package:clipious/music/views/components/music_playlist_edit_actions.dart';
 import 'package:clipious/music/views/components/music_playlist_resume.dart';
 import 'package:clipious/music/views/components/music_song_selection_bar.dart';
 import 'package:clipious/music/views/components/music_status_title.dart';
@@ -764,22 +765,27 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
               showServerCopy: !_playlistSearching,
             ),
           ),
-          if (songs.isNotEmpty && !_playlistSelecting && !_playlistSearching)
+          if (!_playlistSelecting && !_playlistSearching)
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
               child: Wrap(spacing: 8, runSpacing: 8, children: [
-                FilledButton.icon(
-                    onPressed: () => _play(songs, reference: reference),
-                    icon: const Icon(Icons.play_arrow),
-                    label: Text(locals.musicPlayAll)),
-                MusicPlaylistResume(
-                    reference: reference,
-                    videos: songs,
-                    onPlay: (index, position) => _play(songs,
-                        reference: reference,
-                        startIndex: index,
-                        startAt: position)),
-                MusicLibraryActions(videos: songs, compact: false),
+                if (songs.isNotEmpty) ...[
+                  FilledButton.icon(
+                      onPressed: () => _play(songs, reference: reference),
+                      icon: const Icon(Icons.play_arrow),
+                      label: Text(locals.musicPlayAll)),
+                  MusicPlaylistResume(
+                      reference: reference,
+                      videos: songs,
+                      onPlay: (index, position) => _play(songs,
+                          reference: reference,
+                          startIndex: index,
+                          startAt: position)),
+                  MusicLibraryActions(videos: songs, compact: false),
+                ],
+                if (playlist.playlistId != localWatchLaterId)
+                  MusicPlaylistEditActions(
+                      playlist: playlist, reference: reference),
               ]),
             ),
         ]);
@@ -890,7 +896,9 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                                         : Icons.check_box_outline_blank))
                                 : MusicLibraryActions(
                                     videos: [song],
-                                    localPlaylistId: playlist.playlistId,
+                                    localPlaylistId: playlist.isEditLocked
+                                        ? null
+                                        : playlist.playlistId,
                                     onPlay: () => playSong(index)),
                             onLongPress: _playlistSelecting
                                 ? null
