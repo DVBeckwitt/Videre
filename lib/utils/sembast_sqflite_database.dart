@@ -28,6 +28,8 @@ import '../settings/states/settings.dart';
 import '../network/media_companion.dart';
 import '../playlists/services/playlist_progress.dart';
 import '../playlists/services/playlist_library_service.dart';
+import '../playlists/models/local_playlist_entries.dart';
+import '../playlists/models/playlist.dart';
 import '../playlists/models/playlist_reference.dart';
 import '../playlists/models/saved_playlist.dart';
 import '../recommendations/subscription_revision.dart';
@@ -166,6 +168,45 @@ class SembastSqfDb extends IDbClient {
         final selected = (await active.get(txn))?['id'];
         if (!profiles.any((profile) => profile.key == selected)) {
           await active.put(txn, {'id': profiles.first.key});
+        }
+        for (final profile in profiles) {
+          final store = stringMapStoreFactory
+              .store(_profileStoreName('settings', profile.key));
+          final record = store.record(localPlaylistsSetting);
+          final stored = (await record.get(txn))?['value'];
+          if (stored is! String) continue;
+          final List<Playlist> raw;
+          try {
+            raw = _decodeLocalPlaylists(stored);
+          } on FormatException {
+            continue;
+          } on TypeError {
+            continue;
+          }
+          final normalized = raw.map(normalizeLocalPlaylistEntries).toList();
+          if (Iterable<int>.generate(raw.length)
+              .any((index) => !identical(raw[index], normalized[index]))) {
+            await record.put(txn, _encodedLocalPlaylists(normalized).toJson());
+          }
+        }
+      });
+
+  static List<Playlist> _decodeLocalPlaylists(String? value) =>
+      (jsonDecode(value ?? '[]') as List)
+          .cast<Map<String, dynamic>>()
+          .map(Playlist.fromJson)
+          .toList();
+
+  static SettingsValue _encodedLocalPlaylists(Iterable<Playlist> playlists) =>
+      SettingsValue(localPlaylistsSetting, jsonEncode(playlists.toList()));
+
+  Future<void> updateLocalPlaylistSetting(String? Function(String?) update) =>
+      _writeProfile((owner, txn) async {
+        final record = owner.settingsStore.record(localPlaylistsSetting);
+        final value = update((await record.get(txn))?['value'] as String?);
+        if (value != null) {
+          await record.put(
+              txn, SettingsValue(localPlaylistsSetting, value).toJson());
         }
       });
 
@@ -1041,7 +1082,7 @@ class SembastSqfDb extends IDbClient {
             .toList(),
       _musicListeningEvents:
           _musicListeningStore.findSync(db).map((r) => r.value).toList(),
-      'playlists': jsonDecode(getSettings('local-playlists')?.value ?? '[]'),
+      'playlists': jsonDecode(getSettings(localPlaylistsSetting)?.value ?? '[]'),
       'savedPlaylists': [
         for (final saved in SavedPlaylist.decodeLibrary(
             getSettings(playlistLibrarySettingName)?.value, profileId))
@@ -1163,35 +1204,26 @@ class SembastSqfDb extends IDbClient {
           }
         }
         await playbackSequence.put(txn, {'value': playbackRevision});
+        final playlistRecord = settingsStore.record(localPlaylistsSetting);
         final old = replace
-            ? <dynamic>[]
-            : jsonDecode(getSettings('local-playlists')?.value ?? '[]') as List;
-        final lists = <String, dynamic>{
-          for (final playlist in old) playlist['playlistId'] as String: playlist
+            ? const <Playlist>[]
+            : _decodeLocalPlaylists(
+                (await playlistRecord.get(txn))?['value'] as String?);
+        final lists = {
+          for (final playlist in old)
+            playlist.playlistId: normalizeLocalPlaylistEntries(playlist),
         };
-        for (final playlist in backup.sections['playlists']!) {
-          final id = playlist['playlistId'] as String;
-          if (lists.containsKey(id)) {
-            final videos = <String, dynamic>{
-              for (final video in lists[id]['videos'] as List)
-                video['videoId'] as String: video
-            };
-            for (final video in playlist['videos'] as List) {
-              videos.putIfAbsent(video['videoId'] as String, () => video);
-            }
-            lists[id] = {
-              ...lists[id] as Map,
-              'videos': videos.values.toList(),
-              'videoCount': videos.length
-            };
-          } else {
-            lists[id] = playlist;
-          }
+        final incoming =
+            _decodeLocalPlaylists(jsonEncode(backup.sections['playlists']));
+        for (final playlist in incoming) {
+          final existing = lists[playlist.playlistId];
+          lists[playlist.playlistId] = existing == null
+              ? playlist
+              : mergeLocalPlaylistEntries(existing, playlist,
+                  backup.unidentifiedPlaylistEntries(playlist.playlistId));
         }
-        await settingsStore.record('local-playlists').put(
-            txn,
-            SettingsValue('local-playlists', jsonEncode(lists.values.toList()))
-                .toJson());
+        await playlistRecord.put(
+            txn, _encodedLocalPlaylists(lists.values).toJson());
         final storedBookmarks =
             await settingsStore.record(playlistLibrarySettingName).get(txn);
         final bookmarks = <String, SavedPlaylist>{

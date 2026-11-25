@@ -269,13 +269,13 @@ void main() {
         .singleWhere((playlist) => playlist.title == 'Music')
         .playlistId;
     final session = MusicLibrarySession(app);
-    await expectLater(session.removeFromPlaylist('PLpublic', first.videoId),
-        throwsArgumentError);
+    await expectLater(
+        session.removeFromPlaylist('PLpublic', first), throwsArgumentError);
     final next = await db.createProfile('Another person');
     await db.useProfile(next.id);
     app.profileChanged(next.id);
-    await expectLater(session.removeFromPlaylist(playlistId, first.videoId),
-        throwsStateError);
+    await expectLater(
+        session.removeFromPlaylist(playlistId, first), throwsStateError);
     expect(service.getLocalPlaylists().single.videos, isEmpty);
     expect(
         service
@@ -1190,13 +1190,14 @@ void main() {
       await session.createPlaylist('Second list', [first, second]);
     });
     final playlists = service.getLocalPlaylists();
-    final firstId = playlists
-        .singleWhere((playlist) => playlist.title == 'First list')
-        .playlistId;
-    final secondId = playlists
-        .singleWhere((playlist) => playlist.title == 'Second list')
-        .playlistId;
-    final target = ValueNotifier((playlistId: firstId, video: first));
+    final firstList =
+        playlists.singleWhere((playlist) => playlist.title == 'First list');
+    final secondList =
+        playlists.singleWhere((playlist) => playlist.title == 'Second list');
+    final firstId = firstList.playlistId;
+    final secondId = secondList.playlistId;
+    final target =
+        ValueNotifier((playlistId: firstId, video: firstList.videos.first));
     addTearDown(target.dispose);
     await show(tester,
         body: ValueListenableBuilder<({String playlistId, Video video})>(
@@ -1205,7 +1206,7 @@ void main() {
                 videos: [value.video], localPlaylistId: value.playlistId)));
     await tester.tap(find.byTooltip('Music actions'));
     await tester.pumpAndSettle();
-    target.value = (playlistId: secondId, video: second);
+    target.value = (playlistId: secondId, video: secondList.videos.last);
     await tester.pumpAndSettle();
     await tester.runAsync(() async {
       await tester.tap(find.text('Remove from playlist'));

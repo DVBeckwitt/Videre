@@ -152,9 +152,14 @@ class PlaylistCubit extends Cubit<PlaylistState> {
     final server = await _assertCanMutate();
     emit(state.copyWith(loading: true));
     try {
-      await service.deleteUserPlaylistVideo(reference!.playlistId,
-          state.playlist.isLocal ? video.videoId : video.indexId ?? '',
-          database: _database, serverOverride: server);
+      if (state.playlist.isLocal) {
+        await service.removeLocalPlaylistEntry(reference!.playlistId, video,
+            database: _database);
+      } else {
+        await service.deleteUserPlaylistVideo(
+            reference!.playlistId, video.indexId ?? '',
+            database: _database, serverOverride: server);
+      }
       if (isClosed) return;
       // Replace the loader's snapshot as well as the visible state. This also
       // invalidates any page that was already in flight before the deletion.

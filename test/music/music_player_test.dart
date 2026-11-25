@@ -1032,18 +1032,29 @@ void main() {
     expect(namedRemoval, findsNothing);
   });
 
-  testWidgets('Song actions withhold removal for ambiguous playlist copies',
+  testWidgets('Song actions remove only the playing source copy of a song',
       (tester) async {
+    final duplicate = songActionsTrack.copyWith(
+        indexId: 'source-membership-3', title: 'Another occurrence');
     await seedSongActions(tester,
         source: songActionsPlaylist.copyWith(videoCount: 3, videos: [
           songActionsTrack,
-          songActionsTrack.copyWith(
-              indexId: 'source-membership-3', title: 'Another occurrence'),
+          duplicate,
           songActionsNext,
         ]));
+    final before = player.state;
+    await openSongActions(tester);
+    expect(namedRemoval.hitTestable(), findsOneWidget);
+    await chooseAndWait(tester, namedRemoval,
+        () => actionPlaylistEntries(songActionsPlaylist).length == 2);
+    final remaining = service.getLocalPlaylists().singleWhere(
+        (playlist) => playlist.playlistId == songActionsPlaylist.playlistId);
+    expect(remaining.videos.map((video) => video.indexId),
+        [duplicate.indexId, songActionsNext.indexId]);
+    expect(player.state.currentQueueId, before.currentQueueId);
+    expect(player.state.position, before.position);
     await openSongActions(tester);
     expect(namedRemoval, findsNothing);
-    expect(find.text('Add to playlist'), findsOneWidget);
   });
 
   testWidgets('an appended copy of the playlist song gains no removal action',

@@ -83,6 +83,46 @@ void main() {
         isNot(contains(id)));
   });
 
+  test('local writes preserve ordered copies with distinct occurrence IDs',
+      () async {
+    const original = Video(videoId: 'repeat', title: 'First copy');
+    final duplicate = original.copyWith(title: 'Second copy');
+    const other = Video(videoId: 'other');
+    final id = (await library.createLocalPlaylistWithEntries(
+        'Ordered copies', [original, other, duplicate]))!;
+    final before = await library.getUserPlaylist(id);
+    expect(before.videos.map((video) => video.videoId),
+        ['repeat', 'other', 'repeat']);
+    expect(before.videos.map((video) => video.indexId).toSet(), hasLength(3));
+
+    final independentService = Service(httpClient: client);
+    final counts = await Future.wait([
+      library.appendLocalPlaylistEntries(id, [original, other]),
+      independentService.appendLocalPlaylistEntries(id, [original, duplicate],
+          allowDuplicates: true),
+    ]);
+    expect(counts, [0, 2]);
+    final added = await independentService.getUserPlaylist(id);
+    expect(added.videos.map((video) => video.title), [
+      'First copy',
+      other.title,
+      'Second copy',
+      'First copy',
+      'Second copy'
+    ]);
+    expect(added.videos.map((video) => video.indexId).toSet(), hasLength(5));
+
+    final selected = before.videos.last;
+    expect(await library.removeLocalPlaylistEntry(id, selected), isTrue);
+    expect(await library.removeLocalPlaylistEntry(id, selected), isFalse);
+    final restored = await independentService.getUserPlaylist(id);
+    expect(restored.videos.map((video) => video.indexId), [
+      for (final row in added.videos)
+        if (row.indexId != selected.indexId) row.indexId
+    ]);
+    expect(restored.videoCount, 4);
+  });
+
   test('cached video details can be saved without an instance', () async {
     await db.upsertHistoryVideo(HistoryVideoCache(
         'cached', 'Already watched', 'A channel', 'https://example.com/image'));
@@ -236,7 +276,7 @@ void main() {
     expect(restored.videos.single.filterHide, isFalse);
   });
 
-  test('restored metadata without server indexes can be removed and unliked',
+  test('legacy metadata gets a stable ID and can be removed and unliked',
       () async {
     const video = Video(videoId: 'restored', title: 'Saved before restore');
     const playlist = Playlist(
@@ -254,7 +294,7 @@ void main() {
     expect((await library.getUserPlaylist(localWatchLaterId)).isLocal, isTrue);
     final restored = await library.getUserPlaylist(playlist.playlistId);
     expect(restored.isLocal, isTrue);
-    expect(restored.videos.single.indexId, isNull);
+    expect(restored.videos.single.indexId, allOf(isNotNull, isNotEmpty));
     final playlistCubit =
         PlaylistCubit(PlaylistState(playlist: restored), _UnusedPlayer());
     await playlistCubit.removeVideoFromPlayList(restored.videos.single);

@@ -1279,6 +1279,101 @@ void main() {
     expect(lists.single['videoCount'], 2);
   });
 
+  group('local playlist entry identities', () {
+    const playlistId = 'local:repeated';
+    const firstEntry = '25d60a0b-4b7e-411f-a106-4275a8fb3fec';
+    const secondEntry = '2fcb3feb-e1b9-496c-8590-1a432901f28a';
+    const thirdEntry = '94653a52-184e-4be8-afae-aee72522605a';
+    const otherVideo = '12345678901';
+
+    Playlist playlist(List<Video> videos) => Playlist(
+        playlistId: playlistId,
+        title: 'Repeated recordings',
+        author: '',
+        videoCount: videos.length,
+        videos: videos);
+
+    Future<void> save(SembastSqfDb db, List<Video> videos) =>
+        db.saveSetting(SettingsValue(
+            localPlaylistsSetting, jsonEncode([playlist(videos).toJson()])));
+
+    Playlist stored(SembastSqfDb db) => Playlist.fromJson(
+        (jsonDecode(db.getSettings(localPlaylistsSetting)!.value) as List)
+            .single as Map<String, dynamic>);
+
+    test('backup round-trip preserves distinct IDs for repeated uploads',
+        () async {
+      await save(source, const [
+        Video(videoId: id, indexId: firstEntry, title: 'First copy'),
+        Video(videoId: id, indexId: secondEntry, title: 'Second copy'),
+      ]);
+      final backup = UserBackup.parse((await source.exportBackup()).encode());
+
+      await target.restoreBackup(backup, replace: true);
+
+      expect(stored(target).videos.map((video) => video.indexId),
+          [firstEntry, secondEntry]);
+      expect(stored(target).videos.map((video) => video.videoId), [id, id]);
+
+      await save(target, const [
+        Video(videoId: id, indexId: firstEntry, title: 'Existing first copy'),
+        Video(videoId: id, indexId: thirdEntry, title: 'Existing third copy'),
+      ]);
+      await target.restoreBackup(backup);
+      expect(stored(target).videos.map((video) => video.indexId),
+          [firstEntry, thirdEntry, secondEntry]);
+      expect(stored(target).videos.first.title, 'Existing first copy');
+
+      await target.restoreBackup(backup);
+      expect(stored(target).videos.map((video) => video.indexId),
+          [firstEntry, thirdEntry, secondEntry]);
+    });
+
+    test('legacy duplicate rows merge by multiplicity and retain entry IDs',
+        () async {
+      final raw = jsonDecode((await source.exportBackup()).encode())
+          as Map<String, dynamic>;
+      raw['playlists'] = [
+        playlist(const [
+          Video(videoId: id, title: 'Legacy first copy'),
+          Video(videoId: id, indexId: id, title: 'Legacy second copy'),
+          Video(videoId: id, indexId: id, title: 'Legacy third copy'),
+        ]).toJson()
+      ];
+      final legacy = jsonEncode(raw);
+
+      await save(target, const [
+        Video(videoId: id, indexId: firstEntry, title: 'Existing first copy'),
+        Video(videoId: otherVideo, indexId: secondEntry, title: 'Another song'),
+        Video(videoId: id, indexId: thirdEntry, title: 'Existing third copy'),
+      ]);
+      await target.restoreBackup(UserBackup.parse(legacy));
+      final merged = stored(target);
+      final ids = merged.videos.map((video) => video.indexId).toList();
+      expect(merged.videoCount, 4);
+      expect(merged.videos.map((video) => video.videoId),
+          [id, otherVideo, id, id]);
+      expect(ids.take(3), [firstEntry, secondEntry, thirdEntry]);
+      expect(ids.last, isNot(anyOf(isNull, isEmpty, id)));
+      expect(ids.toSet(), hasLength(4));
+
+      await target.restoreBackup(UserBackup.parse(legacy));
+      expect(stored(target).videos.map((video) => video.indexId), ids);
+
+      await source.restoreBackup(UserBackup.parse(legacy), replace: true);
+      final adopted = stored(source);
+      expect(adopted.videos.map((video) => video.title),
+          ['Legacy first copy', 'Legacy second copy', 'Legacy third copy']);
+      expect(adopted.videos.map((video) => video.indexId),
+          everyElement(isNot(anyOf(isNull, isEmpty, id))));
+      expect(
+          adopted.videos.map((video) => video.indexId).toSet(), hasLength(3));
+      await source.restoreBackup(UserBackup.parse(legacy), replace: true);
+      expect(stored(source).videos.map((video) => video.indexId),
+          adopted.videos.map((video) => video.indexId));
+    });
+  });
+
   test('history deletion also removes saved progress and resume queue',
       () async {
     await source.deleteLocalHistory(id);
@@ -1324,7 +1419,7 @@ void main() {
     expect(video.authorId, channel);
     expect(video.authorUrl, 'https://www.youtube.com/channel/$channel');
     expect(video.videoThumbnails.single.url, 'https://example.com/image.jpg');
-    expect(video.indexId, id);
+    expect(video.indexId, isNot(anyOf(isNull, isEmpty, id)));
   });
 
   test('Music playlist export and restore retains sanitized catalog metadata',

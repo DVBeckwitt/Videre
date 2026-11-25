@@ -206,11 +206,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         _sessionTransitionPending ||
         entry == null ||
         state.currentlyPlaying?.videoId != entry.videoId ||
-        entry.explicitMusicDownload != null ||
-        _playlistEntries.values
-                .where((member) => member.videoId == entry.videoId)
-                .singleOrNull ==
-            null) {
+        entry.explicitMusicDownload != null) {
       return null;
     }
     return entry;

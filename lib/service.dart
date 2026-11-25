@@ -13,6 +13,7 @@ import 'package:clipious/player/media_source.dart';
 import 'package:clipious/channels/models/channel_sort_by.dart';
 import 'package:clipious/extensions.dart';
 import 'package:clipious/globals.dart';
+import 'package:clipious/playlists/models/local_playlist_entries.dart';
 import 'package:clipious/playlists/models/playlist.dart';
 import 'package:clipious/playlists/models/playlist_reference.dart';
 import 'package:clipious/search/models/search_date.dart';
@@ -2854,12 +2855,18 @@ class Service {
     }
   }
 
-  List<Playlist> getLocalPlaylists({IDbClient? database}) {
-    final stored = (database ?? db).getSettings(localPlaylistsSetting)?.value;
+  List<Playlist> getLocalPlaylists({IDbClient? database}) =>
+      _localPlaylistsFromSetting(
+          (database ?? db).getSettings(localPlaylistsSetting)?.value);
+
+  static List<Playlist> _localPlaylistsFromSetting(String? stored) {
     final playlists = stored == null
         ? <Playlist>[]
         : (jsonDecode(stored) as List)
             .map((item) => Playlist.fromJson(Map<String, dynamic>.from(item)))
+            .map(normalizeLocalPlaylistEntries)
+            .map((playlist) => playlist.copyWith(
+                videos: assignPlaylistEntryIds(playlist.videos)))
             .toList();
     if (!playlists.any((p) => p.playlistId == localWatchLaterId)) {
       playlists.insert(
@@ -2876,13 +2883,19 @@ class Service {
   Future<void> _updateLocalPlaylists(bool Function(List<Playlist>) update,
       {IDbClient? database}) {
     final owner = database ?? db.forProfile(db.profileId);
-    // Serialize saves so two quick additions cannot overwrite each other.
+    String? apply(String? stored) {
+      final playlists = _localPlaylistsFromSetting(stored);
+      if (!update(playlists)) return null;
+      return jsonEncode(playlists.map((p) => p.toJson()).toList());
+    }
+
+    if (owner is SembastSqfDb) return owner.updateLocalPlaylistSetting(apply);
+    // Other database adapters do not expose transactions.
     return _localPlaylistWrite =
         _localPlaylistWrite.catchError((_) {}).then((_) async {
-      final playlists = getLocalPlaylists(database: owner);
-      if (!update(playlists)) return;
-      await owner.saveSetting(SettingsValue(localPlaylistsSetting,
-          jsonEncode(playlists.map((p) => p.toJson()).toList())));
+      final value = apply(owner.getSettings(localPlaylistsSetting)?.value);
+      if (value == null) return;
+      await owner.saveSetting(SettingsValue(localPlaylistsSetting, value));
     });
   }
 
@@ -2902,23 +2915,37 @@ class Service {
   }
 
   Future<String?> createPlayList(String name, String type) async {
+    if (type == 'local') {
+      return createLocalPlaylistWithEntries(name, const []);
+    }
     name = name.trim();
     if (name.isEmpty) throw ArgumentError('Enter a playlist name');
-    if (type == 'local') {
-      final id = 'local:${const Uuid().v4()}';
-      await _updateLocalPlaylists((playlists) {
-        playlists.add(Playlist(
-            title: name,
-            playlistId: id,
-            author: '',
-            videoCount: 0,
-            updated: DateTime.now().millisecondsSinceEpoch ~/ 1000));
-        return true;
-      });
-      return id;
-    }
     return createServerPlaylist(
         name, type, await db.getCurrentlySelectedServer());
+  }
+
+  /// Save an ordered playlist and its initial occurrences in one write.
+  Future<String?> createLocalPlaylistWithEntries(
+      String title, List<Video> videos,
+      {IDbClient? database, bool Function()? isCurrent}) async {
+    final name = title.trim();
+    if (name.isEmpty) throw ArgumentError('Enter a playlist name');
+    final id = 'local:${const Uuid().v4()}';
+    final entries = videos.map(_newLocalPlaylistEntry).toList();
+    var created = false;
+    await _updateLocalPlaylists((playlists) {
+      if (isCurrent?.call() == false) return false;
+      playlists.add(Playlist(
+          title: name,
+          playlistId: id,
+          author: '',
+          videos: entries,
+          videoCount: entries.length,
+          updated: DateTime.now().millisecondsSinceEpoch ~/ 1000));
+      created = true;
+      return true;
+    }, database: database);
+    return created ? id : null;
   }
 
   Future<String> createServerPlaylist(
@@ -2950,39 +2977,61 @@ class Service {
       final savedVideo = cached ??
           await getVideo(videoId,
               serverOverride: await owner.getCurrentlySelectedServer());
-      await _updateLocalPlaylists((playlists) {
-        final index = playlists.indexWhere((p) => p.playlistId == playListId);
-        if (index < 0) throw StateError('Playlist no longer exists');
-        final playlist = playlists[index];
-        if (playlist.videos.any((v) => v.videoId == videoId)) return true;
-        // Keep display metadata; playback URLs expire and are fetched when needed.
-        final videos = [
-          ...playlist.videos,
-          Video(
-            videoId: videoId,
-            // A saved playback queue must distinguish this membership from
-            // an earlier membership removed and later added again.
-            indexId: const Uuid().v4(),
-            title: savedVideo.title,
-            author: savedVideo.author,
-            authorId: savedVideo.authorId,
-            authorUrl: savedVideo.authorUrl,
-            lengthSeconds: savedVideo.lengthSeconds,
-            videoThumbnails: savedVideo.videoThumbnails,
-            musicMetadata: savedVideo.musicMetadata,
-          )
-        ];
-        playlists[index] = playlist.copyWith(
-            videos: videos,
-            videoCount: videos.length,
-            updated: DateTime.now().millisecondsSinceEpoch ~/ 1000);
-        return true;
-      }, database: owner);
+      await appendLocalPlaylistEntries(
+          playListId, [savedVideo.copyWith(videoId: videoId)],
+          database: owner);
       return;
     }
     await addVideoToServerPlaylist(
         playListId, videoId, await owner.getCurrentlySelectedServer());
   }
+
+  /// Append in source order with a fresh identity for each admitted copy.
+  /// Membership is checked against the latest list within the write.
+  Future<int> appendLocalPlaylistEntries(String playlistId, List<Video> videos,
+      {bool allowDuplicates = false,
+      IDbClient? database,
+      bool Function()? isCurrent}) async {
+    if (!playlistId.startsWith('local:')) {
+      throw ArgumentError('Choose a local playlist');
+    }
+    final requested = List<Video>.of(videos);
+    var added = 0;
+    await _updateLocalPlaylists((playlists) {
+      if (isCurrent?.call() == false) return false;
+      final index = playlists.indexWhere((p) => p.playlistId == playlistId);
+      if (index < 0) throw StateError('Playlist no longer exists');
+      final playlist = playlists[index];
+      final recorded = playlist.videos.map((entry) => entry.videoId).toSet();
+      final entries = [
+        for (final video in requested)
+          if (allowDuplicates || recorded.add(video.videoId))
+            _newLocalPlaylistEntry(video),
+      ];
+      if (entries.isEmpty) return false;
+      added = entries.length;
+      final updated = [...playlist.videos, ...entries];
+      playlists[index] = playlist.copyWith(
+          videos: updated,
+          videoCount: updated.length,
+          updated: DateTime.now().millisecondsSinceEpoch ~/ 1000);
+      return true;
+    }, database: database);
+    return added;
+  }
+
+  // Persist display metadata only. Obtain transport URLs at playback.
+  static Video _newLocalPlaylistEntry(Video video) => Video(
+        videoId: video.videoId,
+        indexId: const Uuid().v4(),
+        title: video.title,
+        author: video.author,
+        authorId: video.authorId,
+        authorUrl: video.authorUrl,
+        lengthSeconds: video.lengthSeconds,
+        videoThumbnails: video.videoThumbnails,
+        musicMetadata: video.musicMetadata,
+      );
 
   Future<void> addVideoToServerPlaylist(
       String playListId, String videoId, Server server) async {
@@ -3059,26 +3108,24 @@ class Service {
     if (source.kind != PlaylistSourceKind.local || !source.matchesOwner(db)) {
       return null;
     }
-    return _localPlaylistWithUniqueEntry(
-        getLocalPlaylists(database: db.forProfile(source.profileId)),
-        source.playlistId,
-        entry);
+    return _findLocalPlaylistOccurrence(
+            getLocalPlaylists(database: db.forProfile(source.profileId)),
+            source.playlistId,
+            entry)
+        ?.$1;
   }
 
-  static Playlist? _localPlaylistWithUniqueEntry(
+  static (Playlist, Video)? _findLocalPlaylistOccurrence(
       List<Playlist> playlists, String id, Video entry) {
     final candidates = playlists
         .where((playlist) => playlist.isLocal && playlist.playlistId == id);
     final playlist = candidates.singleOrNull;
     if (playlist == null) return null;
     final saved = playlist.videos
-        .where((video) => video.videoId == entry.videoId)
+        .where((video) => matchesLocalPlaylistEntryKey(
+            id, video, entry.videoId, entry.queueEntryId))
         .singleOrNull;
-    if (saved == null) return null;
-    // For a unique upload, the fallback playlist ID uses occurrence zero
-    // regardless of its position amongst other videos.
-    final assigned = assignPlaylistEntryIds([saved]).single;
-    return assigned.queueEntryId == entry.queueEntryId ? playlist : null;
+    return saved == null ? null : (playlist, saved);
   }
 
   /// Keeps the final membership and player checks inside the playlist write.
@@ -3088,15 +3135,35 @@ class Service {
     if (source.kind != PlaylistSourceKind.local || !source.matchesOwner(db)) {
       return false;
     }
-    final owner = db.forProfile(source.profileId);
+    return _removeLocalPlaylistEntry(source.playlistId, entry,
+        database: db.forProfile(source.profileId),
+        expectedTitle: expectedTitle,
+        isCurrent: () => source.matchesOwner(db) && isCurrent());
+  }
+
+  Future<bool> removeLocalPlaylistEntry(String playlistId, Video entry,
+          {IDbClient? database, bool Function()? isCurrent}) =>
+      _removeLocalPlaylistEntry(playlistId, entry,
+          database: database, isCurrent: isCurrent);
+
+  Future<bool> _removeLocalPlaylistEntry(String playlistId, Video entry,
+      {IDbClient? database,
+      String? expectedTitle,
+      bool Function()? isCurrent}) async {
+    if (!playlistId.startsWith('local:')) {
+      throw ArgumentError('Choose a local playlist');
+    }
     var removed = false;
     await _updateLocalPlaylists((playlists) {
-      if (!source.matchesOwner(db) || !isCurrent()) return false;
-      final playlist =
-          _localPlaylistWithUniqueEntry(playlists, source.playlistId, entry);
-      if (playlist == null || playlist.title != expectedTitle) return false;
+      if (isCurrent?.call() == false) return false;
+      final match = _findLocalPlaylistOccurrence(playlists, playlistId, entry);
+      if (match == null) return false;
+      final (playlist, saved) = match;
+      if (expectedTitle != null && playlist.title != expectedTitle) {
+        return false;
+      }
       final videos = playlist.videos
-          .where((video) => video.videoId != entry.videoId)
+          .where((video) => video.indexId != saved.indexId)
           .toList();
       playlists[playlists.indexOf(playlist)] = playlist.copyWith(
           videos: videos,
@@ -3104,7 +3171,7 @@ class Service {
           updated: DateTime.now().millisecondsSinceEpoch ~/ 1000);
       removed = true;
       return true;
-    }, database: owner);
+    }, database: database);
     return removed;
   }
 

@@ -604,6 +604,47 @@ void main() {
     expect(metadata.playlistRequests, isEmpty);
   });
 
+  test('cold resume keeps the exact local duplicate and playback position',
+      () async {
+    const playlist = Playlist(
+        title: 'Local duplicates',
+        playlistId: 'local:duplicates',
+        author: '',
+        videoCount: 2,
+        videos: [
+          Video(videoId: 'a', lengthSeconds: 100),
+          Video(videoId: 'a', lengthSeconds: 100),
+        ]);
+    await db.saveSetting(
+        SettingsValue(localPlaylistsSetting, jsonEncode([playlist.toJson()])));
+    final stored = metadata
+        .getLocalPlaylists(database: db)
+        .singleWhere((entry) => entry.playlistId == playlist.playlistId);
+    final local = PlaylistReference.forPlaylist(stored, db);
+    final ordered = assignPlaylistEntryIds(stored.videos);
+    final selected = ordered.last;
+    expect(selected.indexId, isNotNull);
+    expect(selected.indexId, isNot(ordered.first.indexId));
+
+    await player.playPlaylist(ordered,
+        reference: local, startIndex: 1, audio: true);
+    await player.onProgress(const Duration(seconds: 37));
+    await player.close();
+
+    player = TestPlayerCubit(PlayerState.init(null), settings);
+    player.audioSession = await AudioSession.instance;
+    app_main.mediaHandler = MediaHandler(player);
+    expect(player.savedSession!.currentId, playbackQueueId(selected));
+    expect(player.savedSession!.seconds, 37);
+
+    await player.resumeSession();
+
+    expect(player.state.currentQueueId, playbackQueueId(selected));
+    expect(player.state.startAt, const Duration(seconds: 37));
+    expect(player.currentLocalPlaylistEntry?.indexId, selected.indexId);
+    expect(player.state.playedVideos, [playbackQueueId(ordered.first)]);
+  });
+
   test('manually queued videos do not replace the source playlist cursor',
       () async {
     await player.playPlaylist(entries, reference: reference, startIndex: 1);

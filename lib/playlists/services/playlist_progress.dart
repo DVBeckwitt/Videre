@@ -8,6 +8,7 @@ import '../../utils/interfaces/db.dart';
 import '../../utils/sembast_sqflite_database.dart';
 import '../../videos/models/db/progress.dart';
 import '../../videos/models/video.dart';
+import '../models/local_playlist_entries.dart';
 import '../models/playlist_reference.dart';
 
 const playlistProgressSettingName = 'playlist-progress-v1';
@@ -126,7 +127,11 @@ class _EntryIdentity {
         'indexHint': indexHint,
       };
 
-  int locate(List<Video> entries) {
+  int locate(List<Video> entries, PlaylistReference reference) {
+    if (reference.kind == PlaylistSourceKind.local) {
+      return entries.indexWhere((entry) => matchesLocalPlaylistEntryKey(
+          reference.playlistId, entry, videoId, entryId));
+    }
     if (indexId != null && indexId!.isNotEmpty) {
       final index = entries.indexWhere(
           (entry) => entry.indexId == indexId && entry.videoId == videoId);
@@ -200,7 +205,7 @@ class PlaylistCheckpoint {
     final entries = assignPlaylistEntryIds(videos);
     bool playable(Video video) =>
         !video.filtered && !video.filterHide && video.isUpcoming != true;
-    final current = _entry.locate(entries);
+    final current = _entry.locate(entries, reference);
     if (current >= 0) {
       if (!completed && playable(entries[current])) {
         return PlaylistResumeTarget(current, entries[current]);
@@ -214,7 +219,7 @@ class PlaylistCheckpoint {
     }
     // Use saved neighbors, never the unrelated upload now at the old index.
     for (final successor in _successors) {
-      final index = successor.locate(entries);
+      final index = successor.locate(entries, reference);
       if (index >= 0 && playable(entries[index])) {
         return PlaylistResumeTarget(index, entries[index], missing: true);
       }

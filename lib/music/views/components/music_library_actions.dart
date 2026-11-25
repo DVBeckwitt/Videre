@@ -118,16 +118,15 @@ class MusicLibrarySession {
     await saveToPlaylist(id, videos);
   }
 
-  Future<void> removeFromPlaylist(String playlistId, String videoId) async {
+  Future<void> removeFromPlaylist(String playlistId, Video entry) async {
     _requireCurrent();
     if (!playlistId.startsWith('local:')) {
       throw ArgumentError('Choose a local playlist');
     }
-    // The existing local mutation captures its owner before yielding and uses
-    // the video identity, never the index in Music's filtered playlist view.
-    await _service.deleteUserPlaylistVideo(playlistId, videoId);
+    final removed = await _service.removeLocalPlaylistEntry(playlistId, entry,
+        isCurrent: () => isCurrent);
     _requireCurrent();
-    library.notifyChanged();
+    if (removed) library.notifyChanged();
   }
 
   Future<void> removeCurrentPlaylistEntry(
@@ -659,7 +658,7 @@ class MusicLibraryActions extends StatefulWidget {
       await _showSave(context, videos, inPlayer: inPlayer, canSave: isCurrent);
     } else if (action == _LibraryAction.removeFromPlaylist) {
       if (playlistId != null && videos.length == 1) {
-        await session.removeFromPlaylist(playlistId, videos.single.videoId);
+        await session.removeFromPlaylist(playlistId, videos.single);
       }
     } else if (action == _LibraryAction.timeline) {
       final song = _song(videos);

@@ -1,7 +1,9 @@
 import 'dart:convert';
 
+import 'package:clipious/playlists/models/playlist.dart';
 import 'package:clipious/playlists/models/playlist_reference.dart';
 import 'package:clipious/playlists/services/playlist_progress.dart';
+import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/video.dart';
@@ -122,6 +124,65 @@ void main() {
     expect(progress.get(reference)!.resolve(changed)!.index, 0);
     expect(progress.get(reference)!.resolve(changed)!.missing, isFalse);
   });
+
+  for (final legacyIndexId in [null, 'repeat']) {
+    test('legacy local cursor follows its migrated copy ($legacyIndexId)',
+        () async {
+      final api = Service();
+      final playlist = Playlist(
+          title: 'Local duplicates',
+          playlistId: 'local:duplicates',
+          author: '',
+          videoCount: 2,
+          videos: [
+            Video(videoId: 'repeat', indexId: legacyIndexId),
+            Video(videoId: 'repeat', indexId: legacyIndexId),
+          ]);
+      final local = PlaylistReference.forPlaylist(playlist, database);
+      final legacy = assignPlaylistEntryIds(playlist.videos).last;
+      await database.saveSetting(SettingsValue(
+          localPlaylistsSetting, jsonEncode([playlist.toJson()])));
+      await database.saveSetting(SettingsValue(
+          playlistProgressSettingName,
+          jsonEncode({
+            'version': 1,
+            'epoch': 0,
+            'entries': [
+              {
+                'reference': local.toJson(),
+                'entryId': legacy.queueEntryId,
+                'videoId': legacy.videoId,
+                if (legacyIndexId != null) 'indexId': legacyIndexId,
+                'occurrence': 1,
+                'indexHint': 1,
+                'completed': false,
+                'successors': [],
+              },
+            ],
+          })));
+
+      List<Video> readEntries() => api
+          .getLocalPlaylists(database: database)
+          .singleWhere((entry) => entry.playlistId == playlist.playlistId)
+          .videos;
+
+      final migrated = readEntries();
+      final chosenId = migrated.last.indexId;
+      expect(chosenId, isNotNull);
+      expect(progress.get(local)!.resolve(migrated)!.index, 1);
+
+      await api.removeLocalPlaylistEntry(playlist.playlistId, migrated.first,
+          database: database);
+
+      final reopened = PlaylistProgressService.forProfile(database, 'default');
+      final remaining = readEntries();
+      expect(remaining.single.indexId, chosenId);
+      final target = reopened.get(local)!.resolve(remaining)!;
+      expect(target.index, 0);
+      expect(target.video.indexId, chosenId);
+      expect(target.missing, isFalse);
+    });
+  }
 
   test('completion advances cursor while filtered entries are never resumed',
       () async {

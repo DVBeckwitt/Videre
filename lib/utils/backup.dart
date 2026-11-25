@@ -16,6 +16,7 @@ import '../recommendations/recommendation_models.dart';
 import '../recommendations/recommendation_snapshot.dart';
 
 import '../offline_subscriptions/models/offline_subscription.dart';
+import '../playlists/models/local_playlist_entries.dart';
 import '../playlists/models/playlist.dart';
 import '../playlists/models/playlist_reference.dart';
 import '../playlists/models/saved_playlist.dart';
@@ -35,8 +36,15 @@ import 'models/image_object.dart';
 class UserBackup {
   final Map<String, List<Map<String, dynamic>>> sections;
   final bool subscriptionsOnly;
+  final Map<String, Set<String>> _unidentifiedPlaylistEntries;
 
-  UserBackup._(this.sections, {this.subscriptionsOnly = false});
+  UserBackup._(this.sections,
+      {this.subscriptionsOnly = false,
+      Map<String, Set<String>> unidentifiedPlaylistEntries = const {}})
+      : _unidentifiedPlaylistEntries = unidentifiedPlaylistEntries;
+
+  Set<String> unidentifiedPlaylistEntries(String playlistId) =>
+      _unidentifiedPlaylistEntries[playlistId] ?? const {};
 
   static const maxBytes = 10 * 1024 * 1024;
   static final _videoId = RegExp(r'^[a-zA-Z0-9_-]{11}$');
@@ -86,6 +94,7 @@ class UserBackup {
         throw const FormatException('This backup version is not supported.');
       }
       final sections = <String, List<Map<String, dynamic>>>{};
+      final unidentifiedPlaylistEntries = <String, Set<String>>{};
       for (final name in sectionNames) {
         final rows = (_optionalSections.contains(name)
             ? data[name] ?? []
@@ -229,7 +238,7 @@ class UserBackup {
                 }
                 return Video(
                     videoId: video.videoId,
-                    indexId: video.videoId,
+                    indexId: video.indexId,
                     title: video.title,
                     author: video.author,
                     authorId: video.authorId,
@@ -240,22 +249,30 @@ class UserBackup {
                     musicMetadata: _safeMusicMetadata(video.musicMetadata),
                     lengthSeconds: video.lengthSeconds);
               }).toList();
-              final clean = Playlist(
+              final sanitized = Playlist(
                   playlistId: playlist.playlistId,
                   title: playlist.title,
                   type: 'local',
                   author: '',
                   videos: videos,
                   videoCount: videos.length);
+              final clean = normalizeLocalPlaylistEntries(sanitized);
+              if (!identical(clean, sanitized)) {
+                unidentifiedPlaylistEntries[playlist.playlistId] = {
+                  for (final (index, video) in clean.videos.indexed)
+                    if (video.indexId != videos[index].indexId) video.indexId!,
+                };
+              }
               return {
                 ...clean.toJson(),
-                'videos': videos.map((video) => video.toJson()).toList()
+                'videos': clean.videos.map((video) => video.toJson()).toList()
               };
           }
           throw const FormatException('Unknown backup section.');
         }).toList();
       }
-      return UserBackup._(sections);
+      return UserBackup._(sections,
+          unidentifiedPlaylistEntries: unidentifiedPlaylistEntries);
     } on FormatException {
       rethrow;
     } catch (_) {
