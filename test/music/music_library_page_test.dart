@@ -905,6 +905,72 @@ void main() {
         jsonDecode(jsonEncode(song.copyWith(indexId: storedEntry.indexId))));
   });
 
+  testWidgets('local playlist pins use the current sort in list and grid',
+      (tester) async {
+    const alpha = 'Alpha list';
+    const middle = 'Middle list';
+    const zulu = 'Zulu list';
+    final ids = <String, String>{};
+    await tester.runAsync(() async {
+      for (final title in [middle, zulu, alpha]) {
+        final id = (await service.createPlayList(title, 'local'))!;
+        ids[title] = id;
+        await library.markLocalPlaylist(id);
+      }
+    });
+    Finder row(String title) =>
+        find.byKey(ValueKey('music-local-${ids[title]}'));
+    void expectOrder(List<String> titles, {bool grid = false}) {
+      final positions = titles.map((title) => tester.getTopLeft(row(title)));
+      final offsets =
+          positions.map((position) => grid ? position.dx : position.dy);
+      expect(offsets, orderedEquals(offsets.toList()..sort()));
+    }
+
+    Future<void> changePin(String title, {required bool pinned}) async {
+      await tester.tap(row(title));
+      await tester.pumpAndSettle();
+      await tester.runAsync(() async {
+        await tester.tap(find.text(pinned ? 'Pin playlist' : 'Unpin playlist'));
+        await waitFor(() =>
+            library.pinnedLocalPlaylistIds.contains(ids[title]) == pinned);
+      });
+      await tester.pumpAndSettle();
+      expect(find.text(pinned ? 'Unpin playlist' : 'Pin playlist'),
+          findsOneWidget);
+      await tester.tap(find.byTooltip('Back'));
+      await tester.pumpAndSettle();
+    }
+
+    await show(tester);
+    const layout = ValueKey('music-library-layout');
+    await tester.tap(find.byKey(layout));
+    await tester.pumpAndSettle();
+    expectOrder([middle, zulu, alpha]);
+    await changePin(zulu, pinned: true);
+    await changePin(alpha, pinned: true);
+    expectOrder([zulu, alpha, middle]);
+    expect(tester.getTopLeft(find.text('Songs')).dy,
+        lessThan(tester.getTopLeft(row(zulu)).dy));
+
+    await tester.tap(find.text('Playlists'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('music-library-sort')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Title'));
+    await tester.pumpAndSettle();
+    expectOrder([alpha, zulu, middle]);
+    expect(find.byIcon(Icons.push_pin), findsNWidgets(2));
+
+    await tester.tap(find.byKey(layout));
+    await tester.pumpAndSettle();
+    expectOrder([alpha, zulu, middle], grid: true);
+    await changePin(zulu, pinned: false);
+    expectOrder([alpha, middle, zulu], grid: true);
+    expect(find.byIcon(Icons.push_pin), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('local playlist grid previews reject an external song image',
       (tester) async {
     const id = 'abcdefghijk';

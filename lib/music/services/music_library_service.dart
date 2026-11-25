@@ -8,6 +8,7 @@ import 'package:clipious/utils/models/image_object.dart';
 import 'package:flutter/foundation.dart';
 
 const musicLibrarySettingName = 'music-library-v1';
+const musicPlaylistPinsSettingName = 'music-playlist-pins-v1';
 
 class _ProfileChanges extends ChangeNotifier {
   Future<void> writes = Future.value();
@@ -93,6 +94,40 @@ class MusicLibraryService {
 
   /// Explicit Music playlist membership, including nonempty imported lists.
   Set<String> get localPlaylistIds => Set.unmodifiable(_playlists(_read()));
+
+  Set<String> _readPlaylistPins() {
+    final stored = _database.getSettings(musicPlaylistPinsSettingName)?.value;
+    if (stored == null || stored.length > musicLibraryMaximumBytes) return {};
+    try {
+      final rows = jsonDecode(stored);
+      if (rows is List && rows.length <= musicLibraryMaximumEntries) {
+        return rows.whereType<String>().where(_localId).toSet();
+      }
+    } on FormatException {
+      // A damaged pin setting can be replaced without changing the library.
+    }
+    return {};
+  }
+
+  Set<String> get pinnedLocalPlaylistIds =>
+      Set.unmodifiable(_readPlaylistPins());
+
+  Future<void> setLocalPlaylistPinned(String id, {required bool pinned}) {
+    if (!_localId(id)) throw ArgumentError('A local playlist is required');
+    return _enqueueWrite(() async {
+      final pins = _readPlaylistPins();
+      final changed = pinned ? pins.add(id) : pins.remove(id);
+      if (!changed) return;
+      final value = jsonEncode(pins.toList());
+      if (pins.length > musicLibraryMaximumEntries ||
+          value.length > musicLibraryMaximumBytes) {
+        throw StateError('The playlist pin list is full');
+      }
+      await _database
+          .saveSetting(SettingsValue(musicPlaylistPinsSettingName, value));
+      _changes.changed();
+    });
+  }
 
   bool isMusicPlaylist(Playlist playlist) =>
       playlist.isLocal &&
@@ -237,10 +272,13 @@ class MusicLibraryService {
   /// Existing playlist writes also invalidate the Music surface for this owner.
   void notifyChanged() => _changes.changed();
 
+  Future<void> _enqueueWrite(Future<void> Function() write) =>
+      _changes.writes = _changes.writes.catchError((_) {}).then((_) => write());
+
   Future<void> _write(
       void Function(List<MusicLibraryEntry>, Set<String>) update,
       {bool Function()? shouldWrite}) {
-    return _changes.writes = _changes.writes.catchError((_) {}).then((_) async {
+    return _enqueueWrite(() async {
       final data = _read();
       final entries = _entries(data);
       final playlists = _playlists(data);

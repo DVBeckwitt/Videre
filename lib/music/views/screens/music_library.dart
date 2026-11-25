@@ -755,6 +755,9 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
       ]);
     }
 
+    final canPin = widget.source == null || library.isMusicPlaylist(playlist);
+    final pinned = library.pinnedLocalPlaylistIds.contains(playlist.playlistId);
+
     Widget details({bool showHeading = false}) => Column(children: [
           if (showHeading && widget.source == null)
             ListTile(
@@ -795,10 +798,22 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                 if (playlist.playlistId != localWatchLaterId)
                   MusicPlaylistEditActions(
                       playlist: playlist, reference: reference),
+                if (canPin)
+                  OutlinedButton.icon(
+                    onPressed: () => _setPlaylistPinned(
+                        library, playlist.playlistId,
+                        pinned: !pinned),
+                    icon:
+                        Icon(pinned ? Icons.push_pin : Icons.push_pin_outlined),
+                    label: Text(pinned
+                        ? locals.musicUnpinPlaylist
+                        : locals.musicPinPlaylist),
+                  ),
               ]),
             ),
           if (!_playlistSelecting &&
               !_playlistSearching &&
+              !playlist.isEditLocked &&
               MusicPlaylistCovers.supports(playlist.playlistId))
             Align(
               alignment: AlignmentDirectional.centerStart,
@@ -942,6 +957,23 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
     );
   }
 
+  Future<void> _setPlaylistPinned(MusicLibraryService library, String id,
+      {required bool pinned}) async {
+    final session =
+        _sourceSession ?? MusicLibrarySession(context.read<AppCubit>());
+    if (!session.isCurrent || session.library.profileId != library.profileId) {
+      return;
+    }
+    try {
+      await library.setLocalPlaylistPinned(id, pinned: pinned);
+    } catch (_) {
+      if (!mounted || !session.isCurrent) return;
+      final locals = AppLocalizations.of(context)!;
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(locals.musicLibraryActionError)));
+    }
+  }
+
   Widget _sourcePlaylist(PlaylistReference source, {required bool active}) {
     final locals = AppLocalizations.of(context)!;
     final app = context.read<AppCubit>();
@@ -1040,7 +1072,7 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
         .toList();
     final hasPlaylists =
         _filter == _LibraryFilter.playlists || _filter == _LibraryFilter.all;
-    final items = <_LibraryItem>[
+    final sortedItems = <_LibraryItem>[
       if (hasPlaylists)
         for (final playlist in playlists) (playlist: playlist, bookmark: null),
       for (final entry in entries) (playlist: null, bookmark: entry),
@@ -1051,7 +1083,17 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
           context.watch<DownloadManagerCubit?>() != null)
         _LibraryFilter.downloads,
     ];
-    _sortLibraryItems(items);
+    _sortLibraryItems(sortedItems);
+    final pins =
+        hasPlaylists ? library.pinnedLocalPlaylistIds : const <String>{};
+    final items = pins.isEmpty
+        ? sortedItems
+        : [
+            ...sortedItems
+                .where((item) => pins.contains(item.playlist?.playlistId)),
+            ...sortedItems
+                .where((item) => !pins.contains(item.playlist?.playlistId)),
+          ];
     final selection = _savedSongsSelection;
     selection?.retainAll(entries.map((entry) => entry.id));
     final finding = _savedSongsFinding;
@@ -1180,7 +1222,7 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
       Expanded(
         child: items.isEmpty && shortcuts.isEmpty
             ? _empty()
-            : _collection(items, shortcuts, library),
+            : _collection(items, shortcuts, library, pinnedPlaylistIds: pins),
       ),
     ]);
   }
@@ -1246,6 +1288,7 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
   Widget _collection(List<_LibraryItem> items, List<_LibraryFilter> shortcuts,
       MusicLibraryService library,
       {List<_LibraryItem>? playbackItems,
+      Set<String> pinnedPlaylistIds = const {},
       Widget? searchToolbar,
       Widget? emptyResults}) {
     // Both lazy layouts retain an item's element when sorting or removing an
@@ -1288,6 +1331,7 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
         if (item.bookmark case final bookmark?) {
           return _bookmark(bookmark, () => _openItem(item, allItems));
         }
+        final pinned = pinnedPlaylistIds.contains(item.playlist!.playlistId);
         return ListTile(
             key: _itemKey(item),
             leading: MusicPlaylistCoverImage(
@@ -1296,8 +1340,10 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
               size: 40,
             ),
             title: Text(_itemTitle(item)),
-            subtitle: Text(AppLocalizations.of(context)!.onDevice),
-            trailing: const Icon(Icons.chevron_right),
+            subtitle: Text(locals.onDevice),
+            trailing: pinned
+                ? Icon(Icons.push_pin, semanticLabel: locals.musicPlaylistPinned)
+                : const Icon(Icons.chevron_right),
             onTap: () => _openItem(item, allItems));
       }, childCount: count, findChildIndexCallback: (key) => indices[key]);
       return searchToolbar == null
@@ -1334,13 +1380,14 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
           crossAxisSpacing: spacing,
           mainAxisSpacing: 14,
           mainAxisExtent: width + titleHeight * 2 + subtitleHeight + 10);
-      final cards = SliverChildBuilderDelegate(
-          (_, index) => index < shortcuts.length
-              ? _gridShortcut(shortcuts[index], locals)
-              : _gridItem(items[index - shortcuts.length], savedCovers, covers,
-                  () => _openItem(items[index - shortcuts.length], allItems)),
-          childCount: count,
-          findChildIndexCallback: (key) => indices[key]);
+      final cards = SliverChildBuilderDelegate((_, index) {
+        if (index < shortcuts.length) {
+          return _gridShortcut(shortcuts[index], locals);
+        }
+        final item = items[index - shortcuts.length];
+        return _gridItem(item, savedCovers, covers, () => _openItem(item, allItems),
+            pinned: pinnedPlaylistIds.contains(item.playlist?.playlistId));
+      }, childCount: count, findChildIndexCallback: (key) => indices[key]);
       return searchToolbar == null
           ? GridView.custom(
               key: collectionKey,
@@ -1376,7 +1423,8 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
       _LibraryItem item,
       Map<String, List<ImageObject>> savedCovers,
       MusicPlaylistCovers covers,
-      Future<void> Function() onOpen) {
+      Future<void> Function() onOpen,
+      {required bool pinned}) {
     final entry = item.bookmark;
     final local = item.playlist;
     final song = local?.videos.firstOrNull;
@@ -1431,6 +1479,7 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
           : _bookmarkActions(entry, onOpen),
       plays: plays,
       selected: selected,
+      pinned: pinned,
       onOpen: onOpen,
       onLongPress: _bookmarkLongPress(entry, onOpen),
     );
@@ -1448,6 +1497,7 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
     Widget? action,
     bool plays = false,
     bool? selected,
+    bool pinned = false,
   }) {
     final theme = Theme.of(context);
     return Material(
@@ -1488,6 +1538,18 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                                         : selected
                                             ? Icons.check_box
                                             : Icons.check_box_outline_blank)))),
+                      if (pinned)
+                        PositionedDirectional(
+                            end: 7,
+                            bottom: 7,
+                            child: CircleAvatar(
+                              radius: 17,
+                              backgroundColor: Colors.black54,
+                              foregroundColor: Colors.white,
+                              child: Icon(Icons.push_pin,
+                                  semanticLabel: AppLocalizations.of(context)!
+                                      .musicPlaylistPinned),
+                            )),
                       if (action != null)
                         PositionedDirectional(
                             end: 4,
