@@ -56,7 +56,8 @@ class OnDeviceMusicDownloads extends ChangeNotifier {
             !indexed.contains(file.identity) &&
             !hidden.contains(file.identity) &&
             listed.add(file.identity))
-          OnDeviceMusicEntry.download(file.download, file.identity),
+          OnDeviceMusicEntry.download(file.download, file.identity,
+              sizeBytes: file.byteLength),
     ];
   }
 

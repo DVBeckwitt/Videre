@@ -35,9 +35,11 @@ internal data class LocalMusicRow(
         modifiedMs != null && sizeBytes != null &&
             modifiedMs == previous.modifiedMs && sizeBytes == previous.sizeBytes
 
-    fun needsTagRead(previous: LocalMusicRow?): Boolean =
-        previous?.metadata?.albumTagsRead != true || !matchesRevision(previous) ||
+    fun needsTagRead(previous: LocalMusicRow?): Boolean {
+        val metadata = previous?.metadata ?: return true
+        return !metadata.albumTagsRead || metadata.sortTags == null || !matchesRevision(previous) ||
             identityKey != previous.identityKey
+    }
 
     fun inheritsIdentity(previous: LocalMusicRow) = copy(
         identityUri = (previous.identityUri ?: previous.uri).takeUnless { it == uri },
@@ -75,6 +77,10 @@ internal data class LocalMusicRow(
         "artist" to metadata?.artist,
         "album" to metadata?.album,
         "albumArtist" to metadata?.albumArtist,
+        "titleSort" to metadata?.sortTags?.title,
+        "artistSort" to metadata?.sortTags?.artist,
+        "albumSort" to metadata?.sortTags?.album,
+        "albumArtistSort" to metadata?.sortTags?.albumArtist,
         "albumKey" to source?.let(::albumKey),
         "discNumber" to metadata?.discNumber,
         "trackNumber" to metadata?.trackNumber,
@@ -101,6 +107,10 @@ internal data class LocalMusicRow(
         remove("artist")
         remove("album")
         remove("albumArtist")
+        remove("titleSort")
+        remove("artistSort")
+        remove("albumSort")
+        remove("albumArtistSort")
         remove("albumKey")
         remove("discNumber")
         remove("trackNumber")
@@ -151,6 +161,8 @@ internal data class LocalMusicMetadata(
     val releaseDate: String? = null,
     val originalReleaseDate: String? = null,
     val albumTagsRead: Boolean = false,
+    // Null denotes a legacy row or an interrupted read. An empty result is cached.
+    val sortTags: LocalMusicSortTags? = null,
 ) {
     fun toJson(): JSONObject = JSONObject()
         .put("title", title).put("artist", artist).put("album", album)
@@ -159,6 +171,12 @@ internal data class LocalMusicMetadata(
         .put("discNumber", discNumber).put("trackNumber", trackNumber)
         .put("releaseDate", releaseDate).put("originalReleaseDate", originalReleaseDate)
         .put("albumTagsRead", albumTagsRead)
+        .apply {
+            sortTags?.let {
+                put("sortTags", JSONObject().put("title", it.title).put("artist", it.artist)
+                    .put("album", it.album).put("albumArtist", it.albumArtist))
+            }
+        }
 
     companion object {
         fun fromJson(json: JSONObject): LocalMusicMetadata = LocalMusicMetadata(
@@ -174,6 +192,10 @@ internal data class LocalMusicMetadata(
             localReleaseDate(json.stringOrNull("originalReleaseDate")),
             // Refresh legacy tags once without losing dates, track IDs or the rename journal.
             json.opt("albumTagsRead") == true,
+            json.optJSONObject("sortTags")?.let {
+                LocalMusicSortTags(it.stringOrNull("title"), it.stringOrNull("artist"),
+                    it.stringOrNull("album"), it.stringOrNull("albumArtist"))
+            },
         )
     }
 }

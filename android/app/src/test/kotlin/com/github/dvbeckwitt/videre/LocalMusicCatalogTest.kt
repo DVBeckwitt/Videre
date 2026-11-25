@@ -86,10 +86,12 @@ class LocalMusicCatalogTest {
         assertEquals(null, first.copy(mediaAlbumId = 0).albumKey(source))
     }
 
-    @Test fun legacyTagRecordsRefreshOnceEvenWhenTheNewAlbumTagsAreAbsent() {
-        val tags = LocalMusicMetadata("Title", "Artist", "Album", 12, albumTagsRead = true)
+    @Test fun legacyTagRecordsRefreshOnceEvenWhenTheNewTagsAreAbsent() {
+        val tags = LocalMusicMetadata("Title", "Artist", "Album", 12, albumTagsRead = true,
+            sortTags = LocalMusicSortTags())
         val row = track().copy(metadata = tags)
         assertTrue(row.needsTagRead(row.copy(metadata = tags.copy(albumTagsRead = false))))
+        assertTrue(row.needsTagRead(row.copy(metadata = tags.copy(sortTags = null))))
         assertFalse(row.needsTagRead(row))
         assertTrue(row.copy(sizeBytes = 50L).needsTagRead(row))
         assertTrue(row.copy(identityKey = "replacement").needsTagRead(row))

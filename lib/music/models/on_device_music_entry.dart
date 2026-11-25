@@ -7,16 +7,21 @@ class OnDeviceMusicEntry {
   OnDeviceMusicEntry.device(LocalMusicTrack track)
       : deviceTrack = track,
         download = null,
-        downloadFileProof = null;
+        downloadFileProof = null,
+        sizeBytes = track.sizeBytes;
 
-  OnDeviceMusicEntry.download(DownloadedVideo file, String fileProof)
-      : deviceTrack = null,
+  OnDeviceMusicEntry.download(
+    DownloadedVideo file,
+    String fileProof, {
+    this.sizeBytes,
+  })  : deviceTrack = null,
         download = file,
         downloadFileProof = fileProof;
 
   final LocalMusicTrack? deviceTrack;
   final DownloadedVideo? download;
   final String? downloadFileProof;
+  final int? sizeBytes;
 
   late final String id = deviceTrack?.playbackId ??
       'download:${musicDownloadFingerprint(download!)}:$downloadFileProof';
@@ -26,6 +31,8 @@ class OnDeviceMusicEntry {
       : deviceTrack!.artist;
   String? get album =>
       deviceTrack == null ? download!.musicMetadata!.album : deviceTrack!.album;
+  int get durationMs =>
+      deviceTrack?.durationMs ?? download!.lengthSeconds * 1000;
   String? get fileName => deviceTrack?.fileName;
   DateTime? get dateAdded => deviceTrack?.dateAdded;
   DateTime? get dateModified => deviceTrack?.dateModified;

@@ -16,7 +16,7 @@ class LocalMusicTrack {
   static final _identityPattern = RegExp(r'^[a-f0-9]{64}$');
   static final _volumePattern = RegExp(r'^[a-zA-Z0-9_-]+$');
   static final _rowPattern = RegExp(r'^[0-9]+$');
-  static final _folderLabelControls = RegExp(r'[\x00-\x1f\x7f-\x9f]');
+  static final _metadataControls = RegExp(r'[\x00-\x1f\x7f-\x9f]');
 
   final String uri;
   final Uri? sourceUri;
@@ -27,6 +27,10 @@ class LocalMusicTrack {
   final String? artist;
   final String? album;
   final String? albumArtist;
+  final String? titleSort;
+  final String? artistSort;
+  final String? albumSort;
+  final String? albumArtistSort;
 
   /// Identifies an album grouping only within the authorized device catalog.
   final String? albumKey;
@@ -37,6 +41,7 @@ class LocalMusicTrack {
   final String? releaseDate;
   final String? originalReleaseDate;
   final int durationMs;
+  final int? sizeBytes;
   final String? artPath;
   final String? fileName;
   final DateTime? dateAdded;
@@ -62,12 +67,17 @@ class LocalMusicTrack {
     this.artist,
     this.album,
     this.albumArtist,
+    this.titleSort,
+    this.artistSort,
+    this.albumSort,
+    this.albumArtistSort,
     this.albumKey,
     this.discNumber,
     this.trackNumber,
     this.releaseDate,
     this.originalReleaseDate,
     this.durationMs = 0,
+    this.sizeBytes,
     this.artPath,
     this.fileName,
     this.dateAdded,
@@ -103,6 +113,7 @@ class LocalMusicTrack {
       return null;
     }
     final duration = value['durationMs'];
+    final size = value['sizeBytes'];
     final art = value['artPath'];
     final name = value['fileName'];
     final albumKey = value['albumKey'];
@@ -124,6 +135,10 @@ class LocalMusicTrack {
       albumArtist: value['albumArtist'] is String
           ? value['albumArtist'] as String
           : null,
+      titleSort: _sortTag(value['titleSort']),
+      artistSort: _sortTag(value['artistSort']),
+      albumSort: _sortTag(value['albumSort']),
+      albumArtistSort: _sortTag(value['albumArtistSort']),
       albumKey: albumKey is String && _identityPattern.hasMatch(albumKey)
           ? albumKey
           : null,
@@ -132,6 +147,7 @@ class LocalMusicTrack {
       releaseDate: _releaseDate(value['releaseDate']),
       originalReleaseDate: _releaseDate(value['originalReleaseDate']),
       durationMs: duration is int && duration > 0 ? duration : 0,
+      sizeBytes: size is int && size >= 0 ? size : null,
       artPath: art is String && art.startsWith('/') ? art : null,
       fileName: name is String && name.isNotEmpty ? name : null,
       dateAdded: _date(value['addedMs']),
@@ -201,6 +217,16 @@ class LocalMusicTrack {
     return DateTime.utc(year, month, day).month == month ? value : null;
   }
 
+  static String? _sortTag(Object? value) {
+    if (value is! String ||
+        value.length > 1024 ||
+        _metadataControls.hasMatch(value)) {
+      return null;
+    }
+    final tag = value.trim();
+    return tag.isEmpty || tag.toLowerCase() == '<unknown>' ? null : tag;
+  }
+
   static List<LocalMusicFolderLocation> _parseFolderLocations(Object? value) {
     if (value is! List || value.isEmpty || value.length > 64) return const [];
     final folders = <LocalMusicFolderLocation>[];
@@ -215,7 +241,7 @@ class LocalMusicTrack {
           !seen.add(key) ||
           label.isEmpty ||
           label.length > 1024 ||
-          _folderLabelControls.hasMatch(label) ||
+          _metadataControls.hasMatch(label) ||
           !label.split(' / ').every(_validFolderLabelPart)) {
         return const [];
       }

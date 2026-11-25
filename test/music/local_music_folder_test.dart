@@ -552,6 +552,37 @@ void main() {
     expect(player.index, 0);
   });
 
+  testWidgets('device browse keeps sort tags, totals and playback in scope',
+      (tester) async {
+    consent = picked;
+    pendingScan = Completer<List<Object?>>()
+      ..complete([
+        {...first, 'title': 'The Song 10', 'durationMs': 700, 'sizeBytes': 100},
+        {...second, 'title': 'Song 2', 'durationMs': 500},
+        {
+          ...second,
+          'uri': '$tree/document/Bonus',
+          'title': 'Bonus',
+          'titleSort': 'Song 20',
+          'durationMs': 2100,
+          'sizeBytes': 200,
+        },
+      ]);
+    await show(tester, settings: false);
+    expect(find.text('Total duration 00:03'), findsOneWidget);
+    expect(find.text('Known size 300 B'), findsOneWidget);
+    await tester.tap(find.text('Song 2'));
+    await tester.pumpAndSettle();
+    expect(player.queue.map((track) => track.title),
+        ['Song 2', 'The Song 10', 'Bonus']);
+
+    await tester.enterText(find.byType(TextField), 'song');
+    await tester.pumpAndSettle();
+    expect(find.text('Total duration 00:01'), findsOneWidget);
+    expect(find.text('Known size 100 B'), findsOneWidget);
+    expect(find.text('Bonus'), findsNothing);
+  });
+
   testWidgets('search matches local filenames and keeps the playing snapshot',
       (tester) async {
     consent = picked;

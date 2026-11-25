@@ -15,6 +15,7 @@ import '../../../player/views/components/player_modal_back_handler.dart';
 import '../../../settings/models/db/settings.dart';
 import '../../../settings/states/settings.dart';
 import '../../../utils.dart' show selectKeys;
+import '../../models/local_music_browse.dart';
 import '../../models/local_music_track.dart';
 import '../../models/music_search_text.dart';
 import '../../models/on_device_music_entry.dart';
@@ -25,6 +26,7 @@ import '../screens/music_device_artist.dart';
 import 'local_music_albums.dart';
 import 'local_music_exclusions.dart';
 import 'local_music_locations.dart';
+import 'local_music_summary.dart';
 
 bool get supportsLocalMusicFolders =>
     !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
@@ -346,10 +348,10 @@ class _LocalMusicFolderState extends State<LocalMusicFolder>
     }
   }
 
-  Future<void> _chooseSort(_LocalMusicSort sort,
+  Future<void> _chooseSort(LocalMusicTrackSort sort,
       {required bool hasFirstSeen}) async {
     final settings = context.read<SettingsCubit>();
-    final choice = await showModalBottomSheet<_LocalMusicSort>(
+    final choice = await showModalBottomSheet<LocalMusicTrackSort>(
         context: context,
         useSafeArea: true,
         isScrollControlled: true,
@@ -499,7 +501,7 @@ class _LocalMusicFolderState extends State<LocalMusicFolder>
     final savedSort = context.select(
         (SettingsCubit? settings) => settings?.state.settings[_sortSetting]);
     final canSort = context.read<SettingsCubit?>() != null;
-    final sort = _LocalMusicSort.fromValue(savedSort?.value);
+    final sort = LocalMusicTrackSort.fromValue(savedSort?.value);
     final catalogChanges =
         widget._settings ? _library : Listenable.merge([_library, _downloads]);
     return _withSelectKeys(ListenableBuilder(
@@ -578,6 +580,9 @@ class _LocalMusicFolderState extends State<LocalMusicFolder>
             currentEntries: _currentEntries,
             tracks: tracks,
             canBrowse: canBrowse,
+            complete: !_library.scanning &&
+                (!_library.enabled || _library.loaded) &&
+                _library.error == null,
             row: (visible, index) => _buildTrack(context, visible[index], sort,
                 profile, selection, () => _play(visible, index)),
             header:
@@ -731,7 +736,7 @@ class _LocalMusicFolderState extends State<LocalMusicFolder>
   Widget _buildTrack(
       BuildContext context,
       OnDeviceMusicEntry entry,
-      _LocalMusicSort sort,
+      LocalMusicTrackSort sort,
       Object? profile,
       String? selection,
       VoidCallback play) {
@@ -742,13 +747,14 @@ class _LocalMusicFolderState extends State<LocalMusicFolder>
         _library.visibilityProfile == profile &&
         (track == null || _library.acceptsSessionSelection(selection));
     final date = switch (sort.field) {
-      _SortField.dateAdded => entry.dateAdded,
-      _SortField.dateModified => entry.dateModified,
+      LocalMusicTrackSortField.dateAdded => entry.dateAdded,
+      LocalMusicTrackSortField.dateModified => entry.dateModified,
       _ => null,
     };
-    final dateLabel = sort.field == _SortField.dateAdded && entry.firstSeen
-        ? locals.localMusicFirstSeen
-        : sort.field.label(locals);
+    final dateLabel =
+        sort.field == LocalMusicTrackSortField.dateAdded && entry.firstSeen
+            ? locals.localMusicFirstSeen
+            : sort.field.label(locals);
     final description = [
       if (entry.download != null) locals.localMusicDownloadedFile,
       entry.artist,
@@ -849,6 +855,7 @@ class _LocalTrackBrowser extends StatefulWidget {
     required this.currentEntries,
     required this.tracks,
     required this.canBrowse,
+    required this.complete,
     required this.header,
     required this.row,
   });
@@ -858,6 +865,7 @@ class _LocalTrackBrowser extends StatefulWidget {
   final List<OnDeviceMusicEntry> Function() currentEntries;
   final List<OnDeviceMusicEntry> tracks;
   final bool canBrowse;
+  final bool complete;
   final Widget header;
   final Widget Function(List<OnDeviceMusicEntry>, int) row;
 
@@ -931,8 +939,11 @@ class _LocalTrackBrowserState extends State<_LocalTrackBrowser> {
       builder: (context) => _withSelectKeys(ListenableBuilder(
         listenable: widget.catalogChanges,
         builder: (context, _) {
-          final values =
-              <Object, ({_LocalAlbumFilter filter, String? credit})>{};
+          final values = <Object, ({
+            _LocalAlbumFilter filter,
+            String? credit,
+            List<String?> tags,
+          })>{};
           if (library.visibilityProfile == profile &&
               library.selectionId == selection) {
             for (final track in widget.currentEntries()) {
@@ -940,19 +951,35 @@ class _LocalTrackBrowserState extends State<_LocalTrackBrowser> {
               final tag = (artist ? track.artist : track.album)?.trim();
               if (tag == null || tag.isEmpty) continue;
               final key = artist ? null : track.deviceTrack?.albumKey;
-              values.putIfAbsent(
-                  key ?? (label: tag),
-                  () => (
-                        filter: (key: key, label: tag),
-                        credit:
-                            key == null ? null : track.deviceTrack?.albumArtist,
-                      ));
+              final option = values.putIfAbsent(
+                key ?? (label: tag),
+                () => (
+                  filter: (key: key, label: tag),
+                  credit: key == null ? null : track.deviceTrack?.albumArtist,
+                  tags: <String?>[],
+                ),
+              );
+              option.tags.add(artist
+                  ? track.deviceTrack?.artistSort
+                  : track.deviceTrack?.albumSort);
             }
           }
-          final options = values.values.toList()
-            ..sort((a, b) => a.filter.label
-                .toLowerCase()
-                .compareTo(b.filter.label.toLowerCase()));
+          final sortNames = values.map((key, option) => MapEntry(
+              key, localMusicGroupSortName(option.filter.label, option.tags)));
+          final options = (values.entries.toList()
+                ..sort((a, b) {
+                  final byName = compareLocalMusicSortNames(
+                      sortNames[a.key], sortNames[b.key]);
+                  if (byName != 0) return byName;
+                  final byLabel = a.value.filter.label.compareTo(
+                      b.value.filter.label);
+                  return byLabel != 0
+                      ? byLabel
+                      : (a.value.filter.key ?? '')
+                          .compareTo(b.value.filter.key ?? '');
+                }))
+              .map((entry) => entry.value)
+              .toList();
           return Column(mainAxisSize: MainAxisSize.min, children: [
             ListTile(
                 title:
@@ -1074,6 +1101,14 @@ class _LocalTrackBrowserState extends State<_LocalTrackBrowser> {
                         tagFilter(locals.localMusicSortAlbum, _album?.label,
                             artist: false),
                       ]),
+                    if (visible.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        child: LocalMusicSummary(
+                          totals: LocalMusicTotals.fromEntries(visible,
+                              complete: widget.complete),
+                        ),
+                      ),
                     if (widget.tracks.isNotEmpty && visible.isEmpty)
                       Padding(
                           padding: const EdgeInsets.symmetric(vertical: 12),
@@ -1096,72 +1131,23 @@ Widget _withSelectKeys(Widget child) => Shortcuts(shortcuts: {
 
 enum _TrackAction { playNext, addToQueue, rename, hide, removeKeep }
 
-enum _SortField {
-  title,
-  artist,
-  album,
-  dateAdded,
-  dateModified;
-
+extension on LocalMusicTrackSortField {
   String label(AppLocalizations locals) => switch (this) {
-        title => locals.musicLibraryTitleOrder,
-        artist => locals.localMusicSortArtist,
-        album => locals.localMusicSortAlbum,
-        dateAdded => locals.localMusicSortDateAdded,
-        dateModified => locals.localMusicSortDateModified,
+        LocalMusicTrackSortField.title => locals.musicLibraryTitleOrder,
+        LocalMusicTrackSortField.artist => locals.localMusicSortArtist,
+        LocalMusicTrackSortField.album => locals.localMusicSortAlbum,
+        LocalMusicTrackSortField.dateAdded => locals.localMusicSortDateAdded,
+        LocalMusicTrackSortField.dateModified =>
+          locals.localMusicSortDateModified,
+        LocalMusicTrackSortField.duration => locals.searchDuration,
+        LocalMusicTrackSortField.size => locals.localMusicFileSize,
       };
-}
-
-class _LocalMusicSort {
-  const _LocalMusicSort(this.field, this.descending);
-
-  factory _LocalMusicSort.fromValue(String? value) {
-    final parts = value?.split(':');
-    final field = _SortField.values.firstWhere(
-        (field) => field.name == parts?.first,
-        orElse: () => _SortField.title);
-    return _LocalMusicSort(field, parts?.last == 'descending');
-  }
-
-  final _SortField field;
-  final bool descending;
-
-  String get value =>
-      '${field.name}:${descending ? 'descending' : 'ascending'}';
-
-  List<OnDeviceMusicEntry> order(List<OnDeviceMusicEntry> tracks) =>
-      [...tracks]..sort(_compare);
-
-  int _compare(OnDeviceMusicEntry a, OnDeviceMusicEntry b) {
-    final comparison = switch (field) {
-      _SortField.title => _compareText(a.title, b.title),
-      _SortField.artist => _compareText(a.artist, b.artist),
-      _SortField.album => _compareText(a.album, b.album),
-      _SortField.dateAdded => _compareValue(a.dateAdded, b.dateAdded),
-      _SortField.dateModified => _compareValue(a.dateModified, b.dateModified),
-    };
-    if (comparison != 0) return comparison;
-    final title = a.title.toLowerCase().compareTo(b.title.toLowerCase());
-    return title != 0 ? title : a.id.compareTo(b.id);
-  }
-
-  int _compareText(String? first, String? second) {
-    final a = first?.trim().toLowerCase();
-    final b = second?.trim().toLowerCase();
-    return _compareValue(a == '' ? null : a, b == '' ? null : b);
-  }
-
-  int _compareValue<T extends Comparable<T>>(T? a, T? b) {
-    if (a == null) return b == null ? 0 : 1;
-    if (b == null) return -1;
-    return descending ? b.compareTo(a) : a.compareTo(b);
-  }
 }
 
 class _LocalMusicSortSheet extends StatefulWidget {
   const _LocalMusicSortSheet({required this.sort, required this.hasFirstSeen});
 
-  final _LocalMusicSort sort;
+  final LocalMusicTrackSort sort;
   final bool hasFirstSeen;
 
   @override
@@ -1169,7 +1155,7 @@ class _LocalMusicSortSheet extends StatefulWidget {
 }
 
 class _LocalMusicSortSheetState extends State<_LocalMusicSortSheet> {
-  late _LocalMusicSort _sort = widget.sort;
+  late LocalMusicTrackSort _sort = widget.sort;
 
   @override
   Widget build(BuildContext context) {
@@ -1186,18 +1172,19 @@ class _LocalMusicSortSheetState extends State<_LocalMusicSortSheet> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Text(locals.searchSortBy, style: heading),
-              for (final field in _SortField.values)
+              for (final field in LocalMusicTrackSortField.values)
                 ListTile(
                   selected: field == _sort.field,
                   autofocus: isTv && field == widget.sort.field,
                   title: Text(field.label(locals)),
-                  subtitle: field == _SortField.dateAdded && widget.hasFirstSeen
+                  subtitle: field == LocalMusicTrackSortField.dateAdded &&
+                          widget.hasFirstSeen
                       ? Text(locals.localMusicFirstSeenHelp)
                       : null,
                   trailing:
                       field == _sort.field ? const Icon(Icons.check) : null,
-                  onTap: () => setState(
-                      () => _sort = _LocalMusicSort(field, _sort.descending)),
+                  onTap: () => setState(() =>
+                      _sort = LocalMusicTrackSort(field, _sort.descending)),
                 ),
               Text(locals.localMusicSortDirection, style: heading),
               Wrap(spacing: 8, children: [
@@ -1205,12 +1192,12 @@ class _LocalMusicSortSheetState extends State<_LocalMusicSortSheet> {
                     label: Text(locals.localMusicAscending),
                     selected: !_sort.descending,
                     onSelected: (_) => setState(
-                        () => _sort = _LocalMusicSort(_sort.field, false))),
+                        () => _sort = LocalMusicTrackSort(_sort.field, false))),
                 ChoiceChip(
                     label: Text(locals.localMusicDescending),
                     selected: _sort.descending,
                     onSelected: (_) => setState(
-                        () => _sort = _LocalMusicSort(_sort.field, true))),
+                        () => _sort = LocalMusicTrackSort(_sort.field, true))),
               ]),
               Row(mainAxisAlignment: MainAxisAlignment.end, children: [
                 TextButton(

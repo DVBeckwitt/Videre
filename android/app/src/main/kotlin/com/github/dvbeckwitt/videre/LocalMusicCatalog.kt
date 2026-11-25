@@ -180,7 +180,7 @@ internal class LocalMusicCatalog(
             val previous = snapshot.tracks[row.uri]
             if (row.needsTagRead(previous)) {
                 ++reads
-                val metadata = readMetadata(Uri.parse(row.uri), row.metadata)
+                val metadata = readMetadata(Uri.parse(row.uri), row.metadata, signal)
                 entry.setValue(row.copy(metadata = metadata))
                 batch.add(channelValue(entry.value, sourceKey))
             }
@@ -601,7 +601,7 @@ internal class LocalMusicCatalog(
         null
     }
 
-    private fun readMetadata(uri: Uri, prior: LocalMusicMetadata?): LocalMusicMetadata {
+    private fun readMetadata(uri: Uri, prior: LocalMusicMetadata?, signal: CancellationSignal): LocalMusicMetadata {
         var metadata = (prior ?: LocalMusicMetadata(null, null, null, 0L)).copy(albumTagsRead = true)
         try {
             readMedia(uri) { retriever ->
@@ -640,7 +640,20 @@ internal class LocalMusicCatalog(
         } catch (_: IOException) {
             // A cover-cache failure must not prevent audio playback.
         }
-        return metadata
+        signal.throwIfCanceled()
+        val sortTags = try {
+            context.contentResolver.openAssetFileDescriptor(uri, "r", signal)?.use { document ->
+                document.createInputStream().use(::readLocalMusicSortTags)
+            }
+        } catch (cancelled: OperationCanceledException) {
+            throw cancelled
+        } catch (_: IOException) {
+            null
+        } catch (_: RuntimeException) {
+            // Providers can support metadata retrieval without a readable stream.
+            null
+        }
+        return metadata.copy(sortTags = sortTags)
     }
 
     private fun repairCover(uri: Uri, cover: String) {
