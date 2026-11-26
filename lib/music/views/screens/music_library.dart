@@ -3032,7 +3032,6 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
 
   Widget _downloadsSelectionBar(List<DownloadedVideo> visible,
       List<DownloadedVideo> all, Set<String> scope) {
-    final locals = AppLocalizations.of(context)!;
     final selected =
         all.where((video) => scope.contains(video.videoId)).toList();
     final ids = selected.map((video) => video.videoId).toList();
