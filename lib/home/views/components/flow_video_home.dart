@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:auto_route/auto_route.dart';
 import 'package:flutter/foundation.dart' show listEquals, mapEquals;
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show RenderAbstractViewport;
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:visibility_detector/visibility_detector.dart';
 
@@ -158,6 +159,7 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
       RecommendationCandidates(db, isCurrent: () => _sessionCurrent);
   late final _subscriptionSource = SubscriptionRecommendationSource(db);
   final ScrollController _scroll = ScrollController();
+  final _feedCards = <String, BuildContext>{};
   final Set<Key> _impressionKeys = {};
   final Map<String, Timer> _visibleDwell = {};
   final Set<String> _seenInViewport = {};
@@ -191,6 +193,8 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
   int _revision = 0;
   int _subscriptionRevision = 0;
   bool _subscriptionRankWaiting = false;
+  bool _subscriptionOrderPending = false;
+  bool _rebuildForYouOrder = false;
   late final StreamSubscription<AppState> _appChanges;
   late final StreamSubscription<SettingsState> _settingsChanges;
   late AppState _previousAppState;
@@ -222,7 +226,7 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
     _lifecycle = WidgetsBinding.instance.lifecycleState;
     _scroll.addListener(_scheduleVisibilityUpdate);
     _tasteGeneration = _engine.generation(RecommendationDomain.video);
-    _engine.changes.addListener(_changed);
+    _engine.changes.addListener(_recommendationsChanged);
     playbackHistoryRevision.addListener(_changed);
     communityFilters.changes.addListener(_changed);
     recommendationSubscriptionRevision.addListener(_subscriptionsChanged);
@@ -348,6 +352,9 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
   }
 
   void _resetSelection() {
+    _feedCards.clear();
+    _subscriptionOrderPending = false;
+    _rebuildForYouOrder = false;
     _videos = [];
     _interestVideos.clear();
     _loading = false;
@@ -612,7 +619,7 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
     final observe =
         _impressionsActive && !video.filtered && video.videoId.isNotEmpty;
     if (observe) _impressionKeys.add(key);
-    return VisibilityDetector(
+    final detector = VisibilityDetector(
       key: key,
       onVisibilityChanged: observe
           ? (info) {
@@ -642,6 +649,43 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
           : null,
       child: child,
     );
+    if (_selectedTab != HomeTabsLayout.forYou) return detector;
+    return Builder(
+      key: key,
+      builder: (context) {
+        _feedCards[video.videoId] = context;
+        return detector;
+      },
+    );
+  }
+
+  bool _cardIntersectsViewport(Video video) {
+    // Read the latest layout independently of impression timing and consent.
+    final context = _feedCards[video.videoId];
+    if (context == null || !context.mounted) return false;
+    final card = context.findRenderObject();
+    if (card is! RenderBox || !card.attached || !card.hasSize) return false;
+    final viewport = RenderAbstractViewport.maybeOf(card);
+    if (viewport == null) return false;
+    final bounds = MatrixUtils.transformRect(
+        card.getTransformTo(viewport), card.paintBounds);
+    return bounds.isFinite &&
+        !bounds.isEmpty &&
+        viewport.paintBounds.overlaps(bounds);
+  }
+
+  List<Video> _keepVisibleCards(List<Video> ranked) {
+    final previous = _engine.eligibleVideos(_videos, limit: _videos.length);
+    final lastVisible = previous.lastIndexWhere(_cardIntersectsViewport);
+    if (lastVisible == -1) return ranked;
+
+    // Earlier cards also determine the visible cards' scroll positions.
+    final prefix = previous.take(lastVisible + 1);
+    final ids = prefix.map((video) => video.videoId).toSet();
+    return [
+      ...prefix,
+      ...ranked.where((video) => !ids.contains(video.videoId))
+    ];
   }
 
   void _flushImpressions() {
@@ -663,6 +707,7 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
     _lastForYou = null;
     _subscriptionRevision++;
     _subscriptionRankWaiting = false;
+    _subscriptionOrderPending = false;
     if (_followedVideos.isNotEmpty) {
       final followedIds = _followedVideos.map((video) => video.videoId).toSet();
       _videos = _videos
@@ -729,6 +774,8 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
       _loading = false;
       _discovering = false;
       _available = false;
+      _rebuildForYouOrder = false;
+      _feedCards.clear();
       _discoveryPrepared = false;
       _enteredQuery = null;
       _failed = false;
@@ -749,6 +796,7 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
   }
 
   void _rerankSubscriptions() {
+    _subscriptionOrderPending = true;
     if (_discovering) {
       _subscriptionRankWaiting = true;
     } else {
@@ -796,6 +844,12 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
     }
   }
 
+  void _recommendationsChanged() {
+    // Feedback and learning changes can suppress more cards in the new rank.
+    _subscriptionOrderPending = false;
+    _changed();
+  }
+
   void _changed() {
     _lastForYou = null;
     if (!_sessionCurrent) return;
@@ -803,6 +857,7 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
     final tasteChanged = generation != _tasteGeneration;
     if (tasteChanged) {
       _clearImpressions();
+      _rebuildForYouOrder = true;
       _tasteGeneration = generation;
       _discovering = false;
       _discoveryPrepared = false;
@@ -843,6 +898,7 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
     super.didUpdateWidget(oldWidget);
     if (oldWidget.active != widget.active) {
       _clearImpressions();
+      _rebuildForYouOrder = false;
       _revision++;
       _loading = false;
       _discovering = false;
@@ -871,6 +927,9 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
       return;
     }
     final discover = _selectedTab == HomeTabsLayout.discover;
+    final forYou = _selectedTab == HomeTabsLayout.forYou;
+    // A subscription batch can supersede the current rank during a refresh.
+    if (forYou && refresh) _rebuildForYouOrder = true;
     if (_discovering ||
         (_failed && !refresh && (discover || selected != null))) {
       return;
@@ -964,13 +1023,23 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
         }
         _interests = result.interests;
         _discoveryQueries = result.discoveryQueries;
-        _videos = result.available
+        final ranked = result.available
             ? result.items.map((entry) => entry.item).toList()
             : _engine.eligibleVideos(candidates);
+        final keepVisible =
+            forYou && _subscriptionOrderPending && !_rebuildForYouOrder;
+        _videos = keepVisible ? _keepVisibleCards(ranked) : ranked;
+        final previousReasons = _reasons;
         _reasons = {
+          if (keepVisible)
+            for (final video in _videos)
+              if (previousReasons[video.videoId] case final reason?)
+                video.videoId: reason,
           for (final entry in result.items) entry.item.videoId: entry.reason,
         };
-        if (_selectedTab == HomeTabsLayout.forYou) {
+        if (forYou) {
+          _subscriptionOrderPending = false;
+          _rebuildForYouOrder = false;
           _lastForYou =
               (videos: _videos, reasons: _reasons, available: _available);
         }
@@ -981,6 +1050,10 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
       if (!requestCurrent()) return;
       if (prepare) _instanceRejected(error);
       setState(() {
+        if (forYou) {
+          _subscriptionOrderPending = false;
+          _rebuildForYouOrder = false;
+        }
         _failed = true;
         _loading = false;
         _discovering = false;
@@ -1065,7 +1138,7 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
     _subscriptionRevision++;
     unawaited(_appChanges.cancel());
     unawaited(_settingsChanges.cancel());
-    _engine.changes.removeListener(_changed);
+    _engine.changes.removeListener(_recommendationsChanged);
     playbackHistoryRevision.removeListener(_changed);
     communityFilters.changes.removeListener(_changed);
     recommendationSubscriptionRevision.removeListener(_subscriptionsChanged);
@@ -1085,11 +1158,13 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
     final theme = Theme.of(context);
     final style = theme.textTheme.bodySmall
         ?.copyWith(color: theme.colorScheme.onSurfaceVariant);
+    final showProgress =
+        _loading && (_selectedTab != HomeTabsLayout.forYou || videos.isEmpty);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        if (_loading) const LinearProgressIndicator(minHeight: 2),
-        if (!_available && !_loading && videos.isNotEmpty)
+        if (showProgress) const LinearProgressIndicator(minHeight: 2),
+        if (!_available && !showProgress && videos.isNotEmpty)
           Padding(
             padding: const EdgeInsets.only(bottom: 8),
             child: Text(locals.flowRecommendationUnavailable, style: style),
@@ -1434,8 +1509,13 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
           icon: const Icon(Icons.tune_rounded, size: 20),
         ),
     ]);
+    // The anchored prefix can outlive cards displaced by the ranker's cap.
+    final feedVideos = _engine.eligibleVideos(_videos, limit: _videos.length);
+    final feedIds = feedVideos.map((video) => video.videoId).toSet();
+    _feedCards.removeWhere(
+        (id, context) => !context.mounted || !feedIds.contains(id));
     final feed = CommunityBrowse<Video>(
-      items: _engine.eligibleVideos(_videos),
+      items: feedVideos,
       match: videoCommunityMatches,
       builder: (context, videos, notice) => RefreshIndicator(
         onRefresh: () => _load(refresh: true),
