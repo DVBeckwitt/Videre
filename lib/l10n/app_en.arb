@@ -376,6 +376,7 @@
   "videoDisplayFitDescription": "Show the whole frame and keep its original proportions.",
   "videoDisplayCrop": "Crop",
   "videoDisplayCropDescription": "Fill the player and trim the edges as needed.",
+  "resetVideoZoom": "Reset zoom",
   "videoDisplayStretch": "Stretch",
   "videoDisplayStretchDescription": "Fill the player by changing the frame’s proportions.",
   "videoDisplayFixedRatioDescription": "Reshape the frame to a fixed ratio and fit it in the player.",
@@ -941,6 +942,8 @@
   "@rememberSubtitleLanguageDescription": {
     "description": "Settings description for remembering subtitle language"
   },
+  "playerLockTouchControls": "Lock touch controls",
+  "playerUnlockTouchControls": "Unlock touch controls",
   "lockFullScreenToLandscape": "Lock full screen orientation to video aspect ratio",
   "@lockFullScreenToLandscape": {
     "description": "Title to force full screen to landscape"
@@ -3278,6 +3281,8 @@
   "subtitleTimingReset": "Reset",
   "subtitleTimingSaveFailed": "Could not save subtitle timing. Please try again.",
   "videoChapters": "Chapters",
+  "previousChapter": "Previous chapter",
+  "nextChapter": "Next chapter",
   "localSubtitleAttach": "Attach subtitle file",
   "localSubtitleRelink": "Relink subtitle file",
   "localSubtitleRemove": "Remove subtitle file",

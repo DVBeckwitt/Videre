@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../../videos/models/video.dart';
+import 'fullscreen_video_zoom.dart';
 import 'seek_preview.dart';
 
 // Dart translation of Flow 565d1f7a (GPL-3.0): PlayerTapGestures.kt,
@@ -21,6 +22,7 @@ class FlowVideoGestures extends StatefulWidget {
   final VoidCallback rewind;
   final VoidCallback fastForward;
   final ValueChanged<Duration> seek;
+  final ValueChanged<bool>? skipChapter;
   final Widget child;
 
   const FlowVideoGestures({
@@ -34,6 +36,7 @@ class FlowVideoGestures extends StatefulWidget {
     required this.rewind,
     required this.fastForward,
     required this.seek,
+    this.skipChapter,
     required this.child,
   });
 
@@ -186,10 +189,24 @@ class _FlowVideoGesturesState extends State<FlowVideoGestures> {
   Widget build(BuildContext context) {
     final gestureSettings = MediaQuery.maybeGestureSettingsOf(context);
     final target = _dragTarget;
-    return RawGestureDetector(
+    final surface = RawGestureDetector(
       behavior: HitTestBehavior.translucent,
       excludeFromSemantics: true,
       gestures: {
+        if (widget.skipChapter != null)
+          _ChapterTapRecognizer:
+              GestureRecognizerFactoryWithHandlers<_ChapterTapRecognizer>(
+            _ChapterTapRecognizer.new,
+            (recognizer) => recognizer
+              ..gestureSettings = gestureSettings
+              ..onTwoFingersDown = () {
+                _cancelPendingSurfaceTap();
+                _clearRepeat();
+              }
+              ..onDoubleTap = (point) => widget.skipChapter?.call(
+                    point.dx >= context.size!.width / 2,
+                  ),
+          ),
         TapGestureRecognizer:
             GestureRecognizerFactoryWithHandlers<TapGestureRecognizer>(
           () => TapGestureRecognizer(supportedDevices: _touch),
@@ -203,6 +220,7 @@ class _FlowVideoGesturesState extends State<FlowVideoGestures> {
             () => _FlowSeekDragRecognizer(supportedDevices: _touch),
             (recognizer) {
               recognizer.gestureSettings = gestureSettings;
+              recognizer.yieldToMultitouch = widget.skipChapter != null;
               recognizer.acceptPosition = (point) =>
                   _outsideBackInset(point) &&
                   point.dy >= _dragEdgeGuard &&
@@ -237,7 +255,108 @@ class _FlowVideoGesturesState extends State<FlowVideoGestures> {
         ],
       ),
     );
+    return FullscreenVideoZoomGestures(
+      zoom: FullscreenVideoZoomScope.maybeOf(context),
+      child: surface,
+    );
   }
+}
+
+class _ChapterTapRecognizer extends OneSequenceGestureRecognizer {
+  _ChapterTapRecognizer() : super(supportedDevices: {PointerDeviceKind.touch});
+
+  VoidCallback? onTwoFingersDown;
+  ValueChanged<Offset>? onDoubleTap;
+
+  final _contacts = <int, ({Offset start, Offset position})>{};
+  late Duration _startedAt;
+  int _contactCount = 0;
+  bool _candidate = false;
+  Offset? _tapPoint;
+  Duration? _previousTapEnd;
+
+  @override
+  String get debugDescription => 'two-finger double tap';
+
+  @override
+  void addAllowedPointer(PointerDownEvent event) {
+    super.addAllowedPointer(event);
+    if (_contacts.isEmpty) {
+      _startedAt = event.timeStamp;
+      _contactCount = 0;
+      _candidate = true;
+      _tapPoint = null;
+    }
+    final position = event.localPosition;
+    _contacts[event.pointer] = (start: position, position: position);
+    _contactCount++;
+    if (_contactCount == 2 && _candidate) onTwoFingersDown?.call();
+    if (_contactCount > 2 || !_candidate) _rejectTap();
+  }
+
+  bool _movedBeyondSlop(PointerEvent event) {
+    final contact = _contacts[event.pointer]!;
+    final position = event.localPosition;
+    _contacts[event.pointer] = (start: contact.start, position: position);
+    final slop = computeHitSlop(event.kind, gestureSettings);
+    if ((position - contact.start).distance > slop) return true;
+    if (_contacts.length < 2) return false;
+    final first = _contacts.values.first;
+    final second = _contacts.values.last;
+    final initialSpan = (first.start - second.start).distance;
+    final span = (first.position - second.position).distance;
+    return (span - initialSpan).abs() > slop;
+  }
+
+  void _rejectTap() {
+    _previousTapEnd = null;
+    _candidate = false;
+    resolve(GestureDisposition.rejected);
+  }
+
+  @override
+  void rejectGesture(int pointer) {
+    if (_candidate) _rejectTap();
+  }
+
+  @override
+  void handleEvent(PointerEvent event) {
+    if (event is PointerDownEvent) return;
+    if (_candidate &&
+        (event is PointerCancelEvent ||
+            event.timeStamp - _startedAt > kLongPressTimeout ||
+            _movedBeyondSlop(event))) {
+      _rejectTap();
+    }
+    if (event is! PointerUpEvent && event is! PointerCancelEvent) return;
+
+    if (_candidate && _contacts.length == 2) {
+      final first = _contacts.values.first.position;
+      final second = _contacts.values.last.position;
+      _tapPoint = (first + second) / 2;
+      // Wait for a lift to give pinch and drag recognizers the movement.
+      // Claim a still pair before the surface can turn it into a single tap.
+      resolve(GestureDisposition.accepted);
+    } else if (_candidate && _contactCount == 1) {
+      _rejectTap();
+    }
+    _contacts.remove(event.pointer);
+    stopTrackingIfPointerNoLongerDown(event);
+
+    final tapPoint = _tapPoint;
+    if (_candidate && _contacts.isEmpty && tapPoint != null) {
+      final previous = _previousTapEnd;
+      if (previous != null && _startedAt - previous <= kDoubleTapTimeout) {
+        _previousTapEnd = null;
+        onDoubleTap?.call(tapPoint);
+      } else {
+        _previousTapEnd = event.timeStamp;
+      }
+    }
+  }
+
+  @override
+  void didStopTrackingLastPointer(int pointer) {}
 }
 
 class _FlowSeekDragRecognizer extends HorizontalDragGestureRecognizer {
@@ -245,11 +364,30 @@ class _FlowSeekDragRecognizer extends HorizontalDragGestureRecognizer {
 
   bool Function(Offset)? acceptPosition;
   bool endingWithCancel = false;
+  bool yieldToMultitouch = false;
+  bool _trackingTouch = false;
 
   @override
   bool isPointerAllowed(PointerEvent event) =>
       (acceptPosition?.call(event.localPosition) ?? true) &&
       super.isPointerAllowed(event);
+
+  @override
+  void addAllowedPointer(PointerDownEvent event) {
+    if (yieldToMultitouch && _trackingTouch) {
+      // A pending one-finger seek must leave a horizontal pinch to zoom.
+      resolve(GestureDisposition.rejected);
+      return;
+    }
+    _trackingTouch = true;
+    super.addAllowedPointer(event);
+  }
+
+  @override
+  void didStopTrackingLastPointer(int pointer) {
+    _trackingTouch = false;
+    super.didStopTrackingLastPointer(pointer);
+  }
 
   @override
   void handleEvent(PointerEvent event) {

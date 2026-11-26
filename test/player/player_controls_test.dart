@@ -19,6 +19,8 @@ import 'package:clipious/player/states/player_controls.dart';
 import 'package:clipious/player/states/tv_player_controls.dart';
 import 'package:clipious/player/states/video_player.dart';
 import 'package:clipious/player/views/components/flow_floating_mini.dart';
+import 'package:clipious/player/views/components/flow_video_gestures.dart';
+import 'package:clipious/player/views/components/fullscreen_video_zoom.dart';
 import 'package:clipious/player/views/components/minimize_on_swipe_down.dart';
 import 'package:clipious/player/views/components/player_controls.dart';
 import 'package:clipious/player/views/components/seek_preview.dart';
@@ -28,6 +30,7 @@ import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:clipious/videos/models/video.dart';
+import 'package:clipious/videos/models/video_chapter.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -43,6 +46,14 @@ class _ControlsTestPlayer extends TestPlayerCubit {
 
   void replaceOccurrence() => emit(state.copyWith(
       currentlyPlaying: const Video(videoId: 'next-track', lengthSeconds: 60)));
+
+  void replaceWithChapteredVideo() => emit(state.copyWith(
+        currentlyPlaying: const Video(
+          videoId: 'description-chapters',
+          lengthSeconds: 60,
+          description: '0:00 Intro\n0:30 Setup',
+        ),
+      ));
 }
 
 class _SpeedBoostVideo extends VideoPlayerCubit {
@@ -149,6 +160,64 @@ class _WatchTrackAudio extends AudioPlayerCubit {
   }
 }
 
+const _zoomViewport = Size(400, 240);
+const _zoomSource = Size(400, 75);
+const _zoomPictureKey = ValueKey('fullscreen-zoom-test-picture');
+
+Future<void> _showZoomSurface(
+  WidgetTester tester,
+  FullscreenVideoZoom zoom,
+  List<Duration> seeks, {
+  VoidCallback? onVerticalDrag,
+}) {
+  return tester.pumpWidget(
+    MaterialApp(
+      home: Center(
+        child: SizedBox.fromSize(
+          size: _zoomViewport,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              zoom.buildSurface(
+                FittedBox(
+                  fit: BoxFit.contain,
+                  child: SizedBox.fromSize(
+                    key: _zoomPictureKey,
+                    size: _zoomSource,
+                    child: const ColoredBox(color: Colors.black),
+                  ),
+                ),
+                _zoomSource,
+                BoxFit.contain,
+              ),
+              FullscreenVideoZoomScope(
+                zoom: zoom,
+                child: FlowVideoGestures(
+                  video: null,
+                  duration: const Duration(minutes: 3),
+                  readPosition: () => const Duration(minutes: 1),
+                  canSeek: true,
+                  toggleControls: () {},
+                  togglePlayback: () {},
+                  rewind: () {},
+                  fastForward: () {},
+                  seek: seeks.add,
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onVerticalDragStart:
+                        onVerticalDrag == null ? null : (_) => onVerticalDrag(),
+                    child: const SizedBox.expand(),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
 void main() {
   late TestAppCubit app;
   late TestSettingsCubit settings;
@@ -186,14 +255,18 @@ void main() {
   }
 
   Future<_SpeedBoostVideo> createPlayingVideo(WidgetTester tester,
-      {double aspectRatio = 16 / 9, int lengthSeconds = 60}) async {
-    final video = Video(videoId: 'boost-test', lengthSeconds: lengthSeconds);
+      {double aspectRatio = 16 / 9,
+      int lengthSeconds = 60,
+      Video? source,
+      bool playing = true}) async {
+    final video =
+        source ?? Video(videoId: 'boost-test', lengthSeconds: lengthSeconds);
     await tester.runAsync(player.close);
     player = _ControlsTestPlayer(
       PlayerState.init(null).copyWith(
         isMini: false,
         isHidden: false,
-        isPlaying: true,
+        isPlaying: playing,
         currentlyPlaying: video,
         forwardStep: settings.state.skipStep,
         rewindStep: settings.state.skipStep,
@@ -849,6 +922,136 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
+  testWidgets(
+    'fullscreen zoom waits for two-finger motion and preserves seek',
+    (tester) async {
+      final zoom = FullscreenVideoZoom();
+      final seeks = <Duration>[];
+      var transforms = 0;
+      zoom.addListener(() => transforms++);
+      addTearDown(zoom.dispose);
+      await _showZoomSurface(tester, zoom, seeks);
+      final center = tester.getCenter(find.byType(FlowVideoGestures));
+      final updatesAtRest = transforms;
+
+      final first = await tester.startGesture(center - const Offset(30, 0));
+      final second = await tester.startGesture(center + const Offset(30, 0));
+      await first.moveBy(const Offset(-kTouchSlop * 0.8, 0));
+      await first.up();
+      await second.up();
+      await tester.pump(kDoubleTapTimeout);
+      expect(transforms, updatesAtRest);
+      expect(zoom.scale, 1);
+      expect(zoom.offset, Offset.zero);
+      expect(seeks, isEmpty);
+
+      final swipe = await tester.startGesture(center - const Offset(80, 0));
+      await swipe.moveBy(const Offset(32, 0));
+      await swipe.moveBy(const Offset(80, 0));
+      await tester.pump();
+      expect(find.byType(SeekPreview), findsOneWidget);
+      expect(seeks, isEmpty);
+
+      final lateFinger = await tester.startGesture(
+        center + const Offset(50, 0),
+      );
+      await lateFinger.moveBy(const Offset(30, 0));
+      await swipe.moveBy(const Offset(30, 0));
+      await lateFinger.up();
+      await swipe.up();
+      await tester.pump();
+      expect(seeks, hasLength(1));
+      expect(seeks.single, greaterThan(const Duration(minutes: 1)));
+      expect(zoom.scale, 1);
+      expect(find.byType(SeekPreview), findsNothing);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
+  testWidgets(
+    'fullscreen pinch and pan respect the viewport, letterboxing and reset',
+    (tester) async {
+      final zoom = FullscreenVideoZoom();
+      final seeks = <Duration>[];
+      var verticalDrags = 0;
+      addTearDown(zoom.dispose);
+      await _showZoomSurface(
+        tester,
+        zoom,
+        seeks,
+        onVerticalDrag: () => verticalDrags++,
+      );
+      final center = tester.getCenter(find.byType(FlowVideoGestures));
+      final picture = find.byKey(_zoomPictureKey);
+      final fittedFrame = tester.getRect(picture);
+
+      final left = await tester.startGesture(center - const Offset(40, 0));
+      final right = await tester.startGesture(center + const Offset(40, 0));
+      await left.moveBy(const Offset(-25, 0));
+      await right.moveBy(const Offset(25, 0));
+      await left.up();
+      await right.up();
+      await tester.pump();
+      expect(zoom.scale, greaterThan(1));
+      expect(zoom.scale * _zoomSource.height, lessThan(_zoomViewport.height));
+
+      // With both fingers down, pan must win over the nested vertical drag.
+      final panLeft = await tester.startGesture(center - const Offset(75, 0));
+      final panRight = await tester.startGesture(center + const Offset(75, 0));
+      await panRight.moveBy(const Offset(0, 42));
+      await panLeft.moveBy(const Offset(0, 42));
+      await panRight.moveBy(const Offset(42, 0));
+      await panLeft.moveBy(const Offset(42, 0));
+      await tester.pump();
+      expect(zoom.offset.dx, greaterThan(0));
+      expect(zoom.offset.dy, 0);
+      expect(verticalDrags, 0);
+      await panLeft.up();
+      final zoomAtLift = (zoom.scale, zoom.offset);
+      await panRight.moveBy(const Offset(90, 90));
+      await panRight.up();
+      expect((zoom.scale, zoom.offset), zoomAtLift);
+
+      final outerLeft = await tester.startGesture(center - const Offset(15, 0));
+      final outerRight = await tester.startGesture(
+        center + const Offset(15, 0),
+      );
+      await outerLeft.moveBy(const Offset(-500, 180));
+      await outerRight.moveBy(const Offset(1100, 180));
+      await tester.pump();
+      expect(zoom.scale, 6);
+      final expandedFrame = tester.getRect(picture);
+      final viewport = Rect.fromCenter(
+        center: center,
+        width: _zoomViewport.width,
+        height: _zoomViewport.height,
+      );
+      expect(expandedFrame.left, lessThanOrEqualTo(viewport.left + .01));
+      expect(expandedFrame.right, greaterThanOrEqualTo(viewport.right - .01));
+      expect(expandedFrame.top, lessThanOrEqualTo(viewport.top + .01));
+      expect(expandedFrame.bottom, greaterThanOrEqualTo(viewport.bottom - .01));
+      expect(seeks, isEmpty);
+      expect(verticalDrags, 0);
+
+      zoom.reset();
+      await outerLeft.moveBy(const Offset(60, 0));
+      await outerLeft.up();
+      await outerRight.up();
+      await tester.pump();
+      expect(zoom.scale, 1);
+      expect(zoom.offset, Offset.zero);
+      expect(tester.getRect(picture), fittedFrame);
+
+      final swipe = await tester.startGesture(center);
+      await swipe.moveBy(const Offset(0, 42));
+      await swipe.moveBy(const Offset(0, 20));
+      await swipe.up();
+      expect(verticalDrags, 1);
+      expect(zoom.scale, 1);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
   testWidgets('a quick Flow center-button tap pauses without a tap delay',
       (tester) async {
     final videoPlayer = await createPlayingVideo(tester);
@@ -904,6 +1107,104 @@ void main() {
     expect(videoPlayer.speedChanges, [2]);
     await hold.up();
     expect(videoPlayer.speedChanges, [2, 1.37]);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('fullscreen chapter controls and gestures seek while paused',
+      (tester) async {
+    final videoPlayer = await createPlayingVideo(
+      tester,
+      source: const Video(videoId: 'chapters', lengthSeconds: 90, chapters: [
+        VideoChapter(title: 'Intro', start: Duration(seconds: 10)),
+        VideoChapter(title: 'Setup', start: Duration(seconds: 30)),
+        VideoChapter(title: 'Results', start: Duration(seconds: 60)),
+      ]),
+      playing: false,
+    );
+    player.setFullScreen(FullScreenState.fullScreen);
+    await tester.pumpWidget(hostControls(SizedBox(
+      width: 540,
+      height: 320,
+      child: PlayerControls(mediaPlayerCubit: videoPlayer),
+    )));
+    await tester.pumpAndSettle();
+
+    final bounds = tester.getRect(find.byType(PlayerControls));
+    Future<void> doubleTapWithTwoFingers(double x) async {
+      for (var tap = 0; tap < 2; tap++) {
+        final first = await tester
+            .startGesture(bounds.topLeft + Offset(x, bounds.height / 3));
+        final second = await tester.startGesture(
+            bounds.topLeft + Offset(x + 30, bounds.height / 3 + 16));
+        await first.up();
+        await second.up();
+        await tester.pump(const Duration(milliseconds: 60));
+      }
+      await tester.pump(kDoubleTapTimeout);
+    }
+
+    Finder chapterButton(String label) => find.byWidgetPredicate(
+        (widget) => widget is IconButton && widget.tooltip == label);
+    final previous = chapterButton('Previous chapter');
+    final next = chapterButton('Next chapter');
+    expect(tester.widget<IconButton>(previous).onPressed, isNull);
+    await doubleTapWithTwoFingers(70);
+    expect(player.state.position, Duration.zero);
+    expect(player.state.mediaCommand?.type, MediaCommandType.enterFullScreen);
+    await tester.tap(next);
+    await tester.pump();
+    expect(player.state.position, const Duration(seconds: 10));
+    expect(player.state.mediaCommand?.type, MediaCommandType.seek);
+
+    await doubleTapWithTwoFingers(410);
+    expect(player.state.position, const Duration(seconds: 30));
+    await doubleTapWithTwoFingers(70);
+    expect(player.state.position, const Duration(seconds: 10));
+
+    player.seek(const Duration(seconds: 34));
+    await tester.pump();
+    await tester.tap(previous);
+    await tester.pump();
+    expect(player.state.position, const Duration(seconds: 30));
+
+    await tester.tap(next);
+    await tester.pump();
+    final lastSeek = player.state.mediaCommand;
+    expect(player.state.position, const Duration(seconds: 60));
+    expect(tester.widget<IconButton>(next).onPressed, isNull);
+    await doubleTapWithTwoFingers(410);
+    expect(player.state.mediaCommand, same(lastSeek));
+    expect(player.state.isPlaying, isFalse);
+    expect(videoPlayer.speedChanges, isEmpty);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('chapter actions require fullscreen and loaded chapters',
+      (tester) async {
+    final videoPlayer = await createPlayingVideo(tester);
+    player.setFullScreen(FullScreenState.fullScreen);
+    await tester.pumpWidget(hostControls(SizedBox(
+      width: 540,
+      height: 320,
+      child: PlayerControls(mediaPlayerCubit: videoPlayer),
+    )));
+    final chapterAction = find.byTooltip('Next chapter');
+    expect(chapterAction, findsNothing);
+    expect(player.skipFullscreenChapter(forward: true), isFalse);
+
+    player.setFullScreen(FullScreenState.notFullScreen);
+    player.replaceWithChapteredVideo();
+    await tester.pump();
+    expect(chapterAction, findsNothing);
+    expect(player.skipFullscreenChapter(forward: true), isFalse);
+
+    player.setFullScreen(FullScreenState.fullScreen);
+    await tester.pumpAndSettle();
+    expect(player.fullscreenChapterTargets.next?.start,
+        const Duration(seconds: 30));
+    expect(chapterAction, findsOneWidget);
+    await tester.tap(chapterAction);
+    expect(player.state.position, const Duration(seconds: 30));
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
@@ -964,6 +1265,116 @@ void main() {
       await tester.pumpWidget(const SizedBox.shrink());
     });
   }
+
+  testWidgets('fullscreen touch lock shields playback and has a focused Unlock',
+      (tester) async {
+    final video = await createPlayingVideo(tester, lengthSeconds: 180);
+    const position = Duration(seconds: 60);
+    player.seek(position);
+    player.setFullScreen(FullScreenState.fullScreen);
+    var underlyingTaps = 0;
+    await tester.pumpWidget(hostControls(Stack(
+      fit: StackFit.expand,
+      children: [
+        GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () => underlyingTaps++,
+        ),
+        PlayerControls(mediaPlayerCubit: video),
+      ],
+    )));
+    await tester.pump();
+
+    final lock = find.byTooltip('Lock touch controls');
+    final unlock = find.bySemanticsLabel('Unlock touch controls');
+    final bounds = tester.getRect(find.byType(PlayerControls));
+    final edge = Offset(bounds.width * .85, bounds.height * .35);
+    final seekStart = Offset(bounds.width * .3, bounds.height * .35);
+    final timeline = tester.getCenter(find.byType(Slider));
+    final baseline = player.state.mediaCommand;
+    await tester.tap(lock);
+    await tester.pumpAndSettle();
+
+    expect(lock, findsNothing);
+    expect(find.byType(Slider), findsNothing);
+    expect(find.byType(FlowVideoGestures), findsNothing);
+    expect(find.byType(FullscreenVideoZoomGestures), findsNothing);
+    expect(
+      tester.getSemantics(unlock),
+      containsSemantics(isButton: true, isFocused: true, isLiveRegion: true),
+    );
+
+    await tester.tapAt(bounds.center);
+    await tester.tapAt(edge);
+    await tester.pump(const Duration(milliseconds: 50));
+    await tester.tapAt(edge);
+    await tester.tapAt(timeline);
+    final swipe = await tester.startGesture(seekStart);
+    await swipe.moveBy(const Offset(30, 0));
+    await swipe.moveBy(const Offset(140, 0));
+    await tester.pump();
+    expect(find.byType(SeekPreview), findsNothing);
+    await swipe.up();
+    await tester.longPressAt(edge);
+    await tester.pump(const Duration(seconds: 4));
+
+    expect(player.state.position, position);
+    expect(player.state.isPlaying, isTrue);
+    expect(player.state.mediaCommand, baseline);
+    expect(video.speedChanges, isEmpty);
+    expect(underlyingTaps, 0);
+    expect(unlock, findsOneWidget);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+    expect(unlock, findsNothing);
+    expect(lock, findsOneWidget);
+
+    final forward = Duration(seconds: player.state.forwardStep);
+    await tester.tapAt(edge);
+    await tester.pump(const Duration(milliseconds: 50));
+    await tester.tapAt(edge);
+    await tester.pump();
+    expect(player.state.position, position + forward);
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('touch lock clears when leaving fullscreen and re-entering',
+      (tester) async {
+    final video = await createPlayingVideo(tester);
+    await tester.pumpWidget(hostControls(
+      PlayerControls(mediaPlayerCubit: video),
+    ));
+    final lock = find.byTooltip('Lock touch controls');
+    final unlock = find.text('Unlock touch controls');
+    expect(lock, findsNothing);
+
+    player.setFullScreen(FullScreenState.fullScreen);
+    await tester.pumpAndSettle();
+    await tester.tap(lock);
+    await tester.pumpAndSettle();
+    expect(unlock, findsOneWidget);
+
+    player.setFullScreen(FullScreenState.notFullScreen);
+    await tester.pumpAndSettle();
+    expect(unlock, findsNothing);
+    expect(lock, findsNothing);
+
+    player.setFullScreen(FullScreenState.fullScreen);
+    await tester.pumpAndSettle();
+    await tester.tap(lock);
+    await tester.pumpAndSettle();
+    expect(unlock, findsOneWidget);
+
+    // An exit and re-entry can arrive before the controls build again.
+    player.setFullScreen(FullScreenState.notFullScreen);
+    player.setFullScreen(FullScreenState.fullScreen);
+    await tester.pumpAndSettle();
+    expect(unlock, findsNothing);
+    expect(lock, findsOneWidget);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
 
   testWidgets('video options apply a new display mode during playback',
       (tester) async {

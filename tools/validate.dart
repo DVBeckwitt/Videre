@@ -127,6 +127,8 @@ const strictValidationTargets = [
   './test/player/video_quality_test.dart',
   './test/player/seek_preview_test.dart',
   './test/player/player_controls_test.dart',
+  './test/player/flow_chapter_gesture_test.dart',
+  './test/player/tv_chapter_controls_test.dart',
   './test/player/mini_player_position_test.dart',
   './test/videos/models/storyboard_test.dart',
   './test/videos/models/video_transcript_test.dart',
