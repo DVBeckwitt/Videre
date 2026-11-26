@@ -77,6 +77,10 @@ List<SettingsSearchEntry> musicSettingsSearchEntries(
           locals.musicRetryExhaustionSkip,
           locals.musicRetryExhaustionStay
         ]),
+    setting('music-remember-queue-after-restart-setting',
+        locals.musicRememberQueueAfterRestartSetting,
+        description: locals.musicRememberQueueAfterRestartHelp,
+        keywords: [locals.settingsSearchRememberQueueKeywords]),
     if (android) ...[
       setting('music-task-removal-setting', locals.musicTaskRemovalSetting,
           description: locals.musicTaskRemovalKeepPlayingHelp,

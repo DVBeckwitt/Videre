@@ -342,6 +342,13 @@ class _MusicRequests {
     return jsonEncode(json);
   }
 
+  static String? removeFromSession(String session) {
+    final json = jsonDecode(session) as Map<String, dynamic>;
+    if (!json.containsKey(_musicRequestsPayload)) return null;
+    json.remove(_musicRequestsPayload);
+    return jsonEncode(json);
+  }
+
   void restore(PlaybackSession? activeSession) {
     final database = player._profileDatabase;
     if (identical(_loadedProfile, database)) return;
@@ -350,6 +357,10 @@ class _MusicRequests {
     _collection = null;
     _activeId = null;
     _pending.clear();
+    if (!player._rememberMusicQueue) {
+      revision.value++;
+      return;
+    }
     PlaybackSession? decode(Object? value) {
       final song = value is String ? PlaybackSession.decode(value) : null;
       return song != null &&

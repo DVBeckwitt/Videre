@@ -81,8 +81,9 @@ class MusicProviderSettings extends StatelessWidget {
           settings.state.musicResumeOnBluetoothReconnect,
           settings.state.musicSkipAfterRetryExhaustion,
         ));
-    final (taskRemoval, audioOffload) =
+    final (rememberQueueAfterRestart, taskRemoval, audioOffload) =
         context.select((SettingsCubit settings) => (
+              settings.state.musicRememberQueueAfterRestart,
               settings.state.musicTaskRemoval,
               settings.state.musicAudioOffload,
             ));
@@ -316,6 +317,22 @@ class MusicProviderSettings extends StatelessWidget {
             : locals.musicRetryExhaustionStay,
         optionKey: (skip) => ValueKey('music-retry-exhaustion-$skip'),
         save: settings.setMusicSkipAfterRetryExhaustion,
+      ),
+      Shortcuts(
+        shortcuts: {
+          for (final key in selectKeys)
+            SingleActivator(key): const ActivateIntent()
+        },
+        child: SwitchListTile(
+          key: const ValueKey('music-remember-queue-after-restart-setting'),
+          focusNode: _focusFor('music-remember-queue-after-restart-setting'),
+          secondary: const Icon(Icons.queue_music),
+          title: Text(locals.musicRememberQueueAfterRestartSetting),
+          subtitle: Text(locals.musicRememberQueueAfterRestartHelp),
+          value: rememberQueueAfterRestart,
+          onChanged:
+              onPreferenceChanged(settings.setMusicRememberQueueAfterRestart),
+        ),
       ),
       if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) ...[
         _MusicChoice<MusicTaskRemoval>(

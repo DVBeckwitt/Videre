@@ -41,6 +41,7 @@ import '../../recommendations/recommendation_service.dart';
 import '../../utils.dart';
 import '../../utils/motion.dart';
 import '../../utils/backup.dart';
+import '../../utils/interfaces/db.dart';
 import '../../utils/models/country.dart';
 import '../models/db/settings.dart';
 import '../models/theme_palette.dart';
@@ -483,7 +484,8 @@ class SettingsCubit extends Cubit<SettingsState> {
       _saveSettingInOrder(
           subtitleSizeSettingName, () => update(state.subtitleSize).toString());
 
-  Future<void> _saveSettingInOrder(String name, String Function() nextValue) {
+  Future<void> _saveSettingInOrder(String name, String Function() nextValue,
+      {Future<void> Function(IDbClient, SettingsValue)? persist}) {
     final owner = db.forProfile(db.profileId);
     final profile = owner.profileId;
     final session = appCubit.state.sessionRevision;
@@ -495,7 +497,11 @@ class SettingsCubit extends Cubit<SettingsState> {
     Future<void> save() async {
       if (!isCurrentSession()) return;
       final setting = SettingsValue(name, nextValue());
-      await owner.saveSetting(setting);
+      if (persist == null) {
+        await owner.saveSetting(setting);
+      } else {
+        await persist(owner, setting);
+      }
       if (isCurrentSession()) {
         emit(state
             .copyWith(settings: {...state.settings, setting.name: setting}));
@@ -591,6 +597,11 @@ class SettingsCubit extends Cubit<SettingsState> {
   Future<void> setMusicSkipAfterRetryExhaustion(bool enabled) =>
       _saveSettingInOrder(
           musicSkipAfterRetryExhaustionSettingName, enabled.toString);
+
+  Future<void> setMusicRememberQueueAfterRestart(bool enabled) =>
+      _saveSettingInOrder(
+          musicRememberQueueAfterRestartSettingName, enabled.toString,
+          persist: PlayerCubit.saveMusicQueueRestartPreference);
 
   Future<void> setMusicTaskRemoval(MusicTaskRemoval behavior) =>
       _saveSettingInOrder(musicTaskRemovalSettingName, () => behavior.name);
@@ -1011,6 +1022,9 @@ sealed class SettingsState with _$SettingsState {
 
   bool get musicSkipAfterRetryExhaustion =>
       _get(musicSkipAfterRetryExhaustionSettingName)?.value == 'true';
+
+  bool get musicRememberQueueAfterRestart =>
+      _get(musicRememberQueueAfterRestartSettingName)?.value != 'false';
 
   MusicTaskRemoval get musicTaskRemoval =>
       MusicTaskRemoval.fromStorage(_get(musicTaskRemovalSettingName)?.value) ??

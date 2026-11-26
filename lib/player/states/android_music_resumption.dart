@@ -132,7 +132,7 @@ extension AndroidMusicResumptionPlayer on PlayerCubit {
     _androidRemoteOccurrence = null;
     cancelPendingAndroidMusicResumption();
     final database = _profileDatabase;
-    await _queueSessionWrite(() async {
+    await PlayerCubit._queueSessionWrite(() async {
       final value = database.getSettings(playbackSessionSetting)?.value;
       final stored = PlaybackSession.decode(value);
       if (stored?.androidResumption != null) {
@@ -146,6 +146,7 @@ extension AndroidMusicResumptionPlayer on PlayerCubit {
 
   PlaybackSession? get _androidResumeCheckpoint {
     if (!_canResumeFromAndroid ||
+        !_rememberMusicQueue ||
         _androidResumeSuppressed ||
         state.isClosing ||
         activePodcast != null) {
@@ -292,6 +293,7 @@ extension AndroidMusicResumptionPlayer on PlayerCubit {
         scope != null &&
         androidAutoSession == scope &&
         revision == _androidResumeRevision &&
+        _rememberMusicQueue &&
         activePodcast == null;
     try {
       if (!await enterForeground() ||

@@ -156,6 +156,34 @@ void main() {
     expect(hasPrimaryFocus(tester, trackChip), isTrue);
   }, variant: TargetPlatformVariant.only(TargetPlatform.android));
 
+  testWidgets('phone finds and changes the Music queue restart preference',
+      (tester) async {
+    const settingId = 'music-remember-queue-after-restart-setting';
+    final restoreResult =
+        find.byKey(const ValueKey('settings-search-result-$settingId'));
+    final restoreSwitch = find.byKey(const ValueKey(settingId));
+
+    await mountSettings(tester);
+    await tester.tap(entry);
+    await tester.pumpAndSettle();
+    await tester.enterText(input, 'restore queue');
+    await tester.pumpAndSettle();
+    await tester.tap(restoreResult);
+    await tester.pumpAndSettle();
+    expect(restoreSwitch.hitTestable(), findsOneWidget);
+    expect(hasPrimaryFocus(tester, restoreSwitch), isTrue);
+    expect(tester.widget<SwitchListTile>(restoreSwitch).value, isTrue);
+
+    await tester.runAsync(() async {
+      final saved = settings.stream
+          .firstWhere((state) => !state.musicRememberQueueAfterRestart);
+      await tester.tap(restoreSwitch);
+      await saved.timeout(const Duration(seconds: 5));
+    });
+    await tester.pumpAndSettle();
+    expect(tester.widget<SwitchListTile>(restoreSwitch).value, isFalse);
+  });
+
   testWidgets('TV selects ReplayGain and Back restores result focus',
       (tester) async {
     await mountSettings(tester, television: true);

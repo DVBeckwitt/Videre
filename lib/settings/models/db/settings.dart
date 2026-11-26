@@ -87,6 +87,8 @@ const musicResumeOnBluetoothReconnectSettingName =
     'music-resume-on-bluetooth-reconnect';
 const musicSkipAfterRetryExhaustionSettingName =
     'music-skip-after-retry-exhaustion';
+const musicRememberQueueAfterRestartSettingName =
+    'music-remember-queue-after-restart';
 const musicTaskRemovalSettingName = 'music-task-removal';
 const musicAudioOffloadSettingName = 'music-audio-offload';
 const musicWiredHeadsetAutoplaySettingName = 'music-wired-headset-autoplay';

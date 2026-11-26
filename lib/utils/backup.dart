@@ -458,6 +458,7 @@ class UserBackup {
       musicAutoReconnectSettingName,
       musicResumeOnBluetoothReconnectSettingName,
       musicSkipAfterRetryExhaustionSettingName,
+      musicRememberQueueAfterRestartSettingName,
       musicScreenPrivacySettingName,
       preserveAlbumTransitionsSettingName,
       musicWiredHeadsetAutoplaySettingName,

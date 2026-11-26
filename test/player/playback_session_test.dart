@@ -28,6 +28,7 @@ import 'package:clipious/music/services/music_listening_history.dart';
 import 'package:clipious/music/services/cached_music.dart';
 import 'package:clipious/player/audio_playback_sources.dart';
 import 'package:clipious/player/models/playback_session.dart';
+import 'package:clipious/player/models/named_music_queue.dart';
 import 'package:clipious/player/models/playback_queue.dart';
 import 'package:clipious/player/models/media_command.dart';
 import 'package:clipious/player/models/media_event.dart';
@@ -669,6 +670,126 @@ void main() {
       if (!player.isClosed) await player.close();
       await settings.close();
       await db.close();
+    });
+
+    test('legacy Music restores silently until the profile opts out', () async {
+      const legacy = PlaybackSession(
+          videos: [
+            Video(
+                videoId: 'song',
+                musicMetadata: MusicMetadata(title: 'Song', artist: 'Artist')),
+            Video(videoId: 'next'),
+          ],
+          currentId: 'song',
+          seconds: 28,
+          next: ['next'],
+          audio: true);
+      await db
+          .saveSetting(SettingsValue(playbackSessionSetting, legacy.encode()));
+      expect(settings.state.musicRememberQueueAfterRestart, isTrue);
+      player.restoreSession();
+      expect(player.state.startAt, const Duration(seconds: 28));
+      expect(player.state.playQueue, ['next']);
+      expect(player.state.isHidden, isTrue);
+      expect(player.state.hasVideo, isFalse);
+
+      await settings.setMusicRememberQueueAfterRestart(false);
+      expect(settings.state.musicRememberQueueAfterRestart, isFalse);
+      expect(player.state.playQueue, isEmpty);
+      await player.close();
+      player = _SessionPlayer(PlayerState.init(null), settings);
+      player.restoreSession();
+      expect(player.savedSession, isNull);
+      expect(player.state.videos, isEmpty);
+      await settings.setMusicRememberQueueAfterRestart(true);
+      player.restoreSession();
+      expect(player.savedSession, isNull);
+      expect(player.state.videos, isEmpty);
+    });
+
+    test('opting out keeps active playback and the named queue checkpoint',
+        () async {
+      const songs = [
+        Video(
+            videoId: 'song',
+            lengthSeconds: 180,
+            musicMetadata: MusicMetadata(title: 'Song', artist: 'Artist')),
+        Video(
+            videoId: 'next',
+            musicMetadata: MusicMetadata(title: 'Next', artist: 'Artist')),
+      ];
+      player.seedState(PlayerState.init(songs).copyWith(
+          currentlyPlaying: songs.first,
+          isAudio: true,
+          isPlaying: true,
+          isHidden: false));
+      await player.onProgress(const Duration(seconds: 25));
+      await waitForSavedPosition(25, videoId: 'song');
+
+      await settings.setMusicRememberQueueAfterRestart(false);
+      expect(player.state.isPlaying, isTrue);
+      final named = (await player.saveNamedMusicQueue('Evening'))!;
+      await player.onProgress(const Duration(seconds: 37));
+      player.didChangeAppLifecycleState(AppLifecycleState.paused);
+      expect(player.state.currentlyPlaying, songs.first);
+      expect(player.state.isPlaying, isTrue);
+      await player.close();
+
+      player = _SessionPlayer(PlayerState.init(null), settings);
+      player.restoreSession();
+      expect(player.savedSession, isNull);
+      expect(player.state.videos, isEmpty);
+      expect(player.namedMusicQueues.single.snapshot.position,
+          const Duration(seconds: 37));
+      player.audioSession = await AudioSession.instance;
+      app_main.mediaHandler = MediaHandler(player);
+      expect(await player.resumeNamedMusicQueue(named.id),
+          NamedMusicQueueResumeResult.restored);
+      expect(player.state.currentQueueId, 'song');
+      expect(player.state.position, const Duration(seconds: 37));
+      await settings.setMusicRememberQueueAfterRestart(true);
+      expect(player.savedSession?.currentId, 'song');
+      expect(player.savedSession?.position, const Duration(seconds: 37));
+    });
+
+    test(
+        'queue restart preference follows the profile and preserves Watch audio',
+        () async {
+      final database = db as SembastSqfDb;
+      final other = await database.createProfile('Second listener');
+      const watch = PlaybackSession(
+          videos: [Video(videoId: 'watch')],
+          currentId: 'watch',
+          seconds: 19,
+          audio: true);
+      const music = PlaybackSession(videos: [
+        Video(
+            videoId: 'music',
+            musicMetadata: MusicMetadata(title: 'Song', artist: 'Artist')),
+      ], currentId: 'music', seconds: 32, audio: true);
+      await database
+          .saveSetting(SettingsValue(playbackSessionSetting, watch.encode()));
+      await database
+          .forProfile(other.id)
+          .saveSetting(SettingsValue(playbackSessionSetting, music.encode()));
+      await settings.setMusicRememberQueueAfterRestart(false);
+
+      player.restoreSession();
+      expect(player.state.videos.single.videoId, 'watch');
+      expect(player.state.startAt, const Duration(seconds: 19));
+      await player.prepareForProfileSwitch();
+      await database.useProfile(other.id);
+      await player.reloadForProfile();
+      expect(SettingsState.init().musicRememberQueueAfterRestart, isTrue);
+      expect(player.state.videos.single.videoId, 'music');
+      expect(player.state.startAt, const Duration(seconds: 32));
+      expect(player.state.hasVideo, isFalse);
+
+      await player.prepareForProfileSwitch();
+      await database.useProfile('default');
+      await player.reloadForProfile();
+      expect(SettingsState.init().musicRememberQueueAfterRestart, isFalse);
+      expect(player.state.videos.single.videoId, 'watch');
     });
 
     test('SponsorBlock loads default categories and respects saved choices',
@@ -3769,12 +3890,19 @@ void main() {
       });
     }
 
-    for (final paused in [false, true]) {
-      test('keep playing on task removal respects a pending Pause: $paused',
-          () async {
+    for (final (paused, rememberQueue) in [
+      (false, true),
+      (true, true),
+      (false, false),
+      (true, false),
+    ]) {
+      test(
+          'keep playing on task removal respects Pause '
+          '(paused: $paused, remember queue: $rememberQueue)', () async {
         debugDefaultTargetPlatformOverride = TargetPlatform.android;
         addTearDown(() => debugDefaultTargetPlatformOverride = null);
         await settings.setMusicTaskRemoval(MusicTaskRemoval.keepPlaying);
+        await settings.setMusicRememberQueueAfterRestart(rememberQueue);
         const song = Video(
           videoId: 'first',
           lengthSeconds: 120,
@@ -3799,8 +3927,8 @@ void main() {
 
         await handler.onTaskRemoved();
 
-        expect(player.savedSession?.currentId, 'first');
-        expect(player.savedSession?.seconds, 37);
+        expect(player.savedSession?.currentId, rememberQueue ? 'first' : null);
+        expect(player.savedSession?.seconds, rememberQueue ? 37 : null);
         expect(player.state.hasVideo, !paused);
         expect(player.requestedPlaying, !paused);
         expect(handler.mediaItem.value, paused ? isNull : same(item));
