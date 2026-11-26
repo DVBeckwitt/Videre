@@ -233,8 +233,9 @@ class RecommendationService extends ChangeNotifier {
 
   List<T> _eligible<T>(RecommendationDomain domain, Iterable<T> values,
       RecommendationCandidate Function(T) metadata, Video Function(T) toVideo,
-      {bool includeCommunityHidden = false}) {
-    if (!_current) return const [];
+      {bool includeCommunityHidden = false,
+      int limit = recommendationMaximumCandidates}) {
+    if (!_current || limit <= 0) return const [];
     final snapshot = _read(domain);
     late final filters = _database.getAllFilters();
     // MusicBrain can escalate repeated dislikes without a host-side block.
@@ -258,7 +259,7 @@ class RecommendationService extends ChangeNotifier {
         continue;
       }
       result.add(value);
-      if (result.length == recommendationMaximumCandidates) break;
+      if (result.length == limit) break;
     }
     return result;
   }
@@ -266,10 +267,11 @@ class RecommendationService extends ChangeNotifier {
   /// Admission is useful even when native ranking is unavailable. Callers can
   /// show an honestly labeled unranked shelf without restoring excluded items.
   List<Video> eligibleVideos(Iterable<Video> videos,
-          {bool includeCommunityHidden = false}) =>
+          {bool includeCommunityHidden = false,
+          int limit = recommendationMaximumCandidates}) =>
       _eligible(RecommendationDomain.video, videos,
           RecommendationCandidate.video, (video) => video,
-          includeCommunityHidden: includeCommunityHidden);
+          includeCommunityHidden: includeCommunityHidden, limit: limit);
 
   List<MusicTrack> eligibleMusic(Iterable<MusicTrack> tracks,
           {bool includeCommunityHidden = false}) =>

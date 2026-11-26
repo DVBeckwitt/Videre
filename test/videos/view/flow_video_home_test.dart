@@ -149,10 +149,11 @@ void main() {
   }
 
   Future<void> remember(String id, String title, double progress,
-      {bool music = false}) async {
+      {bool music = false, String? authorId}) async {
     await db.recordPlaybackHistory(
         music ? PlaybackHistoryOrigin.music : PlaybackHistoryOrigin.video,
         HistoryVideoCache(id, title, 'Creator', '',
+            authorId: authorId,
             lengthSeconds: 300,
             musicMetadata: music
                 ? MusicMetadata(title: title, artist: 'Artist', thumbnails: [])
@@ -1033,6 +1034,119 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
+  testWidgets('late subscription videos stay below visible For You cards',
+      (tester) async {
+    const channelId = 'UCaaaaaaaaaaaaaaaaaaaaaa';
+    const lateId = 'followed001';
+    final localIds = List.generate(
+        12, (index) => 'local${index.toString().padLeft(6, '0')}');
+    await tester.runAsync(() async {
+      await connect();
+      await db.addOfflineSubscription(const OfflineSubscription(
+          channelId: channelId, channelName: 'Existing follow'));
+      await settings.setHomeTabsLayout(
+          HomeTabsLayout(enabledOrder: [HomeTabsLayout.forYou]));
+      for (final id in localIds) {
+        await remember(id, 'Local video $id', 0);
+      }
+    });
+    final uploads = Completer<List<Video>>();
+    final ranking = Completer<void>();
+    final finishRanking = Completer<void>();
+    addTearDown(() {
+      if (!uploads.isCompleted) uploads.complete(const []);
+      if (!finishRanking.isCompleted) finishRanking.complete();
+    });
+    api.discoveryResults = (_) => uploads.future;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+      final candidates = (call.arguments as Map)['candidates'] as List;
+      final ids = candidates.map((item) => (item as Map)['id']).toList();
+      if (ids.remove(lateId)) {
+        ids.insert(0, lateId);
+        if (!ranking.isCompleted) ranking.complete();
+        await finishRanking.future;
+      }
+      return {
+        'state': <String, Object?>{},
+        'ranked': [
+          for (final id in ids) {'id': id, 'score': 1.0, 'reason': 'Local'}
+        ]
+      };
+    });
+
+    await show(tester, disableAnimations: true);
+    expect(api.requests, 1, reason: 'The subscription upload is pending.');
+    final feed = find.byKey(const PageStorageKey('flow-video-home'));
+    final scrollable =
+        find.descendant(of: feed, matching: find.byType(Scrollable));
+    final controller = tester.widget<CustomScrollView>(feed).controller!;
+    Finder card(String id) => find.byKey(ValueKey('flow-video-$id'));
+
+    await tester.drag(feed, const Offset(0, -630));
+    await tester.pumpAndSettle();
+    final offset = controller.offset;
+    expect(offset, greaterThan(0));
+    final viewport = tester.getRect(feed);
+    Map<String, Rect> visibleCardBounds() {
+      final bounds = <String, Rect>{};
+      for (final id in localIds) {
+        final finder = card(id);
+        if (finder.evaluate().isEmpty) continue;
+        final rect = tester.getRect(finder);
+        if (rect.overlaps(viewport)) bounds[id] = rect;
+      }
+      return bounds;
+    }
+
+    final before = visibleCardBounds();
+    expect(before.length, greaterThanOrEqualTo(2));
+    expect(before.length, lessThan(localIds.length));
+
+    uploads.complete(const [
+      Video(
+          videoId: lateId,
+          title: 'Late subscription video',
+          authorId: channelId),
+    ]);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 16));
+    expect(ranking.isCompleted, isTrue);
+    final whileRanking = visibleCardBounds();
+    final pendingOffset = controller.offset;
+
+    finishRanking.complete();
+    await tester.pumpAndSettle();
+    expect(visibleCardBounds(), before,
+        reason: 'An arriving upload must not move any visible cards.');
+    expect(controller.offset, offset);
+    expect(whileRanking, before,
+        reason: 'The background rank must not shift the feed while pending.');
+    expect(pendingOffset, offset);
+
+    final lateCard = card(lateId);
+    if (lateCard.evaluate().isNotEmpty) {
+      expect(
+          tester.getRect(lateCard).top, greaterThanOrEqualTo(viewport.bottom));
+    }
+    await tester.scrollUntilVisible(lateCard, 180, scrollable: scrollable);
+    await tester.pumpAndSettle();
+    expect(controller.offset, greaterThan(offset));
+    expect(tester.getRect(lateCard).overlaps(viewport), isTrue);
+
+    controller.jumpTo(0);
+    await tester.pumpAndSettle();
+    final refresh =
+        tester.widget<RefreshIndicator>(find.byType(RefreshIndicator));
+    final refreshed = refresh.onRefresh();
+    await tester.pumpAndSettle();
+    await refreshed;
+    expect(lateCard, findsOneWidget);
+    expect(tester.getTopLeft(lateCard).dy, viewport.top);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
   testWidgets('missing native engine shows unranked local items honestly',
       (tester) async {
     await tester.runAsync(() => remember('video000001', 'Local video', 0));
@@ -1233,51 +1347,72 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
-  testWidgets('local exclusions hide a card before pending reranking completes',
-      (tester) async {
-    await tester.runAsync(() async {
-      await remember('video000001', 'Exclude this video', 0);
-      await remember('video000002', 'Keep this video', 0);
+  for (final feedback in [
+    RecommendationFeedback.notInterested,
+    RecommendationFeedback.block,
+  ]) {
+    testWidgets('${feedback.name} excludes cards before reranking completes',
+        (tester) async {
+      const authorId = 'UCaaaaaaaaaaaaaaaaaaaaaa';
+      const excluded = 'Exclude this video';
+      const kept = 'Keep this video';
+      const sameCreator = 'Another video from this creator';
+      await tester.runAsync(() async {
+        await remember('video000001', excluded, 0, authorId: authorId);
+        await remember('video000002', kept, 0);
+        await remember('video000003', sameCreator, 0, authorId: authorId);
+      });
+      await show(tester, television: true);
+      expect(find.text(excluded), findsOneWidget);
+      expect(find.text(kept), findsOneWidget);
+      expect(find.text(sameCreator), findsOneWidget);
+      final pending = Completer<Map<String, Object?>>();
+      addTearDown(() {
+        if (!pending.isCompleted) {
+          pending
+              .complete({'state': <String, Object?>{}, 'ranked': <Object?>[]});
+        }
+      });
+      var waiting = false;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (call) async {
+        final events = (call.arguments as Map)['events'] as List;
+        if (events.isNotEmpty) {
+          return {'state': <String, Object?>{}, 'ranked': <Object?>[]};
+        }
+        waiting = true;
+        return pending.future;
+      });
+      await tester.runAsync(() =>
+          RecommendationService.forProfile(db, db.profileId).feedback(
+              const Video(
+                  videoId: 'video000001', title: excluded, authorId: authorId),
+              RecommendationDomain.video,
+              feedback));
+      await tester.pump();
+      await tester.pump();
+      expect(waiting, isTrue);
+      expect(find.text(excluded), findsNothing);
+      expect(find.text(kept), findsOneWidget);
+      expect(
+          find.text(sameCreator),
+          feedback == RecommendationFeedback.block
+              ? findsNothing
+              : findsOneWidget);
+      pending.complete({
+        'state': <String, Object?>{},
+        'ranked': [
+          {'id': 'video000002', 'score': 1.0, 'reason': 'Local'},
+        ],
+      });
+      await tester.pump();
+      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+      await tester.pumpAndSettle();
+      expect(find.text(sameCreator), findsNothing,
+          reason: 'The native rank can suppress the rest of the creator.');
+      expect(find.text(kept), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
     });
-    await show(tester, television: true);
-    expect(find.text('Exclude this video'), findsOneWidget);
-    expect(find.text('Keep this video'), findsOneWidget);
-    final pending = Completer<Map<String, Object?>>();
-    addTearDown(() {
-      if (!pending.isCompleted) {
-        pending.complete({'state': <String, Object?>{}, 'ranked': <Object?>[]});
-      }
-    });
-    var waiting = false;
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(channel, (call) async {
-      final events = (call.arguments as Map)['events'] as List;
-      if (events.isNotEmpty) {
-        return {'state': <String, Object?>{}, 'ranked': <Object?>[]};
-      }
-      waiting = true;
-      return pending.future;
-    });
-    await tester.runAsync(() =>
-        RecommendationService.forProfile(db, db.profileId).feedback(
-            const Video(videoId: 'video000001', title: 'Exclude this video'),
-            RecommendationDomain.video,
-            RecommendationFeedback.notInterested));
-    await tester.pump();
-    await tester.pump();
-    expect(waiting, isTrue);
-    expect(find.text('Exclude this video'), findsNothing);
-    expect(find.text('Keep this video'), findsOneWidget);
-    pending.complete({
-      'state': <String, Object?>{},
-      'ranked': [
-        {'id': 'video000002', 'score': 1.0, 'reason': 'Local'}
-      ],
-    });
-    await tester.pump();
-    await tester.runAsync(() => Future<void>.delayed(Duration.zero));
-    await tester.pumpAndSettle();
-    expect(tester.takeException(), isNull);
-    await tester.pumpWidget(const SizedBox.shrink());
-  });
+  }
 }
