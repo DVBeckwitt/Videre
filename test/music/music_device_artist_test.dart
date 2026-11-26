@@ -4,6 +4,7 @@ import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' as app_globals;
 import 'package:clipious/music/models/local_music_artist.dart';
+import 'package:clipious/music/models/local_music_browse.dart';
 import 'package:clipious/music/models/local_music_track.dart';
 import 'package:clipious/music/models/on_device_music_entry.dart';
 import 'package:clipious/music/services/local_music_library.dart';
@@ -49,6 +50,8 @@ class _Player extends Cubit<PlayerState> implements PlayerCubit {
   String? title;
   int? start;
   bool? lastSongTap;
+  bool? lastRetainQueueOrder;
+  int playCalls = 0;
 
   void showTrack(LocalMusicTrack track) => emit(state.copyWith(
         offlineCurrentlyPlaying: localMusicPlaybackEntry(track, db.profileId),
@@ -66,10 +69,12 @@ class _Player extends Cubit<PlayerState> implements PlayerCubit {
       bool Function()? isCurrent,
       bool songTap = false}) async {
     if (isCurrent?.call() == false) return;
+    playCalls++;
     queue = tracks;
     title = queueTitle;
     start = startIndex;
     lastSongTap = songTap;
+    lastRetainQueueOrder = retainQueueOrder;
   }
 
   @override
@@ -294,6 +299,125 @@ void main() {
     await tester.tap(find.byTooltip('Open artist: The Ensemble'));
     await tester.pumpAndSettle();
     expect(find.text('Album artist · Live Sessions'), findsNWidgets(2));
+  });
+
+  testWidgets('artist detail sorts songs and plays the visible order',
+      (tester) async {
+    const track10 = 'Track 10';
+    const track2 = 'Track 2';
+    const middle = 'Middle';
+    const untagged = 'Untagged';
+    const alpha = 'Alpha';
+    const members = [track10, track2, middle, untagged, alpha];
+
+    rows = [
+      {
+        'uri': '$folder/document/1',
+        'title': track10,
+        'artist': 'Fixture Artist',
+        'album': 'Album A',
+        'releaseDate': '1991-03',
+        'durationMs': 1900,
+      },
+      {
+        'uri': '$folder/document/2',
+        'title': track2,
+        'artist': 'Fixture Artist',
+        'album': 'Album Z',
+        'originalReleaseDate': '2005',
+        'durationMs': 900,
+      },
+      {
+        'uri': '$folder/document/3',
+        'title': middle,
+        'artist': 'Fixture Artist',
+        'album': 'Album A',
+        'releaseDate': '1999-09-15',
+        'originalReleaseDate': '1988',
+        'durationMs': 1900,
+      },
+      {
+        'uri': '$folder/document/4',
+        'title': untagged,
+        'artist': 'Fixture Artist',
+      },
+      {
+        'uri': '$folder/document/5',
+        'title': alpha,
+        'artist': 'Fixture Artist',
+        'album': 'Album B',
+        'releaseDate': '1996',
+        'durationMs': 3100,
+      },
+    ];
+    await show(
+        tester,
+        MusicDeviceArtistPage(
+          selectionId: 'original',
+          artistKey: 'fixture artist',
+          library: library,
+        ));
+
+    Future<void> sortBy(String label) async {
+      await tester.tap(find.byTooltip('Sort by'));
+      await tester.pumpAndSettle();
+      expect(find.text('Artist'), findsNothing);
+      await tester.tap(find.widgetWithText(
+          CheckedPopupMenuItem<LocalMusicDetailSongOrder>, label));
+      await tester.pumpAndSettle();
+    }
+
+    Future<void> expectOrderAndPlay(List<String> expected,
+        {bool retainQueueOrder = true}) async {
+      final visible = [...members]..sort((a, b) => tester
+          .getCenter(find.text(a).hitTestable())
+          .dy
+          .compareTo(tester.getCenter(find.text(b).hitTestable()).dy));
+      expect(visible, expected);
+      await tester.tap(find.text('Play all'));
+      await tester.pumpAndSettle();
+      expect(player.queue.map((entry) => entry.title), visible);
+      expect(player.start, 0);
+      expect(player.lastSongTap, isFalse);
+      expect(player.lastRetainQueueOrder, retainQueueOrder);
+    }
+
+    await expectOrderAndPlay(members, retainQueueOrder: false);
+    player.showTrack(player.queue.first.deviceTrack!);
+    await tester.pumpAndSettle();
+    final playingQueue = player.queue;
+    final playingState = player.state;
+    final playCalls = player.playCalls;
+    await sortBy('Title');
+    expect(player.playCalls, playCalls);
+    expect(player.queue, same(playingQueue));
+    expect(player.state, same(playingState));
+    await expectOrderAndPlay([alpha, middle, track2, track10, untagged]);
+
+    await sortBy('Album');
+    await expectOrderAndPlay([middle, track10, alpha, track2, untagged]);
+    await sortBy('Release date');
+    await expectOrderAndPlay([track10, alpha, middle, track2, untagged]);
+    await sortBy('Duration');
+    await expectOrderAndPlay([track2, middle, track10, alpha, untagged]);
+
+    await sortBy('Descending');
+    const durationDescending = [alpha, middle, track10, track2, untagged];
+    await expectOrderAndPlay(durationDescending);
+    await tester.tap(find.text(track2));
+    await tester.pumpAndSettle();
+    expect(player.queue.map((entry) => entry.title), durationDescending);
+    expect(player.start, 3);
+    expect(player.lastSongTap, isTrue);
+
+    await sortBy('Release date');
+    await expectOrderAndPlay([track2, middle, alpha, track10, untagged]);
+    await sortBy('Album');
+    await expectOrderAndPlay([track2, alpha, middle, track10, untagged]);
+    await sortBy('Title');
+    await expectOrderAndPlay([untagged, track10, track2, middle, alpha]);
+    await sortBy('Default order');
+    await expectOrderAndPlay(members, retainQueueOrder: false);
   });
 
   testWidgets('Artists index remembers and applies explicit album credits',
