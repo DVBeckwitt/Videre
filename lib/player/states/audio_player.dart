@@ -545,7 +545,8 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
 
   @override
   Future<bool> prepareMusicSelection(
-      IdedVideo entry, Duration startAt, bool Function() isCurrent) async {
+      IdedVideo entry, Duration startAt, bool Function() isCurrent,
+      {bool skipDownload = false}) async {
     cancelMusicSelection();
     if (isClosed || player.isClosed || audioPlayer == null || !isCurrent()) {
       return false;
@@ -554,7 +555,8 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
     final adjacent = _standbys[id];
     // The automatic queue keeps its start-at-zero buffer while a manual request
     // loads a different part of the same song.
-    final reuse = startAt == Duration.zero &&
+    final reuse = !skipDownload &&
+        startAt == Duration.zero &&
         adjacent != null &&
         !adjacent.failed &&
         !adjacent.decoder.playing &&
@@ -566,7 +568,7 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
           ..ready = Future.value(null));
     final request = _manual = _ManualMusicDecoder(
         this, slot, startAt, isCurrent, player.openedAudioTrack,
-        borrowedAdjacent: reuse);
+        borrowedAdjacent: reuse, skipDownload: skipDownload);
     final ready =
         await Future.any([request.prepare(), request.cancelled.future]);
     if (!identical(_manual, request)) return false;
@@ -584,9 +586,14 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
     _manual = null;
     request.cancelled.complete(false);
     final slot = request.slot;
-    final id = playbackQueueId(slot.entry);
+    final entry = slot.entry;
+    final id = playbackQueueId(entry);
     final wanted = _adjacentEntries[id];
+    final failedDownload = entry is Video &&
+        entry.downloadPlaybackOnly &&
+        request.exhaustedSourceError != null;
     final restore = request.borrowedAdjacent &&
+        !failedDownload &&
         wanted != null &&
         slot.matches(wanted) &&
         request.samePlaybackContext &&
@@ -1943,7 +1950,10 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
         (candidate != null && !candidate.failed && candidate.matches(entry)
             ? _standbys.remove(id)
             : null);
-    if (selection != null) _manual = null;
+    if (selection != null) {
+      _manual = null;
+      _downloadReuseFailed = selection.skipDownload;
+    }
     final continueOverlap = _transition.switchTo(entry, standby);
     _promoted = standby;
     if (standby != null) {

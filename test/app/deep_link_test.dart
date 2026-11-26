@@ -889,6 +889,92 @@ void main() {
     expect(opened.last.$2(), isFalse);
   });
 
+  test('Android audio opens without a selected server', () async {
+    final profile = await db.createProfile('Offline listener');
+    await db.useProfile(profile.id);
+    final inbox = _AndroidLinkInbox();
+    final audio = Uri.parse('content://documents/document/song.flac');
+    inbox.stageAudio(audio.toString());
+    final receiver = _DeferredLinkApp();
+    addTearDown(receiver.close);
+    final opened = <Uri>[];
+    receiver.bindOpenedAudio((uri, _) async => opened.add(uri));
+
+    await Future<void>.delayed(Duration.zero);
+    expect(inbox.consumed, 1);
+    final restored =
+        receiver.stream.firstWhere((state) => state.profileId == profile.id);
+    receiver.ready.complete();
+    expect((await restored).server, isNull);
+    expect(opened, [audio]);
+  });
+
+  test('a newer Android video link wins over older audio in the same batch',
+      () async {
+    final inbox = _AndroidLinkInbox();
+    inbox.stageAudio('content://documents/document/song.flac');
+    inbox.stage('https://youtu.be/dQw4w9WgXcQ', initial: true);
+    final receiver = _DeferredLinkApp();
+    addTearDown(receiver.close);
+    final opened = <Uri>[];
+    receiver.bindOpenedAudio((uri, _) async => opened.add(uri));
+
+    await Future<void>.delayed(Duration.zero);
+    expect(inbox.consumed, 2);
+    receiver.ready.complete();
+    await _waitForRoute(TvVideoRoute.name);
+
+    expect(appRouter.current.argsAs<TvVideoRouteArgs>().videoId, 'dQw4w9WgXcQ');
+    expect(opened, isEmpty);
+  });
+
+  test('Android audio wins over an older link and survives unrelated shares',
+      () async {
+    final inbox = _AndroidLinkInbox();
+    inbox.stage('https://youtu.be/dQw4w9WgXcQ', initial: true);
+    const audio = 'content://documents/document/song.flac';
+    inbox.stageAudio(audio);
+    inbox.stage('Unrelated shared text', share: true);
+    final receiver = _DeferredLinkApp();
+    addTearDown(receiver.close);
+    final opened = Completer<Uri>();
+    receiver.bindOpenedAudio((uri, _) async => opened.complete(uri));
+
+    await Future<void>.delayed(Duration.zero);
+    expect(inbox.consumed, 3);
+    receiver.ready.complete();
+    expect(await opened.future, Uri.parse(audio));
+    expect(appRouter.hasEntries, isFalse);
+  });
+
+  test('a newer web link retires an in-flight Android audio open', () async {
+    final inbox = _AndroidLinkInbox();
+    final receiver = AppCubit(AppState(0, null, HomeLayout()));
+    addTearDown(receiver.close);
+    await receiver.stream.firstWhere((state) => state.server != null);
+    final opening = Completer<bool Function()>();
+    final finishAudio = Completer<void>();
+    addTearDown(() => finishAudio.complete());
+    receiver.bindOpenedAudio((_, current) async {
+      opening.complete(current);
+      await finishAudio.future;
+    });
+
+    inbox.stageAudio('content://documents/document/song.flac');
+    await inbox.notify();
+    final audioCurrent = await opening.future;
+    expect(audioCurrent(), isTrue);
+
+    inbox.stage('Unrelated shared text', share: true);
+    await inbox.notify();
+    expect(audioCurrent(), isTrue);
+
+    inbox.stage('https://youtu.be/dQw4w9WgXcQ');
+    await inbox.notify();
+    await _waitForRoute(TvVideoRoute.name);
+    expect(audioCurrent(), isFalse);
+  });
+
   test('An Android Activity attaching to the running engine keeps Back history',
       () async {
     final inbox = _AndroidLinkInbox();

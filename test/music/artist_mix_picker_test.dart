@@ -23,7 +23,8 @@ class _Catalog extends MusicCatalogService {
   @override
   Future<MusicCatalogSearchPage> searchPage(
       String query, MusicCatalogSearchType type, int page,
-      {bool Function()? isCurrent}) {
+      {bool Function()? isCurrent,
+      void Function(List<MusicCatalogArtistHit>)? onArtistPreview}) {
     expect(type, MusicCatalogSearchType.channels);
     expect(page, 1);
     final response = Completer<MusicCatalogSearchPage>();

@@ -12,6 +12,7 @@ import '../../../utils.dart' show selectKeys;
 import '../../../utils/interfaces/db.dart';
 import '../../../utils/motion.dart';
 import '../../../utils/views/components/channel_avatar.dart';
+import '../../models/music_catalog_search.dart';
 import '../../services/music_catalog_service.dart';
 import '../../services/music_starter_artists.dart';
 
@@ -268,12 +269,14 @@ class _StarterArtistDialogState extends State<_StarterArtistDialog> {
       bool current() => mounted && _current && generation == _generation;
       if (!current()) return;
       try {
-        final artists = await _catalog.searchArtists(query);
+        final page = await _catalog.searchPage(
+            query, MusicCatalogSearchType.artists, 1,
+            isCurrent: current);
         if (!current()) return;
         final seen = <String>{};
         final results = <MusicStarterArtistPick>[];
-        for (final artist in artists) {
-          final pick = MusicStarterArtistPick.fromCatalog(artist, server);
+        for (final hit in page.hits.whereType<MusicCatalogArtistHit>()) {
+          final pick = MusicStarterArtistPick.fromCatalog(hit.artist, server);
           if (pick == null || !seen.add(pick.catalogId!)) continue;
           results.add(pick);
           if (results.length == _resultLimit) break;

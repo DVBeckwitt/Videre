@@ -273,7 +273,7 @@ class _ChapterTapRecognizer extends OneSequenceGestureRecognizer {
   int _contactCount = 0;
   bool _candidate = false;
   Offset? _tapPoint;
-  Duration? _previousTapEnd;
+  ({Duration end, Offset point})? _previousTap;
 
   @override
   String get debugDescription => 'two-finger double tap';
@@ -309,7 +309,7 @@ class _ChapterTapRecognizer extends OneSequenceGestureRecognizer {
   }
 
   void _rejectTap() {
-    _previousTapEnd = null;
+    _previousTap = null;
     _candidate = false;
     resolve(GestureDisposition.rejected);
   }
@@ -345,12 +345,14 @@ class _ChapterTapRecognizer extends OneSequenceGestureRecognizer {
 
     final tapPoint = _tapPoint;
     if (_candidate && _contacts.isEmpty && tapPoint != null) {
-      final previous = _previousTapEnd;
-      if (previous != null && _startedAt - previous <= kDoubleTapTimeout) {
-        _previousTapEnd = null;
+      final previous = _previousTap;
+      if (previous != null &&
+          _startedAt - previous.end <= kDoubleTapTimeout &&
+          (tapPoint - previous.point).distance <= kDoubleTapSlop) {
+        _previousTap = null;
         onDoubleTap?.call(tapPoint);
       } else {
-        _previousTapEnd = event.timeStamp;
+        _previousTap = (end: event.timeStamp, point: tapPoint);
       }
     }
   }

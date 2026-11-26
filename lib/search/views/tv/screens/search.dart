@@ -89,11 +89,13 @@ class TvSearchScreen extends StatelessWidget {
             ],
             child: BlocBuilder<SearchCubit, SearchState>(
                 builder: (context, search) {
-              final query = search.queryController.text;
+              final searchCubit = context.read<SearchCubit>();
+              final query = searchCubit.submittedQuery;
+              final scope = searchCubit.resultScope;
               return BlocBuilder<TvSearchCubit, TvSearchState>(
-                builder: (context, tv) {
-                  var tvCubit = context.read<TvSearchCubit>();
-                  var searchCubit = context.read<SearchCubit>();
+                builder: (context, _) {
+                  final tvCubit = context.read<TvSearchCubit>();
+                  final tv = tvCubit.resultsFor(scope);
                   return Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -131,7 +133,7 @@ class TvSearchScreen extends StatelessWidget {
                           padding: const EdgeInsets.only(top: 20),
                           child: search.showResults
                               ? FocusScope(
-                                  key: ValueKey(query),
+                                  key: ValueKey(scope),
                                   onKeyEvent: tvCubit.handleResultScopeKeyEvent,
                                   canRequestFocus: true,
                                   child: Row(
@@ -191,11 +193,13 @@ class TvSearchScreen extends StatelessWidget {
                                                                   .video)
                                                           .then((value) {
                                                     if (page == 1 &&
-                                                        search.queryController
-                                                                .text ==
-                                                            query) {
-                                                      tvCubit.setHasVideo(value
-                                                          .videos.isNotEmpty);
+                                                        searchCubit
+                                                            .isShowingResultsFor(
+                                                                scope)) {
+                                                      tvCubit.setHasVideo(
+                                                          scope,
+                                                          value.videos
+                                                              .isNotEmpty);
                                                     }
                                                     return value.videos;
                                                   }),
@@ -231,10 +235,11 @@ class TvSearchScreen extends StatelessWidget {
                                                                   .channel)
                                                           .then((value) {
                                                     if (page == 1 &&
-                                                        search.queryController
-                                                                .text ==
-                                                            query) {
+                                                        searchCubit
+                                                            .isShowingResultsFor(
+                                                                scope)) {
                                                       tvCubit.setHasChannels(
+                                                          scope,
                                                           value.channels
                                                               .isNotEmpty);
                                                     }
@@ -295,10 +300,11 @@ class TvSearchScreen extends StatelessWidget {
                                                                     .playlist)
                                                             .then((value) {
                                                   if (page == 1 &&
-                                                      search.queryController
-                                                              .text ==
-                                                          query) {
+                                                      searchCubit
+                                                          .isShowingResultsFor(
+                                                              scope)) {
                                                     tvCubit.setHasPlaylists(
+                                                        scope,
                                                         value.playlists
                                                             .isNotEmpty);
                                                   }

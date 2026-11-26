@@ -46,6 +46,7 @@ import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:clipious/videos/models/sponsor_segment_types.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:easy_debounce/easy_throttle.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -2581,6 +2582,103 @@ void main() {
         expect(player.musicSelectionFailureRevision.value, failure);
         expect(
             selector.selectedValue(await db.getCurrentlySelectedServer()), '0');
+      });
+
+      test('a failed opportunistic download tries the current online route',
+          () async {
+        debugDefaultTargetPlatformOverride = TargetPlatform.android;
+        addTearDown(() => debugDefaultTargetPlatformOverride = null);
+        await db.saveSetting(SettingsValue(
+            SponsorSegmentType.musicOffTopic.settingsName(), 'false'));
+        final selected = song('x');
+        final server = await db.getCurrentlySelectedServer();
+        final digest = 'a' * 64;
+        final provenance = DownloadPlaybackProvenance.tryFromJson({
+          'version': 1,
+          'profileId': server.profileId,
+          'accountId': server.accountId,
+          'origin': Uri.parse(server.url).origin,
+          'contentId': selected.videoId,
+          'audioOnly': true,
+          'container': 'webm',
+          'audio': {
+            'itag': '251',
+            'clen': '4096',
+            'lmt': '1',
+            'typeSha256': digest,
+            'audioTrackSha256': null,
+            'trackDimensionsSha256': digest,
+          },
+          'videoHeight': null,
+          'defaultAudioTrack': true,
+          'byteLength': 4096,
+          'sha256': digest,
+        })!;
+        await db.upsertDownload(DownloadedVideo(
+            videoId: selected.videoId,
+            title: selected.musicMetadata!.title,
+            musicMetadata: selected.musicMetadata,
+            profileId: server.profileId,
+            accountId: server.accountId,
+            audioOnly: true,
+            folderUri: 'content://files/tree/music',
+            storageUri: 'content://files/document/track',
+            container: DownloadContainer.webm,
+            downloadComplete: true,
+            playbackProvenance: provenance,
+            lengthSeconds: 120,
+            quality: 'audio'));
+        final started = Completer<void>();
+        final response = Completer<void>();
+        final requests = <Uri>[];
+        final client = MockClient((request) async {
+          requests.add(request.url);
+          if (!started.isCompleted) started.complete();
+          await response.future;
+          return http.Response(
+              '{"videoId":"x","title":"Upload","adaptiveFormats":[],"formatStreams":[],"captions":[]}',
+              200,
+              headers: {'content-type': 'application/json'});
+        });
+        addTearDown(client.close);
+        addTearDown(() {
+          if (!response.isCompleted) response.complete();
+        });
+        service = Service(httpClient: client);
+        final original = player.state.currentlyPlaying;
+        final command = player.state.mediaCommand;
+        final failure = player.musicSelectionFailureRevision.value;
+        final selecting = player.playVideo([selected], audio: true);
+        final local =
+            await preparer.started.future.timeout(const Duration(seconds: 3));
+        expect((local as Video).downloadPlaybackOnly, isTrue);
+        expect(preparer.skippedDownloads['x'], isFalse);
+        expect(requests, isEmpty);
+
+        final first = preparer.requests['x']!;
+        first
+            .completeError(const ManualMusicSourceFailure('local unavailable'));
+        await Future.any([selecting, started.future])
+            .timeout(const Duration(seconds: 3));
+        expect(
+            requests, [Uri.parse('${server.url}/api/v1/videos/x?local=true')]);
+        expect(player.state.currentlyPlaying, same(original));
+        expect(player.state.mediaCommand, same(command));
+        expect(player.state.isPlaying, isTrue);
+        expect(handler.mediaItem.value?.id, 'a');
+
+        response.complete();
+        await until(() => !identical(preparer.requests['x'], first));
+        expect(preparer.skippedDownloads['x'], isTrue);
+        preparer.requests['x']!.complete(true);
+        await selecting;
+        final committed = player.state.currentlyPlaying!;
+        expect(committed.videoId, 'x');
+        expect(committed.downloadPlaybackOnly, isFalse);
+        expect(committed.musicMetadata?.artist, 'Band');
+        expect(requests, hasLength(1));
+        expect(handler.mediaItem.value?.id, 'x');
+        expect(player.musicSelectionFailureRevision.value, failure);
       });
 
       test('playlist ownership and duplicate occurrences change together',

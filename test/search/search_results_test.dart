@@ -16,6 +16,7 @@ import 'package:clipious/search/models/search_type.dart';
 import 'package:clipious/search/states/search.dart';
 import 'package:clipious/search/views/screens/channel_tab.dart';
 import 'package:clipious/search/views/screens/playlist_tab.dart';
+import 'package:clipious/search/views/screens/search.dart';
 import 'package:clipious/search/views/screens/video_tab.dart';
 import 'package:clipious/search/views/components/search_channel_hero_card.dart';
 import 'package:clipious/service.dart';
@@ -34,8 +35,10 @@ import '../test_player_cubit.dart';
 import '../test_settings_cubit.dart';
 
 class _SearchService extends Service {
-  final requests = <({String label, Completer<SearchResults> result})>[];
+  final requests =
+      <({String label, int? page, Completer<SearchResults> result})>[];
   bool deferred = false;
+  bool hideFirstPage = false;
 
   @override
   Future<SearchSuggestion> getSearchSuggestion(String query) async =>
@@ -53,6 +56,7 @@ class _SearchService extends Service {
     final result = Completer<SearchResults>();
     requests.add((
       label: '$query-${sortBy?.name}-${date.name}-${duration.name}',
+      page: page,
       result: result
     ));
     if (!deferred) complete(requests.length - 1);
@@ -61,6 +65,16 @@ class _SearchService extends Service {
 
   void complete(int index) {
     final request = requests[index];
+    if (hideFirstPage && request.page == 1) {
+      final results = SearchResults()
+        ..videos = List.generate(
+          searchPageSize,
+          (i) => Video(
+              videoId: 'hidden-$i', title: 'Hidden result', filterHide: true),
+        );
+      request.result.complete(results);
+      return;
+    }
     final results = SearchResults()
       ..videos.add(Video(videoId: 'result-$index', title: request.label))
       ..channels.add(Channel(request.label, 'channel-$index', '', null, [], 0,
@@ -145,6 +159,23 @@ void main() {
     final reopened = SearchCubit(SearchState.init(), settings);
     expect(reopened.compactResults.value, isTrue);
     await reopened.close();
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('video search can page past locally hidden results',
+      (tester) async {
+    fakeService.hideFirstPage = true;
+    await showTab(tester, SearchType.video);
+    await tester.pumpAndSettle();
+    expect(find.text('Hidden result'), findsNothing);
+    expect(fakeService.requests.map((request) => request.page), [1]);
+
+    await tester.tap(find.text('Load more'));
+    await tester.pumpAndSettle();
+
+    expect(fakeService.requests.map((request) => request.page), [1, 2]);
+    expect(find.text('cats-relevance-any-any'), findsOneWidget);
+    expect(find.text('Hidden result'), findsNothing);
     await tester.pumpWidget(const SizedBox.shrink());
   });
 

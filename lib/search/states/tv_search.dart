@@ -29,19 +29,30 @@ class TvSearchCubit extends Cubit<TvSearchState> {
     return KeyEventResult.ignored;
   }
 
-  setHasVideo(bool hasVideos) {
+  Object? _resultScope;
+
+  TvSearchState resultsFor(Object scope) =>
+      scope == _resultScope ? state : const TvSearchState();
+
+  void setHasVideo(Object scope, bool hasVideos) {
     if (isClosed) return;
-    emit(state.copyWith(hasVideos: hasVideos));
+    _updateResults(scope, resultsFor(scope).copyWith(hasVideos: hasVideos));
   }
 
-  setHasChannels(bool hasChannels) {
+  void setHasChannels(Object scope, bool hasChannels) {
     if (isClosed) return;
-    emit(state.copyWith(hasChannels: hasChannels));
+    _updateResults(scope, resultsFor(scope).copyWith(hasChannels: hasChannels));
   }
 
-  setHasPlaylists(bool hasPlaylists) {
+  void setHasPlaylists(Object scope, bool hasPlaylists) {
     if (isClosed) return;
-    emit(state.copyWith(hasPlaylists: hasPlaylists));
+    _updateResults(
+        scope, resultsFor(scope).copyWith(hasPlaylists: hasPlaylists));
+  }
+
+  void _updateResults(Object scope, TvSearchState next) {
+    _resultScope = scope;
+    emit(next);
   }
 }
 

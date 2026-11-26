@@ -28,9 +28,13 @@ class SearchCubit<T extends SearchState> extends Cubit<SearchState> {
   Timer? _suggestionTimer;
   late String _query;
   String _submittedQuery = '';
+  Object _resultScope = Object();
   int _suggestionRequest = 0;
 
   String get submittedQuery => _submittedQuery;
+  Object get resultScope => _resultScope;
+  bool isShowingResultsFor(Object scope) =>
+      !isClosed && state.showResults && _resultScope == scope;
   bool get canRestoreResults =>
       _submittedQuery.isNotEmpty && !state.showResults;
 
@@ -163,6 +167,9 @@ class SearchCubit<T extends SearchState> extends Cubit<SearchState> {
           chooseOpen: chooseOpen, isCurrent: current);
       if (!current() || action == PastedLinkAction.handled) return;
       if (action == PastedLinkAction.searchAsText) recordHistory = false;
+    }
+    if (query != _submittedQuery || !state.showResults) {
+      _resultScope = Object();
     }
     _submittedQuery = query;
     if (!showSuggestionsWithResults) {

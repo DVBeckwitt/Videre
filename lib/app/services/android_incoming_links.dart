@@ -2,11 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/services.dart';
 
-typedef AndroidIncomingLink = ({String text, bool share, bool initial});
-typedef AndroidIncomingContent = ({
-  List<AndroidIncomingLink> links,
-  Uri? audio
-});
+typedef AndroidIncomingContent = ({String? text, bool share, Uri? audio});
 
 enum AndroidMusicShortcut { home, search, library, shuffleLocal }
 
@@ -27,8 +23,8 @@ class AndroidIncomingLinks {
         _ => null,
       };
 
-  static Stream<AndroidIncomingContent> events() {
-    late final StreamController<AndroidIncomingContent> controller;
+  static Stream<List<AndroidIncomingContent>> events() {
+    late final StreamController<List<AndroidIncomingContent>> controller;
     var taking = false;
     var requested = false;
 
@@ -42,8 +38,7 @@ class AndroidIncomingLinks {
           final pending =
               await _channel.invokeListMethod<Object?>('takePending');
           if (controller.isClosed) return;
-          final links = <AndroidIncomingLink>[];
-          Uri? audio;
+          final batch = <AndroidIncomingContent>[];
           for (final event in pending ?? const <Object?>[]) {
             if (event case {'audioUri': final String raw}) {
               final uri = Uri.tryParse(raw);
@@ -51,20 +46,18 @@ class AndroidIncomingLinks {
                   uri.scheme == 'content' &&
                   uri.authority.isNotEmpty &&
                   uri.path.isNotEmpty) {
-                audio ??= uri;
+                batch.add((text: null, share: false, audio: uri));
               }
             } else if (event
                 case {
                   'text': final String text,
                   'share': final bool share,
-                  'initial': final bool initial,
+                  'initial': bool _,
                 }) {
-              links.add((text: text, share: share, initial: initial));
+              batch.add((text: text, share: share, audio: null));
             }
           }
-          if (links.isNotEmpty || audio != null) {
-            controller.add((links: links, audio: audio));
-          }
+          if (batch.isNotEmpty) controller.add(batch);
         } while (requested && !controller.isClosed);
       } catch (error, trace) {
         if (!controller.isClosed) controller.addError(error, trace);
@@ -73,7 +66,7 @@ class AndroidIncomingLinks {
       }
     }
 
-    controller = StreamController<AndroidIncomingContent>(
+    controller = StreamController<List<AndroidIncomingContent>>(
       onListen: () {
         _channel.setMethodCallHandler((call) async {
           if (call.method != 'linksAvailable') throw MissingPluginException();

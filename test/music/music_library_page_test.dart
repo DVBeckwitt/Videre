@@ -370,7 +370,8 @@ class _ReplacementCatalog extends MusicCatalogService {
   @override
   Future<MusicCatalogSearchPage> searchPage(
       String query, MusicCatalogSearchType type, int page,
-      {bool Function()? isCurrent}) async {
+      {bool Function()? isCurrent,
+      void Function(List<MusicCatalogArtistHit>)? onArtistPreview}) async {
     expect(isCurrent?.call(), isTrue);
     expect(type, MusicCatalogSearchType.songs);
     expect(page, 1);

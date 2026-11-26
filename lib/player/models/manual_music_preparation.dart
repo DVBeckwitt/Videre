@@ -9,7 +9,8 @@ class ManualMusicSourceFailure implements Exception {
 /// Prepares a selected Music occurrence while the current decoder keeps playing.
 abstract interface class ManualMusicPreparer {
   Future<bool> prepareMusicSelection(
-      IdedVideo entry, Duration startAt, bool Function() isCurrent);
+      IdedVideo entry, Duration startAt, bool Function() isCurrent,
+      {bool skipDownload = false});
 
   void cancelMusicSelection();
 }

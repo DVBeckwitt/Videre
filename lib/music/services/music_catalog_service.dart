@@ -92,11 +92,14 @@ abstract class MusicCatalogService {
 
   /// One ordered search page. An adapter that only supplies typed results can
   /// still support page one of those types through the original methods.
+  /// Artist searches may report growing snapshots of qualified hits before
+  /// the page completes. A later verification can still fail the page.
   Future<MusicCatalogSearchPage> searchPage(
     String query,
     MusicCatalogSearchType type,
     int page, {
     bool Function()? isCurrent,
+    void Function(List<MusicCatalogArtistHit>)? onArtistPreview,
   }) async {
     if (page < 1) throw ArgumentError.value(page, 'page');
     void check() {

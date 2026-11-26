@@ -117,6 +117,18 @@ void main() {
     },
   );
 
+  testWidgets('far apart tap pairs cannot skip a chapter', (tester) async {
+    final skips = <bool>[];
+    await _mount(tester, skipChapter: skips.add);
+
+    await _tapPair(tester, _left, 0);
+    await _tapPair(tester, _right, 120);
+    expect(skips, isEmpty);
+
+    await _tapPair(tester, _right, 240);
+    expect(skips, [true]);
+  });
+
   testWidgets('moving pinch wins the arena and cancels a pending tap pair', (
     tester,
   ) async {

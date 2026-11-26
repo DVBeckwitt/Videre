@@ -5528,9 +5528,11 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       final position = skip == null || exactStartAt
           ? startAt
           : Duration(milliseconds: skip.last);
+      var skipDownload = false;
       while (current()) {
         try {
-          if (!await preparer.prepareMusicSelection(entry, position, current) ||
+          if (!await preparer.prepareMusicSelection(entry, position, current,
+                  skipDownload: skipDownload) ||
               !current()) {
             break;
           }
@@ -5557,17 +5559,18 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
           final failed = entry;
           if (failed is! Video ||
               isLocalMusicPlaybackId(failed.videoId) ||
-              failed.downloadPlaybackOnly ||
               failed.explicitMusicDownload != null ||
               CachedMusicPlayback.of(failed) != null ||
               !current()) {
             break;
           }
-          // Retry the candidate's own backend without changing the active
-          // song's requested route, connection status, or playback.
-          final next =
-              await service.retryVideoBackend(failed, isCurrent: current);
+          // A saved-only candidate needs online metadata if its native open
+          // failed. Both retries leave the active song's playback intact.
+          final next = failed.downloadPlaybackOnly
+              ? await service.refreshPlaybackVideo(failed, isCurrent: current)
+              : await service.retryVideoBackend(failed, isCurrent: current);
           if (!current() || next == null) break;
+          skipDownload = skipDownload || failed.downloadPlaybackOnly;
           entry = next;
         }
       }

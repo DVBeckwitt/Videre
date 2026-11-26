@@ -127,6 +127,7 @@ class _Catalog extends MusicCatalogService {
     MusicCatalogSearchType type,
     int page,
     bool Function()? isCurrent,
+    void Function(List<MusicCatalogArtistHit>)? onArtistPreview,
     Completer<MusicCatalogSearchPage> response,
   })>[];
   bool paginate = false;
@@ -184,9 +185,11 @@ class _Catalog extends MusicCatalogService {
   @override
   Future<MusicCatalogSearchPage> searchPage(
       String query, MusicCatalogSearchType type, int page,
-      {bool Function()? isCurrent}) {
+      {bool Function()? isCurrent,
+      void Function(List<MusicCatalogArtistHit>)? onArtistPreview}) {
     if (!paginate) {
-      return super.searchPage(query, type, page, isCurrent: isCurrent);
+      return super.searchPage(query, type, page,
+          isCurrent: isCurrent, onArtistPreview: onArtistPreview);
     }
     final response = Completer<MusicCatalogSearchPage>();
     pageRequests.add((
@@ -194,6 +197,7 @@ class _Catalog extends MusicCatalogService {
       type: type,
       page: page,
       isCurrent: isCurrent,
+      onArtistPreview: onArtistPreview,
       response: response,
     ));
     return response.future;
@@ -2103,6 +2107,64 @@ void main() {
     expect(player.calls.single.videos.map((video) => video.videoId),
         [first.videoId, second.videoId]);
     expect(player.calls.single.startIndex, 0);
+  });
+
+  testWidgets('Online artist previews open early and survive a search error',
+      (tester) async {
+    catalog.paginate = true;
+    await show(tester, screen: const MusicScreen(embedded: true));
+    await tester.tap(find.widgetWithText(ChoiceChip, 'Artists'));
+    await tester.pump();
+
+    const hit = MusicCatalogArtistHit(artist);
+    final row = find.byKey(ValueKey(hit.key));
+    final loadingMore = find.byWidgetPredicate((widget) =>
+        widget is CircularProgressIndicator &&
+        widget.semanticsLabel == 'Loading more music results…');
+
+    await search(tester, 'artist');
+    final opening = catalog.pageRequests.single;
+    expect(opening.type, MusicCatalogSearchType.artists);
+    expect(opening.page, 1);
+    opening.onArtistPreview!([hit]);
+    await tester.pump();
+    expect(row, findsOneWidget);
+    expect(loadingMore, findsOneWidget);
+    expect(opening.response.isCompleted, isFalse);
+
+    await tester.tap(row);
+    await tester.pumpAndSettle();
+    expect(catalog.artistRequests, [artist.id]);
+    expect(find.text('Artist description'), findsOneWidget);
+    opening.response.complete(_page([hit]));
+    await tester.pumpAndSettle();
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+
+    await search(tester, 'artist again');
+    final failing = catalog.pageRequests.last;
+    expect(failing.query, 'artist again');
+    failing.onArtistPreview!([hit]);
+    await tester.pump();
+    expect(row, findsOneWidget);
+    expect(loadingMore, findsOneWidget);
+    failing.response.completeError(StateError('verification failed'));
+    await tester.pumpAndSettle();
+    final retry = find.widgetWithText(TextButton, 'Retry');
+    expect(row, findsOneWidget);
+    expect(loadingMore, findsNothing);
+    expect(retry, findsOneWidget);
+
+    await tester.tap(retry);
+    await tester.pump();
+    final retried = catalog.pageRequests.last;
+    expect(retried.query, 'artist again');
+    expect(retried.type, MusicCatalogSearchType.artists);
+    expect(retried.page, 1);
+    retried.response.complete(_page([hit]));
+    await tester.pumpAndSettle();
+    expect(row, findsOneWidget);
+    expect(retry, findsNothing);
   });
 
   testWidgets('Online pagination retries in place and ends on a repeated page',

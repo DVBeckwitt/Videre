@@ -44,11 +44,13 @@ class TvHorizontalItemList<T> extends StatelessWidget {
             items = filteredVideos(state.items.cast()).cast();
           }
 
+          final hasLocallyHiddenVideos = items.length < state.items.length;
           return CommunityBrowse<T>(
             items: items,
             match: communityMatch,
             builder: (context, items, hiddenNotice) {
               final canLoadMore = (state.itemList is SubscriptionVideoList ||
+                      hasLocallyHiddenVideos ||
                       hiddenNotice != null) &&
                   (state.itemList.getHasMore() ||
                       state.error != ItemListErrors.none);

@@ -125,6 +125,7 @@ class _OnlineSearchListing {
   final String? country;
   final SocksProxyConfig proxy;
   final hits = <MusicCatalogSearchHit>[];
+  List<MusicCatalogArtistHit> artistPreview = const [];
   final _seenHits = <String>{};
   final _seenRaw = <String>{};
   int nextPage = 1;
@@ -139,6 +140,7 @@ class _OnlineSearchListing {
       identical(proxy, NetworkProxy.instance.config);
 
   void accept(MusicCatalogSearchPage page) {
+    artistPreview = const [];
     hits.addAll(paginated
         ? page.hits.where((hit) => _seenHits.add(hit.key))
         : page.hits);
@@ -1318,6 +1320,14 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
     }
     final listing =
         _OnlineSearchListing(query, _type, paginated: _canSwitchSearchSource);
+    final previous = _onlineListing;
+    if (retryQuery != null &&
+        previous != null &&
+        previous.query == query &&
+        previous.type == _type &&
+        previous.connectionCurrent) {
+      listing.artistPreview = previous.artistPreview;
+    }
     setState(() {
       _onlineListing = listing;
       _onlineResultRevision++;
@@ -1333,19 +1343,25 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
           _active(generation, session) &&
           identical(_onlineListing, listing) &&
           _type == listing.type;
+      bool current() => ownsResults() && listing.connectionCurrent;
       try {
         // Older standalone song lists preserve distinct occurrences. Use the
         // cancellable page endpoint for the other typed catalog lookups.
-        final page = !listing.paginated &&
-                listing.type == MusicCatalogSearchType.songs
-            ? MusicCatalogSearchPage(
-                hits: (await musicCatalogService.searchSongs(query))
-                    .map(MusicCatalogSongHit.new)
-                    .toList(),
-                rawKeys: const [],
-              )
-            : await musicCatalogService.searchPage(query, listing.type, 1,
-                isCurrent: () => ownsResults() && listing.connectionCurrent);
+        final page =
+            !listing.paginated && listing.type == MusicCatalogSearchType.songs
+                ? MusicCatalogSearchPage(
+                    hits: (await musicCatalogService.searchSongs(query))
+                        .map(MusicCatalogSongHit.new)
+                        .toList(),
+                    rawKeys: const [],
+                  )
+                : await musicCatalogService.searchPage(query, listing.type, 1,
+                    isCurrent: current, onArtistPreview: (artists) {
+                    if (current() &&
+                        artists.length >= listing.artistPreview.length) {
+                      setState(() => listing.artistPreview = artists);
+                    }
+                  });
         if (!ownsResults()) return;
         if (!listing.connectionCurrent) {
           throw const MusicCatalogException(
@@ -1369,6 +1385,7 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
     final listing = _onlineListing;
     if (!mounted || listing == null || !listing.hasMore) return;
     setState(() {
+      listing.artistPreview = const [];
       listing.hasMore = false;
       listing.pending = null;
     });
@@ -2366,11 +2383,16 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
           builder: (context) =>
               _collectionResults(context, collection, layout));
     }
-    if (_loading) {
+    final listing = _onlineListing;
+    final showingPreview = !_browseRequest &&
+        listing != null &&
+        listing.type == _type &&
+        listing.artistPreview.isNotEmpty;
+    if (_loading && !showingPreview) {
       return const Center(child: CircularProgressIndicator());
     }
     final failure = _failure;
-    if (failure != null) {
+    if (failure != null && !showingPreview) {
       return Center(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(24),
@@ -2398,7 +2420,6 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
     }
     final artistPage = _artistPage;
     if (artistPage != null) return _artistResults(artistPage, layout);
-    final listing = _onlineListing;
     if (listing == null) {
       return Center(
         child: SingleChildScrollView(
@@ -2431,9 +2452,11 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
 
   Widget _onlineListingView(_OnlineSearchListing listing, Key scrollKey,
       AppLocalizations locals, MusicLayout layout) {
-    final hits = listing.hits;
+    final showingPreview = listing.artistPreview.isNotEmpty;
+    final hits = showingPreview ? listing.artistPreview : listing.hits;
     final mixed = listing.type == MusicCatalogSearchType.all;
     final songsOnly = listing.type == MusicCatalogSearchType.songs;
+    final artistsOnly = listing.type == MusicCatalogSearchType.artists;
     final songs = musicTrackResults(
       [for (final hit in hits.whereType<MusicCatalogSongHit>()) hit.track],
       showHidden: _showCommunityHidden,
@@ -2458,10 +2481,9 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
     };
     Object songId(int index, MusicTrack track) =>
         ('search', index, track.videoId);
-    final canContinue = _canSwitchSearchSource &&
-        listing.paginated &&
-        listing.hasMore &&
-        listing.connectionCurrent;
+    final canContinue = listing.connectionCurrent &&
+        (showingPreview ||
+            (_canSwitchSearchSource && listing.paginated && listing.hasMore));
     if (visible.isEmpty &&
         songs.hidden == 0 &&
         !canContinue &&
@@ -2488,6 +2510,13 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
     final view = ListView.builder(
       key: scrollKey,
       itemCount: headers.length + visible.length + (canContinue ? 1 : 0),
+      findChildIndexCallback: artistsOnly
+          ? (key) {
+              final row =
+                  visible.indexWhere((item) => ValueKey(item.$2.key) == key);
+              return row < 0 ? null : headers.length + row;
+            }
+          : null,
       itemBuilder: (_, index) {
         if (index < headers.length) return headers[index];
         final row = index - headers.length;
@@ -2504,7 +2533,8 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
           case MusicCatalogArtistHit(:final artist):
             final name = _artistName(artist);
             return ListTile(
-                key: listing.paginated ? ValueKey(hit.key) : null,
+                key:
+                    listing.paginated || artistsOnly ? ValueKey(hit.key) : null,
                 leading: ChannelAvatar(
                     musicArtwork: true,
                     name: artist.name,
@@ -2573,36 +2603,40 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
   }
 
   Widget _onlinePageFooter(
-          _OnlineSearchListing listing, AppLocalizations locals) =>
-      Padding(
-        key: const ValueKey('music-search-page-footer'),
-        padding: const EdgeInsets.all(12),
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(minHeight: 48),
-          child: Center(
-            child: listing.pending != null
-                ? Semantics(
-                    liveRegion: true,
-                    child: CircularProgressIndicator(
-                        semanticsLabel: locals.musicSearchLoadingMore),
-                  )
-                : Wrap(
-                    alignment: WrapAlignment.center,
-                    spacing: 8,
-                    children: [
-                      TextButton(
-                        onPressed: () => unawaited(_loadMore(listing)),
-                        child: Text(listing.failure == null
-                            ? locals.loadMore
-                            : locals.retry),
-                      ),
-                      if (isMusicBrowseConnectionFailure(listing.failure))
-                        const BrowseOfflineMusicButton(),
-                    ],
-                  ),
-          ),
+      _OnlineSearchListing listing, AppLocalizations locals) {
+    final preview = listing.artistPreview.isNotEmpty;
+    final failure = preview ? _failure : listing.failure;
+    return Padding(
+      key: const ValueKey('music-search-page-footer'),
+      padding: const EdgeInsets.all(12),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minHeight: 48),
+        child: Center(
+          child: listing.pending != null || (preview && _loading)
+              ? Semantics(
+                  liveRegion: true,
+                  child: CircularProgressIndicator(
+                      semanticsLabel: locals.musicSearchLoadingMore),
+                )
+              : Wrap(
+                  alignment: WrapAlignment.center,
+                  spacing: 8,
+                  children: [
+                    TextButton(
+                      onPressed: () => preview
+                          ? unawaited(_submit(retryQuery: listing.query))
+                          : unawaited(_loadMore(listing)),
+                      child: Text(
+                          failure == null ? locals.loadMore : locals.retry),
+                    ),
+                    if (isMusicBrowseConnectionFailure(failure))
+                      const BrowseOfflineMusicButton(),
+                  ],
+                ),
         ),
-      );
+      ),
+    );
+  }
 
   Widget _collectionResults(
       BuildContext context, MusicCollection collection, MusicLayout layout) {

@@ -9,6 +9,7 @@ class _ManualMusicDecoder {
   final bool Function() isCurrent;
   final LocalMusicTrack? Function(String) openedAudioTrack;
   final bool borrowedAdjacent;
+  final bool skipDownload;
   final _database = db;
   final _profile = db.profileId;
   final _proxy = NetworkProxy.instance.config;
@@ -21,7 +22,7 @@ class _ManualMusicDecoder {
 
   _ManualMusicDecoder(this.owner, this.slot, this.startAt, this.isCurrent,
       this.openedAudioTrack,
-      {required this.borrowedAdjacent});
+      {required this.borrowedAdjacent, required this.skipDownload});
 
   bool get decoderReady =>
       !slot.decoder.playing &&
@@ -52,6 +53,7 @@ class _ManualMusicDecoder {
             openedAudioTrack: openedAudioTrack,
             sessionId: session,
             isCurrent: active,
+            skipDownload: skipDownload,
             verifyPinnedCompletion: verifyCompletion);
     try {
       final adjacent = await slot.ready;

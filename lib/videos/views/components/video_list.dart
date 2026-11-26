@@ -76,6 +76,7 @@ class VideoList<T extends IdedVideo> extends StatelessWidget {
             items = filteredVideos(state.items.cast()).cast<T>();
           }
 
+          final hasLocallyHiddenVideos = items.length < state.items.length;
           final gridCount = small || layout == VideoCardLayout.flowRow
               ? 1
               : getGridCount(context);
@@ -87,7 +88,9 @@ class VideoList<T extends IdedVideo> extends StatelessWidget {
                     item is Video ? videoCommunityMatches(item) : const []
                 : null,
             builder: (context, items, hiddenNotice) {
-              final canLoadMore = (subscriptionFeed || hiddenNotice != null) &&
+              final canLoadMore = (subscriptionFeed ||
+                      hasLocallyHiddenVideos ||
+                      hiddenNotice != null) &&
                   state.itemList.getHasMore();
               return NotificationListener<ScrollNotification>(
                 onNotification: (notice) {
@@ -109,9 +112,10 @@ class VideoList<T extends IdedVideo> extends StatelessWidget {
                             alignment: Alignment.center,
                             color: colorScheme.surface,
                             child: InkWell(
-                                onTap: subscriptionFeed
-                                    ? cubit.retryItems
-                                    : cubit.getItems,
+                                onTap:
+                                    subscriptionFeed || hasLocallyHiddenVideos
+                                        ? cubit.retryItems
+                                        : cubit.getItems,
                                 child: Text(
                                   state.error ==
                                           ItemListErrors.nerdVpnApprovalPending
