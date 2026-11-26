@@ -6,6 +6,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../../app/states/app.dart';
 import '../../../downloads/models/downloaded_video.dart';
+import '../../../downloads/services/explicit_music_download.dart';
 import '../../../downloads/states/download_manager.dart';
 import '../../../globals.dart' show db;
 import '../../../l10n/generated/app_localizations.dart';
@@ -14,8 +15,10 @@ import '../../../playlists/models/playlist_reference.dart';
 import '../../../settings/models/db/server.dart';
 import '../../../utils/interfaces/db.dart';
 import '../../../videos/models/video.dart';
+import '../../models/device_playlist_track.dart';
 import '../../models/local_music_track.dart';
 import '../../models/music_library_entry.dart';
+import '../../models/music_song_selection.dart';
 import '../../models/on_device_music_entry.dart';
 import '../../services/local_music_library.dart';
 import '../../services/music_library_search.dart';
@@ -26,7 +29,10 @@ import '../screens/music_device_album.dart';
 import '../screens/music_device_artist.dart';
 import '../screens/music_device_collections.dart';
 import '../screens/music_library.dart';
+import 'music_download_removal.dart';
 import 'music_playlist_cover.dart';
+import 'music_saved_song_removal.dart';
+import 'music_song_selection_bar.dart';
 import 'music_status_title.dart';
 
 typedef _SearchOwner = ({
@@ -45,6 +51,10 @@ class MusicLibrarySearchResults extends StatefulWidget {
     super.key,
     required this.query,
     required this.active,
+    required this.songSelection,
+    required this.selectionRevision,
+    this.selectionCloseFocus,
+    required this.changeSelection,
     this.types = MusicLibrarySearchType.categories,
     this.controller,
     this.scrollKey,
@@ -55,6 +65,10 @@ class MusicLibrarySearchResults extends StatefulWidget {
 
   final String query;
   final bool active;
+  final MusicSongSelection<Object> songSelection;
+  final int selectionRevision;
+  final FocusNode? selectionCloseFocus;
+  final ValueChanged<VoidCallback> changeSelection;
   final Set<MusicLibrarySearchType> types;
   final ScrollController? controller;
   final Key? scrollKey;
@@ -437,6 +451,114 @@ class _MusicLibrarySearchResultsState extends State<MusicLibrarySearchResults>
     }
   }
 
+  bool _isSong(MusicLibrarySearchHit hit) => switch (hit) {
+        MusicLibrarySearchBookmark(
+          entry: MusicLibraryEntry(kind: MusicLibraryKind.song)
+        ) ||
+        MusicLibrarySearchRecording() ||
+        MusicLibrarySearchFile() =>
+          true,
+        _ => false,
+      };
+
+  Video? _selectionVideo(MusicLibrarySearchHit hit) => switch (hit) {
+        MusicLibrarySearchBookmark(:final entry) => entry.toVideo(),
+        MusicLibrarySearchRecording(:final video) => video,
+        MusicLibrarySearchFile(
+          entry: OnDeviceMusicEntry(deviceTrack: final track?)
+        ) =>
+          devicePlaylistVideo(track),
+        MusicLibrarySearchFile(
+          entry: OnDeviceMusicEntry(
+            download: final file?,
+            downloadFileProof: final proof?
+          )
+        ) =>
+          _downloadVideo(file, proof),
+        _ => null,
+      };
+
+  Video? _downloadVideo(DownloadedVideo file, String proof) {
+    final fingerprint = musicDownloadFileFingerprint(file, proof);
+    if (file.musicMetadata == null || fingerprint == null) return null;
+    return musicDownloadSelectionEntry(file, fingerprint: fingerprint);
+  }
+
+  Widget _selectionBar(_SearchOwner owner, List<MusicLibrarySearchHit> hits,
+      AppLocalizations locals) {
+    final selection = widget.songSelection;
+    final songHits = hits.where(_isSong).toList();
+    final ids = songHits.map((hit) => hit.key).toList();
+    selection.retain(ids);
+    final rows = selection.selectedRows(songHits, (hit) => hit.key);
+    final selectedIds = [for (final hit in rows) hit.key];
+    final revision = widget.selectionRevision;
+    bool current() =>
+        _current(owner) &&
+        widget.active &&
+        revision == widget.selectionRevision &&
+        selection.active &&
+        listEquals(selectedIds, [
+          for (final hit in _hits(owner))
+            if (_isSong(hit) && selection.contains(hit.key)) hit.key,
+        ]);
+    List<OnDeviceMusicEntry>? resolveFiles() {
+      if (!current()) return null;
+      final completed = _completedFiles(context.read<DownloadManagerCubit?>());
+      final files = [
+        for (final hit in _hits(owner).whereType<MusicLibrarySearchFile>())
+          if (selection.contains(hit.key) &&
+              (hit.entry.download == null ||
+                  completed.contains(hit.entry.download)))
+            hit.entry,
+      ];
+      return files.length == rows.length ? files : null;
+    }
+
+    final videos = [
+      for (final hit in rows)
+        if (_selectionVideo(hit) case final video?) video,
+    ];
+    final includesFiles = rows.any((hit) => hit is MusicLibrarySearchFile);
+    final onlySaved = rows.isNotEmpty &&
+        rows.every((hit) => hit is MusicLibrarySearchBookmark);
+    return MusicSongSelectionBar(
+      selected: videos,
+      selectedCount: rows.length,
+      allSelected: selection.allSelected(ids),
+      onToggleAll: ids.isEmpty
+          ? null
+          : () => widget.changeSelection(() => selection.toggleAll(ids)),
+      onClose: () => widget.changeSelection(selection.clear),
+      closeFocus: widget.selectionCloseFocus,
+      isCurrent: current,
+      resolveOnDevice: includesFiles ? resolveFiles : null,
+      onPlay: !includesFiles
+          ? (tracks) => MusicScreen.playTracks(context, tracks,
+              queueTitle: _lyricsMode ? locals.musicLyrics : locals.search)
+          : null,
+      removal: onlySaved
+          ? (
+              label: locals.musicRemoveSelectedSavedSongs,
+              run: () async {
+                final ids = [
+                  for (final hit in rows.cast<MusicLibrarySearchBookmark>())
+                    hit.entry.id,
+                ];
+                final library = MusicLibraryService.forProfile(
+                    owner.database, owner.profileId);
+                if (await confirmMusicSavedSongRemoval(context, library, ids,
+                        isCurrent: current) &&
+                    _current(owner) &&
+                    widget.selectionRevision == revision) {
+                  widget.changeSelection(selection.clear);
+                }
+              },
+            )
+          : null,
+    );
+  }
+
   Widget _row(
       _SearchOwner owner,
       String query,
@@ -505,8 +627,19 @@ class _MusicLibrarySearchResultsState extends State<MusicLibrarySearchResults>
         subtitle == null || subtitle.isEmpty ? kind : '$kind · $subtitle';
     final lyricLine = hit.lyricLine;
     final titleLabel = Text(title);
+    final selection = widget.songSelection;
+    final selected = selection.contains(hit.key);
+    void select() {
+      if (!_current(owner)) return;
+      widget.searchFocusNode?.unfocus();
+      widget.changeSelection(() => selection.start(hit.key));
+    }
+
+    void toggleSelection() =>
+        widget.changeSelection(() => selection.toggle(hit.key));
     return ListTile(
       key: ValueKey(('music-library-search-hit', hit.key)),
+      selected: selected,
       leading: hit is MusicLibrarySearchPlaylist
           ? MusicPlaylistCoverImage(
               encoded: MusicPlaylistCovers.forProfile(
@@ -546,10 +679,17 @@ class _MusicLibrarySearchResultsState extends State<MusicLibrarySearchResults>
               ],
             ),
       isThreeLine: lyricLine != null,
-      trailing: Icon(plays ? Icons.play_arrow : Icons.chevron_right),
-      onTap: widget.active
-          ? () => _activate(owner, query, types, hit, ownsSearch)
-          : null,
+      trailing: plays
+          ? MusicSongSelectButton(
+              selected: selection.active ? selected : null,
+              onPressed: selection.active ? toggleSelection : select)
+          : const Icon(Icons.chevron_right),
+      onLongPress: plays && widget.active ? select : null,
+      onTap: !widget.active
+          ? null
+          : selection.active
+              ? (plays ? toggleSelection : null)
+              : () => _activate(owner, query, types, hit, ownsSearch),
     );
   }
 
@@ -558,11 +698,20 @@ class _MusicLibrarySearchResultsState extends State<MusicLibrarySearchResults>
     final state = context.watch<AppCubit>().state;
     final owner = _owner(state);
     final files = context.select(_completedFiles);
-    if (owner == null || !_visible || !_sessionCurrent(owner)) {
+    final visible = _visible;
+    // The contextual menu and confirmation can briefly cover this route.
+    final keepSelection = widget.songSelection.active &&
+        widget.active &&
+        _foreground &&
+        TickerMode.of(context) &&
+        _visibleOwner == owner;
+    if (owner == null ||
+        !(visible || keepSelection) ||
+        !_sessionCurrent(owner)) {
       if (_visibleOwner != null) _fileEpoch++;
       _visibleOwner = null;
       _visibleSource = null;
-    } else {
+    } else if (visible) {
       final activating =
           _visibleOwner != owner || _visibleSource?.call() == false;
       _visibleOwner = owner;
@@ -603,7 +752,7 @@ class _MusicLibrarySearchResultsState extends State<MusicLibrarySearchResults>
         }
         final hits = _hits(owner);
         final searchingLyrics = lyricsMode && _checkingLyrics;
-        if (hits.isEmpty) {
+        if (hits.isEmpty && !widget.songSelection.active) {
           final loading = searchingLyrics ||
               (_checkingFiles &&
                   types
@@ -617,7 +766,7 @@ class _MusicLibrarySearchResultsState extends State<MusicLibrarySearchResults>
                       ? locals.musicSearchLyricsEmpty
                       : locals.musicNoResults));
         }
-        return ListView.builder(
+        final view = ListView.builder(
           key: widget.scrollKey ??
               const PageStorageKey('music-search-library-results'),
           controller: widget.controller,
@@ -632,6 +781,10 @@ class _MusicLibrarySearchResultsState extends State<MusicLibrarySearchResults>
                 )
               : _row(owner, query, types, hits[index], locals),
         );
+        return Column(children: [
+          if (widget.songSelection.active) _selectionBar(owner, hits, locals),
+          Expanded(child: view),
+        ]);
       },
     );
   }

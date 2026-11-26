@@ -15,6 +15,8 @@ class MusicCatalogCard extends StatefulWidget {
   final MusicTrack? song;
   final VoidCallback onOpen;
   final VoidCallback? onLongPress;
+  final VoidCallback? onSelect;
+  final bool? selected;
   final bool artist;
   final Widget? badge;
   final bool showPlayIndicator;
@@ -27,6 +29,8 @@ class MusicCatalogCard extends StatefulWidget {
     this.song,
     required this.onOpen,
     this.onLongPress,
+    this.onSelect,
+    this.selected,
     this.subtitle,
     this.artist = false,
     this.badge,
@@ -47,8 +51,9 @@ class _MusicCatalogCardState extends State<MusicCatalogCard> {
     final colors = theme.colorScheme;
     final radius = BorderRadius.circular(widget.artist ? 1000 : 6);
     final origin = widget.cardOrigin;
-    final playing =
-        origin == null ? null : watchMusicCardPlaying(context, origin);
+    final playing = origin == null || widget.selected != null
+        ? null
+        : watchMusicCardPlaying(context, origin);
     final song = widget.song;
     final images = song?.displayThumbnails ?? widget.thumbnails;
     final artwork = widget.artist
@@ -74,15 +79,18 @@ class _MusicCatalogCardState extends State<MusicCatalogCard> {
               );
     final card = Semantics(
       button: true,
+      selected: widget.selected,
       onTapHint: musicCardPlaybackHint(context, playing),
       child: Material(
         color: Colors.transparent,
         borderRadius: BorderRadius.circular(6),
         child: InkWell(
-          onTap: origin == null
-              ? widget.onOpen
-              : () => activateMusicCard(context, origin, widget.onOpen),
-          onLongPress: widget.onLongPress,
+          onTap: widget.selected != null
+              ? widget.onSelect
+              : origin == null
+                  ? widget.onOpen
+                  : () => activateMusicCard(context, origin, widget.onOpen),
+          onLongPress: widget.onSelect ?? widget.onLongPress,
           onFocusChange: (focused) {
             setState(() => _focused = focused);
             if (focused) {
@@ -91,7 +99,7 @@ class _MusicCatalogCardState extends State<MusicCatalogCard> {
           },
           borderRadius: BorderRadius.circular(6),
           child: Container(
-            foregroundDecoration: _focused
+            foregroundDecoration: _focused || widget.selected == true
                 ? BoxDecoration(
                     borderRadius: BorderRadius.circular(6),
                     border: Border.all(color: colors.primary, width: 2),
@@ -114,7 +122,8 @@ class _MusicCatalogCardState extends State<MusicCatalogCard> {
                           durationSeconds: song.durationSeconds,
                           fallback: artwork,
                         ),
-                      if (widget.showPlayIndicator || playing != null)
+                      if (widget.selected == null &&
+                          (widget.showPlayIndicator || playing != null))
                         PositionedDirectional(
                           end: 8,
                           bottom: 8,

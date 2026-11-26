@@ -11,9 +11,11 @@ import 'community_music_artwork.dart';
 import 'music_card_playback.dart';
 import 'music_collection_panes.dart';
 import 'music_discovery_snooze.dart';
+import 'music_discovery_song_selection.dart';
 import 'music_library_actions.dart';
 import 'music_status_title.dart';
 import 'music_song_row_swipe.dart';
+import 'music_song_selection_bar.dart';
 import 'music_screen_privacy.dart';
 
 /// A recommendation shelf opens as a playable collection, following Muzza's
@@ -182,80 +184,104 @@ class _MusicRecommendationCollectionState
                       Text(locals.musicEmptyCollection),
                   ]),
                 );
-                final songs = SliverList.builder(
-                  key: const ValueKey('music-recommendation-tracks'),
-                  itemCount: tracks.length,
-                  itemBuilder: (_, index) => Builder(builder: (context) {
-                    final song = tracks[index];
-                    final video = song.toVideo();
-                    final artists = song.artists.join(', ');
-                    final visibility = widget.snooze;
-                    final recommendation = visibility == null
-                        ? null
-                        : MusicSongRecommendation(
-                            isCurrent: () => _current,
-                            onSnooze: () => showMusicDiscoverySnooze(
-                                context, visibility, song, () => _current),
-                          );
-                    final origin = _origin(song.videoId);
-                    final playing = origin == null
-                        ? null
-                        : watchMusicCardPlaying(context, origin);
-                    final indicator = musicCardPlaybackIcon(playing);
-                    Future<void> start() => _play(from: song.videoId);
-                    Future<void> tap() =>
-                        _play(from: song.videoId, songTap: true);
-                    void activate() {
-                      if (!_current) return;
-                      if (origin == null) {
-                        tap();
-                      } else {
-                        activateMusicCard(context, origin, tap);
-                      }
-                    }
-
-                    final tile = Semantics(
-                      onTapHint: musicCardPlaybackHint(context, playing),
-                      child: ListTile(
-                        onTap: activate,
-                        onLongPress: () => MusicLibraryActions.showSongMenu(
-                            context, video,
-                            recommendation: recommendation, onPlay: start),
-                        leading: _art(song, size: 48, songRow: true),
-                        title: MusicStatusTitle.song(
-                            video: video,
-                            child: Text(song.title,
-                                maxLines: 1, overflow: TextOverflow.ellipsis)),
-                        subtitle: artists.isEmpty
+                return MusicDiscoverySongSelection(
+                  source: (widget.collectionId, widget.tracks),
+                  songs: [for (final track in tracks) track.toVideo()],
+                  isCurrent: widget.isCurrent,
+                  fill: true,
+                  builder: (context, selection) {
+                    final songs = SliverList.builder(
+                      key: const ValueKey('music-recommendation-tracks'),
+                      itemCount: tracks.length,
+                      itemBuilder: (_, index) => Builder(builder: (context) {
+                        final song = tracks[index];
+                        final video = song.toVideo();
+                        final artists = song.artists.join(', ');
+                        final visibility = widget.snooze;
+                        final recommendation = visibility == null
                             ? null
-                            : Text(artists,
-                                maxLines: 1, overflow: TextOverflow.ellipsis),
-                        trailing:
-                            Row(mainAxisSize: MainAxisSize.min, children: [
-                          if (indicator != null) indicator,
-                          MusicLibraryActions(
-                              videos: [video],
-                              recommendation: recommendation,
-                              onPlay: start),
-                        ]),
+                            : MusicSongRecommendation(
+                                isCurrent: () => _current,
+                                onSnooze: () => showMusicDiscoverySnooze(
+                                    context, visibility, song, () => _current),
+                              );
+                        final origin = _origin(song.videoId);
+                        final playing = origin == null
+                            ? null
+                            : watchMusicCardPlaying(context, origin);
+                        final indicator = musicCardPlaybackIcon(playing);
+                        Future<void> start() => _play(from: song.videoId);
+                        Future<void> tap() =>
+                            _play(from: song.videoId, songTap: true);
+                        void activate() {
+                          if (!_current) return;
+                          if (origin == null) {
+                            tap();
+                          } else {
+                            activateMusicCard(context, origin, tap);
+                          }
+                        }
+
+                        final selected = selection.selected(index);
+                        final select = selection.toggle(index);
+                        final tile = Semantics(
+                          onTapHint: selected == null
+                              ? musicCardPlaybackHint(context, playing)
+                              : null,
+                          child: ListTile(
+                            selected: selected == true,
+                            selectedTileColor: Theme.of(context)
+                                .colorScheme
+                                .secondaryContainer,
+                            onTap: selected == null ? activate : select,
+                            onLongPress: select,
+                            leading: _art(song, size: 48, songRow: true),
+                            title: MusicStatusTitle.song(
+                                video: video,
+                                child: Text(song.title,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis)),
+                            subtitle: artists.isEmpty
+                                ? null
+                                : Text(artists,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis),
+                            trailing:
+                                Row(mainAxisSize: MainAxisSize.min, children: [
+                              if (selected == null) ...[
+                                if (indicator != null) indicator,
+                                MusicLibraryActions(
+                                  videos: [video],
+                                  recommendation: recommendation,
+                                  onPlay: start,
+                                  onSelectSong: select,
+                                ),
+                              ] else
+                                MusicSongSelectButton(
+                                    selected: selected, onPressed: select),
+                            ]),
+                          ),
+                        );
+                        return MusicSongRowSwipe(
+                          key: ValueKey('music-collection-${song.videoId}'),
+                          onAction: selected == null
+                              ? (action) => MusicLibraryActions.queueSong(
+                                  context, video, action)
+                              : null,
+                          child: tile,
+                        );
+                      }),
+                    );
+                    return MusicCollectionPanes(
+                      details: details,
+                      buildTracks: (_, split) => CustomScrollView(
+                        slivers: [
+                          if (!split) SliverToBoxAdapter(child: details),
+                          songs,
+                        ],
                       ),
                     );
-                    return MusicSongRowSwipe(
-                      key: ValueKey('music-collection-${song.videoId}'),
-                      onAction: (action) =>
-                          MusicLibraryActions.queueSong(context, video, action),
-                      child: tile,
-                    );
-                  }),
-                );
-                return MusicCollectionPanes(
-                  details: details,
-                  buildTracks: (_, split) => CustomScrollView(
-                    slivers: [
-                      if (!split) SliverToBoxAdapter(child: details),
-                      songs,
-                    ],
-                  ),
+                  },
                 );
               },
             ),

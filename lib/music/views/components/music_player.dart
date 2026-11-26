@@ -8,6 +8,7 @@ import 'package:clipious/downloads/states/download_manager.dart';
 import 'package:clipious/globals.dart' show db;
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' show isTv;
+import 'package:clipious/music/models/device_playlist_track.dart';
 import 'package:clipious/music/models/local_music_artist.dart';
 import 'package:clipious/music/models/local_music_track.dart';
 import 'package:clipious/music/models/music_artist_identity.dart';
@@ -2214,6 +2215,7 @@ enum _QueueSelectionAction {
 }
 
 enum _QueueRowAction {
+  select,
   play,
   pause,
   next,
@@ -2233,6 +2235,13 @@ typedef _QueueMenuCommand = Future<void> Function();
 
 enum _QueueFollow { reveal, center, jump, find }
 
+typedef _QueueOwner = ({
+  String profileId,
+  int sessionRevision,
+  int generation,
+  bool catalog,
+});
+
 ({String title, String artist}) _queueDisplayLabels(
     IdedVideo entry, MusicPlaybackLabels labels) {
   final raw = musicQueueLabels(entry);
@@ -2244,21 +2253,23 @@ enum _QueueFollow { reveal, center, jump, find }
 
 class _MusicQueueState extends State<MusicQueue> {
   final _scroll = ScrollController();
+  final _selectFocus = FocusNode();
+  final _closeSelectionFocus = FocusNode();
   final _scrollPointers = <int>{};
-  ({(String, int, int) owner, String id, int index, double extent})? _activeRow;
+  ({_QueueOwner owner, String id, int index, double extent})? _activeRow;
   String? _foundId;
   (int, double)? _foundRow;
   _QueueFollow? _pendingFollow;
   bool _followScheduled = false;
   ({
-    (String, int, int) owner,
+    _QueueOwner owner,
     List<String> order,
     List<String> upcoming,
     String? active,
     int from,
   })? _drag;
-  Set<String>? _selection;
-  (String, int, int)? _queueOwner;
+  Map<String, IdedVideo>? _selection;
+  _QueueOwner? _queueOwner;
   ({int count, bool Function() restore})? _removalUndo;
   bool _removalUndoUnavailable = false;
   Timer? _removalNoticeTimer;
@@ -2299,6 +2310,12 @@ class _MusicQueueState extends State<MusicQueue> {
             videoThumbnails: musicMetadata.thumbnails),
       _ => null,
     };
+  }
+
+  Video? _playlistSong(IdedVideo entry) {
+    if (!isLocalMusicPlaybackId(entry.videoId)) return _catalogSong(entry);
+    final track = localMusicTrackForPlayback(entry.videoId);
+    return track == null ? null : devicePlaylistVideo(track);
   }
 
   bool _canDownload(PlayerCubit player, Video song) {
@@ -2359,7 +2376,7 @@ class _MusicQueueState extends State<MusicQueue> {
       ];
 
   void _followActiveRow(
-      (String, int, int) owner, String? id, int index, double extent) {
+      _QueueOwner owner, String? id, int index, double extent) {
     final previous = _activeRow;
     _activeRow = id == null || index < 0
         ? null
@@ -2430,10 +2447,21 @@ class _MusicQueueState extends State<MusicQueue> {
   void dispose() {
     _removalNoticeTimer?.cancel();
     _scroll.dispose();
+    _selectFocus.dispose();
+    _closeSelectionFocus.dispose();
     super.dispose();
   }
 
-  void _closeSelection() => setState(() => _selection = null);
+  void _openSelection([IdedVideo? entry]) {
+    setState(
+        () => _selection = {if (entry != null) playbackQueueId(entry): entry});
+    _closeSelectionFocus.requestFocus();
+  }
+
+  void _closeSelection() {
+    setState(() => _selection = null);
+    _selectFocus.requestFocus();
+  }
 
   void _showRemovalNotice({
     ({int count, bool Function() restore})? undo,
@@ -2485,8 +2513,12 @@ class _MusicQueueState extends State<MusicQueue> {
     final app = context.watch<AppCubit>();
     final session = app.state;
     final playlistGeneration = player.playlistGeneration;
-    final owner =
-        (session.profileId, session.sessionRevision, playlistGeneration);
+    final owner = (
+      profileId: session.profileId,
+      sessionRevision: session.sessionRevision,
+      generation: playlistGeneration,
+      catalog: state.videos.isNotEmpty,
+    );
     if (_queueOwner != owner) {
       _queueOwner = owner;
       _selection = null;
@@ -2495,10 +2527,16 @@ class _MusicQueueState extends State<MusicQueue> {
       _removalUndo = null;
       _removalUndoUnavailable = false;
     }
+    if (session.globalLoading || session.sessionRecoveryRequired) {
+      _selection = null;
+    }
     final settings = context.watch<SettingsCubit>();
     final locked = settings.state.musicQueueLocked;
     final locals = AppLocalizations.of(context)!;
-    final order = videos.map(playbackQueueId).toList();
+    final rowsById = {
+      for (final entry in videos) playbackQueueId(entry): entry
+    };
+    final order = rowsById.keys.toList();
     final ids = order.toSet();
     final upcoming = state.playQueue.where(ids.contains).toList();
     final active = order.indexOf(currentId ?? '');
@@ -2516,7 +2554,9 @@ class _MusicQueueState extends State<MusicQueue> {
       if (_pendingFollow == _QueueFollow.find) _pendingFollow = null;
     }
     _followActiveRow(owner, currentId, active, extent);
-    final selection = _selection?..retainAll(ids);
+    // An occurrence ID can be reused after removal within the same queue.
+    final selection = _selection
+      ?..removeWhere((id, entry) => !identical(rowsById[id], entry));
     final allSelected = ids.isNotEmpty && selection?.length == ids.length;
     final editing = !locked && selection == null;
     bool sessionCurrent() =>
@@ -2530,7 +2570,9 @@ class _MusicQueueState extends State<MusicQueue> {
         app.state.server == session.server &&
         !player.state.isClosing;
     bool current() =>
-        sessionCurrent() && player.playlistGeneration == playlistGeneration;
+        sessionCurrent() &&
+        player.playlistGeneration == playlistGeneration &&
+        player.state.videos.isNotEmpty == owner.catalog;
 
     Future<void> findInQueue() async {
       if (!current()) return;
@@ -2570,10 +2612,15 @@ class _MusicQueueState extends State<MusicQueue> {
     // Muzza Queue.kt binds selection to Timeline.Window UIDs. Local occurrence
     // IDs have the same role and make repeat uploads independently selectable.
     void toggle(String id) {
-      if (!current()) return;
+      final entry = rowsById[id];
+      if (entry == null ||
+          !current() ||
+          !_sources(player.state).any((row) => identical(row, entry))) {
+        return;
+      }
       setState(() {
-        final selected = _selection ??= <String>{};
-        if (!selected.add(id)) selected.remove(id);
+        final selected = _selection ??= {};
+        if (!identical(selected.remove(id), entry)) selected[id] = entry;
       });
     }
 
@@ -2588,28 +2635,45 @@ class _MusicQueueState extends State<MusicQueue> {
       }
     }
 
-    void removeOccurrences(Set<String> selectedIds) {
-      if (!current() || settings.state.musicQueueLocked) return;
-      final undo = player.removeInactiveQueueOccurrences(selectedIds
-          .where((id) => !_isProtectedOccurrence(player, id))
-          .toSet());
-      if (undo == null) return;
+    bool removeOccurrences(Set<String> selectedIds) {
+      if (!current() ||
+          settings.state.musicQueueLocked ||
+          selectedIds.any((id) => _isProtectedOccurrence(player, id))) {
+        return false;
+      }
+      final undo = player.removeInactiveQueueOccurrences(selectedIds);
+      if (undo == null) return false;
       _showRemovalNotice(
         undo: (
           count: undo.count,
           restore: () => current() && player.undoQueueRemoval(undo),
         ),
       );
+      return true;
+    }
+
+    List<IdedVideo>? liveSelection(Map<String, IdedVideo> requested) {
+      if (!current() ||
+          requested.isEmpty ||
+          _selection?.length != requested.length ||
+          !requested.entries.every(
+              (entry) => identical(_selection?[entry.key], entry.value))) {
+        return null;
+      }
+      final selected = _entries(player)
+          .where((entry) => identical(requested[playbackQueueId(entry)], entry))
+          .toList();
+      return selected.length == requested.length ? selected : null;
     }
 
     Future<void> selectedAction(
-        _QueueSelectionAction action, Set<String> selectedIds) async {
-      if (_selection == null) return;
-      final selected = _entries(player)
-          .where((entry) => selectedIds.contains(playbackQueueId(entry)))
-          .toList();
-      if (selected.isEmpty || selected.length != selectedIds.length) return;
-      _closeSelection();
+        _QueueSelectionAction action, Map<String, IdedVideo> requested) async {
+      final selected = liveSelection(requested);
+      if (selected == null) return;
+      if (action != _QueueSelectionAction.save &&
+          action != _QueueSelectionAction.remove) {
+        _closeSelection();
+      }
       switch (action) {
         case _QueueSelectionAction.play:
         case _QueueSelectionAction.shuffle:
@@ -2632,10 +2696,24 @@ class _MusicQueueState extends State<MusicQueue> {
           await _enqueueCopies(player, selected,
               next: action == _QueueSelectionAction.next);
         case _QueueSelectionAction.save:
-          final songs = selected.map(_catalogSong).nonNulls.toList();
-          if (songs.length == selected.length) {
-            await MusicLibraryActions.save(context, songs, inPlayer: true);
-          }
+          final songs = selected.map(_playlistSong).nonNulls.toList();
+          if (songs.length != selected.length) return;
+          final library = LocalMusicLibrary.instance;
+          final grant = library.selectionId;
+          final profile = library.visibilityProfile;
+          final deviceSongs =
+              songs.where((song) => isLocalMusicPlaybackId(song.videoId));
+          bool canSave() =>
+              liveSelection(requested) != null &&
+              deviceSongs.every((song) =>
+                  library.visibilityProfile == profile &&
+                  library.acceptsSessionSelection(grant) &&
+                  library.playlistTrackById(song.videoId, visibleOnly: true) !=
+                      null);
+
+          final saved = await MusicLibraryActions.save(context, songs,
+              inPlayer: true, canSave: canSave);
+          if (saved && canSave()) _closeSelection();
         case _QueueSelectionAction.download:
           await MusicLibraryActions.download(
               context,
@@ -2645,7 +2723,36 @@ class _MusicQueueState extends State<MusicQueue> {
                   .toList(),
               inPlayer: true);
         case _QueueSelectionAction.remove:
-          removeOccurrences(selectedIds);
+          final removable = requested.keys
+              .where((id) => !_isProtectedOccurrence(player, id))
+              .toSet();
+          if (removable.isEmpty || settings.state.musicQueueLocked) return;
+          final confirmed = await showDialog<bool>(
+            context: context,
+            useRootNavigator: false,
+            builder: (dialogContext) => PlayerModalBackHandler(
+              priority: 5,
+              child: AlertDialog(
+                title: Text(
+                    locals.musicQueueRemoveSelectedConfirm(removable.length)),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(dialogContext, false),
+                    child: Text(locals.cancel),
+                  ),
+                  TextButton(
+                    onPressed: () => Navigator.pop(dialogContext, true),
+                    child: Text(locals.musicQueueRemove),
+                  ),
+                ],
+              ),
+            ),
+          );
+          if (confirmed == true &&
+              liveSelection(requested) != null &&
+              removeOccurrences(removable)) {
+            _closeSelection();
+          }
       }
     }
 
@@ -2661,6 +2768,10 @@ class _MusicQueueState extends State<MusicQueue> {
           !settings.state.musicQueueLocked;
       final song = _catalogSong(item);
       switch (action) {
+        case _QueueRowAction.select:
+          if (_selection == null && identical(rowsById[id], item)) {
+            _openSelection(item);
+          }
         case _QueueRowAction.play:
           if (!isActive) {
             await player.selectQueueOccurrence(id);
@@ -2815,7 +2926,7 @@ class _MusicQueueState extends State<MusicQueue> {
                     localMusicTrackForPlayback(video.videoId) == null);
             final tile = ListTile(
               key: ValueKey('music-queue-$id'),
-              selected: isActive,
+              selected: selection?.containsKey(id) ?? isActive,
               minVerticalPadding: 8,
               contentPadding: const EdgeInsetsDirectional.fromSTEB(12, 0, 4, 0),
               shape: RoundedRectangleBorder(
@@ -2887,7 +2998,7 @@ class _MusicQueueState extends State<MusicQueue> {
               trailing: selection != null
                   ? Checkbox(
                       key: ValueKey('music-queue-select-$id'),
-                      value: selection.contains(id),
+                      value: selection.containsKey(id),
                       onChanged: (_) => toggle(id),
                       semanticLabel: title,
                     )
@@ -2933,6 +3044,7 @@ class _MusicQueueState extends State<MusicQueue> {
                               state.isPlaying;
                           return _menuItems(
                               {
+                                _QueueRowAction.select: locals.musicSelectSong,
                                 if (pause)
                                   _QueueRowAction.pause: locals.musicPause
                                 else if (!missing)
@@ -3251,8 +3363,12 @@ class _MusicQueueState extends State<MusicQueue> {
             IconButton(
               key: const ValueKey('music-queue-select-mode'),
               tooltip: locals.musicQueueSelect,
-              onPressed:
-                  videos.isEmpty ? null : () => setState(() => _selection = {}),
+              focusNode: _selectFocus,
+              onPressed: !current() || videos.isEmpty
+                  ? null
+                  : () {
+                      if (current()) _openSelection();
+                    },
               icon: const Icon(Icons.checklist_rounded),
             ),
             IconButton(
@@ -3272,21 +3388,31 @@ class _MusicQueueState extends State<MusicQueue> {
             builder: (context, constraints) => queueToolbar(constraints))
         : Row(children: [
             IconButton(
+              key: const ValueKey('music-queue-selection-cancel'),
               tooltip: locals.cancel,
+              focusNode: _closeSelectionFocus,
               onPressed: _closeSelection,
               icon: const Icon(Icons.close_rounded),
             ),
             Expanded(
+              child: Semantics(
+                liveRegion: true,
                 child: Text(locals.musicQueueSelected(selection.length),
-                    maxLines: 1, overflow: TextOverflow.ellipsis)),
+                    maxLines: 1, overflow: TextOverflow.ellipsis),
+              ),
+            ),
             IconButton(
               tooltip: allSelected
                   ? locals.musicQueueDeselectAll
                   : locals.musicQueueSelectAll,
               onPressed: ids.isEmpty
                   ? null
-                  : () =>
-                      setState(() => _selection = allSelected ? {} : {...ids}),
+                  : () {
+                      if (current()) {
+                        setState(() =>
+                            _selection = allSelected ? {} : {...rowsById});
+                      }
+                    },
               icon: Icon(allSelected
                   ? Icons.deselect_rounded
                   : Icons.select_all_rounded),
@@ -3294,14 +3420,12 @@ class _MusicQueueState extends State<MusicQueue> {
             PopupMenuButton<_QueueMenuCommand>(
               key: const ValueKey('music-queue-selection-menu'),
               enabled: selection.isNotEmpty,
-              tooltip: locals.musicQueueSelect,
+              tooltip: locals.musicPlaylistSelectionActions,
               onSelected: (command) => unawaited(command()),
               itemBuilder: (_) {
-                final selectedIds = Set<String>.of(selection);
-                final selected = videos
-                    .where(
-                        (entry) => selectedIds.contains(playbackQueueId(entry)))
-                    .toList();
+                final requested = Map<String, IdedVideo>.of(selection);
+                final selected = liveSelection(requested);
+                if (selected == null) return [];
                 return _menuItems(
                     {
                       _QueueSelectionAction.play: locals.musicPlay,
@@ -3311,7 +3435,7 @@ class _MusicQueueState extends State<MusicQueue> {
                         _QueueSelectionAction.append: locals.addToQueueList,
                       },
                       if (selected
-                          .every((entry) => _catalogSong(entry) != null))
+                          .every((entry) => _playlistSong(entry) != null))
                         _QueueSelectionAction.save: locals.musicSaveToPlaylist,
                       if (selected
                           .whereType<Video>()
@@ -3319,13 +3443,13 @@ class _MusicQueueState extends State<MusicQueue> {
                         _QueueSelectionAction.download:
                             locals.musicDownloadAudio,
                       if (!locked &&
-                          selectedIds
+                          requested.keys
                               .any((id) => !_isProtectedOccurrence(player, id)))
                         _QueueSelectionAction.remove:
                             locals.musicQueueRemoveSelected,
                     },
                     (action) =>
-                        perform(() => selectedAction(action, selectedIds)));
+                        perform(() => selectedAction(action, requested)));
               },
             ),
           ]);

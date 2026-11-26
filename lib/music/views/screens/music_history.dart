@@ -9,12 +9,14 @@ import 'package:clipious/main.dart' show isTv;
 import 'package:clipious/music/models/device_playlist_track.dart';
 import 'package:clipious/music/models/local_music_track.dart';
 import 'package:clipious/music/models/music_search_text.dart';
+import 'package:clipious/music/models/music_song_selection.dart';
 import 'package:clipious/music/models/on_device_music_entry.dart';
 import 'package:clipious/music/services/local_music_library.dart';
 import 'package:clipious/music/services/music_listening_history.dart';
 import 'package:clipious/music/views/components/music_history_privacy.dart';
 import 'package:clipious/music/views/components/music_history_transfer.dart';
 import 'package:clipious/music/views/components/music_listening_timeline.dart';
+import 'package:clipious/music/views/components/music_song_selection_bar.dart';
 import 'package:clipious/music/views/components/music_voice_filter.dart';
 import 'package:clipious/player/models/local_music_playback.dart';
 import 'package:clipious/player/states/player.dart';
@@ -28,15 +30,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 
 import 'music.dart';
 
-enum _HistoryAction {
-  play,
-  shuffle,
-  remove,
-  clear,
-  timeline,
-  privacy,
-  transfer
-}
+enum _HistoryAction { select, remove, clear, timeline, privacy, transfer }
 
 enum _PlaybackGroup { catalogAndDownloads, deviceFiles }
 
@@ -81,7 +75,7 @@ class _MusicHistoryScreenState extends State<MusicHistoryScreen> {
   late final MusicListeningHistory _history;
   late Map<String, _HistoryRow> _rows;
   late Map<String, _HistoryRow> _listens;
-  Set<String>? _selection;
+  final _selection = MusicSongSelection<String>();
   bool _everyListen = false;
   bool _finding = false;
   bool _removing = false;
@@ -114,7 +108,7 @@ class _MusicHistoryScreenState extends State<MusicHistoryScreen> {
     if (!_sameSession(_app.state)) return;
     setState(() {
       _readRows();
-      _selection?.retainAll(_rows.keys);
+      _selection.retain((_everyListen ? _listens : _rows).keys);
     });
   }
 
@@ -171,21 +165,22 @@ class _MusicHistoryScreenState extends State<MusicHistoryScreen> {
     if (_scroll.hasClients) _scroll.jumpTo(0);
   }
 
+  String _rowId(_HistoryRow row) => _everyListen ? row.event.id : row.id;
+
   void _startSelection([String? id]) {
-    setState(() => _selection = {if (id != null) id});
+    setState(() {
+      if (id == null) {
+        _selection.begin();
+      } else {
+        _selection.start(id);
+      }
+    });
     _focusAfterLayout(_exitSelectionFocus);
   }
 
   void _closeSelection() {
-    setState(() => _selection = null);
+    setState(_selection.clear);
     _focusAfterLayout(_selectFocus);
-  }
-
-  void _toggleSelection(String id) {
-    setState(() {
-      final selection = _selection!;
-      if (!selection.add(id)) selection.remove(id);
-    });
   }
 
   void _showMessage(String message) {
@@ -195,40 +190,55 @@ class _MusicHistoryScreenState extends State<MusicHistoryScreen> {
     }
   }
 
-  Future<void> _confirmRemoval({Set<String>? ids}) async {
-    if (!_current || _removing || ids?.isEmpty == true) return;
+  Future<void> _confirmRemoval({List<_HistoryRow>? rows}) async {
+    if (!_current || _removing || rows?.isEmpty == true) return;
     final locals = AppLocalizations.of(context)!;
-    final approved = ids == null ? null : Set<String>.unmodifiable(ids);
+    final everyListen = _everyListen;
+    final removalLabel = everyListen
+        ? locals.musicHistoryRemoveListens
+        : locals.musicHistoryRemove;
     final confirmed = await showDialog<bool>(
       context: context,
       useRootNavigator: false,
       animationStyle: AppMotion.dialogStyle(context),
       builder: (context) => AlertDialog(
-        title: Text(approved == null
-            ? locals.clearHistoryQuestion
-            : locals.musicHistoryRemove),
-        content: Text(approved == null
+        title: Text(rows == null ? locals.clearHistoryQuestion : removalLabel),
+        content: Text(rows == null
             ? locals.clearMusicPlaybackHistory
-            : locals.musicHistoryRemoveConfirm(approved.length)),
+            : everyListen
+                ? locals.musicHistoryRemoveListensConfirm(rows.length)
+                : locals.musicHistoryRemoveConfirm(rows.length)),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(context, false),
               child: Text(locals.cancel)),
           TextButton(
               onPressed: () => Navigator.pop(context, true),
-              child: Text(approved == null ? locals.ok : locals.delete)),
+              child: Text(rows == null ? locals.ok : locals.delete)),
         ],
       ),
     );
-    if (confirmed != true || !_current || _removing) return;
+    if (confirmed != true ||
+        !_current ||
+        _removing ||
+        everyListen != _everyListen) {
+      return;
+    }
     setState(() => _removing = true);
     try {
-      if (approved == null) {
+      if (rows == null) {
         await _history.clear();
+      } else if (everyListen) {
+        await _history.removeEvents(rows.map((row) => row.event));
       } else {
-        await _history.removeTracks(approved);
+        await _history.removeTracks(rows.map((row) => row.id).toSet());
       }
-      if (_current && _selection?.isEmpty == true) _closeSelection();
+      final remaining = (_everyListen ? _listens : _rows).keys;
+      if (_current &&
+          _selection.active &&
+          !remaining.any(_selection.contains)) {
+        _closeSelection();
+      }
     } catch (_) {
       _showMessage(locals.itemlistErrorGeneric);
     } finally {
@@ -262,6 +272,7 @@ class _MusicHistoryScreenState extends State<MusicHistoryScreen> {
     if (!_current || rows.isEmpty) return;
     final request = ++_replayRequest;
     final locals = AppLocalizations.of(context)!;
+    final everyListen = _everyListen;
     final hasDevice = rows.any((row) => row.isDevice);
     final hasCatalog = rows.any((row) => !row.isDevice);
     if (hasDevice && hasCatalog) {
@@ -277,7 +288,10 @@ class _MusicHistoryScreenState extends State<MusicHistoryScreen> {
         mounted &&
         _replayRequest == request &&
         _sameSession(_app.state) &&
-        rows.every((row) => _rows[row.id]?.event.id == row.event.id);
+        everyListen == _everyListen &&
+        rows.every((row) => everyListen
+            ? _listens.containsKey(row.event.id)
+            : _rows[row.id]?.event.id == row.event.id);
     if (!rowsCurrent()) return;
     if (shuffle) rows = List.of(rows)..shuffle();
 
@@ -453,18 +467,19 @@ class _MusicHistoryScreenState extends State<MusicHistoryScreen> {
       );
 
   Widget _toolbar(List<_HistoryRow> visible, AppLocalizations locals) {
-    final selection = _selection;
-    if (selection == null) {
+    if (!_selection.active) {
       return Row(mainAxisAlignment: MainAxisAlignment.end, children: [
-        IconButton(
-            tooltip: locals.musicPlayAll,
-            icon: const Icon(Icons.play_arrow),
-            onPressed: visible.isEmpty ? null : () => _play(visible)),
-        IconButton(
-            tooltip: locals.musicShuffleAll,
-            icon: const Icon(Icons.shuffle),
-            onPressed:
-                visible.isEmpty ? null : () => _play(visible, shuffle: true)),
+        if (!_everyListen) ...[
+          IconButton(
+              tooltip: locals.musicPlayAll,
+              icon: const Icon(Icons.play_arrow),
+              onPressed: visible.isEmpty ? null : () => _play(visible)),
+          IconButton(
+              tooltip: locals.musicShuffleAll,
+              icon: const Icon(Icons.shuffle),
+              onPressed:
+                  visible.isEmpty ? null : () => _play(visible, shuffle: true)),
+        ],
         IconButton(
             focusNode: _selectFocus,
             tooltip: locals.musicQueueSelect,
@@ -472,65 +487,74 @@ class _MusicHistoryScreenState extends State<MusicHistoryScreen> {
             onPressed: visible.isEmpty ? null : _startSelection),
       ]);
     }
-    final selected =
-        visible.where((row) => selection.contains(row.id)).toList();
-    final allSelected = visible.isNotEmpty && selected.length == visible.length;
-    return Row(children: [
-      IconButton(
-          focusNode: _exitSelectionFocus,
-          tooltip: MaterialLocalizations.of(context).closeButtonTooltip,
-          icon: const Icon(Icons.close),
-          onPressed: _closeSelection),
-      Expanded(
-        child: Text(locals.musicQueueSelected(selected.length),
-            maxLines: 1, overflow: TextOverflow.ellipsis),
-      ),
-      IconButton(
-        tooltip: allSelected
-            ? locals.musicQueueDeselectAll
-            : locals.musicQueueSelectAll,
-        icon: Icon(allSelected ? Icons.deselect : Icons.select_all),
-        onPressed: visible.isEmpty
-            ? null
-            : () => setState(() {
-                  final ids = visible.map((row) => row.id);
-                  allSelected
-                      ? selection.removeAll(ids)
-                      : selection.addAll(ids);
-                }),
-      ),
-      PopupMenuButton<_HistoryAction>(
-        tooltip: locals.musicPlaylistSelectionActions,
-        enabled: selected.isNotEmpty && !_removing,
-        onSelected: (action) {
-          switch (action) {
-            case _HistoryAction.play:
-            case _HistoryAction.shuffle:
-              unawaited(
-                  _play(selected, shuffle: action == _HistoryAction.shuffle));
-            case _HistoryAction.remove:
-              unawaited(
-                  _confirmRemoval(ids: selected.map((row) => row.id).toSet()));
-            default:
-              break;
-          }
-        },
-        itemBuilder: (_) => [
-          PopupMenuItem(
-              value: _HistoryAction.play, child: Text(locals.musicPlay)),
-          PopupMenuItem(
-              value: _HistoryAction.shuffle, child: Text(locals.musicShuffle)),
-          PopupMenuItem(
-              value: _HistoryAction.remove,
-              child: Text(locals.musicHistoryRemove)),
-        ],
-      ),
-    ]);
+
+    final everyListen = _everyListen;
+    final visibleIds = visible.map(_rowId);
+    final selected = _selection.selectedRows(visible, _rowId);
+    final byEventId = {for (final row in selected) row.event.id: row};
+    final videos = [
+      for (final row in selected)
+        if (_selectionVideo(row) case final video?)
+          video.copyWith(queueEntryId: row.event.id),
+    ];
+    bool current() =>
+        mounted &&
+        _sameSession(_app.state) &&
+        everyListen == _everyListen &&
+        _selection.active &&
+        selected.every((row) =>
+            _selection.contains(_rowId(row)) &&
+            (everyListen
+                ? _listens.containsKey(row.event.id)
+                : _rows[row.id]?.event.id == row.event.id));
+
+    List<OnDeviceMusicEntry>? resolveOnDevice() {
+      if (!current() || selected.any((row) => !row.isDevice)) return null;
+      final library = LocalMusicLibrary.instance;
+      final tracks = [
+        for (final row in selected)
+          if (_visibleDeviceTrack(library, row.id) case final track?)
+            OnDeviceMusicEntry.device(track),
+      ];
+      return tracks.length == selected.length ? tracks : null;
+    }
+
+    return MusicSongSelectionBar(
+      selected: videos,
+      selectedCount: selected.length,
+      allSelected: _selection.allSelected(visibleIds),
+      onToggleAll: visible.isEmpty
+          ? null
+          : () => setState(() => _selection.toggleAll(visibleIds)),
+      onClose: _closeSelection,
+      closeFocus: _exitSelectionFocus,
+      isCurrent: current,
+      resolveOnDevice: resolveOnDevice,
+      closeOnPlay: false,
+      onPlay: (tracks) => _play([
+        for (final track in tracks) byEventId[track.queueEntryId]!,
+      ]),
+      removal: selected.isEmpty || _removing
+          ? null
+          : (
+              label: everyListen
+                  ? locals.musicHistoryRemoveListens
+                  : locals.musicHistoryRemove,
+              run: () => _confirmRemoval(rows: selected),
+            ),
+    );
+  }
+
+  Video? _selectionVideo(_HistoryRow row) {
+    if (!row.isDevice) return _historyVideo(row);
+    final track = _visibleDeviceTrack(LocalMusicLibrary.instance, row.id);
+    return track == null ? null : devicePlaylistVideo(track);
   }
 
   Widget _row(_HistoryRow row, AppLocalizations locals,
       {VoidCallback? replay}) {
-    final selected = _selection?.contains(row.id);
+    final id = _rowId(row);
+    final selected = _selection.contains(id);
     final material = MaterialLocalizations.of(context);
     final timestamp = replay == null
         ? material.formatCompactDate(row.localPlayedAt)
@@ -538,12 +562,13 @@ class _MusicHistoryScreenState extends State<MusicHistoryScreen> {
             alwaysUse24HourFormat: MediaQuery.alwaysUse24HourFormatOf(context));
     return ListTile(
       key: replay == null ? ValueKey(row.id) : null,
-      selected: selected ?? false,
-      leading: Icon(selected == null
-          ? Icons.music_note_outlined
-          : selected
-              ? Icons.check_box
-              : Icons.check_box_outline_blank),
+      selected: selected,
+      leading: _selection.active
+          ? MusicSongSelectButton(
+              selected: selected,
+              onPressed: () => setState(() => _selection.toggle(id)),
+            )
+          : const Icon(Icons.music_note_outlined),
       title: Text(row.title, maxLines: 1, overflow: TextOverflow.ellipsis),
       subtitle: Text(
           [row.artist, row.album, timestamp]
@@ -552,33 +577,43 @@ class _MusicHistoryScreenState extends State<MusicHistoryScreen> {
               .join(' · '),
           maxLines: 2,
           overflow: TextOverflow.ellipsis),
-      onTap: replay ??
-          (selected == null
-              ? () => _play([row])
-              : () => _toggleSelection(row.id)),
-      onLongPress: replay == null && selected == null
-          ? () => _startSelection(row.id)
-          : null,
-      trailing: replay != null || selected != null
+      onTap: _selection.active
+          ? () => setState(() => _selection.toggle(id))
+          : replay ?? () => _play([row]),
+      onLongPress: _selection.active ? null : () => _startSelection(id),
+      trailing: _selection.active
           ? null
           : PopupMenuButton<_HistoryAction>(
               onSelected: (action) {
-                if (!_current || !_rows.containsKey(row.id)) return;
-                if (action == _HistoryAction.timeline) {
-                  unawaited(showMusicListeningTimeline(context,
-                      trackId: row.id, title: row.title));
-                } else {
-                  unawaited(_confirmRemoval(ids: {row.id}));
+                if (!_current ||
+                    !(_everyListen ? _listens : _rows).containsKey(id)) {
+                  return;
+                }
+                switch (action) {
+                  case _HistoryAction.select:
+                    _startSelection(id);
+                  case _HistoryAction.timeline:
+                    unawaited(showMusicListeningTimeline(context,
+                        trackId: row.id, title: row.title));
+                  case _HistoryAction.remove:
+                    unawaited(_confirmRemoval(rows: [row]));
+                  default:
+                    break;
                 }
               },
               itemBuilder: (_) => [
+                PopupMenuItem(
+                    value: _HistoryAction.select,
+                    child: Text(locals.musicSelectSong)),
                 PopupMenuItem(
                     value: _HistoryAction.timeline,
                     child: Text(locals.musicListeningTimeline)),
                 PopupMenuItem(
                     enabled: !_removing,
                     value: _HistoryAction.remove,
-                    child: Text(locals.musicHistoryRemove)),
+                    child: Text(_everyListen
+                        ? locals.musicHistoryRemoveListens
+                        : locals.musicHistoryRemove)),
               ],
             ),
     );
@@ -616,6 +651,7 @@ class _MusicHistoryScreenState extends State<MusicHistoryScreen> {
     final locals = AppLocalizations.of(context)!;
     final material = MaterialLocalizations.of(context);
     final valid = context.select((AppCubit app) => _sameSession(app.state));
+    if (!valid) _selection.clear();
     final terms = musicSearchTerms(_query.text);
     final visible = [
       if (valid)
@@ -623,11 +659,10 @@ class _MusicHistoryScreenState extends State<MusicHistoryScreen> {
           if (terms.every(row.searchText.contains)) row,
     ];
     final positions = {
-      for (final (index, row) in visible.indexed)
-        ValueKey(_everyListen ? row.event.id : row.id): index,
+      for (final (index, row) in visible.indexed) ValueKey(_rowId(row)): index,
     };
     final body = Column(children: [
-      if (_selection == null)
+      if (!_selection.active)
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16),
           child: Wrap(spacing: 8, children: [
@@ -643,9 +678,8 @@ class _MusicHistoryScreenState extends State<MusicHistoryScreen> {
             ),
           ]),
         ),
-      if (_finding && _selection == null) _queryField(locals),
-      if (!_everyListen && (_rows.isNotEmpty || _selection != null))
-        _toolbar(visible, locals),
+      if (_finding && !_selection.active) _queryField(locals),
+      if (visible.isNotEmpty || _selection.active) _toolbar(visible, locals),
       Expanded(
         child: visible.isEmpty
             ? Center(
@@ -667,10 +701,10 @@ class _MusicHistoryScreenState extends State<MusicHistoryScreen> {
       ),
     ]);
     return PopScope(
-      canPop: !valid || (!_finding && _selection == null),
+      canPop: !valid || (!_finding && !_selection.active),
       onPopInvokedWithResult: (didPop, _) {
         if (didPop) return;
-        if (_selection != null) {
+        if (_selection.active) {
           _closeSelection();
         } else if (_finding) {
           _toggleFind();
@@ -680,7 +714,7 @@ class _MusicHistoryScreenState extends State<MusicHistoryScreen> {
         appBar: AppBar(
           title: Text(locals.musicPlaybackHistory),
           actions: [
-            if (valid && _selection == null)
+            if (valid && !_selection.active)
               IconButton(
                 key: const ValueKey('music-history-find'),
                 autofocus: isTv,
@@ -691,7 +725,7 @@ class _MusicHistoryScreenState extends State<MusicHistoryScreen> {
                 icon: Icon(_finding ? Icons.close : Icons.search),
                 onPressed: _toggleFind,
               ),
-            if (valid && _selection == null)
+            if (valid && !_selection.active)
               PopupMenuButton<_HistoryAction>(
                 key: const ValueKey('music-history-more'),
                 onSelected: (action) {

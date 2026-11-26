@@ -733,6 +733,26 @@ void main() {
     expect(find.text('Folder song'), findsNothing);
     final repeated = find.text('Looped song');
     expect(repeated, findsNWidgets(2));
+    final occurrences = find.widgetWithText(ListTile, 'Looped song');
+    await tester.longPress(occurrences.at(1));
+    await tester.pumpAndSettle();
+    expect(find.text('1 selected'), findsOneWidget);
+    expect(tester.widget<ListTile>(occurrences.at(0)).selected, isFalse);
+    expect(tester.widget<ListTile>(occurrences.at(1)).selected, isTrue);
+    await tester.tap(occurrences.at(0));
+    await tester.pumpAndSettle();
+    expect(find.text('2 selected'), findsOneWidget);
+    await tester.tap(occurrences.at(1));
+    await tester.pumpAndSettle();
+    expect(find.text('1 selected'), findsOneWidget);
+    expect(tester.widget<ListTile>(occurrences.at(0)).selected, isTrue);
+    expect(tester.widget<ListTile>(occurrences.at(1)).selected, isFalse);
+    expect(player.queues, isEmpty);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(find.text('1 selected'), findsNothing);
+    expect(find.text('Road set'), findsOneWidget);
+
     await tester.tap(repeated.at(1));
     await tester.pumpAndSettle();
     final queue = player.queues.single;

@@ -223,6 +223,22 @@ class MusicLibraryService {
         shouldWrite: () => changed);
   }
 
+  Future<bool> removeLikedSongs(Iterable<String> songIds,
+      {required bool Function() isCurrent}) async {
+    final ids = songIds.toSet();
+    if (ids.isEmpty) return false;
+    var changed = false;
+    await _write(null,
+        updateLikes: (songs) {
+          if (!isCurrent()) return;
+          final count = songs.length;
+          songs.removeWhere((song) => ids.contains(song.id));
+          changed = songs.length != count;
+        },
+        shouldWrite: () => changed);
+    return changed;
+  }
+
   /// Resolve a whole catalog page against one snapshot of this profile's
   /// saved song covers. The index changes with the stored library data.
   Map<String, List<ImageObject>> get coversBySongId {
@@ -323,11 +339,9 @@ class MusicLibraryService {
               ? clean
               : clean.withSavedTitle(savedTitle));
       changed = true;
-    },
-            shouldWrite: () => changed,
-            replacedSongId:
-                clean.kind == MusicLibraryKind.song ? clean.id : null)
-        .then((_) => changed);
+    }, shouldWrite: () => changed, replacedSongIds: [
+      if (clean.kind == MusicLibraryKind.song) clean.id,
+    ]).then((_) => changed);
   }
 
   /// Change a saved song's display title in place. Null restores its metadata
@@ -412,7 +426,22 @@ class MusicLibraryService {
   Future<void> remove(MusicLibraryKind kind, String id) => _write(
       (entries, _) =>
           entries.removeWhere((entry) => entry.kind == kind && entry.id == id),
-      replacedSongId: kind == MusicLibraryKind.song ? id : null);
+      replacedSongIds: [if (kind == MusicLibraryKind.song) id]);
+
+  Future<bool> removeSavedSongs(Iterable<String> ids,
+      {required bool Function() isCurrent}) async {
+    final selected = ids.toSet();
+    if (selected.isEmpty) return false;
+    var removed = false;
+    await _write((entries, _) {
+      if (!isCurrent()) return;
+      final count = entries.length;
+      entries.removeWhere((entry) =>
+          entry.kind == MusicLibraryKind.song && selected.contains(entry.id));
+      removed = count - entries.length == selected.length;
+    }, shouldWrite: () => removed, replacedSongIds: selected);
+    return removed;
+  }
 
   bool canRefreshSongMetadata(String id) =>
       _songId.stringMatch(id) == id && contains(MusicLibraryKind.song, id);
@@ -586,7 +615,7 @@ class MusicLibraryService {
       void Function(List<MusicLibraryEntry>, Set<String>)? updateLibrary,
       {void Function(List<MusicLibraryEntry>)? updateLikes,
       bool Function()? shouldWrite,
-      String? replacedSongId}) {
+      Iterable<String> replacedSongIds = const []}) {
     return _enqueueWrite(() async {
       final data = _read();
       final entries = _entries(data);
@@ -610,8 +639,8 @@ class MusicLibraryService {
       }
       await _database
           .saveSetting(SettingsValue(musicLibrarySettingName, value));
-      if (replacedSongId != null) {
-        _changes.songMetadataRefreshes.remove(replacedSongId);
+      for (final id in replacedSongIds) {
+        _changes.songMetadataRefreshes.remove(id);
       }
       _changes.changed();
     });

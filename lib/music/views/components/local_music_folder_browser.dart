@@ -4,26 +4,40 @@ import '../../../l10n/generated/app_localizations.dart';
 import '../../../main.dart' show isTv;
 import '../../models/local_music_track.dart';
 import '../../models/on_device_music_entry.dart';
+import '../../services/local_music_library.dart';
+import 'device_music_song_selection.dart';
 
 /// Browses only the verified ancestry of the current profile's playable rows.
 class LocalMusicFolderBrowser extends StatefulWidget {
   const LocalMusicFolderBrowser({
     super.key,
+    required this.library,
     required this.catalogChanges,
     required this.currentEntries,
+    required this.sourceScope,
     required this.order,
     required this.refresh,
     required this.unavailableMessage,
     required this.row,
   });
 
+  final LocalMusicLibrary library;
   final Listenable catalogChanges;
   final List<OnDeviceMusicEntry>? Function() currentEntries;
+  final Object? Function() sourceScope;
   final List<OnDeviceMusicEntry> Function(List<OnDeviceMusicEntry>) order;
   final VoidCallback? Function() refresh;
   final String Function() unavailableMessage;
-  final Widget Function(BuildContext, List<OnDeviceMusicEntry>, int,
-      LocalMusicFolderLocation, bool autofocus) row;
+  final Widget Function(
+    BuildContext context,
+    List<OnDeviceMusicEntry> tracks,
+    int index,
+    LocalMusicFolderLocation folder,
+    bool autofocus, {
+    required bool? selected,
+    required VoidCallback? onToggleSelection,
+    required VoidCallback? onStartSelection,
+  }) row;
 
   @override
   State<LocalMusicFolderBrowser> createState() =>
@@ -102,77 +116,135 @@ class _LocalMusicFolderBrowserState extends State<LocalMusicFolderBrowser> {
             : depth == 0
                 ? locals.localMusicNoIndexedFolders
                 : locals.localMusicNoVisibleFiles;
-        return PopScope<void>(
-          canPop: canPop,
-          onPopInvokedWithResult: (didPop, _) {
-            if (!didPop && !canPop) _goUp();
+        final scope = widget.sourceScope();
+        final path = _path;
+        return DeviceMusicSongSelection(
+          library: widget.library,
+          tracks: [for (final track in tracks) track.deviceTrack!],
+          source: (scope, path),
+          currentTracks: () {
+            if (scope == null ||
+                scope != widget.sourceScope() ||
+                !identical(_path, path)) {
+              return null;
+            }
+            final live = widget.currentEntries();
+            if (live == null) return null;
+            return [
+              for (final entry in widget.order([
+                for (final entry in live)
+                  if (entry.deviceTrack?.folderLocations case final locations?)
+                    if (locations.isNotEmpty &&
+                        locations.length == depth &&
+                        _isInFolder(locations))
+                      entry,
+              ]))
+                entry.deviceTrack!,
+            ];
           },
-          child: Scaffold(
-            appBar: AppBar(
-              leading: canPop ? null : BackButton(onPressed: _goUp),
-              title: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(breadcrumb?.last ?? locals.localMusicBrowseFolders,
-                      maxLines: 1, overflow: TextOverflow.ellipsis),
-                  if (breadcrumb != null && breadcrumb.length > 1)
-                    Text(breadcrumb.take(breadcrumb.length - 1).join(' / '),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.bodySmall),
-                ],
-              ),
-              actions: [
-                IconButton(
-                  tooltip: locals.refresh,
-                  icon: const Icon(Icons.refresh),
-                  onPressed: widget.refresh(),
-                ),
-              ],
-            ),
-            body: SafeArea(
-              child: folders.isEmpty && tracks.isEmpty
-                  ? Center(
-                      child: Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Text(emptyMessage, textAlign: TextAlign.center),
-                    ))
-                  : FocusScope(
-                      key: ValueKey(_path.lastOrNull),
-                      child: ListView.builder(
-                        key: PageStorageKey(_path.lastOrNull),
-                        itemCount: folders.length + tracks.length,
-                        findChildIndexCallback: (key) => indexes[key],
-                        itemBuilder: (context, index) {
-                          final autofocus = isTv && index == focusIndex;
-                          if (index >= folders.length) {
-                            return widget.row(context, tracks,
-                                index - folders.length, folder!, autofocus);
-                          }
-                          final child = folders[index];
-                          final label = child.label.split(' / ');
-                          return ListTile(
-                            key: ValueKey(child.key),
-                            autofocus: autofocus,
-                            leading: const Icon(Icons.folder_outlined),
-                            title: Text(label.last,
-                                maxLines: 1, overflow: TextOverflow.ellipsis),
-                            subtitle: depth == 0 && label.length > 1
-                                ? Text(label.take(label.length - 1).join(' / '),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis)
-                                : null,
-                            trailing: const Icon(Icons.chevron_right),
-                            onTap: () => setState(() {
-                              _focusFolder = null;
-                              _path = [..._path, child.key];
-                            }),
-                          );
-                        },
-                      ),
+          builder: (context, selection) {
+            final selecting = selection.active;
+            return PopScope<void>(
+              canPop: canPop,
+              onPopInvokedWithResult: (didPop, _) {
+                if (!didPop && !canPop && !selecting) _goUp();
+              },
+              child: Scaffold(
+                appBar: AppBar(
+                  leading: canPop
+                      ? null
+                      : BackButton(
+                          onPressed: selecting ? selection.close : _goUp),
+                  title: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(breadcrumb?.last ?? locals.localMusicBrowseFolders,
+                          maxLines: 1, overflow: TextOverflow.ellipsis),
+                      if (breadcrumb != null && breadcrumb.length > 1)
+                        Text(breadcrumb.take(breadcrumb.length - 1).join(' / '),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.bodySmall),
+                    ],
+                  ),
+                  actions: [
+                    if (selection.selectButton case final button?) button,
+                    IconButton(
+                      tooltip: locals.refresh,
+                      icon: const Icon(Icons.refresh),
+                      onPressed: widget.refresh(),
                     ),
-            ),
-          ),
+                  ],
+                ),
+                body: SafeArea(
+                  child: Column(children: [
+                    if (selection.toolbar case final toolbar?) toolbar,
+                    Expanded(
+                      child: folders.isEmpty && tracks.isEmpty
+                          ? Center(
+                              child: Padding(
+                              padding: const EdgeInsets.all(16),
+                              child: Text(emptyMessage,
+                                  textAlign: TextAlign.center),
+                            ))
+                          : FocusScope(
+                              key: ValueKey(_path.lastOrNull),
+                              child: ListView.builder(
+                                key: PageStorageKey(_path.lastOrNull),
+                                itemCount: folders.length + tracks.length,
+                                findChildIndexCallback: (key) => indexes[key],
+                                itemBuilder: (context, index) {
+                                  final autofocus = isTv && index == focusIndex;
+                                  if (index >= folders.length) {
+                                    final songIndex = index - folders.length;
+                                    return widget.row(
+                                      context,
+                                      tracks,
+                                      songIndex,
+                                      folder!,
+                                      autofocus,
+                                      selected: selecting
+                                          ? selection.contains(songIndex)
+                                          : null,
+                                      onToggleSelection: selecting
+                                          ? () => selection.toggle(songIndex)
+                                          : null,
+                                      onStartSelection: () =>
+                                          selection.start(songIndex),
+                                    );
+                                  }
+                                  final child = folders[index];
+                                  final label = child.label.split(' / ');
+                                  return ListTile(
+                                    key: ValueKey(child.key),
+                                    autofocus: autofocus,
+                                    leading: const Icon(Icons.folder_outlined),
+                                    title: Text(label.last,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis),
+                                    subtitle: depth == 0 && label.length > 1
+                                        ? Text(
+                                            label
+                                                .take(label.length - 1)
+                                                .join(' / '),
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis)
+                                        : null,
+                                    trailing: const Icon(Icons.chevron_right),
+                                    onTap: () => setState(() {
+                                      _focusFolder = null;
+                                      _path = [..._path, child.key];
+                                    }),
+                                  );
+                                },
+                              ),
+                            ),
+                    ),
+                  ]),
+                ),
+              ),
+            );
+          },
         );
       },
     );

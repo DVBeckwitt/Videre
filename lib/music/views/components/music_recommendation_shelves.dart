@@ -35,9 +35,11 @@ import 'music_card_playback.dart';
 import 'music_catalog_cards.dart';
 import 'community_music_artwork.dart';
 import 'music_discovery_snooze.dart';
+import 'music_discovery_song_selection.dart';
 import 'music_dismissal_notice.dart';
 import 'music_library_actions.dart';
 import 'music_recommendation_collection.dart';
+import 'music_song_selection_bar.dart';
 import '../screens/music.dart';
 
 typedef _DailyMix = ({String label, List<String> seeds});
@@ -678,35 +680,46 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves>
           ),
         ]),
       ),
-      MusicCatalogShelf(
-        key: ValueKey('music-${shelf.id}'),
-        itemCount: tracks.length,
-        itemBuilder: (context, index) {
-          final song = tracks[index];
-          final cardOrigin = origin(song.videoId);
-          Future<void> start() => _playShelf(shelf, cardOrigin);
-          final recommendation = MusicSongRecommendation(
-            isCurrent: () => _current,
-            onSnooze: () => showMusicDiscoverySnooze(
-                context, _visibility, song, () => _current),
-          );
-          return MusicCatalogCard(
-            key: ValueKey('music-${shelf.id}-${song.videoId}'),
-            title: song.title,
-            subtitle: song.artists.join(', '),
-            song: song,
-            cardOrigin: cardOrigin,
-            showPlayIndicator: true,
-            badge: MusicLibraryActions(
-                videos: [song.toVideo()],
-                recommendation: recommendation,
-                onPlay: start),
-            onOpen: () => _playShelf(shelf, cardOrigin, songTap: true),
-            onLongPress: () => MusicLibraryActions.showSongMenu(
-                context, song.toVideo(),
-                recommendation: recommendation, onPlay: start),
-          );
-        },
+      MusicDiscoverySongSelection(
+        source: shelf.id,
+        songs: [for (final song in tracks) song.toVideo()],
+        isCurrent: () => _current,
+        builder: (context, selection) => MusicCatalogShelf(
+          key: ValueKey('music-${shelf.id}'),
+          itemCount: tracks.length,
+          itemBuilder: (context, index) {
+            final song = tracks[index];
+            final cardOrigin = origin(song.videoId);
+            Future<void> start() => _playShelf(shelf, cardOrigin);
+            final recommendation = MusicSongRecommendation(
+              isCurrent: () => _current,
+              onSnooze: () => showMusicDiscoverySnooze(
+                  context, _visibility, song, () => _current),
+            );
+            final selected = selection.selected(index);
+            final select = selection.toggle(index);
+            return MusicCatalogCard(
+              key: ValueKey('music-${shelf.id}-${song.videoId}'),
+              title: song.title,
+              subtitle: song.artists.join(', '),
+              song: song,
+              cardOrigin: cardOrigin,
+              showPlayIndicator: true,
+              badge: selected == null
+                  ? MusicLibraryActions(
+                      videos: [song.toVideo()],
+                      recommendation: recommendation,
+                      onPlay: start,
+                      onSelectSong: select,
+                    )
+                  : MusicSongSelectButton(
+                      selected: selected, onPressed: select),
+              onOpen: () => _playShelf(shelf, cardOrigin, songTap: true),
+              selected: selected,
+              onSelect: select,
+            );
+          },
+        ),
       ),
     ]);
   }
@@ -785,16 +798,22 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves>
               onPressed: () => showRecommendationSettings(context),
             ),
           ),
-          _QuickPickRows(
-            picks: picks,
-            focusForSlot: isTv
-                ? (slot) => _pickFocus.putIfAbsent(slot, FocusNode.new)
-                : null,
-            onOpen: _openQuickPick,
-            onFeedback: _feedback,
-            onSnooze: (track) => showMusicDiscoverySnooze(
-                context, _visibility, track, () => _current),
+          MusicDiscoverySongSelection(
+            source: 'quick-picks',
+            songs: [for (final pick in picks) pick.item.toVideo()],
             isCurrent: () => _current,
+            builder: (context, selection) => _QuickPickRows(
+              picks: picks,
+              selection: selection,
+              focusForSlot: isTv
+                  ? (slot) => _pickFocus.putIfAbsent(slot, FocusNode.new)
+                  : null,
+              onOpen: _openQuickPick,
+              onFeedback: _feedback,
+              onSnooze: (track) => showMusicDiscoverySnooze(
+                  context, _visibility, track, () => _current),
+              isCurrent: () => _current,
+            ),
           ),
         ],
         if (_current) ...[
@@ -817,58 +836,88 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves>
           if (speedDial.isEmpty)
             Text(locals.musicSpeedDialEmpty)
           else
-            MusicCatalogShelf(
-              key: const ValueKey('music-speed-dial'),
-              itemCount: speedDial.length,
-              itemBuilder: (_, index) {
-                final track = speedDial[index];
-                return MusicCatalogCard(
-                  key: ValueKey('music-speed-dial-${track.videoId}'),
-                  title: track.title,
-                  subtitle: track.artists.join(', '),
-                  song: track,
-                  cardOrigin: _speedDialOrigin(track),
-                  showPlayIndicator: true,
-                  onOpen: () => _openSpeedDial(videoId: track.videoId),
-                );
-              },
+            MusicDiscoverySongSelection(
+              source: 'speed-dial',
+              songs: [for (final song in speedDial) song.toVideo()],
+              isCurrent: () => _current,
+              builder: (context, selection) => MusicCatalogShelf(
+                key: const ValueKey('music-speed-dial'),
+                itemCount: speedDial.length,
+                itemBuilder: (_, index) {
+                  final track = speedDial[index];
+                  final selected = selection.selected(index);
+                  final select = selection.toggle(index);
+                  Future<void> open() => _openSpeedDial(videoId: track.videoId);
+                  return MusicCatalogCard(
+                    key: ValueKey('music-speed-dial-${track.videoId}'),
+                    title: track.title,
+                    subtitle: track.artists.join(', '),
+                    song: track,
+                    cardOrigin: _speedDialOrigin(track),
+                    showPlayIndicator: true,
+                    onOpen: open,
+                    selected: selected,
+                    onSelect: select,
+                    badge: selected == null
+                        ? MusicLibraryActions(
+                            videos: [track.toVideo()],
+                            onPlay: open,
+                            onSelectSong: select,
+                          )
+                        : MusicSongSelectButton(
+                            selected: selected, onPressed: select),
+                  );
+                },
+              ),
             ),
         ],
         if (showRecentActivity && _history.isNotEmpty) ...[
           _ShelfHeading(title: locals.musicKeepListening),
-          MusicCatalogShelf(
-            key: const ValueKey('music-keep-listening'),
-            itemCount: _history.length,
-            itemBuilder: (context, index) {
-              final track = _history[index];
-              final MusicCardOrigin cardOrigin = (
-                surface: MusicCardSurface.keepListening,
-                collectionId: null,
-                entryId: track.videoId,
-              );
-              Future<void> open() =>
-                  _open(track, _history, locals.musicKeepListening,
-                      cardOrigin: cardOrigin);
-              return MusicCatalogCard(
-                key: ValueKey('music-keep-listening-${track.videoId}'),
-                title: track.title,
-                subtitle: [
-                  if (track.artists.isNotEmpty) track.artists.join(', '),
-                  if (track.durationSeconds case final seconds?
-                      when seconds > 0)
-                    prettyDurationCustom(Duration(seconds: seconds)),
-                ].join(' • '),
-                song: track,
-                cardOrigin: cardOrigin,
-                badge: MusicLibraryActions(
-                    videos: [track.toVideo()], onPlay: open),
-                onOpen: open,
-                onLongPress: () => MusicLibraryActions.showSongMenu(
-                    context, track.toVideo(),
-                    onPlay: open),
-                showPlayIndicator: true,
-              );
-            },
+          MusicDiscoverySongSelection(
+            source: 'keep-listening',
+            songs: [for (final song in _history) song.toVideo()],
+            isCurrent: () => _current,
+            builder: (context, selection) => MusicCatalogShelf(
+              key: const ValueKey('music-keep-listening'),
+              itemCount: _history.length,
+              itemBuilder: (context, index) {
+                final track = _history[index];
+                final MusicCardOrigin cardOrigin = (
+                  surface: MusicCardSurface.keepListening,
+                  collectionId: null,
+                  entryId: track.videoId,
+                );
+                Future<void> open() =>
+                    _open(track, _history, locals.musicKeepListening,
+                        cardOrigin: cardOrigin);
+                final selected = selection.selected(index);
+                final select = selection.toggle(index);
+                return MusicCatalogCard(
+                  key: ValueKey('music-keep-listening-${track.videoId}'),
+                  title: track.title,
+                  subtitle: [
+                    if (track.artists.isNotEmpty) track.artists.join(', '),
+                    if (track.durationSeconds case final seconds?
+                        when seconds > 0)
+                      prettyDurationCustom(Duration(seconds: seconds)),
+                  ].join(' • '),
+                  song: track,
+                  cardOrigin: cardOrigin,
+                  badge: selected == null
+                      ? MusicLibraryActions(
+                          videos: [track.toVideo()],
+                          onPlay: open,
+                          onSelectSong: select,
+                        )
+                      : MusicSongSelectButton(
+                          selected: selected, onPressed: select),
+                  onOpen: open,
+                  selected: selected,
+                  onSelect: select,
+                  showPlayIndicator: true,
+                );
+              },
+            ),
           ),
         ],
         if (mixes.isNotEmpty) ...[
@@ -1002,6 +1051,7 @@ class _QuickPickScrollPhysics extends PageScrollPhysics {
 
 class _QuickPickRows extends StatefulWidget {
   final List<RecommendedItem<MusicTrack>> picks;
+  final MusicDiscoverySelectionRows selection;
   final FocusNode Function(int)? focusForSlot;
   final Future<void> Function(MusicTrack) onOpen;
   final void Function(MusicTrack, RecommendationFeedback) onFeedback;
@@ -1010,6 +1060,7 @@ class _QuickPickRows extends StatefulWidget {
 
   const _QuickPickRows(
       {required this.picks,
+      required this.selection,
       required this.focusForSlot,
       required this.onOpen,
       required this.onFeedback,
@@ -1088,6 +1139,8 @@ class _QuickPickRowsState extends State<_QuickPickRows> {
                           compact: compact,
                           titleLines: titleLines,
                           focusNode: widget.focusForSlot?.call(slot),
+                          selected: widget.selection.selected(slot),
+                          onSelect: widget.selection.toggle(slot),
                           onOpen: () => widget.onOpen(pick.item),
                           onFeedback: (feedback) =>
                               widget.onFeedback(pick.item, feedback),
@@ -1119,6 +1172,8 @@ class _QuickPickRow extends StatelessWidget {
   final bool compact;
   final int titleLines;
   final FocusNode? focusNode;
+  final bool? selected;
+  final VoidCallback onSelect;
   final Future<void> Function() onOpen;
   final ValueChanged<RecommendationFeedback> onFeedback;
   final Future<void> Function() onSnooze;
@@ -1129,6 +1184,8 @@ class _QuickPickRow extends StatelessWidget {
       required this.compact,
       required this.titleLines,
       required this.focusNode,
+      required this.selected,
+      required this.onSelect,
       required this.onOpen,
       required this.onFeedback,
       required this.onSnooze,
@@ -1149,17 +1206,18 @@ class _QuickPickRow extends StatelessWidget {
     final playbackIcon = musicCardPlaybackIcon(playing);
     void activate() => activateMusicCard(context, origin, onOpen);
     return Semantics(
-      onTapHint: musicCardPlaybackHint(context, playing),
+      onTapHint:
+          selected == null ? musicCardPlaybackHint(context, playing) : null,
       child: ListTile(
+        selected: selected == true,
+        selectedTileColor: theme.colorScheme.secondaryContainer,
         focusNode: focusNode,
         contentPadding: const EdgeInsetsDirectional.only(start: 2, end: 4),
         horizontalTitleGap: 12,
         minLeadingWidth: 0,
         visualDensity: VisualDensity.compact,
-        onTap: activate,
-        onLongPress: () => MusicLibraryActions.showSongMenu(
-            context, track.toVideo(),
-            onPlay: onOpen, recommendation: recommendation),
+        onTap: selected == null ? activate : onSelect,
+        onLongPress: onSelect,
         onFocusChange: (focused) {
           if (focused) Scrollable.ensureVisible(context, alignment: 0.5);
         },
@@ -1192,11 +1250,16 @@ class _QuickPickRow extends StatelessWidget {
             style: theme.textTheme.bodyMedium
                 ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
         trailing: Row(mainAxisSize: MainAxisSize.min, children: [
-          if (playbackIcon != null) playbackIcon,
-          MusicLibraryActions(
+          if (selected == null) ...[
+            if (playbackIcon != null) playbackIcon,
+            MusicLibraryActions(
               videos: [track.toVideo()],
               onPlay: onOpen,
-              recommendation: recommendation),
+              recommendation: recommendation,
+              onSelectSong: onSelect,
+            ),
+          ] else
+            MusicSongSelectButton(selected: selected, onPressed: onSelect),
         ]),
       ),
     );

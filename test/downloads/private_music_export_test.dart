@@ -1,13 +1,19 @@
 import 'dart:async';
+import 'dart:ui' show PointerDeviceKind;
 
+import 'package:clipious/app/states/app.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/downloads/models/music_download_format.dart';
 import 'package:clipious/downloads/states/download_manager.dart';
 import 'package:clipious/downloads/views/components/download_folder.dart';
 import 'package:clipious/downloads/views/components/downloaded_video.dart';
+import 'package:clipious/downloads/views/screens/download_manager.dart';
 import 'package:clipious/globals.dart';
+import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
+import 'package:clipious/player/states/player.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
+import 'package:clipious/videos/models/ided_video.dart';
 import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -24,6 +30,49 @@ const _song = DownloadedVideo(
   quality: 'audio',
 );
 
+class _App extends AppCubit {
+  _App() : super(AppState(0, null, HomeLayout())) {
+    intentDataStreamSubscription = const Stream.empty().listen((_) {});
+  }
+
+  @override
+  void initState() {}
+
+  @override
+  void onReady() {}
+}
+
+class _Player extends Cubit<PlayerState> implements PlayerCubit {
+  _Player() : super(PlayerState.init(null));
+
+  final plays = <List<DownloadedVideo>>[];
+
+  @override
+  int get playlistGeneration => 0;
+
+  @override
+  bool canAddMusicRequest(IdedVideo entry) => false;
+
+  @override
+  Future<void> playOfflineVideos(
+    List<DownloadedVideo> videos, {
+    int startIndex = 0,
+    bool fromMusic = false,
+    bool songTap = false,
+  }) async {
+    plays.add(videos);
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+class _RemovalApproval extends Fake implements MusicDownloadDeletionApproval {
+  _RemovalApproval(List<DownloadedVideo> rows) : rows = List.unmodifiable(rows);
+
+  final List<DownloadedVideo> rows;
+}
+
 class _Downloads extends Cubit<DownloadManagerState>
     implements DownloadManagerCubit {
   _Downloads() : super(const DownloadManagerState());
@@ -33,6 +82,33 @@ class _Downloads extends Cubit<DownloadManagerState>
   final destinations = <String>[];
   DateTime? retryAt;
   final actions = <String>[];
+  final approvedRemovals = <List<DownloadedVideo>>[];
+
+  @override
+  bool canPlayAll() => false;
+
+  @override
+  bool isMusicDownloadRequiredByPlaylist(String videoId) => false;
+
+  @override
+  _RemovalApproval captureMusicDeletion(List<DownloadedVideo> selection) =>
+      _RemovalApproval(selection);
+
+  @override
+  Future<int> deleteMusicSelection(
+    MusicDownloadDeletionApproval approval, {
+    required bool Function() isCurrent,
+  }) async {
+    if (!isCurrent()) return 0;
+    final selected = (approval as _RemovalApproval).rows;
+    approvedRemovals.add(selected);
+    emit(
+      state.copyWith(
+        videos: state.videos.where((row) => !selected.contains(row)).toList(),
+      ),
+    );
+    return selected.length;
+  }
 
   void setPending(DownloadManagerState next) => emit(next);
 
@@ -119,6 +195,129 @@ void main() {
     await tester.pumpAndSettle();
     return locals;
   }
+
+  testWidgets(
+      'Downloads long press selects, Back exits and confirmation '
+      'deletes only the chosen songs in display order', (tester) async {
+    final app = _App();
+    final player = _Player();
+    addTearDown(app.close);
+    addTearDown(player.close);
+
+    DownloadedVideo song(String id, String title) => _song.copyWith(
+          videoId: id,
+          title: title,
+          musicMetadata: MusicMetadata(title: title, artist: 'Artist'),
+        );
+    final first = song('firstsong01', 'First song');
+    final middle = song('middlesong1', 'Middle song');
+    final last = song('lastsong001', 'Last song');
+    await tester.runAsync(() async {
+      for (final row in [first, middle, last]) {
+        await db.upsertDownload(row);
+      }
+    });
+    downloads.setPending(DownloadManagerState(videos: [first, middle, last]));
+
+    await tester.pumpWidget(
+      MultiBlocProvider(
+        providers: [
+          BlocProvider<AppCubit>.value(value: app),
+          BlocProvider<PlayerCubit>.value(value: player),
+          BlocProvider<DownloadManagerCubit>.value(value: downloads),
+        ],
+        child: MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          locale: const Locale('en'),
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => TextButton(
+                onPressed: () => Navigator.of(context).push<void>(
+                  MaterialPageRoute(
+                    builder: (_) => const DownloadManagerScreen(),
+                  ),
+                ),
+                child: const Text('Open Downloads'),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('Open Downloads'));
+    await tester.pumpAndSettle();
+    final locals = AppLocalizations.of(
+      tester.element(find.byType(DownloadManagerScreen)),
+    )!;
+
+    Future<void> openDelete() async {
+      await tester.tap(find.byTooltip(locals.musicPlaylistSelectionActions));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(locals.musicRemoveSelectedDownloads));
+      await tester.pumpAndSettle();
+      expect(find.byType(AlertDialog), findsOneWidget);
+    }
+
+    expect(find.byTooltip(locals.musicSongActions), findsNWidgets(3));
+    await tester.tap(find.text(middle.title));
+    expect(player.plays, [
+      [middle],
+    ]);
+
+    await tester.longPress(find.text(last.title),
+        kind: PointerDeviceKind.mouse);
+    await tester.pumpAndSettle();
+    expect(find.text(locals.musicQueueSelected(1)), findsOneWidget);
+    await tester.tap(find.text(first.title));
+    await tester.pumpAndSettle();
+    expect(find.text(locals.musicQueueSelected(2)), findsOneWidget);
+    expect(player.plays, [
+      [middle],
+    ]);
+    await openDelete();
+    await tester.tap(find.text(locals.cancel));
+    await tester.pumpAndSettle();
+    expect(downloads.approvedRemovals, isEmpty);
+    expect(find.text(locals.musicQueueSelected(2)), findsOneWidget);
+
+    await tester.tap(find.text(last.title));
+    await tester.pumpAndSettle();
+    expect(find.text(locals.musicQueueSelected(1)), findsOneWidget);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(find.byType(DownloadManagerScreen), findsOneWidget);
+    expect(find.text(locals.musicQueueSelected(1)), findsNothing);
+    expect(find.byTooltip(locals.musicQueueSelect), findsOneWidget);
+
+    await tester.tap(find.byTooltip(locals.musicSongActions).last);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('music-song-play')), findsOneWidget);
+    await tester.tap(find.text(locals.musicSelectSong));
+    await tester.pumpAndSettle();
+    expect(find.text(locals.musicQueueSelected(1)), findsOneWidget);
+    await tester.tap(find.byTooltip(locals.musicQueueSelectAll));
+    await tester.pumpAndSettle();
+    expect(find.text(locals.musicQueueSelected(3)), findsOneWidget);
+    await tester.tap(find.text(middle.title));
+    await tester.pumpAndSettle();
+    expect(find.text(locals.musicQueueSelected(2)), findsOneWidget);
+    await openDelete();
+    await tester.tap(find.text(locals.musicRemoveSelectedDownloads));
+    await tester.pumpAndSettle();
+    expect(downloads.approvedRemovals, [
+      [first, last],
+    ]);
+    expect(find.text(first.title), findsNothing);
+    expect(find.text(last.title), findsNothing);
+    expect(find.text(middle.title), findsOneWidget);
+    expect(player.plays, [
+      [middle],
+    ]);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(find.text('Open Downloads'), findsOneWidget);
+  });
 
   testWidgets(
       'audio destination distinguishes default and private and survives picker cancellation',

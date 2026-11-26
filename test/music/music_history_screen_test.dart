@@ -390,6 +390,58 @@ void main() {
     expect(player.chronologicalQueues.last.startIndex, 1);
   });
 
+  testWidgets('Every listen removes only confirmed occurrences of a song',
+      (tester) async {
+    await tester.runAsync(() async {
+      await seed(db, 'a', 'Repeated song');
+      await seed(db, 'b', 'Untouched song', order: 1);
+      await seed(db, 'a', 'Repeated song', order: 2);
+    });
+    final history = MusicListeningHistory.forProfile(db, db.profileId);
+    final events = history.events();
+    Finder tile(int index) => find.descendant(
+          of: find.byKey(ValueKey(events[index].id)),
+          matching: find.byType(ListTile),
+        );
+
+    await show(tester);
+    await tester.tap(find.text('Every listen'));
+    await tester.pumpAndSettle();
+    await tester.longPress(tile(0));
+    await tester.pumpAndSettle();
+    expect(tester.widget<ListTile>(tile(0)).selected, isTrue);
+    expect(tester.widget<ListTile>(tile(2)).selected, isFalse);
+    await tester.tap(tile(2));
+    await tester.pumpAndSettle();
+    expect(find.text('2 selected'), findsOneWidget);
+    expect(player.chronologicalQueues, isEmpty);
+
+    await tester.tap(tile(2));
+    await tester.pumpAndSettle();
+    await openSelectionAction(tester, 'Remove listens from Music history');
+    expect(find.text('Remove this listen from Music history?'), findsOneWidget);
+    await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+    await tester.pumpAndSettle();
+    expect(history.events().map((event) => event.id),
+        events.map((event) => event.id));
+    expect(find.text('1 selected'), findsOneWidget);
+
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(find.text('1 selected'), findsNothing);
+    expect(find.text('Music history'), findsOneWidget);
+
+    await tester.longPress(tile(0));
+    await tester.pumpAndSettle();
+    await openSelectionAction(tester, 'Remove listens from Music history');
+    await tester.tap(delete);
+    await settleHistoryWrite(tester);
+    expect(history.events().map((event) => event.id),
+        [events[1].id, events[2].id]);
+    expect(find.text('Repeated song'), findsOneWidget);
+    expect(find.text('Untouched song'), findsOneWidget);
+  });
+
   testWidgets('clearing Every listen retains other profiles and Video history',
       (tester) async {
     final current = db.forProfile(db.profileId);

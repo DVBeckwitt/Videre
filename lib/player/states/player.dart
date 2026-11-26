@@ -6486,7 +6486,8 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
           author: file.musicMetadata!.artist,
           lengthSeconds: file.lengthSeconds,
           musicMetadata: file.musicMetadata,
-          explicitMusicDownload: musicDownloadFingerprint(file),
+          explicitMusicDownload:
+              file.explicitMusicDownload ?? musicDownloadFingerprint(file),
         ),
     ], next: next, recommendationSource: recommendationSource);
   }
@@ -8845,6 +8846,19 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       state.videos
           .any((video) => playbackQueueId(video) == state.currentQueueId);
 
+  bool _canEnqueueCatalogMusicSelection(List<Video> selection) {
+    if (!_hasCurrentCatalogQueueEntry) return false;
+    final device = selection.where((v) => isLocalMusicPlaybackId(v.videoId));
+    if (device.isEmpty) return true;
+    final library = LocalMusicLibrary.instance;
+    return state.isAudio &&
+        library.acceptsSessionSelection(library.selectionId) &&
+        (!state.videos.any((v) => isLocalMusicPlaybackId(v.videoId)) ||
+            library.acceptsSessionSelection(_queuedDeviceSelectionId)) &&
+        device.every((v) =>
+            library.playlistTrackById(v.videoId, visibleOnly: true) != null);
+  }
+
   List<DownloadedVideo>? _catalogMusicDownloadSelection(
       List<Video> selection, List<DownloadedVideo> downloads) {
     if (!canAddMusicDownloadsToQueue || downloads.length != selection.length) {
@@ -8853,14 +8867,23 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     for (final (index, file) in downloads.indexed) {
       if (file.videoId != selection[index].videoId) return null;
     }
-    return _resolveCompletedMusicDownloads(downloads, allowRepeats: true);
+    final files =
+        _resolveCompletedMusicDownloads(downloads, allowRepeats: true);
+    if (files == null) return null;
+    for (final (index, song) in selection.indexed) {
+      final fingerprint = song.explicitMusicDownload;
+      if (fingerprint == null) continue;
+      if (_explicitDownload(song) == null) return null;
+      files[index] = files[index].copyWith(explicitMusicDownload: fingerprint);
+    }
+    return files;
   }
 
   bool canEnqueueMusicSongs(List<Video> selection,
       {List<DownloadedVideo>? downloads}) {
     if (!_canEnqueueMusicSelection(selection)) return false;
     if (state.videos.isNotEmpty) {
-      return _hasCurrentCatalogQueueEntry &&
+      return _canEnqueueCatalogMusicSelection(selection) &&
           (downloads == null ||
               _catalogMusicDownloadSelection(selection, downloads) != null);
     }
@@ -8903,8 +8926,13 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       List<PlaylistReference?>? recommendationSources}) {
     if (!_canEnqueueMusicSelection(selection)) return Future.value(false);
     if (state.videos.isNotEmpty) {
-      if (!_hasCurrentCatalogQueueEntry) return Future.value(false);
+      if (!_canEnqueueCatalogMusicSelection(selection)) {
+        return Future.value(false);
+      }
       if (downloads == null) {
+        if (selection.any((v) => isLocalMusicPlaybackId(v.videoId))) {
+          _queuedDeviceSelectionId = LocalMusicLibrary.instance.selectionId;
+        }
         _enqueueQueueCopies(selection,
             next: next,
             recommendationSource: recommendationSource,

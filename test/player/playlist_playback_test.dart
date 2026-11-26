@@ -1566,4 +1566,43 @@ void main() {
             isCurrent: () => true),
         throwsStateError);
   });
+
+  test('catalog queue accepts only authorized device selection occurrences',
+      () async {
+    final folder = await openDeviceFolder();
+    final device = devicePlaylistVideo(folder.library.tracks.single)!;
+    const catalog = Video(
+        videoId: 'catalog0001',
+        musicMetadata: MusicMetadata(title: 'Catalog', artist: 'Artist'));
+    const untouched = Video(
+        videoId: 'catalog0002',
+        musicMetadata: MusicMetadata(title: 'Untouched', artist: 'Artist'));
+    await player.playMusicCollectionQueue([catalog, untouched],
+        queueTitle: 'Selection fixture');
+    await player.onProgress(const Duration(seconds: 37));
+    final current = player.state.currentlyPlaying;
+    final playhead = player.state.position;
+    final selection = [device, catalog, device];
+    expect(player.canEnqueueMusicSongs(selection), isTrue);
+    expect(await player.enqueueMusicSongs(selection, next: true), isTrue);
+    final queue = player.state.videos;
+    expect(queue.map((video) => video.videoId), [
+      catalog.videoId,
+      device.videoId,
+      catalog.videoId,
+      device.videoId,
+      untouched.videoId,
+    ]);
+    expect(queue.map(playbackQueueId).toSet(), hasLength(5));
+    expect(player.state.currentlyPlaying, same(current));
+    expect(player.state.position, playhead);
+
+    expect(await folder.library.setHideExplicitTracks(true), isTrue);
+    final eligibleQueue = player.state.videos;
+    expect(player.canEnqueueMusicSongs(selection), isFalse);
+    expect(await player.enqueueMusicSongs(selection, next: false), isFalse);
+    expect(player.state.videos, eligibleQueue);
+    expect(player.state.currentlyPlaying, same(current));
+    expect(player.state.position, playhead);
+  });
 }

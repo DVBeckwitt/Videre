@@ -13,6 +13,7 @@ import 'package:clipious/music/models/music_artist_identity.dart';
 import 'package:clipious/music/models/music_library_entry.dart';
 import 'package:clipious/music/models/music_lyrics.dart';
 import 'package:clipious/music/models/music_lyrics_match.dart';
+import 'package:clipious/music/models/music_song_selection.dart';
 import 'package:clipious/music/services/local_music_library.dart';
 import 'package:clipious/music/services/local_music_lyrics_authoring.dart';
 import 'package:clipious/music/services/music_library_search.dart';
@@ -958,6 +959,8 @@ void main() {
     });
     addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    final selection = MusicSongSelection<Object>();
+    var selectionRevision = 0;
 
     await tester.pumpWidget(MultiBlocProvider(
       providers: [
@@ -967,8 +970,19 @@ void main() {
       child: MaterialApp(
         localizationsDelegates: AppLocalizations.localizationsDelegates,
         supportedLocales: AppLocalizations.supportedLocales,
-        home: const Scaffold(
-          body: MusicLibrarySearchResults(query: 'cancion', active: true),
+        home: Scaffold(
+          body: StatefulBuilder(
+            builder: (context, setState) => MusicLibrarySearchResults(
+              query: 'cancion',
+              active: true,
+              songSelection: selection,
+              selectionRevision: selectionRevision,
+              changeSelection: (change) => setState(() {
+                change();
+                selectionRevision++;
+              }),
+            ),
+          ),
         ),
       ),
     ));

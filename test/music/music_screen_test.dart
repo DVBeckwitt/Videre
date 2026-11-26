@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:ui' show SemanticsAction, SemanticsRole, TextBox;
+import 'dart:ui'
+    show PointerDeviceKind, SemanticsAction, SemanticsRole, TextBox;
 
 import 'package:auto_route/auto_route.dart' show AutoRoute, DeepLink;
 import 'package:clipious/app/states/app.dart';
@@ -384,7 +385,8 @@ class _Player extends TestPlayerCubit {
   @override
   int get musicSelectionRequestRevision => _selectionRevision;
 
-  void commitSelection(List<Video> videos, int index, {bool mini = false}) {
+  void commitSelection(List<Video> videos, int index,
+      {bool mini = false, Duration? position}) {
     final queue = assignPlaybackQueueIds(videos);
     _databaseZone.run(() => emit(state.copyWith(
         videos: queue,
@@ -392,7 +394,19 @@ class _Player extends TestPlayerCubit {
         isAudio: true,
         isHidden: false,
         isMini: mini,
+        position: position ?? state.position,
         isPlaying: true)));
+  }
+
+  @override
+  Future<bool> enqueueMusicSongs(List<Video> selection,
+      {required bool next,
+      List<DownloadedVideo>? downloads,
+      PlaylistReference? recommendationSource}) {
+    return _databaseZone.run(() => super.enqueueMusicSongs(selection,
+        next: next,
+        downloads: downloads,
+        recommendationSource: recommendationSource));
   }
 
   @override
@@ -1108,6 +1122,105 @@ void main() {
     ]);
   });
 
+  testWidgets(
+      'online song selection saves and queues nonadjacent songs in display order',
+      (tester) async {
+    const third = MusicTrack(videoId: 'thirdsong03', title: 'Third song');
+    await show(tester, screen: const MusicScreen(initialQuery: 'three songs'));
+    catalog.responses.single.complete([first, second, third]);
+    await tester.pumpAndSettle();
+    final firstSong = find.text(first.title);
+    final lastSong = find.text(third.title);
+    final actions = find.byTooltip('Actions for selected songs');
+    Future<void> settleAction() async {
+      for (var i = 0; i < 5 && actions.evaluate().isNotEmpty; i++) {
+        await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+        await tester.pumpAndSettle();
+      }
+    }
+
+    await tester.longPress(lastSong, kind: PointerDeviceKind.mouse);
+    await tester.pumpAndSettle();
+    expect(find.text('1 selected'), findsOneWidget);
+    await tester.tap(firstSong);
+    await tester.pumpAndSettle();
+    expect(find.text('2 selected'), findsOneWidget);
+    await tester.tap(lastSong);
+    await tester.pumpAndSettle();
+    expect(find.text('1 selected'), findsOneWidget);
+    await tester.tap(find.byTooltip('Select all'));
+    await tester.pumpAndSettle();
+    expect(find.text('3 selected'), findsOneWidget);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(actions, findsNothing);
+    expect(player.calls, isEmpty);
+
+    final menu = find.descendant(
+      of: find.byKey(const ValueKey('music-song-search-2-thirdsong03')),
+      matching: find.byTooltip('Music actions'),
+    );
+    await tester.tap(menu);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Select song'));
+    await tester.pumpAndSettle();
+    await tester.tap(firstSong);
+    await tester.pumpAndSettle();
+    await tester.tap(actions);
+    await tester.pumpAndSettle();
+    expect(find.text('Remove from Saved Songs'), findsNothing);
+    await tester.tap(find.text('Save to playlist'));
+    await tester.pumpAndSettle();
+    await tester.runAsync(() async {
+      await tester.tap(find.text('Watch Later'));
+      await Future.doWhile(() async {
+        await Future<void>.delayed(const Duration(milliseconds: 1));
+        return service
+                .getLocalPlaylists()
+                .singleWhere(
+                    (playlist) => playlist.playlistId == localWatchLaterId)
+                .videos
+                .length !=
+            2;
+      }).timeout(const Duration(seconds: 5));
+    });
+    await tester.pumpAndSettle();
+    await settleAction();
+    final saved = service
+        .getLocalPlaylists()
+        .singleWhere((playlist) => playlist.playlistId == localWatchLaterId);
+    expect(saved.videos.map((video) => video.videoId),
+        [first.videoId, third.videoId]);
+    expect(actions, findsNothing);
+
+    const position = Duration(seconds: 42);
+    player
+        .commitSelection([second.toVideo()], 0, mini: true, position: position);
+    await tester.pumpAndSettle();
+    final playing = player.state.currentQueueId;
+    await tester.longPress(lastSong);
+    await tester.pumpAndSettle();
+    await tester.tap(firstSong);
+    await tester.pumpAndSettle();
+    await tester.tap(actions);
+    await tester.pumpAndSettle();
+    expect(find.text('Play next'), findsOneWidget);
+    await tester.tap(find.text('Add to queue'));
+    await tester.pumpAndSettle();
+    await settleAction();
+    expect(player.state.videos.map((video) => video.videoId),
+        [second.videoId, first.videoId, third.videoId]);
+    expect(player.state.currentQueueId, playing);
+    expect(player.state.position, position);
+    expect(player.calls, isEmpty);
+    expect(actions, findsNothing);
+
+    await tester.tap(firstSong);
+    await tester.pumpAndSettle();
+    expect(player.calls.single.startIndex, 0);
+    expect(player.calls.single.songTap, isTrue);
+  });
+
   testWidgets('only explicit music search submissions produce learning signals',
       (tester) async {
     final events = <Map>[];
@@ -1733,6 +1846,77 @@ void main() {
     expect(track, findsNothing);
     expect(catalog.searches, isEmpty);
     await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets(
+      'Library Search selection clears on source change and confirms Saved Songs removal',
+      (tester) async {
+    final library = MusicLibraryService.forProfile(db, db.profileId);
+    await tester.runAsync(() => library.importSongs([
+          MusicLibraryEntry.song(first.toVideo()),
+          MusicLibraryEntry.song(second.toVideo()),
+        ]));
+    await show(tester, screen: const MusicScreen(embedded: true));
+    final local = find.byKey(const ValueKey('music-search-source-library'));
+    final online = find.byKey(const ValueKey('music-search-source-online'));
+    final firstSong = find.widgetWithText(ListTile, first.title);
+    final actions = find.byTooltip('Actions for selected songs');
+    final remove = find.text('Remove from Saved Songs');
+
+    await tester.tap(local);
+    await tester.pump();
+    await search(tester, 'song');
+    await tester.pumpAndSettle();
+    await tester.longPress(firstSong);
+    await tester.pumpAndSettle();
+    expect(find.text('1 selected'), findsOneWidget);
+    await tester.tap(online);
+    await tester.pumpAndSettle();
+    await tester.tap(local);
+    await tester.pumpAndSettle();
+    expect(actions, findsNothing);
+
+    Future<void> requestRemoval() async {
+      await tester.tap(actions);
+      await tester.pumpAndSettle();
+      await tester.tap(remove);
+      await tester.pumpAndSettle();
+      expect(find.text('Remove this song from Saved Songs?'), findsOneWidget);
+    }
+
+    await tester.tap(find.descendant(
+        of: firstSong, matching: find.byTooltip('Select song')));
+    await tester.pumpAndSettle();
+    await requestRemoval();
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    expect(library.contains(MusicLibraryKind.song, first.videoId), isTrue);
+    expect(find.text('1 selected'), findsOneWidget);
+    await requestRemoval();
+    await tester.runAsync(() async {
+      final removed = Completer<void>();
+      void onChanged() {
+        if (!library.contains(MusicLibraryKind.song, first.videoId) &&
+            !removed.isCompleted) {
+          removed.complete();
+        }
+      }
+
+      library.changes.addListener(onChanged);
+      try {
+        await tester
+            .tap(find.widgetWithText(FilledButton, 'Remove from Saved Songs'));
+        await tester.pumpAndSettle();
+        await removed.future.timeout(const Duration(seconds: 5));
+      } finally {
+        library.changes.removeListener(onChanged);
+      }
+    });
+    await tester.pumpAndSettle();
+    expect(firstSong, findsNothing);
+    expect(actions, findsNothing);
+    expect(find.widgetWithText(ListTile, second.title), findsOneWidget);
+    expect(player.calls, isEmpty);
   });
 
   testWidgets(
@@ -3618,7 +3802,7 @@ void main() {
     expect(catalog.searches, ['songs']);
   });
 
-  testWidgets('search rows and both Play menus keep the visible song queue',
+  testWidgets('search row, selection and overflow Play use their own queues',
       (tester) async {
     await tester.runAsync(installCommunityMusicFilters);
     await show(tester);
@@ -3635,16 +3819,19 @@ void main() {
     await tester.ensureVisible(selected);
     await tester.tap(selected);
     await tester.pumpAndSettle();
+    expect(player.calls.single.videos.map((video) => video.videoId),
+        [first.videoId, first.videoId, second.videoId]);
+    expect(player.calls.single.startIndex, 1);
+
     await tester.longPress(selected);
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('music-song-play')));
+    await tester.tap(find.byTooltip('Actions for selected songs'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Play'));
     await tester.pumpAndSettle();
     expect(player.calls, hasLength(2));
-    for (final call in player.calls) {
-      expect(call.videos.map((v) => v.videoId),
-          [first.videoId, first.videoId, second.videoId]);
-      expect(call.startIndex, 1);
-    }
+    expect(player.calls.last.videos.single.videoId, first.videoId);
+    expect(player.calls.last.startIndex, 0);
 
     final reveal = find.textContaining('Show hidden results');
     await tester.ensureVisible(reveal);
@@ -3854,9 +4041,30 @@ void main() {
     expect(player.calls, isEmpty);
     expect(find.text(first.title), findsNothing);
     expect(find.text(duplicate.title), findsNWidgets(2));
+    final early = find.byKey(const ValueKey('music-song-1-duplicates1'));
     final later = find.byKey(const ValueKey('music-song-3-duplicates1'));
     expect(
         find.descendant(of: later, matching: find.text('6')), findsOneWidget);
+
+    bool selected(Finder row) => tester
+        .widget<Checkbox>(
+            find.descendant(of: row, matching: find.byType(Checkbox)))
+        .value!;
+    await tester.longPress(later);
+    await tester.pumpAndSettle();
+    expect(selected(early), isFalse);
+    expect(selected(later), isTrue);
+    await tester.tap(early);
+    await tester.pumpAndSettle();
+    expect(selected(early), isTrue);
+    expect(selected(later), isTrue);
+    expect(find.text('2 selected'), findsOneWidget);
+    expect(player.calls, isEmpty);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(find.text('2 selected'), findsNothing);
+    expect(query, findsOneWidget);
+
     await tester.tap(later);
     await tester.pumpAndSettle();
     final call = player.calls.single;

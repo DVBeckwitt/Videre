@@ -7,8 +7,10 @@ import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' as app_globals;
 import 'package:clipious/music/models/local_music_track.dart';
+import 'package:clipious/music/models/on_device_music_entry.dart';
 import 'package:clipious/music/services/local_music_library.dart';
 import 'package:clipious/music/views/screens/music_device_album.dart';
+import 'package:clipious/player/models/local_music_playback.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:flutter/material.dart';
@@ -32,6 +34,25 @@ class _Player extends Cubit<PlayerState> implements PlayerCubit {
   List<LocalMusicTrack> queue = [];
   int? start;
   String? source;
+  final queuedBatches = <({List<String> uris, bool next})>[];
+
+  @override
+  int get playlistGeneration => 1;
+
+  @override
+  bool canEnqueueOnDeviceMusic(List<OnDeviceMusicEntry> tracks) =>
+      tracks.isNotEmpty && state.isAudio;
+
+  @override
+  Future<bool> enqueueOnDeviceMusic(List<OnDeviceMusicEntry> tracks,
+      {required bool next, bool Function()? isCurrent}) async {
+    if (isCurrent?.call() != true) return false;
+    queuedBatches.add((
+      uris: [for (final track in tracks) track.deviceTrack!.uri],
+      next: next,
+    ));
+    return true;
+  }
 
   @override
   Future<void> playLocalMusic(List<LocalMusicTrack> tracks,
@@ -42,6 +63,11 @@ class _Player extends Cubit<PlayerState> implements PlayerCubit {
     queue = tracks;
     start = startIndex;
     source = queueTitle;
+    emit(state.copyWith(
+      isAudio: true,
+      offlineCurrentlyPlaying:
+          localMusicPlaybackEntry(tracks[startIndex], db.profileId),
+    ));
   }
 
   @override
@@ -539,6 +565,82 @@ void main() {
     await tester.tap(find.text('Play all'));
     await tester.pumpAndSettle();
     expect(player.start, 0);
+  });
+
+  testWidgets('long press selects album rows and Back leaves them playable',
+      (tester) async {
+    rows = [
+      editableSong(40, 1),
+      editableSong(41, 2),
+      editableSong(42, 3),
+    ];
+    await show(tester, fromLibrary: true, anchored: false);
+    Finder tile(int number) => find.widgetWithText(ListTile, 'Track $number');
+
+    await tester.longPress(tile(3));
+    await tester.pumpAndSettle();
+    expect(find.text('1 selected'), findsOneWidget);
+    expect(tester.widget<ListTile>(tile(3)).selected, isTrue);
+    expect(tester.widget<ListTile>(tile(1)).selected, isFalse);
+
+    await tester.tap(tile(1));
+    await tester.pumpAndSettle();
+    expect(find.text('2 selected'), findsOneWidget);
+    expect(tester.widget<ListTile>(tile(2)).selected, isFalse);
+    expect(player.queue, isEmpty);
+
+    await tester.tap(tile(3));
+    await tester.pumpAndSettle();
+    expect(find.text('1 selected'), findsOneWidget);
+    await tester.tap(find.byTooltip('Select all'));
+    await tester.pumpAndSettle();
+    expect(find.text('3 selected'), findsOneWidget);
+
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(find.text('Live'), findsOneWidget);
+    expect(find.text('3 selected'), findsNothing);
+    await tester.tap(tile(2));
+    await tester.pumpAndSettle();
+    expect(player.queue.map((track) => track.title),
+        ['Track 1', 'Track 2', 'Track 3']);
+    expect(player.start, 1);
+  });
+
+  testWidgets('album batch enqueue keeps display order and current song',
+      (tester) async {
+    rows = [
+      editableSong(40, 1),
+      editableSong(41, 2),
+      editableSong(42, 3),
+    ];
+    await show(tester, fromLibrary: true, anchored: false);
+    Finder tile(int number) => find.widgetWithText(ListTile, 'Track $number');
+    await tester.tap(tile(2));
+    await tester.pumpAndSettle();
+    final playing = player.state.offlineCurrentlyPlaying;
+
+    for (final (action, next) in [
+      ('Add to queue', false),
+      ('Play next', true),
+    ]) {
+      await tester.longPress(tile(3));
+      await tester.pumpAndSettle();
+      await tester.tap(tile(1));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Actions for selected songs'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(action));
+      await tester.pumpAndSettle();
+
+      expect(player.queuedBatches.last.uris,
+          ['$tree/document/40', '$tree/document/42']);
+      expect(player.queuedBatches.last.next, next);
+      expect(player.state.offlineCurrentlyPlaying, playing);
+      expect(player.start, 1);
+      expect(find.text('2 selected'), findsNothing);
+    }
+    expect(player.queuedBatches, hasLength(2));
   });
 
   testWidgets('tablet album keeps its track viewport when returning to phone',

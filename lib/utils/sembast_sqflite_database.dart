@@ -1027,6 +1027,41 @@ class SembastSqfDb extends IDbClient {
     playbackHistoryRevision.value++;
   }
 
+  @override
+  Future<void> removeMusicListeningEvents(
+      Iterable<MusicListeningEvent> events) async {
+    final selected = events.toList();
+    if (selected.isEmpty) return;
+    final changed = await _writeProfile((owner, txn) async {
+      final legacy = owner.playbackHistoryStore(PlaybackHistoryOrigin.music);
+      var changed = false;
+      for (final event in selected) {
+        final record = owner._musicListeningStore.record(event.id);
+        final stored = await record.get(txn);
+        if (stored != null &&
+            stored['trackId'] == event.trackId &&
+            stored['playedAt'] == event.playedAt.toIso8601String()) {
+          await record.delete(txn);
+          changed = true;
+        } else if (!event.isLegacy) {
+          continue;
+        }
+
+        // A recency record masked by this occurrence would otherwise reappear.
+        final previous = legacy.record(event.trackId);
+        final data = await previous.get(txn);
+        if (data != null &&
+            HistoryVideoCache.fromJson(data).created.toUtc() ==
+                event.playedAt) {
+          await previous.delete(txn);
+          changed = true;
+        }
+      }
+      return changed;
+    });
+    if (changed) playbackHistoryRevision.value++;
+  }
+
   void _cancelPendingHistory({PlaybackHistoryOrigin? origin, String? videoId}) {
     final profile = profileId;
     for (final pending in _pendingHistory.toList()) {

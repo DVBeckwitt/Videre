@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:ui' show SemanticsAction;
+import 'dart:ui' show PointerDeviceKind, SemanticsAction;
 
 import 'package:audio_session/audio_session.dart';
 import 'package:auto_route/auto_route.dart';
@@ -18,6 +18,7 @@ import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' as app_main;
+import 'package:clipious/music/models/device_playlist_track.dart';
 import 'package:clipious/music/models/local_music_track.dart';
 import 'package:clipious/music/models/music_artist.dart';
 import 'package:clipious/music/models/music_artist_page.dart';
@@ -947,6 +948,7 @@ void main() {
       {String? embeddedArt,
       String? albumKey,
       bool allowRename = false,
+      bool allowPlaylistSave = false,
       Future<Object?> Function(MethodCall)? readLyrics}) async {
     const channel = MethodChannel('com.github.dvbeckwitt.videre/local_music');
     const tree =
@@ -971,6 +973,8 @@ void main() {
                 'artist': 'Device artist',
                 'album': 'Device album',
                 if (albumKey != null) 'albumKey': albumKey,
+                if (allowPlaylistSave)
+                  'visibilityKey': (name == 'Intro' ? 'a' : 'b') * 64,
                 'durationMs': 180000,
                 if (allowRename) 'fileName': '$name.ogg',
                 if (allowRename) 'canRename': true,
@@ -1653,7 +1657,8 @@ void main() {
     for (final (index, track) in [unlinked, linked].indexed) {
       final row = find.byKey(ValueKey('music-song-$index-${track.videoId}'));
       await tester.scrollUntilVisible(row, 150, scrollable: collectionScroll);
-      await tester.longPress(row);
+      await tester.tap(
+          find.descendant(of: row, matching: find.byTooltip('Music actions')));
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('music-song-add-to-queue')));
       await tester.pumpAndSettle();
@@ -4380,7 +4385,12 @@ void main() {
     expect(
         find.byKey(ValueKey('music-queue-select-$duplicateId')), findsNothing);
 
-    await tester.longPress(find.byKey(ValueKey('music-queue-$duplicateId')));
+    final holding = await tester.startGesture(
+      tester.getCenter(duplicateRow),
+      kind: PointerDeviceKind.mouse,
+    );
+    await tester.pump(const Duration(milliseconds: 600));
+    await holding.up();
     await tester.pumpAndSettle();
     bool checked(String id) => tester
         .widget<Checkbox>(find.byKey(ValueKey('music-queue-select-$id')))
@@ -4393,12 +4403,33 @@ void main() {
     await tester.tap(otherCheckbox);
     await tester.pumpAndSettle();
     expect(checked(otherDuplicateId), isTrue);
-    await tap(tester, 'music-queue-selection-menu');
+    await tap(tester, 'music-queue-$activeId');
+    expect(find.text('3 selected'), findsOneWidget);
+    final position = player.state.position;
+    final command = player.state.mediaCommand;
+
+    Future<void> promptRemoval() async {
+      await tap(tester, 'music-queue-selection-menu');
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Remove selected from queue'));
+      await tester.pumpAndSettle();
+      expect(find.text('Remove 2 songs from the queue?'), findsOneWidget);
+    }
+
+    await promptRemoval();
+    await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Remove selected from queue'));
+    expect(find.text('3 selected'), findsOneWidget);
+    expect(
+        player.state.videos.map(playbackQueueId), songs.map(playbackQueueId));
+
+    await promptRemoval();
+    await tester.tap(find.widgetWithText(TextButton, 'Remove from queue'));
     await tester.pumpAndSettle();
     expect(player.state.videos.map(playbackQueueId), [activeId, next.videoId]);
     expect(player.state.currentQueueId, activeId);
+    expect(player.state.position, position);
+    expect(player.state.mediaCommand, command);
     expect(find.text('Removed 2 songs from queue'), findsOneWidget);
     await tester.tap(find.widgetWithText(TextButton, 'Undo'));
     await tester.pumpAndSettle();
@@ -4416,6 +4447,118 @@ void main() {
     expect(find.widgetWithText(TextButton, 'Undo'), findsNothing);
     expect(player.state.videos.map(playbackQueueId),
         [activeId, next.videoId, otherDuplicateId]);
+  });
+
+  testWidgets('queue removal confirmation rejects a reused occurrence ID',
+      (tester) async {
+    final songs = assignPlaybackQueueIds([song, next, next]);
+    await player.seed(player.state.copyWith(
+      videos: songs,
+      currentlyPlaying: songs.first,
+      playQueue: ListQueue.of(songs.skip(1).map(playbackQueueId)),
+    ));
+    await pump(tester);
+    await tap(tester, 'music-player-queue');
+    final selected = songs.last;
+    final id = playbackQueueId(selected);
+    await tester.longPress(find.byKey(ValueKey('music-queue-$id')));
+    await tester.pumpAndSettle();
+    await tap(tester, 'music-queue-selection-menu');
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Remove selected from queue'));
+    await tester.pumpAndSettle();
+    expect(find.text('Remove 1 song from the queue?'), findsOneWidget);
+
+    // Emit both changes before the queue has a chance to paint a missing row.
+    expect(player.removeInactiveQueueOccurrences({id}), isNotNull);
+    player.enqueueQueueCopies([selected.copyWith()], next: false);
+    final replacement = player.state.videos.last;
+    expect(playbackQueueId(replacement), id);
+    expect(replacement, isNot(same(selected)));
+    final position = player.state.position;
+    await tester.tap(find.widgetWithText(TextButton, 'Remove from queue'));
+    await tester.pumpAndSettle();
+
+    expect(player.state.videos.last, same(replacement));
+    expect(
+        player.state.videos.map(playbackQueueId), songs.map(playbackQueueId));
+    expect(player.state.currentQueueId, playbackQueueId(songs.first));
+    expect(player.state.position, position);
+    expect(find.text('0 selected'), findsOneWidget);
+  });
+
+  testWidgets('queue row menu can select an occurrence with the keyboard',
+      (tester) async {
+    await pump(tester, child: const MusicQueue(television: true));
+    final menu = find.byKey(ValueKey('music-queue-menu-${next.videoId}'));
+    final icon = find.descendant(of: menu, matching: find.byType(Icon));
+    Focus.of(tester.element(icon)).requestFocus();
+    await tester.pump();
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+
+    final select = find.text('Select song');
+    expect(select, findsOneWidget);
+    final selectFocus = Focus.of(tester.element(select));
+    if (!selectFocus.hasFocus) {
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pump();
+    }
+    expect(selectFocus.hasFocus, isTrue);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+    expect(find.text('1 selected'), findsOneWidget);
+    expect(
+        tester
+            .widget<Checkbox>(
+                find.byKey(ValueKey('music-queue-select-${next.videoId}')))
+            .value,
+        isTrue);
+    expect(player.state.currentQueueId, song.videoId);
+    expect(
+        tester
+            .widget<IconButton>(
+                find.byKey(const ValueKey('music-queue-selection-cancel')))
+            .focusNode!
+            .hasFocus,
+        isTrue);
+    await pressAndroidBack(tester);
+    expect(find.text('1 selected'), findsNothing);
+    expect(
+        tester
+            .widget<IconButton>(
+                find.byKey(const ValueKey('music-queue-select-mode')))
+            .focusNode!
+            .hasFocus,
+        isTrue);
+  });
+
+  testWidgets('changing the queue source clears selected occurrences',
+      (tester) async {
+    await pump(tester, child: const MusicQueue());
+    await tester.longPress(find.byKey(ValueKey('music-queue-${song.videoId}')));
+    await tester.pumpAndSettle();
+    expect(find.text('1 selected'), findsOneWidget);
+
+    final offline = DownloadedVideo(
+        videoId: song.videoId,
+        title: song.title!,
+        lengthSeconds: song.lengthSeconds!,
+        quality: 'audio',
+        downloadComplete: true,
+        audioOnly: true,
+        musicMetadata: song.musicMetadata);
+    await player.seed(player.state.copyWith(
+        videos: [],
+        currentlyPlaying: null,
+        offlineVideos: [offline],
+        offlineCurrentlyPlaying: offline,
+        playQueue: ListQueue<String>()));
+    await tester.pumpAndSettle();
+    expect(find.text('1 selected'), findsNothing);
+    expect(find.byKey(ValueKey('music-queue-select-${song.videoId}')),
+        findsNothing);
+    expect(find.byKey(ValueKey('music-queue-${song.videoId}')), findsOneWidget);
   });
 
   testWidgets('long-pressing next seeks without changing tracks',
@@ -5215,6 +5358,116 @@ void main() {
     expect(player.state.position, position);
     expect(player.state.mediaCommand, command);
     expect(membership().single.videoId, next.videoId);
+  });
+
+  testWidgets(
+      'queue selection saves and copies nonadjacent songs in display order',
+      (tester) async {
+    final id = (await tester.runAsync(() {
+      player.enqueueZone = Zone.current;
+      return service.createPlayList('Queue selection list', 'local');
+    }))!;
+    List<Video> membership() => service
+        .getLocalPlaylists()
+        .singleWhere((playlist) => playlist.playlistId == id)
+        .videos;
+    final first = next.copyWith(videoId: 'first');
+    final last = next.copyWith(videoId: 'last');
+    final entries = [song, first, next, last];
+    final upcoming = entries.skip(1).map(playbackQueueId).toList();
+    await player.seed(player.state
+        .copyWith(videos: entries, playQueue: ListQueue.of(upcoming)));
+    final position = player.state.position;
+    final command = player.state.mediaCommand;
+    await pump(tester, child: const MusicQueue());
+
+    Future<void> selectRows() async {
+      await tester
+          .longPress(find.byKey(ValueKey('music-queue-${last.videoId}')));
+      await tester.pumpAndSettle();
+      await tap(tester, 'music-queue-${first.videoId}');
+      expect(find.text('2 selected'), findsOneWidget);
+      await tap(tester, 'music-queue-${first.videoId}');
+      expect(find.text('1 selected'), findsOneWidget);
+      await tap(tester, 'music-queue-${first.videoId}');
+      expect(find.text('2 selected'), findsOneWidget);
+      expect(player.state.currentQueueId, song.videoId);
+      await tap(tester, 'music-queue-selection-menu');
+      await tester.pumpAndSettle();
+    }
+
+    await selectRows();
+    await tester.tap(find.text('Save to playlist'));
+    await tester.pumpAndSettle();
+    await tester.runAsync(() async {
+      final destination = find.text('Queue selection list');
+      await tester.tap(destination);
+      // The storage write and the dialog's result complete on the real clock.
+      for (var i = 0; i < 100 && destination.evaluate().isNotEmpty; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+        await tester.pump();
+      }
+    });
+    await tester.pumpAndSettle();
+    expect(membership().map((entry) => entry.videoId),
+        [first.videoId, last.videoId]);
+    expect(find.text('2 selected'), findsNothing);
+
+    await selectRows();
+    await tester.tap(find.text('Add to queue'));
+    await tester.pumpAndSettle();
+    final order = player.state.playQueue.toList();
+    expect(order.take(upcoming.length), upcoming);
+    final appended = order.skip(upcoming.length);
+    final byOccurrence = {
+      for (final entry in player.state.videos)
+        playbackQueueId(entry): entry.videoId,
+    };
+    expect(
+        appended.map((id) => byOccurrence[id]), [first.videoId, last.videoId]);
+    expect(player.state.currentQueueId, song.videoId);
+    expect(player.state.position, position);
+    expect(player.state.mediaCommand, command);
+
+    await tap(tester, 'music-queue-${song.videoId}');
+    expect(player.state.mediaCommand?.type, MediaCommandType.play);
+  });
+
+  testWidgets('queue saves device selections with durable playlist references',
+      (tester) async {
+    final tracks = await seedDeviceQueue(tester, allowPlaylistSave: true);
+    final id = (await tester
+        .runAsync(() => service.createPlayList('Device queue list', 'local')))!;
+    List<Video> membership() => service
+        .getLocalPlaylists()
+        .singleWhere((playlist) => playlist.playlistId == id)
+        .videos;
+    final playing = player.state.offlineCurrentlyPlaying;
+    await pump(tester, child: const MusicQueue());
+
+    await tester.longPress(
+        find.byKey(ValueKey('music-queue-${tracks.last.playbackId}')));
+    await tester.pumpAndSettle();
+    await tap(tester, 'music-queue-${tracks.first.playbackId}');
+    await tap(tester, 'music-queue-selection-menu');
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Save to playlist'));
+    await tester.pumpAndSettle();
+    await tester.runAsync(() async {
+      final destination = find.text('Device queue list');
+      await tester.tap(destination);
+      // The storage write and the dialog's result complete on the real clock.
+      for (var i = 0; i < 100 && destination.evaluate().isNotEmpty; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+        await tester.pump();
+      }
+    });
+    await tester.pumpAndSettle();
+
+    expect(membership().map((entry) => entry.videoId),
+        tracks.map((track) => devicePlaylistVideo(track)!.videoId));
+    expect(player.state.offlineCurrentlyPlaying, same(playing));
+    expect(find.text('2 selected'), findsNothing);
   });
 
   testWidgets('saved queue menus copy each selected occurrence in place',

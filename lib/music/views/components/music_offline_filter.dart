@@ -204,13 +204,13 @@ class _MusicOfflineFilterState extends State<MusicOfflineFilter>
 }
 
 Widget musicOfflineFilterButton(BuildContext context, MusicOfflineView offline,
-    {Key? key}) {
+    {Key? key, VoidCallback? onToggle}) {
   final label = AppLocalizations.of(context)!.musicOfflineCollectionFilter;
   return IconButton(
     key: key,
     isSelected: offline.enabled,
     tooltip: label,
-    onPressed: offline.toggle,
+    onPressed: onToggle ?? offline.toggle,
     icon: const Icon(Icons.offline_pin_outlined),
     selectedIcon: const Icon(Icons.offline_pin),
   );

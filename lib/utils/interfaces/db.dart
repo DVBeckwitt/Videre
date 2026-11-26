@@ -197,6 +197,10 @@ abstract class IDbClient {
   Future<void> removeMusicListeningTracks(Set<String>? trackIds) async =>
       throw UnsupportedError('Music history requires the app database');
 
+  Future<void> removeMusicListeningEvents(
+          Iterable<MusicListeningEvent> events) async =>
+      throw UnsupportedError('Music history requires the app database');
+
   Future<int> mergeMusicListeningEvents(
           Iterable<MusicListeningEvent> events) async =>
       throw UnsupportedError('Music history requires the app database');

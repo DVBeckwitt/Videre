@@ -633,6 +633,17 @@ void main() {
     expect(find.text('same.mp3'), findsNWidgets(2));
     final secondId =
         library.tracks.singleWhere((track) => track.uri == another).playbackId;
+    final secondRow = find.byKey(ValueKey(secondId));
+    await tester.longPress(secondRow);
+    await tester.pumpAndSettle();
+    expect(find.text('1 selected'), findsOneWidget);
+    expect(tester.widget<CheckboxListTile>(secondRow).value, isTrue);
+    expect(player.queue.single.uri, first['uri']);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(find.text('1 selected'), findsNothing);
+    expect(row('Same song'), findsNWidgets(2));
+
     await tap(find.byKey(ValueKey(secondId)));
     expect(player.queue.map((track) => track.uri),
         unorderedEquals([original, another]));
@@ -2092,37 +2103,30 @@ void main() {
   }, variant: TargetPlatformVariant.only(TargetPlatform.android));
 
   testWidgets(
-    'device selection shares only checked files and can be closed',
+    'long press selects an exact device row and shares the checked files',
     (tester) async {
       consent = {...picked, 'selectionId': 'music-share-selection'};
+      final third = {'title': 'Third', 'uri': '$tree/document/Third'};
       pendingScan = Completer<List<Object?>>()
-        ..complete([
-          first,
-          second,
-          {'title': 'Third', 'uri': '$tree/document/Third'},
-        ]);
+        ..complete([first, second, third]);
       await show(tester, settings: false);
       calls.clear();
 
-      final start = find.text('Select songs');
       Finder action(String label) => find.byWidgetPredicate(
           (widget) => widget is IconButton && widget.tooltip == label);
       final share = action('Share selected audio');
-      await tester.ensureVisible(start);
-      await tester.tap(start);
+      await tester.ensureVisible(find.text('Third'));
+      await tester.longPress(find.text('Third'));
       await tester.pumpAndSettle();
+      expect(find.text('1 selected'), findsOneWidget);
       expect(
         tester.widget<IconButton>(action('Close')).focusNode!.hasFocus,
         isTrue,
       );
 
       await tester.ensureVisible(find.text('First'));
-      await tester.tap(find.text('First'));
-      await tester.pumpAndSettle();
       expect(tester.widget<IconButton>(share).onPressed, isNull);
-
-      await tester.ensureVisible(find.text('Second'));
-      await tester.tap(find.text('Second'));
+      await tester.tap(find.text('First'));
       await tester.pumpAndSettle();
       expect(find.text('2 selected'), findsOneWidget);
       await tester.tap(share);
@@ -2132,7 +2136,7 @@ void main() {
       final request = sharedFiles.single as Map;
       expect(request['requestId'], isNotNull);
       expect(request['tracks'], [
-        for (final item in [first, second]) containsPair('uri', item['uri']),
+        for (final item in [first, third]) containsPair('uri', item['uri']),
       ]);
       for (final track in request['tracks'] as List) {
         expect(track, containsPair('treeUri', tree));

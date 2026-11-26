@@ -59,6 +59,53 @@ class _Player extends Cubit<PlayerState> implements PlayerCubit {
 }
 
 void main() {
+  testWidgets('song ranking selects rows and clears on a ranking change',
+      (tester) async {
+    await tester.runAsync(() async {
+      db = await SembastSqfDb.createInMemory();
+      addTearDown(db.close);
+      for (final id in ['alpha', 'bravo', 'charlie']) {
+        await db
+            .beginMusicListening(id)!
+            .record(HistoryVideoCache(id, id, 'Artist', ''));
+      }
+    });
+    final app = _App();
+    addTearDown(app.close);
+    await tester.pumpWidget(BlocProvider<AppCubit>.value(
+      value: app,
+      child: const MaterialApp(
+        locale: Locale('en'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: MusicListeningStatisticsPage(),
+      ),
+    ));
+    await tester.pumpAndSettle();
+    await tester.longPress(find.text('charlie'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('alpha'));
+    await tester.pumpAndSettle();
+    expect(find.text('2 selected'), findsOneWidget);
+    expect(
+        tester
+            .widget<ListTile>(find.widgetWithText(ListTile, 'bravo'))
+            .selected,
+        isFalse);
+    await tester.tap(find.text('Artists'));
+    await tester.pumpAndSettle();
+    expect(find.text('2 selected'), findsNothing);
+    expect(find.text('Artist'), findsOneWidget);
+    await tester.tap(find.text('Songs'));
+    await tester.pumpAndSettle();
+    expect(find.text('2 selected'), findsNothing);
+    expect(
+        tester
+            .widget<ListTile>(find.widgetWithText(ListTile, 'alpha'))
+            .selected,
+        isFalse);
+  });
+
   testWidgets(
     'February recap uses local midnight for daily activity, replay and sharing',
     (tester) async {

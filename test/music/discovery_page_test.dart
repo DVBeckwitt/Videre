@@ -29,6 +29,7 @@ import 'package:clipious/music/services/music_library_service.dart';
 import 'package:clipious/music/services/music_starter_artists.dart';
 import 'package:clipious/music/services/music_visibility.dart';
 import 'package:clipious/music/views/components/music_catalog_cards.dart';
+import 'package:clipious/music/views/components/music_song_selection_bar.dart';
 import 'package:clipious/music/views/screens/music_discovery.dart';
 import 'package:clipious/network/network_proxy.dart';
 import 'package:clipious/network/socks_proxy.dart';
@@ -50,6 +51,7 @@ import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:file/file.dart' as fs;
 import 'package:file/memory.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -1148,7 +1150,8 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     await show(tester, textScale: 1.8);
     await tester.ensureVisible(first);
-    await tester.longPress(first);
+    await tester.tap(
+        find.descendant(of: first, matching: find.byTooltip('Music actions')));
     await tester.pumpAndSettle();
     expect(tester.getRect(enqueue).bottom,
         lessThan(tester.getRect(find.text('Why this?')).top));
@@ -1849,7 +1852,8 @@ void main() {
     await tester.tap(toggle);
     await tester.pumpAndSettle();
     await tester.ensureVisible(card);
-    await tester.longPress(card);
+    await tester.tap(
+        find.descendant(of: card, matching: find.byTooltip('Music actions')));
     await tester.pumpAndSettle();
     router.pushed = null;
     await tester.tap(find.byKey(const ValueKey('music-song-play')));
@@ -1858,6 +1862,66 @@ void main() {
         ['priorSong01', 'hiddenSong1', _discovered.videoId, 'laterSong01'], 2);
     expect(catalog.discoveryCalls, 1);
     expect(catalog.trendingCalls, 0);
+  });
+
+  testWidgets('holding Discovery cards selects in displayed order before Back',
+      (tester) async {
+    const firstSong = MusicTrack(videoId: 'priorSong01', title: 'First result');
+    const lastSong = MusicTrack(videoId: 'laterSong01', title: 'Last result');
+    catalog.holdDiscovery = true;
+    await show(tester, settle: false);
+    catalog.discoveries.single.complete([firstSong, _discovered, lastSong]);
+    await tester.pumpAndSettle();
+    Finder card(MusicTrack song) =>
+        find.byKey(ValueKey('music-discovery-${song.videoId}'));
+    final first = card(firstSong);
+    final last = card(lastSong);
+    await tester.ensureVisible(last);
+    final mouse = await tester.startGesture(tester.getCenter(last),
+        kind: PointerDeviceKind.mouse);
+    await tester.pump(kLongPressTimeout + const Duration(milliseconds: 10));
+    await mouse.up();
+    await tester.pumpAndSettle();
+    expect(find.text('1 selected'), findsOneWidget);
+    await tester.ensureVisible(first);
+    await tester.tap(first);
+    await tester.pumpAndSettle();
+    final bar = find.byType(MusicSongSelectionBar);
+    expect(find.text('2 selected'), findsOneWidget);
+    expect(
+        tester
+            .widget<MusicSongSelectionBar>(bar)
+            .selected
+            .map((v) => v.videoId),
+        [firstSong.videoId, lastSong.videoId]);
+    expect(router.pushed, isNull);
+
+    await tester.tap(first);
+    await tester.pumpAndSettle();
+    expect(find.text('1 selected'), findsOneWidget);
+    await tester.ensureVisible(find.byTooltip('Select all'));
+    await tester.tap(find.byTooltip('Select all'));
+    await tester.pumpAndSettle();
+    expect(find.text('3 selected'), findsOneWidget);
+
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(bar, findsNothing);
+    await tester.ensureVisible(first);
+    await tester.tap(
+        find.descendant(of: first, matching: find.byTooltip('Music actions')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Select song'));
+    await tester.pumpAndSettle();
+    expect(find.text('1 selected'), findsOneWidget);
+    await tester.ensureVisible(find.byTooltip('Close'));
+    await tester.tap(find.byTooltip('Close'));
+    await tester.pumpAndSettle();
+    expect(bar, findsNothing);
+    await tester.ensureVisible(first);
+    await tester.tap(first);
+    expectSongQueue(
+        [firstSong.videoId, _discovered.videoId, lastSong.videoId], 0);
   });
 
   testWidgets('Discovery snooze removes the recording and can be ended in Home',
@@ -1869,7 +1933,8 @@ void main() {
     final card = find.byKey(const ValueKey('music-discovery-discover001'));
     await tester.ensureVisible(card);
     await tester.pumpAndSettle();
-    await tester.longPress(card);
+    await tester.tap(
+        find.descendant(of: card, matching: find.byTooltip('Music actions')));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Snooze in Discovery'));
     await tester.pumpAndSettle();
@@ -2940,8 +3005,12 @@ void main() {
     await show(tester, settle: false);
     catalog.discoveries.single.complete([_discovered]);
     await tester.pumpAndSettle();
-    final stale = tester.widget<MusicCatalogCard>(
-        find.byKey(const ValueKey('music-discovery-discover001')));
+    final card = find.byKey(const ValueKey('music-discovery-discover001'));
+    final stale = tester.widget<MusicCatalogCard>(card);
+    await tester.ensureVisible(card);
+    await tester.longPress(card);
+    await tester.pumpAndSettle();
+    expect(find.text('1 selected'), findsOneWidget);
     final next = (await tester.runAsync(() => db.createProfile('Second')))!;
     await tester.runAsync(() => db.useProfile(next.id));
     app.change(app.state.copyWith(profileId: next.id));
@@ -2950,6 +3019,7 @@ void main() {
     await tester.pump();
     await tester.pump();
     expect(find.text('Discovered recording'), findsNothing);
+    expect(find.byType(MusicSongSelectionBar), findsNothing);
     expect(catalog.discoveryCalls, 2);
     catalog.discoveries.last.complete([]);
     await tester.pumpAndSettle();
@@ -3306,7 +3376,9 @@ void main() {
       (tester) async {
     await tester.runAsync(() => library.save(_saved));
     await show(tester);
-    final actions = find.byTooltip('Music actions');
+    final actions = find.descendant(
+        of: find.byKey(ValueKey('music-home-saved-${_saved.id}')),
+        matching: find.byTooltip('Music actions'));
     await tester.ensureVisible(actions);
     await tester.pumpAndSettle();
     await tester.tap(actions);
@@ -3334,6 +3406,68 @@ void main() {
     expect(
         find.byKey(const ValueKey('music-home-saved-empty')), findsOneWidget);
     expect(catalog.discoveryArtists, [null, 'Saved artist']);
+  });
+
+  testWidgets('Home removes only confirmed selected Saved Songs',
+      (tester) async {
+    await tester.runAsync(() async {
+      for (var index = 1; index <= 3; index++) {
+        await library.save(MusicLibraryEntry(
+            kind: MusicLibraryKind.song,
+            id: 'savedmusic$index',
+            title: 'Saved track $index'));
+      }
+    });
+    await show(tester);
+    final first = find.byKey(const ValueKey('music-home-saved-savedmusic3'));
+    final last = find.byKey(const ValueKey('music-home-saved-savedmusic1'));
+    await tester.ensureVisible(first);
+    await tester.longPress(first);
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(last);
+    await tester.tap(last);
+    await tester.pumpAndSettle();
+    expect(find.text('2 selected'), findsOneWidget);
+
+    Future<void> openRemoval() async {
+      final actions = find.byTooltip('Actions for selected songs');
+      await tester.ensureVisible(actions);
+      await tester.tap(actions);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Remove from Saved Songs'));
+      await tester.pumpAndSettle();
+      expect(
+          find.text('Remove these 2 songs from Saved Songs?'), findsOneWidget);
+    }
+
+    await openRemoval();
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    expect(library.entries, hasLength(3));
+    expect(find.text('2 selected'), findsOneWidget);
+    await openRemoval();
+    await tester.runAsync(() async {
+      final removed = Completer<void>();
+      void onChanged() {
+        if (library.entries.length == 1 && !removed.isCompleted) {
+          removed.complete();
+        }
+      }
+
+      library.changes.addListener(onChanged);
+      try {
+        await tester
+            .tap(find.widgetWithText(FilledButton, 'Remove from Saved Songs'));
+        await tester.pumpAndSettle();
+        await removed.future.timeout(const Duration(seconds: 5));
+      } finally {
+        library.changes.removeListener(onChanged);
+      }
+    });
+    await tester.pumpAndSettle();
+    expect(library.entries.map((entry) => entry.id), ['savedmusic2']);
+    expect(find.byType(MusicSongSelectionBar), findsNothing);
+    expect(router.pushed, isNull);
   });
 
   testWidgets('Home limits its preview while keeping the full library',

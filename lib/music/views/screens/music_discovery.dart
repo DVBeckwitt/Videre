@@ -27,10 +27,13 @@ import 'package:clipious/music/views/components/music_chart_picker.dart';
 import 'package:clipious/music/views/components/music_discovery_snooze.dart';
 import 'package:clipious/music/views/components/music_dismissal_notice.dart';
 import 'package:clipious/music/views/components/music_discovery_offline.dart';
+import 'package:clipious/music/views/components/music_discovery_song_selection.dart';
 import 'package:clipious/music/views/components/music_library_actions.dart';
+import 'package:clipious/music/views/components/music_song_selection_bar.dart';
 import 'package:clipious/music/views/components/music_offline_recovery.dart';
 import 'package:clipious/music/views/components/music_recommendation_collection.dart';
 import 'package:clipious/music/views/components/music_recommendation_shelves.dart';
+import 'package:clipious/music/views/components/music_saved_song_removal.dart';
 import 'package:clipious/music/views/components/music_starter_artists.dart';
 import 'package:clipious/music/views/components/music_track_results.dart';
 import 'package:clipious/network/network_proxy.dart';
@@ -73,6 +76,7 @@ class _MusicHomePageState extends State<MusicHomePage> {
   final _scroll = ScrollController();
   final _discovery = GlobalKey();
   final _loading = _DiscoveryLoading();
+  final _songSelection = MusicDiscoverySelectionOwner();
 
   void _showDiscovery() {
     final target = _discovery.currentContext;
@@ -83,6 +87,7 @@ class _MusicHomePageState extends State<MusicHomePage> {
   void dispose() {
     _scroll.dispose();
     _loading.dispose();
+    _songSelection.dispose();
     super.dispose();
   }
 
@@ -97,30 +102,33 @@ class _MusicHomePageState extends State<MusicHomePage> {
     });
     final home = TickerMode(
       enabled: !covered,
-      child: _DiscoverySongs(
+      child: MusicDiscoverySelectionScope(
+        owner: _songSelection,
+        child: _DiscoverySongs(
           builder: (canDiscover, freshShelves, songs) => _DiscoveryScroll(
-                storageKey: 'music-home',
-                controller: _scroll,
-                children: [
-                  _MusicHomeShortcuts(
-                    onSearch:
-                        widget.showSearchShortcut ? widget.onSearch : null,
-                    onLibrary: widget.onLibrary,
-                    onDiscover: canDiscover == null
-                        ? null
-                        : () {
-                            if (canDiscover()) _showDiscovery();
-                          },
-                  ),
-                  const MusicStarterArtistsSection(),
-                  const MusicRecommendationShelves(),
-                  const _SnoozedSongs(),
-                  _SavedSongs(onLibrary: widget.onLibrary),
-                  freshShelves,
-                  const _MusicExplore(),
-                  KeyedSubtree(key: _discovery, child: songs),
-                ],
-              )),
+            storageKey: 'music-home',
+            controller: _scroll,
+            children: [
+              _MusicHomeShortcuts(
+                onSearch: widget.showSearchShortcut ? widget.onSearch : null,
+                onLibrary: widget.onLibrary,
+                onDiscover: canDiscover == null
+                    ? null
+                    : () {
+                        if (canDiscover()) _showDiscovery();
+                      },
+              ),
+              const MusicStarterArtistsSection(),
+              const MusicRecommendationShelves(),
+              const _SnoozedSongs(),
+              _SavedSongs(onLibrary: widget.onLibrary),
+              freshShelves,
+              const _MusicExplore(),
+              KeyedSubtree(key: _discovery, child: songs),
+            ],
+          ),
+        ),
+      ),
     );
     return _DiscoveryLoadingScope(
       loading: _loading,
@@ -391,7 +399,9 @@ class _SavedSongs extends StatelessWidget {
               db.profileId != session.profileId) {
             return const SizedBox.shrink();
           }
-          final library = MusicLibraryService.forProfile(db, session.profileId);
+          final database = db;
+          final library =
+              MusicLibraryService.forProfile(database, session.profileId);
           Iterable<MusicLibraryEntry> preview() => library.entries
               .where((entry) => entry.kind == MusicLibraryKind.song)
               .take(12);
@@ -429,8 +439,24 @@ class _SavedSongs extends StatelessWidget {
                       ]),
                     )
                   else
-                    _SavedSongRows(
+                    MusicDiscoverySongSelection(
+                      source: (
+                        database,
+                        session.profileId,
+                        session.sessionRevision,
+                        session.server,
+                      ),
+                      songs: [for (final song in songs) song.toVideo()],
+                      isCurrent: () =>
+                          context.mounted &&
+                          identical(db, database) &&
+                          _sameSession(session, context.read<AppCubit>().state),
+                      removeSavedSongs: (ids, isCurrent) =>
+                          confirmMusicSavedSongRemoval(context, library, ids,
+                              isCurrent: isCurrent),
+                      builder: (context, selection) => _SavedSongRows(
                         songs: songs,
+                        selection: selection,
                         onOpen: (song, cardOrigin) async {
                           if (!context.mounted ||
                               !_sameSession(
@@ -443,7 +469,9 @@ class _SavedSongs extends StatelessWidget {
                               preview().map((entry) => entry.toVideo()),
                               locals.musicSavedSongs,
                               cardOrigin: cardOrigin);
-                        }),
+                        },
+                      ),
+                    ),
                 ],
               );
             },
@@ -456,9 +484,14 @@ class _SavedSongs extends StatelessWidget {
 /// A nested horizontal list owns its drags instead of switching the Home tab.
 class _SavedSongRows extends StatelessWidget {
   final List<MusicLibraryEntry> songs;
+  final MusicDiscoverySelectionRows selection;
   final Future<void> Function(MusicLibraryEntry, MusicCardOrigin) onOpen;
 
-  const _SavedSongRows({required this.songs, required this.onOpen});
+  const _SavedSongRows({
+    required this.songs,
+    required this.selection,
+    required this.onOpen,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -495,7 +528,8 @@ class _SavedSongRows extends StatelessWidget {
             width: laneWidth,
             child: Column(
               children: [
-                for (final song in songs.skip(lane * rows).take(rows))
+                for (final (index, song)
+                    in songs.indexed.skip(lane * rows).take(rows))
                   SizedBox(
                     height: rowHeight,
                     child: _SavedSongRow(
@@ -503,6 +537,8 @@ class _SavedSongRows extends StatelessWidget {
                       song: song,
                       compact: compact,
                       titleLines: titleLines,
+                      selected: selection.selected(index),
+                      onSelect: selection.toggle(index),
                       onOpen: (origin) => onOpen(song, origin),
                     ),
                   ),
@@ -519,6 +555,8 @@ class _SavedSongRow extends StatelessWidget {
   final MusicLibraryEntry song;
   final bool compact;
   final int titleLines;
+  final bool? selected;
+  final VoidCallback onSelect;
   final Future<void> Function(MusicCardOrigin) onOpen;
 
   const _SavedSongRow({
@@ -526,6 +564,8 @@ class _SavedSongRow extends StatelessWidget {
     required this.song,
     required this.compact,
     required this.titleLines,
+    required this.selected,
+    required this.onSelect,
     required this.onOpen,
   });
 
@@ -544,13 +584,11 @@ class _SavedSongRow extends StatelessWidget {
     Future<void> open() => onOpen(cardOrigin);
     void activate() => activateMusicCard(context, cardOrigin, open);
     final row = Material(
-      color: Colors.transparent,
+      color: selected == true ? colors.secondaryContainer : Colors.transparent,
       borderRadius: BorderRadius.circular(12),
       child: InkWell(
-        onTap: activate,
-        onLongPress: () => MusicLibraryActions.showSongMenu(
-            context, song.toVideo(),
-            onPlay: open),
+        onTap: selected == null ? activate : onSelect,
+        onLongPress: onSelect,
         borderRadius: BorderRadius.circular(12),
         onFocusChange: (focused) {
           if (focused) Scrollable.ensureVisible(context, alignment: 0.5);
@@ -606,15 +644,25 @@ class _SavedSongRow extends StatelessWidget {
                   ],
                 ),
               ),
-              if (playbackIcon != null) playbackIcon,
-              MusicLibraryActions(videos: [song.toVideo()], onPlay: open),
+              if (selected == null) ...[
+                if (playbackIcon != null) playbackIcon,
+                MusicLibraryActions(
+                  videos: [song.toVideo()],
+                  onPlay: open,
+                  onSelectSong: onSelect,
+                ),
+              ] else
+                MusicSongSelectButton(selected: selected, onPressed: onSelect),
             ],
           ),
         ),
       ),
     );
     return Semantics(
-        onTapHint: musicCardPlaybackHint(context, playing), child: row);
+        selected: selected,
+        onTapHint:
+            selected == null ? musicCardPlaybackHint(context, playing) : null,
+        child: row);
   }
 }
 
@@ -1190,68 +1238,89 @@ class _DiscoverySongsState extends State<_DiscoverySongs>
                     () => _showCommunityHidden = !_showCommunityHidden),
               ),
             if (batch != null && songs.isNotEmpty)
-              MusicCatalogShelf(
-                key: const ValueKey('music-discovery-songs'),
-                itemCount: songs.length,
-                itemBuilder: (context, index) {
-                  final (song, matches) = songs[index];
-                  final MusicCardOrigin cardOrigin = (
-                    surface: MusicCardSurface.discovery,
-                    collectionId: artist,
-                    entryId: song.videoId,
-                  );
-                  final reason = batch.reasons[song.videoId];
-                  // Opening a menu can cancel a pending refresh. Its actions still
-                  // belong to this displayed list until the selection changes.
-                  bool currentSong() =>
-                      _artist == artist &&
-                      identical(_batches[artist]?.songs, batch.songs) &&
-                      _current(session, artist) &&
-                      playable(artist, [song]).isNotEmpty;
-                  Future<void> open() async {
-                    if (context.mounted && currentSong()) {
-                      await _openSong(
-                          context,
-                          song.videoId,
-                          playable(artist, batch.songs)
-                              .map((track) => track.toVideo()),
-                          locals.musicDiscover,
-                          cardOrigin: cardOrigin);
+              MusicDiscoverySongSelection(
+                source: (
+                  session.database,
+                  session.app.profileId,
+                  session.app.sessionRevision,
+                  session.proxy,
+                  session.country,
+                  session.filters,
+                  _artistSelectionRevision,
+                  artist
+                ),
+                songs: [for (final (song, _) in songs) song.toVideo()],
+                isCurrent: () => _artist == artist && _sameConnection(session),
+                builder: (context, selection) => MusicCatalogShelf(
+                  key: const ValueKey('music-discovery-songs'),
+                  itemCount: songs.length,
+                  itemBuilder: (context, index) {
+                    final (song, matches) = songs[index];
+                    final MusicCardOrigin cardOrigin = (
+                      surface: MusicCardSurface.discovery,
+                      collectionId: artist,
+                      entryId: song.videoId,
+                    );
+                    final reason = batch.reasons[song.videoId];
+                    // Opening a menu can cancel a pending refresh. Its actions still
+                    // belong to this displayed list until the selection changes.
+                    bool currentSong() =>
+                        _artist == artist &&
+                        identical(_batches[artist]?.songs, batch.songs) &&
+                        _current(session, artist) &&
+                        playable(artist, [song]).isNotEmpty;
+                    Future<void> open() async {
+                      if (context.mounted && currentSong()) {
+                        await _openSong(
+                            context,
+                            song.videoId,
+                            playable(artist, batch.songs)
+                                .map((track) => track.toVideo()),
+                            locals.musicDiscover,
+                            cardOrigin: cardOrigin);
+                      }
                     }
-                  }
 
-                  final recommendation = MusicSongRecommendation(
-                      reason: reason,
-                      isCurrent: currentSong,
-                      onSnooze: () => showMusicDiscoverySnooze(
-                          context, visibility, song, currentSong),
-                      onFeedback: reason == null
-                          ? null
-                          : (feedback) => _feedback(
-                              session, artist, batch, song, feedback));
-                  return MusicCatalogCard(
-                    key: ValueKey('music-discovery-${song.videoId}'),
-                    title: song.title,
-                    subtitle: song.artists.join(', '),
-                    song: song,
-                    showPlayIndicator: true,
-                    cardOrigin: cardOrigin,
-                    badge: Row(mainAxisSize: MainAxisSize.min, children: [
-                      if (matches.isNotEmpty)
-                        Flexible(
-                            child: CommunityMatchLabels(
-                                matches: matches, compact: true)),
-                      MusicLibraryActions(
-                          videos: [song.toVideo()],
-                          onPlay: open,
-                          recommendation: recommendation),
-                    ]),
-                    onLongPress: () => MusicLibraryActions.showSongMenu(
-                        context, song.toVideo(),
-                        onPlay: open, recommendation: recommendation),
-                    onOpen: open,
-                  );
-                },
+                    final recommendation = MusicSongRecommendation(
+                        reason: reason,
+                        isCurrent: currentSong,
+                        onSnooze: () => showMusicDiscoverySnooze(
+                            context, visibility, song, currentSong),
+                        onFeedback: reason == null
+                            ? null
+                            : (feedback) => _feedback(
+                                session, artist, batch, song, feedback));
+                    final selected = selection.selected(index);
+                    final select = selection.toggle(index);
+                    return MusicCatalogCard(
+                      key: ValueKey('music-discovery-${song.videoId}'),
+                      title: song.title,
+                      subtitle: song.artists.join(', '),
+                      song: song,
+                      showPlayIndicator: true,
+                      cardOrigin: cardOrigin,
+                      badge: Row(mainAxisSize: MainAxisSize.min, children: [
+                        if (matches.isNotEmpty)
+                          Flexible(
+                              child: CommunityMatchLabels(
+                                  matches: matches, compact: true)),
+                        if (selected == null)
+                          MusicLibraryActions(
+                            videos: [song.toVideo()],
+                            onPlay: open,
+                            recommendation: recommendation,
+                            onSelectSong: select,
+                          )
+                        else
+                          MusicSongSelectButton(
+                              selected: selected, onPressed: select),
+                      ]),
+                      selected: selected,
+                      onSelect: select,
+                      onOpen: open,
+                    );
+                  },
+                ),
               )
             else if (pending.isEmpty &&
                 !_loading &&
@@ -1946,31 +2015,61 @@ class _FreshSelectionState extends State<_FreshSelection>
           ),
         if (tracks.isNotEmpty) ...[
           _SectionHeading(title: chartTitle, action: refresh),
-          MusicCatalogShelf(
-            key: const ValueKey('music-home-chart'),
-            itemCount: tracks.length,
-            itemBuilder: (context, index) {
-              final track = tracks[index];
-              final MusicCardOrigin cardOrigin = (
-                surface: MusicCardSurface.chart,
-                collectionId: chart.playlistId,
-                entryId: track.videoId,
-              );
-              return MusicCatalogCard(
-                title: track.title,
-                subtitle: track.artists.join(', '),
-                song: track,
-                showPlayIndicator: true,
-                cardOrigin: cardOrigin,
-                onOpen: () {
+          MusicDiscoverySongSelection(
+            source: (
+              session.database,
+              session.app.profileId,
+              session.app.sessionRevision,
+              session.proxy,
+              chart.playlistId
+            ),
+            songs: [for (final track in tracks) track.toVideo()],
+            isCurrent: () =>
+                mounted &&
+                _chart.playlistId == chart.playlistId &&
+                session.eligible &&
+                session
+                    .matches(_DiscoverySession(context.read<AppCubit>().state)),
+            builder: (context, selection) => MusicCatalogShelf(
+              key: const ValueKey('music-home-chart'),
+              itemCount: tracks.length,
+              itemBuilder: (context, index) {
+                final track = tracks[index];
+                final MusicCardOrigin cardOrigin = (
+                  surface: MusicCardSurface.chart,
+                  collectionId: chart.playlistId,
+                  entryId: track.videoId,
+                );
+                Future<void> open() async {
                   if (!current()) return;
                   final playable = recommendations.eligibleMusic(tracks);
-                  _openSong(context, track.videoId,
+                  await _openSong(context, track.videoId,
                       playable.map((track) => track.toVideo()), chartTitle,
                       cardOrigin: cardOrigin);
-                },
-              );
-            },
+                }
+
+                final selected = selection.selected(index);
+                final select = selection.toggle(index);
+                return MusicCatalogCard(
+                  title: track.title,
+                  subtitle: track.artists.join(', '),
+                  song: track,
+                  showPlayIndicator: true,
+                  cardOrigin: cardOrigin,
+                  selected: selected,
+                  onSelect: select,
+                  badge: selected == null
+                      ? MusicLibraryActions(
+                          videos: [track.toVideo()],
+                          onPlay: open,
+                          onSelectSong: select,
+                        )
+                      : MusicSongSelectButton(
+                          selected: selected, onPressed: select),
+                  onOpen: open,
+                );
+              },
+            ),
           ),
         ] else if (loadingChart)
           _DiscoveryShelfPlaceholder(

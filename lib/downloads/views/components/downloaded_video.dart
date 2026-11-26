@@ -22,7 +22,36 @@ bool _canExportMusic(DownloadedVideo video) =>
 class DownloadedVideoView extends StatelessWidget {
   final DownloadedVideo video;
 
-  const DownloadedVideoView({super.key, required this.video});
+  const DownloadedVideoView({
+    super.key,
+    required this.video,
+    this.selectionMode = false,
+    this.selected = false,
+    this.onSelect,
+  });
+
+  final bool selectionMode;
+  final bool selected;
+  final VoidCallback? onSelect;
+
+  void _openSongMenu(BuildContext context) {
+    final metadata = video.musicMetadata ??
+        MusicMetadata(title: video.title, artist: video.author ?? '');
+    MusicLibraryActions.showSongMenu(
+      context,
+      Video(
+        videoId: video.videoId,
+        title: metadata.title,
+        author: metadata.artist,
+        lengthSeconds: video.lengthSeconds,
+        musicMetadata: metadata,
+        videoThumbnails: metadata.thumbnails,
+      ),
+      downloads: [video],
+      onSelectSong: onSelect,
+      onPlay: () => context.read<PlayerCubit>().playOfflineVideos([video]),
+    );
+  }
 
   void openVideoSheet(BuildContext context) {
     final cubit = context.read<DownloadManagerCubit>();
@@ -160,54 +189,64 @@ class DownloadedVideoView extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        CompactVideo(
-          offlineVideo: video,
-          onTap: video.downloadComplete
-              ? () => context.read<PlayerCubit>().playOfflineVideos([video])
-              : () => openVideoSheet(context),
-          onLongPress: video.downloadComplete && video.audioOnly
-              ? () {
-                  final metadata = video.musicMetadata ??
-                      MusicMetadata(
-                          title: video.title, artist: video.author ?? '');
-                  MusicLibraryActions.showSongMenu(
-                    context,
-                    Video(
-                      videoId: video.videoId,
-                      title: metadata.title,
-                      author: metadata.artist,
-                      lengthSeconds: video.lengthSeconds,
-                      musicMetadata: metadata,
-                      videoThumbnails: metadata.thumbnails,
-                    ),
-                    downloads: [video],
-                    onPlay: () =>
-                        context.read<PlayerCubit>().playOfflineVideos([video]),
-                  );
-                }
-              : null,
-          trailing: [
-            if (video.audioOnly) const Icon(Icons.audiotrack),
-            if (pending &&
-                progress != null &&
-                progress.retryAt == null &&
-                !paused &&
-                !waitingForWifi)
-              SizedBox(
+        Semantics(
+          selected: selectionMode && onSelect != null ? selected : null,
+          child: CompactVideo(
+            offlineVideo: video,
+            highlighted: selected,
+            onTap: selectionMode
+                ? onSelect
+                : video.downloadComplete
+                    ? () =>
+                        context.read<PlayerCubit>().playOfflineVideos([video])
+                    : () => openVideoSheet(context),
+            onLongPress: selectionMode
+                ? null
+                : onSelect ??
+                    (video.downloadComplete && video.audioOnly
+                        ? () => _openSongMenu(context)
+                        : null),
+            trailing: [
+              if (selectionMode && onSelect != null)
+                Padding(
+                  padding: const EdgeInsetsDirectional.only(end: 12),
+                  child: Icon(
+                    selected ? Icons.check_box : Icons.check_box_outline_blank,
+                  ),
+                )
+              else if (!selectionMode && onSelect != null)
+                IconButton(
+                  tooltip: locals.musicSongActions,
+                  onPressed: () => _openSongMenu(context),
+                  icon: const Icon(Icons.audiotrack),
+                )
+              else if (video.audioOnly)
+                const Icon(Icons.audiotrack),
+              if (pending &&
+                  progress != null &&
+                  progress.retryAt == null &&
+                  !paused &&
+                  !waitingForWifi)
+                SizedBox(
                   width: 20,
                   height: 20,
                   child: MotionLoadingIndicator(
-                      child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          value: progress.count == 0
-                              ? null
-                              : progress.count / progress.total))),
-            IconButton(
-              tooltip: locals.downloads,
-              onPressed: () => openVideoSheet(context),
-              icon: const Icon(Icons.more_vert),
-            ),
-          ],
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      value: progress.count == 0
+                          ? null
+                          : progress.count / progress.total,
+                    ),
+                  ),
+                ),
+              if (!selectionMode)
+                IconButton(
+                  tooltip: locals.downloads,
+                  onPressed: () => openVideoSheet(context),
+                  icon: const Icon(Icons.more_vert),
+                ),
+            ],
+          ),
         ),
         if (!video.downloadComplete && status != null)
           Padding(

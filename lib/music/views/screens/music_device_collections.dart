@@ -13,6 +13,7 @@ import '../../models/local_music_track.dart';
 import '../../services/local_music_library.dart';
 import '../components/local_music_category_sort_menu.dart';
 import '../components/device_music_artwork.dart';
+import '../components/device_music_song_selection.dart';
 import '../components/music_library_actions.dart';
 import 'music.dart';
 import 'music_device_artist.dart';
@@ -218,8 +219,12 @@ class _DeviceCollectionPage extends StatelessWidget {
   }
 
   Widget _trackList(
-      BuildContext context, AppLocalizations locals, Object key, String title) {
-    final tracks = _members(key);
+      BuildContext context,
+      AppLocalizations locals,
+      Object key,
+      String title,
+      List<LocalMusicTrack> tracks,
+      DeviceMusicSongSelectionState selection) {
     if (tracks.isEmpty) return Center(child: Text(locals.musicNoResults));
     final artists = kind == MusicDeviceCollection.genres
         ? (groupLocalMusicArtists(tracks)
@@ -274,14 +279,23 @@ class _DeviceCollectionPage extends StatelessWidget {
               }
               final songIndex = index - songStart;
               final track = tracks[songIndex];
+              final selected = selection.contains(songIndex);
               return ListTile(
                 key: ValueKey((track.playbackId, songIndex)),
-                leading: const Icon(Icons.music_note_outlined),
+                selected: selected,
+                leading: Icon(selection.active
+                    ? (selected
+                        ? Icons.check_box
+                        : Icons.check_box_outline_blank)
+                    : Icons.music_note_outlined),
                 title: Text(track.title,
                     maxLines: 2, overflow: TextOverflow.ellipsis),
                 subtitle: track.artist == null ? null : Text(track.artist!),
-                onTap: () => _play(context, key, title,
-                    index: songIndex, expectedTrackId: track.playbackId),
+                onTap: selection.active
+                    ? () => selection.toggle(songIndex)
+                    : () => _play(context, key, title,
+                        index: songIndex, expectedTrackId: track.playbackId),
+                onLongPress: () => selection.start(songIndex),
               );
             },
           ),
@@ -305,28 +319,45 @@ class _DeviceCollectionPage extends StatelessWidget {
               : null;
           final title =
               (key == null ? null : _labelFor(key)) ?? kind._label(locals);
-          final page = Scaffold(
-            appBar: AppBar(
-              title: Text(title),
-              actions: [
-                if (order != null)
-                  LocalMusicCategorySortMenu(
-                    settingName: _genreOrderSetting,
-                    order: order,
-                    isCurrent: () => _active,
-                  ),
-              ],
-            ),
-            body: SafeArea(
-              child: key == null
-                  ? _browse(locals, _indexCollections(order))
-                  : _trackList(context, locals, key, title),
-            ),
+          final tracks =
+              key == null ? const <LocalMusicTrack>[] : _members(key);
+          return DeviceMusicSongSelection(
+            library: library,
+            tracks: tracks,
+            source: (library, selectionId, profile, kind, key),
+            currentTracks: () => key == null || !_active ? null : _members(key),
+            builder: (context, selection) {
+              final page = Scaffold(
+                appBar: AppBar(
+                  title: Text(title),
+                  actions: [
+                    if (selection.selectButton case final button?) button,
+                    if (order != null)
+                      LocalMusicCategorySortMenu(
+                        settingName: _genreOrderSetting,
+                        order: order,
+                        isCurrent: () => _active,
+                      ),
+                  ],
+                ),
+                body: SafeArea(
+                  child: Column(children: [
+                    if (selection.toolbar case final toolbar?) toolbar,
+                    Expanded(
+                      child: key == null
+                          ? _browse(locals, _indexCollections(order))
+                          : _trackList(
+                              context, locals, key, title, tracks, selection),
+                    ),
+                  ]),
+                ),
+              );
+              return Shortcuts(shortcuts: {
+                for (final key in selectKeys)
+                  SingleActivator(key): const ActivateIntent(),
+              }, child: isTv ? TvOverscan(child: page) : page);
+            },
           );
-          return Shortcuts(shortcuts: {
-            for (final key in selectKeys)
-              SingleActivator(key): const ActivateIntent(),
-          }, child: isTv ? TvOverscan(child: page) : page);
         },
       ),
     );
