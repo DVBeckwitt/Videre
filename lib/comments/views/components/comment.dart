@@ -16,9 +16,15 @@ import '../../models/comment.dart';
 class SingleCommentView extends StatelessWidget {
   final Comment comment;
   final Video video;
+  final Widget? timestampButton;
+  final VoidCallback? onOpenReplies;
 
   const SingleCommentView(
-      {super.key, required this.comment, required this.video});
+      {super.key,
+      required this.comment,
+      required this.video,
+      this.timestampButton,
+      this.onOpenReplies});
 
   void openChannel(BuildContext context, String authorId) {
     AutoRouter.of(context).push(ChannelRoute(channelId: authorId));
@@ -115,10 +121,11 @@ class SingleCommentView extends StatelessWidget {
                           ),
                         ],
                       ),
+                      if (timestampButton case final button?) button,
                       TextLinkified(
                         text: state.comment.content,
                         video: video,
-                        player: player,
+                        player: timestampButton == null ? player : null,
                       ),
                       Row(
                         children: [
@@ -147,7 +154,12 @@ class SingleCommentView extends StatelessWidget {
                             child: FilledButton.tonalIcon(
                               style: FilledButton.styleFrom(
                                   minimumSize: const Size(0, 48)),
-                              onPressed: cubit.toggleShowChildren,
+                              onPressed: () {
+                                if (!state.showingChildren) {
+                                  onOpenReplies?.call();
+                                }
+                                cubit.toggleShowChildren();
+                              },
                               icon: Icon(state.showingChildren
                                   ? Icons.expand_less
                                   : Icons.expand_more),

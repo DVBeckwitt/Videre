@@ -7,9 +7,12 @@ import 'package:clipious/comments/models/video_comments.dart';
 import 'package:clipious/comments/states/comments.dart';
 import 'package:clipious/comments/views/components/comment.dart';
 import 'package:clipious/comments/views/components/comments.dart';
+import 'package:clipious/comments/views/components/comments_container.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
+import 'package:clipious/player/models/media_command.dart';
+import 'package:clipious/player/models/media_event.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/errors/invidious_service_error.dart';
@@ -37,7 +40,31 @@ class _CommentsService extends Service {
   }
 }
 
-final _video = Video(videoId: 'video');
+class _CommentsPlayer extends TestPlayerCubit {
+  _CommentsPlayer(super.initialState, super.settings);
+
+  void showVideo(Video video, Duration position) {
+    emit(state.copyWith(
+      currentlyPlaying: video,
+      isHidden: false,
+      isMini: false,
+      isPlaying: false,
+      position: position,
+      mediaEvent: const MediaEvent(state: MediaState.pause),
+      mediaCommand: null,
+    ));
+  }
+
+  void advancePlayback(Duration position) {
+    emit(state.copyWith(
+      isPlaying: true,
+      position: position,
+      mediaEvent: const MediaEvent(state: MediaState.playing),
+    ));
+  }
+}
+
+const _video = Video(videoId: 'video', lengthSeconds: 120);
 
 Comment _comment(String content, {CommentReplies? replies}) => Comment(
     'Author',
@@ -55,11 +82,19 @@ Comment _comment(String content, {CommentReplies? replies}) => Comment(
 
 Future<void> _flush() => Future<void>.delayed(Duration.zero);
 
-Future<void> _pumpComments(WidgetTester tester, Widget child) async {
+Future<_CommentsPlayer> _pumpComments(
+  WidgetTester tester,
+  Widget child, {
+  bool scrollable = true,
+  Video? playingVideo,
+}) async {
   final app = TestAppCubit(AppState(0, null, HomeLayout()));
   app.intentDataStreamSubscription = const Stream<void>.empty().listen((_) {});
   final settings = TestSettingsCubit(SettingsState.init(), app);
-  final player = TestPlayerCubit(PlayerState.init(null), settings);
+  final player = _CommentsPlayer(PlayerState.init(null), settings);
+  if (playingVideo != null) {
+    player.showVideo(playingVideo, const Duration(seconds: 6));
+  }
   addTearDown(() async {
     await player.close();
     await settings.close();
@@ -71,9 +106,12 @@ Future<void> _pumpComments(WidgetTester tester, Widget child) async {
       localizationsDelegates: AppLocalizations.localizationsDelegates,
       supportedLocales: AppLocalizations.supportedLocales,
       locale: const Locale('en'),
-      home: Scaffold(body: SingleChildScrollView(child: child)),
+      home: Scaffold(
+        body: scrollable ? SingleChildScrollView(child: child) : child,
+      ),
     ),
   ));
+  return player;
 }
 
 void main() {
@@ -210,6 +248,221 @@ void main() {
     expect(find.text('First'), findsOneWidget);
     expect(find.text('Second'), findsOneWidget);
     expect(find.text('Offline'), findsNothing);
+  });
+
+  testWidgets(
+      'Timed indexes loaded Top pages, retries, and keeps Top and New available',
+      (tester) async {
+    const earlier = '0:15 Explains the setup';
+    const later = '1:20 Shows the result';
+    const invalid = '0:75 Invalid seconds';
+    const outOfRange = '2:30 Past the end';
+    final top = find.widgetWithText(ChoiceChip, 'Top');
+    final newest = find.widgetWithText(ChoiceChip, 'New');
+    final timed = find.widgetWithText(ChoiceChip, 'Timed');
+    final loadMore = find.text('Load more');
+    final earlierRow = find.text(earlier, findRichText: true);
+    final laterRow = find.text(later, findRichText: true);
+
+    await _pumpComments(
+      tester,
+      CommentsContainer(
+        video: _video,
+        watchStyle: true,
+        topPage: VideoComments(
+          4,
+          _video.videoId,
+          'next',
+          [_comment(invalid), _comment(outOfRange)],
+        ),
+      ),
+      scrollable: false,
+    );
+    await tester.tap(timed);
+    await tester.pumpAndSettle();
+    expect(fakeService.requests, isEmpty);
+    expect(find.text('No valid timestamps in the loaded comments.'),
+        findsOneWidget);
+    expect(
+      find.text('Uses loaded Top comments from your provider. '
+          'More comments are available.'),
+      findsOneWidget,
+    );
+    expect(find.text(invalid, findRichText: true), findsNothing);
+    expect(find.text(outOfRange, findRichText: true), findsNothing);
+
+    await tester.tap(loadMore);
+    expect(fakeService.requests.single,
+        (continuation: 'next', sortBy: 'top', source: 'youtube'));
+    fakeService.responses.last
+        .complete(VideoComments(4, _video.videoId, 'last', [_comment(later)]));
+    await tester.pumpAndSettle();
+    expect(laterRow, findsOneWidget);
+
+    await tester.tap(loadMore);
+    fakeService.responses.last.completeError(InvidiousServiceError('Offline'));
+    await tester.pumpAndSettle();
+    expect(laterRow, findsOneWidget);
+    await tester.tap(find.text('Retry'));
+    expect(fakeService.requests.last,
+        (continuation: 'last', sortBy: 'top', source: 'youtube'));
+    fakeService.responses.last
+        .complete(VideoComments(4, _video.videoId, null, [_comment(earlier)]));
+    await tester.pumpAndSettle();
+    expect(tester.getTopLeft(earlierRow).dy,
+        lessThan(tester.getTopLeft(laterRow).dy));
+    expect(find.text('Uses Top comments available from your provider.'),
+        findsOneWidget);
+    expect(loadMore, findsNothing);
+
+    await tester.tap(newest);
+    await tester.pump();
+    expect(fakeService.requests.last,
+        (continuation: null, sortBy: 'new', source: 'youtube'));
+    fakeService.responses.last
+        .complete(VideoComments(1, _video.videoId, null, [_comment('Newest')]));
+    await tester.pumpAndSettle();
+    expect(find.text('Newest'), findsOneWidget);
+
+    await tester.tap(top);
+    await tester.pumpAndSettle();
+    expect(find.text(invalid, findRichText: true), findsOneWidget);
+    await tester.tap(timed);
+    await tester.pumpAndSettle();
+    expect(earlierRow, findsOneWidget);
+    expect(laterRow, findsOneWidget);
+    expect(fakeService.requests, hasLength(4));
+  });
+
+  testWidgets(
+      'Timed follows playback, pauses for a drag, and guards stale seeks',
+      (tester) async {
+    final follow = find.text('Follow playback');
+    final pause = find.text('Pause follow');
+    final timedList = find.byKey(const ValueKey('timed-comments-list'));
+    Finder seekButton(String timestamp) =>
+        find.widgetWithText(TextButton, timestamp);
+
+    final player = await _pumpComments(
+      tester,
+      CommentsContainer(
+        video: _video,
+        watchStyle: true,
+        topPage: VideoComments(
+          14,
+          _video.videoId,
+          null,
+          [
+            for (var number = 1; number <= 14; number++)
+              _comment(
+                  '0:${(number * 4).toString().padLeft(2, '0')} Scene $number'),
+          ],
+        ),
+      ),
+      scrollable: false,
+      playingVideo: _video,
+    );
+    await tester.tap(find.widgetWithText(ChoiceChip, 'Timed'));
+    await tester.pumpAndSettle();
+    expect(pause, findsNothing);
+    final scrollable =
+        find.descendant(of: timedList, matching: find.byType(Scrollable)).first;
+    final position = tester.state<ScrollableState>(scrollable).position;
+
+    final seekFromOldRow =
+        tester.widget<TextButton>(seekButton('00:08')).onPressed!;
+    await tester.tap(seekButton('00:08'));
+    await tester.pumpAndSettle();
+    expect(player.state.mediaCommand?.type, MediaCommandType.seek);
+    expect(player.state.position, const Duration(seconds: 8));
+    expect(player.state.isPlaying, isFalse);
+
+    await tester.tap(follow);
+    await tester.pumpAndSettle();
+    expect(pause, findsOneWidget);
+    player.advancePlayback(const Duration(seconds: 43));
+    await tester.pumpAndSettle();
+    expect(position.pixels, greaterThan(0));
+    expect(seekButton('00:40').hitTestable(), findsOneWidget);
+
+    await tester.dragFrom(
+      tester.getTopLeft(scrollable) +
+          Offset(12, tester.getSize(scrollable).height / 2),
+      const Offset(0, 64),
+    );
+    await tester.pumpAndSettle();
+    expect(follow, findsOneWidget);
+    final manualOffset = position.pixels;
+    expect(manualOffset, greaterThan(0));
+
+    player.seek(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
+    expect(position.pixels, manualOffset);
+    await tester.tap(follow);
+    await tester.pumpAndSettle();
+    expect(pause, findsOneWidget);
+    expect(position.pixels, lessThan(manualOffset));
+    expect(seekButton('00:04').hitTestable(), findsOneWidget);
+
+    player.showVideo(const Video(videoId: 'next-video', lengthSeconds: 200),
+        const Duration(seconds: 7));
+    seekFromOldRow();
+    await tester.pumpAndSettle();
+    expect(player.state.currentlyPlaying?.videoId, 'next-video');
+    expect(player.state.position, const Duration(seconds: 7));
+    expect(player.state.mediaCommand, isNull);
+    expect(pause, findsNothing);
+  });
+
+  testWidgets('switching videos starts a fresh Timed index', (tester) async {
+    final shown = ValueNotifier(_video);
+    addTearDown(shown.dispose);
+    const nextVideo = Video(videoId: 'next-video', lengthSeconds: 120);
+    const oldComment = '0:15 An old comment';
+    const lateComment = '0:30 An old page completed late';
+    const newComment = '0:20 A comment for the new video';
+    final timed = find.widgetWithText(ChoiceChip, 'Timed');
+
+    await _pumpComments(
+      tester,
+      ValueListenableBuilder<Video>(
+        valueListenable: shown,
+        builder: (context, video, _) => CommentsContainer(
+          video: video,
+          watchStyle: true,
+          topPage: video == _video
+              ? VideoComments(2, _video.videoId, 'next', [_comment(oldComment)])
+              : null,
+        ),
+      ),
+      scrollable: false,
+    );
+    await tester.tap(timed);
+    await tester.pumpAndSettle();
+    expect(find.text(oldComment, findRichText: true), findsOneWidget);
+    await tester.tap(find.text('Load more'));
+    final pendingPage = fakeService.responses.single;
+
+    shown.value = nextVideo;
+    await tester.pump();
+    expect(
+      tester
+          .widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'Top'))
+          .selected,
+      isTrue,
+    );
+    expect(fakeService.requests.last,
+        (continuation: null, sortBy: 'top', source: 'youtube'));
+    pendingPage.complete(
+        VideoComments(2, _video.videoId, null, [_comment(lateComment)]));
+    fakeService.responses.last.complete(
+        VideoComments(1, nextVideo.videoId, null, [_comment(newComment)]));
+    await tester.pumpAndSettle();
+    await tester.tap(timed);
+    await tester.pumpAndSettle();
+    expect(find.text(newComment, findRichText: true), findsOneWidget);
+    expect(find.text(oldComment, findRichText: true), findsNothing);
+    expect(find.text(lateComment, findRichText: true), findsNothing);
   });
 
   testWidgets(

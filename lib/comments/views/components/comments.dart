@@ -1,11 +1,11 @@
+import 'package:clipious/comments/models/video_comments.dart';
+import 'package:clipious/comments/states/comments.dart';
+import 'package:clipious/comments/views/components/comment.dart';
+import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/utils/motion.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:clipious/l10n/generated/app_localizations.dart';
-import 'package:clipious/comments/states/comments.dart';
-import 'package:clipious/comments/views/components/comment.dart';
-import 'package:clipious/comments/models/video_comments.dart';
 
 class CommentsView extends StatelessWidget {
   final Video video;
@@ -24,74 +24,72 @@ class CommentsView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    var locals = AppLocalizations.of(context)!;
-    final page = initialPage;
-    final initial = CommentsState.init(
-      video: video,
-      sortBy: sortBy,
-      source: source,
-      continuation: continuation,
-    );
     return BlocProvider(
-      create: (context) => CommentsCubit(
-        page == null
-            ? initial
-            : initial.copyWith(
-                comments: page,
-                continuation: page.continuation,
-                loadingComments: false,
-              ),
-        loadInitial: page == null,
+      create: (_) => CommentsCubit.forVideo(
+        video,
+        sortBy: sortBy,
+        source: source,
+        continuation: continuation,
+        initialPage: initialPage,
       ),
-      child:
-          BlocBuilder<CommentsCubit, CommentsState>(builder: (context, state) {
-        var cubit = context.read<CommentsCubit>();
-        List<Widget> widgets = [];
+      child: const CommentsList(),
+    );
+  }
+}
 
-        widgets.addAll(state.comments.comments
-            .map((c) => SingleCommentView(
-                  video: video,
-                  comment: c,
-                ))
-            .toList(growable: true));
+class CommentsList extends StatelessWidget {
+  const CommentsList({super.key});
 
-        if (state.error.isNotEmpty) {
-          widgets.add(Text(state.error));
-        }
+  @override
+  Widget build(BuildContext context) {
+    return BlocBuilder<CommentsCubit, CommentsState>(
+      builder: (context, state) => Column(
+        children: [
+          for (final comment in state.comments.comments)
+            SingleCommentView(video: state.video, comment: comment),
+          CommentsPagination(state: state),
+        ],
+      ),
+    );
+  }
+}
 
+class CommentsPagination extends StatelessWidget {
+  final CommentsState state;
+
+  const CommentsPagination({super.key, required this.state});
+
+  @override
+  Widget build(BuildContext context) {
+    final locals = AppLocalizations.of(context)!;
+    final cubit = context.read<CommentsCubit>();
+    return Column(
+      children: [
+        if (state.error.isNotEmpty) Text(state.error),
         if (!state.loadingComments &&
-            (state.continuation != null || state.error.isNotEmpty)) {
-          widgets.add(
-            Padding(
-              padding: const EdgeInsets.only(top: 4.0),
-              child: FilledButton.tonal(
-                style: FilledButton.styleFrom(minimumSize: const Size(0, 48)),
-                onPressed:
-                    state.error.isNotEmpty ? cubit.getComments : cubit.loadMore,
-                child: Text(
-                    state.error.isNotEmpty ? locals.retry : locals.loadMore),
+            (state.continuation != null || state.error.isNotEmpty))
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: FilledButton.tonal(
+              style: FilledButton.styleFrom(minimumSize: const Size(0, 48)),
+              onPressed:
+                  state.error.isNotEmpty ? cubit.getComments : cubit.loadMore,
+              child:
+                  Text(state.error.isNotEmpty ? locals.retry : locals.loadMore),
+            ),
+          ),
+        if (state.loadingComments)
+          const Padding(
+            padding: EdgeInsets.all(8),
+            child: SizedBox(
+              height: 20,
+              width: 20,
+              child: MotionLoadingIndicator(
+                child: CircularProgressIndicator(strokeWidth: 2),
               ),
             ),
-          );
-        }
-
-        if (state.loadingComments) {
-          widgets.add(Padding(
-            padding: const EdgeInsets.all(8.0),
-            child: Container(
-                alignment: Alignment.center,
-                child: const SizedBox(
-                    height: 20,
-                    width: 20,
-                    child: MotionLoadingIndicator(
-                        child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                    )))),
-          ));
-        }
-
-        return Column(children: widgets);
-      }),
+          ),
+      ],
     );
   }
 }
