@@ -18,6 +18,7 @@ import 'package:clipious/music/models/device_playlist_track.dart';
 import 'package:clipious/music/models/local_music_track.dart';
 import 'package:clipious/music/models/music_library_entry.dart';
 import 'package:clipious/music/models/music_song_row_swipe_action.dart';
+import 'package:clipious/music/models/on_device_music_entry.dart';
 import 'package:clipious/music/services/local_music_library.dart';
 import 'package:clipious/music/services/music_catalog_service.dart';
 import 'package:clipious/music/services/local_music_video_pairings.dart';
@@ -325,6 +326,7 @@ class MusicLibrarySession {
 }
 
 enum _LibraryAction {
+  selectSong,
   preview,
   radio,
   play,
@@ -376,36 +378,47 @@ enum _PlaylistSelectionAction {
   save,
   download,
   removeDownloads,
-  removeFromPlaylist
+  removeFromPlaylist,
+  removeFromSource,
 }
 
 /// Resolves the current files for a Downloads selection in the supplied order.
 typedef MusicSelectionDownloadResolver = List<DownloadedVideo>? Function(
     List<Video> playable);
 
+typedef MusicSelectionRemoval = ({String label, Future<void> Function() run});
+
 class MusicPlaylistSelectionActions extends StatefulWidget {
   final List<Video> videos;
-  final Future<void> Function(bool shuffle) onPlay;
+  final Future<void> Function(bool shuffle)? onPlay;
+  final bool closeOnPlay;
   final VoidCallback? onCompleted;
   final bool Function() isCurrent;
   final PlaylistReference? recommendationSource;
   final int? selectedCount;
   final MusicSelectionDownloadResolver? resolveDownloads;
+  final List<OnDeviceMusicEntry>? Function()? resolveOnDevice;
+  final LocalMusicLibrary? deviceLibrary;
   final Future<void> Function()? onRemoveDownloads;
   final bool _wholePlaylist;
   final Future<void> Function()? onRemoveFromPlaylist;
+  final MusicSelectionRemoval? removal;
 
   const MusicPlaylistSelectionActions({
     super.key,
     required this.videos,
     required this.onPlay,
+    this.closeOnPlay = true,
     required this.onCompleted,
     required this.isCurrent,
     this.recommendationSource,
     this.selectedCount,
     this.resolveDownloads,
+    this.resolveOnDevice,
+    this.deviceLibrary,
     this.onRemoveDownloads,
     this.onRemoveFromPlaylist,
+    this.removal,
   }) : _wholePlaylist = false;
 
   const MusicPlaylistSelectionActions.wholePlaylist({
@@ -416,10 +429,14 @@ class MusicPlaylistSelectionActions extends StatefulWidget {
     this.recommendationSource,
   })  : _wholePlaylist = true,
         onCompleted = null,
+        closeOnPlay = true,
         selectedCount = null,
         resolveDownloads = null,
+        resolveOnDevice = null,
+        deviceLibrary = null,
         onRemoveDownloads = null,
-        onRemoveFromPlaylist = null;
+        onRemoveFromPlaylist = null,
+        removal = null;
 
   @override
   State<MusicPlaylistSelectionActions> createState() =>
@@ -442,7 +459,10 @@ class _MusicPlaylistSelectionActionsState
           ? locals.musicLibraryActions
           : locals.musicPlaylistSelectionActions,
       enabled: !_busy &&
-          (widget.videos.isNotEmpty || widget.onRemoveDownloads != null),
+          (widget.videos.isNotEmpty ||
+              widget.resolveOnDevice?.call()?.isNotEmpty == true ||
+              widget.onRemoveDownloads != null ||
+              widget.removal != null),
       onSelected: (command) => unawaited(command()),
       itemBuilder: (_) {
         // Each command retains the source rows and owner from the moment this
@@ -453,7 +473,7 @@ class _MusicPlaylistSelectionActionsState
         final catalog = source.videos
             .where((v) => !isLocalMusicPlaybackId(v.videoId))
             .toList();
-        final local = LocalMusicLibrary.instance;
+        final local = source.deviceLibrary ?? LocalMusicLibrary.instance;
         final grant = local.selectionId;
         bool hasDeviceAccess(Video video) =>
             local.acceptsSessionSelection(grant) &&
@@ -480,7 +500,13 @@ class _MusicPlaylistSelectionActionsState
         }
 
         final player = context.read<PlayerCubit?>();
-        bool canEnqueue(List<DownloadedVideo>? files) =>
+        final deviceRows = source.resolveOnDevice?.call();
+        final deviceQueue = player != null &&
+            deviceRows != null &&
+            deviceRows.isNotEmpty &&
+            player.canEnqueueOnDeviceMusic(deviceRows);
+        bool canEnqueue(
+                List<DownloadedVideo>? files, List<OnDeviceMusicEntry>? rows) =>
             player != null &&
             identical(context.read<PlayerCubit?>(), player) &&
             !player.isClosed &&
@@ -488,16 +514,23 @@ class _MusicPlaylistSelectionActionsState
             (player.state.currentlyPlaying?.musicMetadata ??
                     player.state.offlineCurrentlyPlaying?.musicMetadata) !=
                 null &&
-            playable.isNotEmpty &&
-            playable.every((video) => !isLocalMusicPlaybackId(video.videoId)) &&
-            (resolve == null || files != null) &&
-            player.canEnqueueMusicSongs(playable, downloads: files);
+            (deviceQueue
+                ? rows != null &&
+                    rows.isNotEmpty &&
+                    player.canEnqueueOnDeviceMusic(rows)
+                : playable.isNotEmpty &&
+                    (source.resolveOnDevice == null ||
+                        playable.length ==
+                            (source.selectedCount ?? source.videos.length)) &&
+                    (resolve == null || files != null) &&
+                    player.canEnqueueMusicSongs(playable, downloads: files));
         final files = completedFiles();
         final fileFingerprints = files?.map(musicDownloadFingerprint).toList();
-        final canPlay =
-            playable.isNotEmpty && (resolve == null || files != null);
+        final canPlay = widget.onPlay != null &&
+            playable.isNotEmpty &&
+            (resolve == null || files != null);
         final generation =
-            canEnqueue(files) ? player!.playlistGeneration : null;
+            canEnqueue(files, deviceRows) ? player!.playlistGeneration : null;
         List<Video> downloads() {
           if (isTv) return [];
           final playing = player?.state.currentlyPlaying;
@@ -522,12 +555,15 @@ class _MusicPlaylistSelectionActionsState
               case _PlaylistSelectionAction.play:
               case _PlaylistSelectionAction.shuffle:
                 if (resolve != null && completedFiles() == null) return;
-                await source.onPlay(action == _PlaylistSelectionAction.shuffle);
+                await source.onPlay
+                    ?.call(action == _PlaylistSelectionAction.shuffle);
+                if (!source.closeOnPlay) return;
               case _PlaylistSelectionAction.next:
               case _PlaylistSelectionAction.append:
                 final currentFiles = completedFiles();
+                final currentDeviceRows = source.resolveOnDevice?.call();
                 if (generation == null ||
-                    !canEnqueue(currentFiles) ||
+                    !canEnqueue(currentFiles, currentDeviceRows) ||
                     player!.playlistGeneration != generation ||
                     (player.state.videos.isNotEmpty &&
                         !listEquals(
@@ -535,10 +571,19 @@ class _MusicPlaylistSelectionActionsState
                             currentFiles
                                 ?.map(musicDownloadFingerprint)
                                 .toList())) ||
-                    !await player.enqueueMusicSongs(playable,
-                        next: action == _PlaylistSelectionAction.next,
+                    !listEquals(deviceRows?.map((row) => row.id).toList(),
+                        currentDeviceRows?.map((row) => row.id).toList())) {
+                  throw StateError('The active music queue changed.');
+                }
+                final next = action == _PlaylistSelectionAction.next;
+                final queued = deviceQueue
+                    ? await player.enqueueOnDeviceMusic(currentDeviceRows!,
+                        next: next, isCurrent: current)
+                    : await player.enqueueMusicSongs(playable,
+                        next: next,
                         downloads: currentFiles,
-                        recommendationSource: source.recommendationSource)) {
+                        recommendationSource: source.recommendationSource);
+                if (!queued) {
                   throw StateError('The active music queue changed.');
                 }
               case _PlaylistSelectionAction.save:
@@ -564,6 +609,9 @@ class _MusicPlaylistSelectionActionsState
               case _PlaylistSelectionAction.removeFromPlaylist:
                 await source.onRemoveFromPlaylist?.call();
                 return;
+              case _PlaylistSelectionAction.removeFromSource:
+                await source.removal?.run();
+                return;
             }
             if (current()) source.onCompleted?.call();
           } catch (_) {
@@ -571,6 +619,7 @@ class _MusicPlaylistSelectionActionsState
             final message = switch (action) {
               _PlaylistSelectionAction.save ||
               _PlaylistSelectionAction.download ||
+              _PlaylistSelectionAction.removeFromSource ||
               _PlaylistSelectionAction.removeFromPlaylist =>
                 locals.musicLibraryActionError,
               _PlaylistSelectionAction.removeDownloads =>
@@ -595,11 +644,12 @@ class _MusicPlaylistSelectionActionsState
                 enabled: false,
                 child: Text(locals
                     .musicSelectedCompletedDownloads(source.videos.length))),
-          if (resolve == null || canPlay) ...[
-            if (!wholePlaylist)
+          if (resolve == null || files != null) ...[
+            if (!wholePlaylist && source.onPlay != null)
               item(_PlaylistSelectionAction.play, locals.musicPlay, canPlay),
-            item(
-                _PlaylistSelectionAction.shuffle, locals.musicShuffle, canPlay),
+            if (source.onPlay != null)
+              item(_PlaylistSelectionAction.shuffle, locals.musicShuffle,
+                  canPlay),
             item(_PlaylistSelectionAction.next, locals.playNext,
                 generation != null),
             item(_PlaylistSelectionAction.append, locals.addToQueueList,
@@ -617,6 +667,9 @@ class _MusicPlaylistSelectionActionsState
           if (source.onRemoveFromPlaylist != null)
             item(_PlaylistSelectionAction.removeFromPlaylist,
                 locals.musicPlaylistRemoveSelected, source.videos.isNotEmpty),
+          if (source.removal case final removal?)
+            item(_PlaylistSelectionAction.removeFromSource, removal.label,
+                (source.selectedCount ?? source.videos.length) > 0),
         ];
       },
     );
@@ -736,6 +789,7 @@ class MusicLibraryActions extends StatefulWidget {
   final PlaylistReference? recommendationSource;
   final List<DownloadedVideo>? downloads;
   final MusicSongRecommendation? recommendation;
+  final VoidCallback? onSelectSong;
 
   const MusicLibraryActions(
       {super.key,
@@ -749,7 +803,8 @@ class MusicLibraryActions extends StatefulWidget {
       this.onPlay,
       this.recommendationSource,
       this.downloads,
-      this.recommendation});
+      this.recommendation,
+      this.onSelectSong});
 
   static MusicLibraryEntry? _song(List<Video> videos) => videos.length == 1 &&
           videos.single.musicMetadata != null &&
@@ -905,6 +960,7 @@ class MusicLibraryActions extends StatefulWidget {
       bool canReplacePlaylistEntry = false,
       bool nowPlaying = false,
       bool canHideInPlaylist = false,
+      bool canSelectSong = false,
       bool showDownload = true}) {
     final locals = AppLocalizations.of(context)!;
     final song = _song(videos);
@@ -929,6 +985,10 @@ class MusicLibraryActions extends StatefulWidget {
             key: const ValueKey('music-song-play'),
             value: _LibraryAction.play,
             child: first(Text(locals.musicPlay))),
+        if (canSelectSong)
+          PopupMenuItem(
+              value: _LibraryAction.selectSong,
+              child: Text(locals.musicSelectSong)),
         if (downloads == null &&
             context.read<AppCubit>().state.server != null &&
             !videos.single.filtered &&
@@ -1623,6 +1683,7 @@ class MusicLibraryActions extends StatefulWidget {
       PlaylistReference? recommendationSource,
       List<DownloadedVideo>? downloads,
       DownloadedVideo? Function()? resolveDownload,
+      VoidCallback? onSelectSong,
       MusicSongRecommendation? recommendation}) async {
     final session = MusicLibrarySession(context.read<AppCubit>());
     if (!session.isCurrent ||
@@ -1653,6 +1714,7 @@ class MusicLibraryActions extends StatefulWidget {
         ..._items(context, videos, localPlaylistId,
             downloads: saved,
             canHideInPlaylist: playlistVisibility != null,
+            canSelectSong: onSelectSong != null,
             first: (child) => Builder(builder: (context) {
                   route ??= ModalRoute.of(context);
                   return inPlayer
@@ -1674,7 +1736,9 @@ class MusicLibraryActions extends StatefulWidget {
           recommendation?.isCurrent() == false) {
         return;
       }
-      if (action == _LibraryAction.setRingtone) {
+      if (action == _LibraryAction.selectSong) {
+        onSelectSong?.call();
+      } else if (action == _LibraryAction.setRingtone) {
         await ringtone?.set(context);
       } else if (action == _LibraryAction.hideInPlaylist &&
           playlistVisibility != null) {
@@ -1767,10 +1831,10 @@ class MusicLibraryActions extends StatefulWidget {
     );
   }
 
-  static Future<void> save(BuildContext context, List<Video> videos,
-      {bool inPlayer = false}) async {
-    if (videos.isEmpty) return;
-    await _showSave(context, videos, inPlayer: inPlayer);
+  static Future<bool> save(BuildContext context, List<Video> videos,
+      {bool inPlayer = false, bool Function()? canSave}) async {
+    if (videos.isEmpty) return false;
+    return _showSave(context, videos, inPlayer: inPlayer, canSave: canSave);
   }
 
   static Future<void> savePlayingSong(BuildContext context, IdedVideo entry,
@@ -1804,7 +1868,7 @@ class MusicLibraryActions extends StatefulWidget {
     await _showSave(context, videos, creating: true);
   }
 
-  static Video? _downloadedPlaylistSong(DownloadedVideo file) {
+  static Video? downloadedPlaylistSong(DownloadedVideo file) {
     final music = file.musicMetadata;
     if (music == null || isLocalMusicPlaybackId(file.videoId)) return null;
     return Video(
@@ -1822,7 +1886,7 @@ class MusicLibraryActions extends StatefulWidget {
     DownloadedVideo file, {
     required bool Function() isCurrent,
   }) async {
-    final song = _downloadedPlaylistSong(file);
+    final song = downloadedPlaylistSong(file);
     if (song == null || !_matchesCompletedDownload(file, song.videoId)) return;
     await _manageSongPlaylists(
       context,
@@ -2017,6 +2081,10 @@ class _MusicLibraryActionsState extends State<MusicLibraryActions> {
     final session =
         menu?.session ?? MusicLibrarySession(context.read<AppCubit>());
     if (!session.isCurrent || _busy) return;
+    if (action == _LibraryAction.selectSong) {
+      source.onSelectSong?.call();
+      return;
+    }
     if (action == _LibraryAction.request &&
         (menu == null ||
             !identical(context.read<PlayerCubit?>(), menu.player) ||
@@ -2117,6 +2185,7 @@ class _MusicLibraryActionsState extends State<MusicLibraryActions> {
                     recommendationSource: widget.recommendationSource,
                     downloads: widget.downloads,
                     inPlayer: widget.inPlayer,
+                    onSelectSong: widget.onSelectSong,
                     recommendation: recommendation)
                 : null);
       }
@@ -2152,6 +2221,7 @@ class _MusicLibraryActionsState extends State<MusicLibraryActions> {
                 downloads: downloads,
                 canHideInPlaylist: widget.playlistVisibility != null,
                 canReplacePlaylistEntry: widget.replacementPlaylist != null,
+                canSelectSong: widget.onSelectSong != null,
                 first: (child) => Builder(builder: (context) {
                       _menuRoute = ModalRoute.of(context);
                       return widget.inPlayer
@@ -2166,6 +2236,11 @@ class _MusicLibraryActionsState extends State<MusicLibraryActions> {
       );
     }
     return Wrap(spacing: 8, runSpacing: 8, children: [
+      if (song != null && widget.onSelectSong != null)
+        OutlinedButton.icon(
+            onPressed: enabled ? widget.onSelectSong : null,
+            icon: const Icon(Icons.check_box_outline_blank),
+            label: Text(locals.musicSelectSong)),
       if (song != null)
         OutlinedButton.icon(
             onPressed: enabled ? () => _act(bookmarkAction) : null,

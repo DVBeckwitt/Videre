@@ -17,6 +17,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../components/device_music_artwork.dart';
+import '../components/device_music_song_selection.dart';
 import '../components/local_music_album_tag_editor.dart';
 import '../components/music_collection_panes.dart';
 import '../components/music_fast_scroll.dart';
@@ -182,156 +183,179 @@ class _MusicDeviceAlbumPageState extends State<MusicDeviceAlbumPage> {
         listenable: Listenable.merge([_library, aliases.changes]),
         builder: (context, _) {
           final album = _album;
-          final Widget body;
-          if (!_current) {
-            body = Center(child: Text(locals.musicNoResults));
-          } else if (_checking) {
-            body = const Center(child: CircularProgressIndicator());
-          } else if (album == null) {
-            final message =
-                !_library.acceptsSessionSelection(widget.selectionId)
-                    ? (_library.isSystem &&
-                            _library.selectionId == widget.selectionId
-                        ? locals.localMusicAndroidLibraryUnavailable
-                        : locals.localMusicFolderUnavailable)
-                    : (_library.error == null
-                        ? locals.musicNoResults
-                        : locals.localMusicFolderError);
-            body = Center(
-                child: Column(mainAxisSize: MainAxisSize.min, children: [
-              Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Text(message, textAlign: TextAlign.center)),
-              TextButton(
-                  autofocus: isTv,
-                  onPressed: () => _load(refresh: true),
-                  child: Text(locals.retry)),
-            ]));
-          } else {
-            final tracks = album.tracks;
-            final originalArtist = album.albumArtist;
-            final artistKey = localMusicArtistKey(originalArtist);
-            final artist = originalArtist == null || artistKey == null
-                ? originalArtist
-                : aliases.artistDisplayName(
-                    MusicArtistIdentity.device(artistKey), originalArtist);
-            final releaseDate = album.releaseDate;
-            final originalReleaseDate = album.originalReleaseDate;
-            final details = Padding(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                child: Wrap(
-                    alignment: WrapAlignment.spaceBetween,
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    spacing: 12,
-                    runSpacing: 4,
-                    children: [
-                      if (!DeviceMusicArtworkPreferences.loadsCovers(db) ||
-                          tracks.any((track) =>
-                              track.artPath != null ||
-                              track.adjacentArtPath != null))
-                        SizedBox.square(
-                          dimension: 96,
-                          child: ClipRRect(
-                            borderRadius: BorderRadius.circular(6),
-                            child: DeviceMusicArtwork.album(
-                              tracks: tracks,
-                              placeholder: const Icon(Icons.album_outlined),
+          return DeviceMusicSongSelection(
+            library: _library,
+            tracks: album?.tracks ?? const [],
+            source: (_library, widget.selectionId, widget.albumKey, _request),
+            currentTracks: () => _album?.tracks,
+            builder: (context, selection) {
+              final Widget body;
+              if (!_current) {
+                body = Center(child: Text(locals.musicNoResults));
+              } else if (_checking) {
+                body = const Center(child: CircularProgressIndicator());
+              } else if (album == null) {
+                final message =
+                    !_library.acceptsSessionSelection(widget.selectionId)
+                        ? (_library.isSystem &&
+                                _library.selectionId == widget.selectionId
+                            ? locals.localMusicAndroidLibraryUnavailable
+                            : locals.localMusicFolderUnavailable)
+                        : (_library.error == null
+                            ? locals.musicNoResults
+                            : locals.localMusicFolderError);
+                body = Center(
+                    child: Column(mainAxisSize: MainAxisSize.min, children: [
+                  Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Text(message, textAlign: TextAlign.center)),
+                  TextButton(
+                      autofocus: isTv,
+                      onPressed: () => _load(refresh: true),
+                      child: Text(locals.retry)),
+                ]));
+              } else {
+                final tracks = album.tracks;
+                final originalArtist = album.albumArtist;
+                final artistKey = localMusicArtistKey(originalArtist);
+                final artist = originalArtist == null || artistKey == null
+                    ? originalArtist
+                    : aliases.artistDisplayName(
+                        MusicArtistIdentity.device(artistKey), originalArtist);
+                final releaseDate = album.releaseDate;
+                final originalReleaseDate = album.originalReleaseDate;
+                final details = Padding(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    child: Wrap(
+                        alignment: WrapAlignment.spaceBetween,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        spacing: 12,
+                        runSpacing: 4,
+                        children: [
+                          if (!DeviceMusicArtworkPreferences.loadsCovers(db) ||
+                              tracks.any((track) =>
+                                  track.artPath != null ||
+                                  track.adjacentArtPath != null))
+                            SizedBox.square(
+                              dimension: 96,
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(6),
+                                child: DeviceMusicArtwork.album(
+                                  tracks: tracks,
+                                  placeholder: const Icon(Icons.album_outlined),
+                                ),
+                              ),
                             ),
-                          ),
-                        ),
-                      if (artist != null ||
-                          releaseDate != null ||
-                          originalReleaseDate != null)
-                        Column(
-                            mainAxisSize: MainAxisSize.min,
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              if (artist != null)
-                                artistKey == null
-                                    ? Text(artist,
-                                        style: Theme.of(context)
-                                            .textTheme
-                                            .titleMedium)
-                                    : Tooltip(
-                                        message:
-                                            locals.musicOpenNamedArtist(artist),
-                                        child: TextButton(
-                                          style: TextButton.styleFrom(
-                                            padding: const EdgeInsets.symmetric(
-                                                horizontal: 4),
-                                            alignment: AlignmentDirectional
-                                                .centerStart,
-                                          ),
-                                          onPressed: () {
-                                            if (localMusicArtistKey(
-                                                    _album?.albumArtist) !=
-                                                artistKey) {
-                                              return;
-                                            }
-                                            MusicScreen.openDeviceCollection(
-                                              context,
-                                              MusicDeviceArtistPage(
-                                                selectionId: widget.selectionId,
-                                                artistKey: artistKey,
-                                                library: _library,
+                          if (artist != null ||
+                              releaseDate != null ||
+                              originalReleaseDate != null)
+                            Column(
+                                mainAxisSize: MainAxisSize.min,
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  if (artist != null)
+                                    artistKey == null
+                                        ? Text(artist,
+                                            style: Theme.of(context)
+                                                .textTheme
+                                                .titleMedium)
+                                        : Tooltip(
+                                            message: locals
+                                                .musicOpenNamedArtist(artist),
+                                            child: TextButton(
+                                              style: TextButton.styleFrom(
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                        horizontal: 4),
+                                                alignment: AlignmentDirectional
+                                                    .centerStart,
                                               ),
-                                            );
-                                          },
-                                          child: Text(artist),
-                                        ),
-                                      ),
-                              if (releaseDate != null) Text(releaseDate),
-                              if (originalReleaseDate != null &&
-                                  originalReleaseDate != releaseDate)
-                                Text(locals.localMusicOriginalReleaseDate(
-                                    originalReleaseDate)),
-                            ]),
-                      FilledButton.icon(
-                          onPressed: tracks.isEmpty ? null : () => _play(null),
-                          icon: const Icon(Icons.play_arrow),
-                          label: Text(locals.musicPlayAll)),
-                      if (tracks.any(_library.canEditTags))
-                        OutlinedButton.icon(
-                          onPressed: _editTags,
-                          icon: const Icon(Icons.edit_outlined),
-                          label: Text(locals.localMusicBatchEditTags),
-                        ),
-                    ]));
-            body = MusicCollectionPanes(
-              details: details,
-              buildTracks: (context, split) => Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  if (!split) details,
-                  Expanded(
-                      key: const ValueKey('music-device-album-tracks'),
-                      child: tracks.isEmpty
-                          ? Center(child: Text(locals.localMusicNoVisibleFiles))
-                          : _AlbumTracks(
-                              key: ValueKey((
-                                widget.selectionId,
-                                widget.playbackId,
-                                widget.albumKey
-                              )),
-                              tracks: tracks,
-                              aliases: aliases,
-                              discHeadings: album.discHeadings,
-                              anchorId: widget.playbackId,
-                              play: _play)),
-                ],
-              ),
-            );
-          }
-          final page = Scaffold(
-            appBar:
-                AppBar(title: Text(album?.title ?? locals.localMusicSortAlbum)),
-            body: SafeArea(child: body),
+                                              onPressed: () {
+                                                if (localMusicArtistKey(
+                                                        _album?.albumArtist) !=
+                                                    artistKey) {
+                                                  return;
+                                                }
+                                                MusicScreen
+                                                    .openDeviceCollection(
+                                                  context,
+                                                  MusicDeviceArtistPage(
+                                                    selectionId:
+                                                        widget.selectionId,
+                                                    artistKey: artistKey,
+                                                    library: _library,
+                                                  ),
+                                                );
+                                              },
+                                              child: Text(artist),
+                                            ),
+                                          ),
+                                  if (releaseDate != null) Text(releaseDate),
+                                  if (originalReleaseDate != null &&
+                                      originalReleaseDate != releaseDate)
+                                    Text(locals.localMusicOriginalReleaseDate(
+                                        originalReleaseDate)),
+                                ]),
+                          FilledButton.icon(
+                              onPressed:
+                                  tracks.isEmpty ? null : () => _play(null),
+                              icon: const Icon(Icons.play_arrow),
+                              label: Text(locals.musicPlayAll)),
+                          if (tracks.any(_library.canEditTags))
+                            OutlinedButton.icon(
+                              onPressed: _editTags,
+                              icon: const Icon(Icons.edit_outlined),
+                              label: Text(locals.localMusicBatchEditTags),
+                            ),
+                        ]));
+                body = MusicCollectionPanes(
+                  details: details,
+                  buildTracks: (context, split) => Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      if (!split) details,
+                      Expanded(
+                          key: const ValueKey('music-device-album-tracks'),
+                          child: tracks.isEmpty
+                              ? Center(
+                                  child: Text(locals.localMusicNoVisibleFiles))
+                              : _AlbumTracks(
+                                  key: ValueKey((
+                                    widget.selectionId,
+                                    widget.playbackId,
+                                    widget.albumKey
+                                  )),
+                                  tracks: tracks,
+                                  aliases: aliases,
+                                  discHeadings: album.discHeadings,
+                                  anchorId: widget.playbackId,
+                                  selection: selection,
+                                  play: _play)),
+                    ],
+                  ),
+                );
+              }
+              final page = Scaffold(
+                appBar: AppBar(
+                  title: Text(album?.title ?? locals.localMusicSortAlbum),
+                  actions: [
+                    if (selection.selectButton case final button?) button,
+                  ],
+                ),
+                body: SafeArea(
+                  child: Column(children: [
+                    if (selection.toolbar case final toolbar?) toolbar,
+                    Expanded(child: body),
+                  ]),
+                ),
+              );
+              return Shortcuts(shortcuts: {
+                for (final key in selectKeys)
+                  SingleActivator(key): const ActivateIntent(),
+              }, child: isTv ? TvOverscan(child: page) : page);
+            },
           );
-          return Shortcuts(shortcuts: {
-            for (final key in selectKeys)
-              SingleActivator(key): const ActivateIntent(),
-          }, child: isTv ? TvOverscan(child: page) : page);
         });
   }
 }
@@ -343,12 +367,14 @@ class _AlbumTracks extends StatefulWidget {
       required this.aliases,
       required this.discHeadings,
       required this.anchorId,
+      required this.selection,
       required this.play});
 
   final List<LocalMusicTrack> tracks;
   final MusicLibraryService aliases;
   final Map<int, ({int number, String? subtitle})> discHeadings;
   final String? anchorId;
+  final DeviceMusicSongSelectionState selection;
   final ValueChanged<String> play;
 
   @override
@@ -404,7 +430,10 @@ class _AlbumTracksState extends State<_AlbumTracks> {
         itemBuilder: (context, index) {
           final track = widget.tracks[index];
           final artist = widget.aliases.deviceArtistByline(track);
-          final selected = index == anchorIndex;
+          final selection = widget.selection;
+          final selected = selection.active
+              ? selection.contains(index)
+              : index == anchorIndex;
           final discNumber = track.discNumber;
           final trackNumber = track.trackNumber;
           final tile = ListTile(
@@ -413,22 +442,30 @@ class _AlbumTracksState extends State<_AlbumTracks> {
             autofocus: isTv && index == math.max(anchorIndex, 0),
             leading: SizedBox(
                 width: 40,
-                child: trackNumber == null
-                    ? Icon(
-                        selected ? Icons.music_note : Icons.audiotrack_outlined)
-                    : Text(
-                        discNumber == null
-                            ? '$trackNumber'
-                            : '$discNumber.$trackNumber',
-                        textAlign: TextAlign.center,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis)),
+                child: selection.active
+                    ? Icon(selected
+                        ? Icons.check_box
+                        : Icons.check_box_outline_blank)
+                    : trackNumber == null
+                        ? Icon(selected
+                            ? Icons.music_note
+                            : Icons.audiotrack_outlined)
+                        : Text(
+                            discNumber == null
+                                ? '$trackNumber'
+                                : '$discNumber.$trackNumber',
+                            textAlign: TextAlign.center,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis)),
             title:
                 Text(track.title, maxLines: 1, overflow: TextOverflow.ellipsis),
             subtitle: artist == null
                 ? null
                 : Text(artist, maxLines: 1, overflow: TextOverflow.ellipsis),
-            onTap: () => widget.play(track.playbackId),
+            onTap: selection.active
+                ? () => selection.toggle(index)
+                : () => widget.play(track.playbackId),
+            onLongPress: () => selection.start(index),
           );
           final heading = headings[index];
           if (heading == null) return tile;

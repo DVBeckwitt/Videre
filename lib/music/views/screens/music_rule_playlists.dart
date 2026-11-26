@@ -6,9 +6,12 @@ import 'package:clipious/music/models/music_recording_rating.dart';
 import 'package:clipious/music/models/music_rule_playlist.dart';
 import 'package:clipious/music/services/music_recording_rating_store.dart';
 import 'package:clipious/music/services/music_rule_playlist_store.dart';
+import 'package:clipious/music/views/components/music_derived_song_selection.dart';
 import 'package:clipious/music/views/components/music_library_actions.dart';
 import 'package:clipious/music/views/components/music_offline_filter.dart';
+import 'package:clipious/music/views/components/music_song_selection_bar.dart';
 import 'package:clipious/music/views/screens/music.dart';
+import 'package:clipious/utils.dart' show selectKeys;
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:uuid/uuid.dart';
@@ -246,13 +249,16 @@ class _RulePlaylistsPage extends StatelessWidget {
       builder: (context, offline) {
         final visible = [
           for (final (index, song) in songs.indexed)
-            if (!offline.enabled || offline.entries?[index] != null) song,
+            if (!offline.enabled)
+              (song: song, video: song.toVideo())
+            else if (offline.entries?[index] case final video?)
+              (song: song, video: video),
         ];
 
         Future<void> play([int? index]) async {
           if (!offline.enabled) {
             await _play(context,
-                songId: index == null ? null : visible[index].id);
+                songId: index == null ? null : visible[index].song.id);
             return;
           }
           bool isCurrent() => session.isCurrent && offline.isCurrent();
@@ -270,43 +276,65 @@ class _RulePlaylistsPage extends StatelessWidget {
           }
         }
 
-        return Column(children: [
-          Padding(
-            padding: const EdgeInsets.all(12),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                FilledButton.icon(
-                  key: const ValueKey('music-rule-playlist-play'),
-                  onPressed: visible.isEmpty ? null : () => play(),
-                  icon: const Icon(Icons.play_arrow),
-                  label: Text(locals.musicPlayAll),
+        return Shortcuts(
+          shortcuts: {
+            for (final key in selectKeys)
+              SingleActivator(key): const ActivateIntent(),
+          },
+          child: MusicDerivedSongSelection(
+            key: ValueKey((playlist.id, offline.enabled)),
+            songs: {for (final row in visible) row.song.id: row.video},
+            isCurrent: () =>
+                session.isCurrent && (!offline.enabled || offline.isCurrent()),
+            builder: (context, selection) => Column(children: [
+              Padding(
+                padding: const EdgeInsets.all(12),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    FilledButton.icon(
+                      key: const ValueKey('music-rule-playlist-play'),
+                      onPressed: visible.isEmpty ? null : () => play(),
+                      icon: const Icon(Icons.play_arrow),
+                      label: Text(locals.musicPlayAll),
+                    ),
+                    musicOfflineFilterButton(context, offline,
+                        key: const ValueKey('music-rule-playlist-offline')),
+                  ],
                 ),
-                musicOfflineFilterButton(context, offline,
-                    key: const ValueKey('music-rule-playlist-offline')),
-              ],
-            ),
+              ),
+              Expanded(
+                child: visible.isEmpty
+                    ? offline.enabled
+                        ? musicOfflineCollectionEmpty(context, offline)
+                        : Center(child: Text(locals.musicRulePlaylistEmpty))
+                    : ListView.builder(
+                        itemCount: visible.length,
+                        itemBuilder: (context, index) {
+                          final song = visible[index].song;
+                          return ListTile(
+                            key: ValueKey(
+                                'music-rule-playlist-track-${song.id}'),
+                            title: Text(song.title),
+                            subtitle: song.subtitle.isEmpty
+                                ? null
+                                : Text(song.subtitle),
+                            selected: selection.selected(song.id) ?? false,
+                            onTap: selection.active
+                                ? () => selection.toggle(song.id)
+                                : () => play(index),
+                            onLongPress: () => selection.start(song.id),
+                            trailing: MusicSongSelectButton(
+                              selected: selection.selected(song.id),
+                              onPressed: () => selection.toggle(song.id),
+                            ),
+                          );
+                        },
+                      ),
+              ),
+            ]),
           ),
-          Expanded(
-            child: visible.isEmpty
-                ? offline.enabled
-                    ? musicOfflineCollectionEmpty(context, offline)
-                    : Center(child: Text(locals.musicRulePlaylistEmpty))
-                : ListView.builder(
-                    itemCount: visible.length,
-                    itemBuilder: (context, index) {
-                      final song = visible[index];
-                      return ListTile(
-                        key: ValueKey('music-rule-playlist-track-${song.id}'),
-                        title: Text(song.title),
-                        subtitle:
-                            song.subtitle.isEmpty ? null : Text(song.subtitle),
-                        onTap: () => play(index),
-                      );
-                    },
-                  ),
-          ),
-        ]);
+        );
       },
     );
   }

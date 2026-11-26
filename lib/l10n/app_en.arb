@@ -1588,6 +1588,11 @@
   "noMusicPlaybackHistory": "Songs played from Music will appear here.",
   "musicHistoryFind": "Find in Music history",
   "musicHistoryRemove": "Remove from Music history",
+  "musicHistoryRemoveListens": "Remove listens from Music history",
+  "musicHistoryRemoveListensConfirm": "{count, plural, one{Remove this listen from Music history?} other{Remove these {count} listens from Music history?}}",
+  "@musicHistoryRemoveListensConfirm": {
+    "placeholders": { "count": { "type": "int" } }
+  },
   "musicHistoryRemoveConfirm": "{count, plural, one{Remove all plays of this song from Music history?} other{Remove all plays of these {count} songs from Music history?}}",
   "@musicHistoryRemoveConfirm": {"placeholders":{"count":{"type":"int"}}},
   "musicHistoryChoosePlaybackSource": "Choose which songs to play",
@@ -1850,8 +1855,8 @@
   "musicDownloadsDefaultOrder": "Default order",
   "musicShuffleAll": "Shuffle all",
   "musicAddAllToQueue": "Add all to queue",
-  "musicRemoveSelectedDownloads": "Remove downloads",
-  "musicRemoveSelectedDownloadsConfirm": "{count, plural, one{Remove 1 download from this device?} other{Remove {count} downloads from this device?}}",
+  "musicRemoveSelectedDownloads": "Delete downloads",
+  "musicRemoveSelectedDownloadsConfirm": "{count, plural, one{Delete 1 download from this device?} other{Delete {count} downloads from this device?}}",
   "@musicRemoveSelectedDownloadsConfirm": {"placeholders":{"count":{"type":"int"}}},
   "musicSelectedCompletedDownloads": "{count, plural, one{1 completed download} other{{count} completed downloads}}",
   "@musicSelectedCompletedDownloads": {"placeholders":{"count":{"type":"int"}}},
@@ -2180,6 +2185,11 @@
   "musicLibraryEmpty": "Nothing saved here yet. Save music while browsing, or create a playlist.",
   "musicSaveSong": "Save song",
   "musicRemoveSong": "Remove saved song",
+  "musicRemoveSelectedSavedSongs": "Remove from Saved Songs",
+  "musicRemoveSelectedSavedSongsConfirm": "{count, plural, one{Remove this song from Saved Songs?} other{Remove these {count} songs from Saved Songs?}}",
+  "@musicRemoveSelectedSavedSongsConfirm": {
+    "placeholders": { "count": { "type": "int" } }
+  },
   "musicEditSavedSongTitle": "Edit title",
   "musicSavedSongTitle": "Song title",
   "musicResetSavedSongTitle": "Use original title",
@@ -2461,6 +2471,11 @@
   "musicQueueLock": "Lock queue editing",
   "musicQueueUnlock": "Unlock queue editing",
   "musicQueueRemoveSelected": "Remove selected from queue",
+  "musicQueueRemoveSelectedConfirm": "{count, plural, one{Remove 1 song from the queue?} other{Remove {count} songs from the queue?}}",
+  "@musicQueueRemoveSelectedConfirm": {
+    "placeholders": { "count": { "type": "int" } }
+  },
+  "musicSelectSong": "Select song",
   "musicQueueRemove": "Remove from queue",
   "musicQueueLocked": "Queue editing locked",
   "musicQueueNowPlaying": "Current song",
@@ -2859,6 +2874,10 @@
   "localMusicProviderLocation": "Document provider",
   "localMusicProviderUnreachable": "Document provider unavailable. Check its connection and retry.",
   "musicRemoveCachedSong": "Remove from playback cache",
+  "musicRemoveCachedSongsConfirm": "{count, plural, one{Remove this song from the playback cache?} other{Remove these {count} songs from the playback cache?}}",
+  "@musicRemoveCachedSongsConfirm": {
+    "placeholders": { "count": { "type": "int" } }
+  },
   "musicCachedSongRemoved": "Song removed from the playback cache.",
   "musicCachedSongInUse": "This cached song is in use. Try again later.",
   "musicRemoveCachedSongError": "Could not remove the cached song. Try again.",
@@ -2918,6 +2937,9 @@
   "musicPreserveAlbumTransitionsHelp": "Skip the pause, fade, or crossfade when the next song starts automatically and both songs are from the same identified album.",
   "musicLikeSong": "Like song",
   "musicUnlikeSong": "Unlike song",
+  "musicRemoveSelectedLikedSongs": "Remove from Liked Songs",
+  "musicRemoveSelectedLikedSongsConfirm": "{count, plural, one{Remove this song from Liked Songs?} other{Remove these {count} songs from Liked Songs?}}",
+  "@musicRemoveSelectedLikedSongsConfirm": {"placeholders":{"count":{"type":"int"}}},
   "musicAutomaticCollections": "Automatic collections",
   "musicLikedSongs": "Liked songs",
   "musicRecentlyPlayed": "Recently played",

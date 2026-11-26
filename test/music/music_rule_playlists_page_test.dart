@@ -200,6 +200,22 @@ void main() {
     expect(track(alpha), findsNothing);
     expect(track(unrelated), findsNothing);
 
+    await tester.longPress(track(gamma));
+    await tester.pumpAndSettle();
+    expect(find.text('1 selected'), findsOneWidget);
+    expect(tester.widget<ListTile>(track(gamma)).selected, isTrue);
+    await tester.tap(find.byTooltip('Select all'));
+    await tester.pumpAndSettle();
+    expect(find.text('2 selected'), findsOneWidget);
+    await tester.tap(track(gamma));
+    await tester.pumpAndSettle();
+    expect(tester.widget<ListTile>(track(gamma)).selected, isFalse);
+    expect(player.requests, isEmpty);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(find.text('Chorus picks'), findsOneWidget);
+    expect(find.text('1 selected'), findsNothing);
+
     final removedSongTap = tester.widget<ListTile>(track(gamma)).onTap!;
     await tester
         .runAsync(() => library.remove(MusicLibraryKind.song, gamma.id));

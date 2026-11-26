@@ -19,6 +19,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import '../components/music_artist_alias_dialog.dart';
 import '../components/local_music_category_sort_menu.dart';
 import '../components/device_music_artwork.dart';
+import '../components/device_music_song_selection.dart';
 import '../components/music_collection_panes.dart';
 import 'music.dart';
 import 'music_device_album.dart';
@@ -297,7 +298,7 @@ class _MusicDeviceArtistPageState extends State<MusicDeviceArtistPage> {
   }
 
   Widget _artist(AppLocalizations locals, LocalMusicArtist artist,
-      MusicLibraryService aliases) {
+      MusicLibraryService aliases, DeviceMusicSongSelectionState selection) {
     final members = artist.tracks;
     final albumKeys = members.map((track) => track.albumKey).nonNulls.toSet();
     // Read the release kind from the whole visible release, including tracks
@@ -355,13 +356,16 @@ class _MusicDeviceArtistPageState extends State<MusicDeviceArtistPage> {
           if (!split && index == 0) return details;
           final trackIndex = split ? index : index - 1;
           final track = members[trackIndex];
-          final selected = track.playbackId == widget.anchorId;
+          final selected = selection.active
+              ? selection.contains(trackIndex)
+              : track.playbackId == widget.anchorId;
           return ListTile(
             key: ValueKey(track.playbackId),
             autofocus: isTv && trackIndex == 0,
             selected: selected,
-            leading:
-                Icon(selected ? Icons.music_note : Icons.audiotrack_outlined),
+            leading: Icon(selection.active
+                ? (selected ? Icons.check_box : Icons.check_box_outline_blank)
+                : (selected ? Icons.music_note : Icons.audiotrack_outlined)),
             title:
                 Text(track.title, maxLines: 1, overflow: TextOverflow.ellipsis),
             subtitle: Text(
@@ -374,7 +378,10 @@ class _MusicDeviceArtistPageState extends State<MusicDeviceArtistPage> {
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
             ),
-            onTap: () => _play(track.playbackId),
+            onTap: selection.active
+                ? () => selection.toggle(trackIndex)
+                : () => _play(track.playbackId),
+            onLongPress: () => selection.start(trackIndex),
           );
         },
       ),
@@ -447,54 +454,72 @@ class _MusicDeviceArtistPageState extends State<MusicDeviceArtistPage> {
             ? locals.localMusicBrowseArtists
             : aliases.artistDisplayName(
                 MusicArtistIdentity.device(artist.key), artist.name);
-        final Widget body;
-        if (!_isCurrent) {
-          body = Center(child: Text(locals.musicSourceUnavailable));
-        } else if (_checking) {
-          body = const Center(child: CircularProgressIndicator());
-        } else if (artist != null) {
-          body = _artist(locals, artist, aliases);
-        } else if (order != null && _sourceCurrent && _library.error == null) {
-          final artists = order.order(
-            groupLocalMusicArtists(_library.visibleTracks),
-            name: (artist) => aliases.artistDisplayName(
-                MusicArtistIdentity.device(artist.key), artist.name),
-            key: (artist) => artist.key,
-            tracks: (artist) => artist.tracks,
-          );
-          body = _filteredIndex(context, locals, artists, aliases);
-        } else {
-          body = _unavailable(locals);
-        }
-        final page = Scaffold(
-          appBar: AppBar(
-            title: Text(title),
-            actions: [
-              if (order != null)
-                LocalMusicCategorySortMenu(
-                  settingName: _orderSetting,
-                  order: order,
-                  isCurrent: () =>
-                      _sourceCurrent && !_checking && _library.error == null,
-                ),
-              if (artist != null &&
-                  MusicArtistIdentity.device(artist.key).isValid)
-                IconButton(
-                  key: const ValueKey('music-edit-device-artist-alias'),
-                  tooltip: locals.musicEditArtistAlias,
-                  onPressed: () => _editAlias(artist),
-                  icon: const Icon(Icons.edit_outlined),
-                ),
-            ],
-          ),
-          body: SafeArea(child: body),
-        );
-        return Shortcuts(
-          shortcuts: {
-            for (final key in selectKeys)
-              SingleActivator(key): const ActivateIntent(),
+        return DeviceMusicSongSelection(
+          library: _library,
+          tracks: artist?.tracks ?? const [],
+          source: (_library, widget.selectionId, widget.artistKey, _request),
+          currentTracks: () => _checking ? null : _currentArtist?.tracks,
+          builder: (context, selection) {
+            final Widget body;
+            if (!_isCurrent) {
+              body = Center(child: Text(locals.musicSourceUnavailable));
+            } else if (_checking) {
+              body = const Center(child: CircularProgressIndicator());
+            } else if (artist != null) {
+              body = _artist(locals, artist, aliases, selection);
+            } else if (order != null &&
+                _sourceCurrent &&
+                _library.error == null) {
+              final artists = order.order(
+                groupLocalMusicArtists(_library.visibleTracks),
+                name: (artist) => aliases.artistDisplayName(
+                    MusicArtistIdentity.device(artist.key), artist.name),
+                key: (artist) => artist.key,
+                tracks: (artist) => artist.tracks,
+              );
+              body = _filteredIndex(context, locals, artists, aliases);
+            } else {
+              body = _unavailable(locals);
+            }
+            final page = Scaffold(
+              appBar: AppBar(
+                title: Text(title),
+                actions: [
+                  if (selection.selectButton case final button?) button,
+                  if (order != null)
+                    LocalMusicCategorySortMenu(
+                      settingName: _orderSetting,
+                      order: order,
+                      isCurrent: () =>
+                          _sourceCurrent &&
+                          !_checking &&
+                          _library.error == null,
+                    ),
+                  if (artist != null &&
+                      MusicArtistIdentity.device(artist.key).isValid)
+                    IconButton(
+                      key: const ValueKey('music-edit-device-artist-alias'),
+                      tooltip: locals.musicEditArtistAlias,
+                      onPressed: () => _editAlias(artist),
+                      icon: const Icon(Icons.edit_outlined),
+                    ),
+                ],
+              ),
+              body: SafeArea(
+                child: Column(children: [
+                  if (selection.toolbar case final toolbar?) toolbar,
+                  Expanded(child: body),
+                ]),
+              ),
+            );
+            return Shortcuts(
+              shortcuts: {
+                for (final key in selectKeys)
+                  SingleActivator(key): const ActivateIntent(),
+              },
+              child: isTv ? TvOverscan(child: page) : page,
+            );
           },
-          child: isTv ? TvOverscan(child: page) : page,
         );
       },
     );

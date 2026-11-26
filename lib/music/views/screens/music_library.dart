@@ -18,6 +18,7 @@ import 'package:clipious/music/models/music_layout.dart';
 import 'package:clipious/music/models/music_playlist_selection.dart';
 import 'package:clipious/music/models/music_search_text.dart';
 import 'package:clipious/music/models/music_track.dart';
+import 'package:clipious/music/models/on_device_music_entry.dart';
 import 'package:clipious/music/models/song_artwork.dart';
 import 'package:clipious/music/services/music_catalog_service.dart';
 import 'package:clipious/music/services/music_library_search.dart';
@@ -32,6 +33,7 @@ import 'package:clipious/music/views/components/music_collection_panes.dart';
 import 'package:clipious/music/views/components/music_collection_selection_bar.dart';
 import 'package:clipious/music/views/components/music_collection_sort_menu.dart';
 import 'package:clipious/music/views/components/music_details_dialog.dart';
+import 'package:clipious/music/views/components/music_download_removal.dart';
 import 'package:clipious/music/views/components/music_download_storage_summary.dart';
 import 'package:clipious/music/views/components/music_duration_label.dart';
 import 'package:clipious/music/views/components/music_fast_scroll.dart';
@@ -53,6 +55,7 @@ import 'package:clipious/music/views/components/music_saved_queues.dart';
 import 'package:clipious/music/views/components/music_screen_privacy.dart';
 import 'package:clipious/music/views/components/music_playlist_hidden_songs.dart';
 import 'package:clipious/music/views/components/music_playlist_undo.dart';
+import 'package:clipious/music/views/components/music_saved_song_removal.dart';
 import 'package:clipious/music/views/components/music_song_selection_bar.dart';
 import 'package:clipious/music/views/components/music_status_title.dart';
 import 'package:clipious/music/views/components/takeout_import_dialog.dart';
@@ -105,6 +108,7 @@ typedef _LibrarySelection = ({
   _LibraryFilter filter,
   Set<String> ids,
   double? offset,
+  bool savedSongs,
 });
 
 /// The Music home's Library body, or a standalone detail for a local source.
@@ -149,12 +153,14 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
   bool get _savedSongsFinding => _findFilter == _LibraryFilter.songs;
   final _downloadSearchText = Expando<String>();
   _LibrarySelection? _librarySelection;
-  Set<String>? get _savedSongsSelection => _selectionIn(_LibraryFilter.songs);
+  Set<String>? get _savedSongsSelection =>
+      _librarySelection?.savedSongs == true ? _librarySelection!.ids : null;
   Set<String>? get _downloadsSelection =>
       _selectionIn(_LibraryFilter.downloads);
-  Set<String>? get _collectionSelection =>
-      _selectionIn(_LibraryFilter.all) ??
-      _selectionIn(_LibraryFilter.playlists);
+  Set<String>? get _collectionSelection => _savedSongsSelection != null
+      ? null
+      : _selectionIn(_LibraryFilter.all) ??
+          _selectionIn(_LibraryFilter.playlists);
   int _collectionSelectionRevision = 0;
 
   Set<String>? _selectionIn(_LibraryFilter filter) {
@@ -252,14 +258,16 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
     }
   }
 
-  void _startLibrarySelection(_LibraryFilter filter, [String? songId]) {
+  void _startLibrarySelection(_LibraryFilter filter,
+      {String? rowId, bool savedSongs = false}) {
     if (_filter != filter || _librarySelection != null) return;
-    final ids = <String>{if (songId != null) songId};
+    final ids = <String>{if (rowId != null) rowId};
     _libraryQueryFocus.unfocus();
     setState(() {
       _librarySelection = (
         filter: filter,
         ids: ids,
+        savedSongs: savedSongs,
         offset: _findFilter == filter && _libraryFindScroll.hasClients
             ? _libraryFindScroll.offset
             : null,
@@ -299,7 +307,8 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
             .toDouble());
       }
       // Restoring an offscreen toolbar's focus would scroll Find back to it.
-      if ((_findFilter != selection.filter || offset == 0) &&
+      if ((!selection.savedSongs || selection.filter == _LibraryFilter.songs) &&
+          (_findFilter != selection.filter || offset == 0) &&
           _librarySelectFocus.context != null) {
         _librarySelectFocus.requestFocus();
       }
@@ -629,7 +638,13 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
     };
     return entry.kind == MusicLibraryKind.song
         ? MusicLibraryActions(
-            videos: [offlineSong ?? entry.toVideo()], onPlay: onOpen)
+            videos: [offlineSong ?? entry.toVideo()],
+            onPlay: onOpen,
+            onSelectSong: _filter == _LibraryFilter.all
+                ? () => _startLibrarySelection(_LibraryFilter.all,
+                    rowId: entry.id, savedSongs: true)
+                : null,
+          )
         : IconButton(
             tooltip: removeLabel,
             onPressed: () => _removeBookmark(entry),
@@ -643,18 +658,6 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
         music: entry.toVideo().musicMetadata!,
         durationSeconds: entry.durationSeconds,
         fallback: fallback);
-  }
-
-  VoidCallback? _bookmarkLongPress(
-      MusicLibraryEntry? entry, Future<void> Function() onOpen) {
-    if (entry == null || entry.kind != MusicLibraryKind.song) return null;
-    if (_filter == _LibraryFilter.songs) {
-      return _savedSongsSelection == null
-          ? () => _startLibrarySelection(_LibraryFilter.songs, entry.id)
-          : null;
-    }
-    return () => MusicLibraryActions.showSongMenu(context, entry.toVideo(),
-        onPlay: onOpen);
   }
 
   Widget _bookmarkTitle(MusicLibraryEntry? entry, Widget title) {
@@ -689,9 +692,8 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
     final entry = item.bookmark!;
     final title = _bookmarkDisplayTitle(entry, library);
     final subtitle = _bookmarkDisplaySubtitle(entry, title, library);
-    final selected =
-        _collectionSelected(item) ?? _savedSongsSelection?.contains(entry.id);
-    final enabled = _collectionSelection == null || selected != null;
+    final selected = _itemSelected(item);
+    final enabled = _librarySelection == null || selected != null;
     final artworkSize = layout.compactRows ? 40.0 : 52.0;
     final tile = ListTile(
         enabled: enabled,
@@ -727,7 +729,7 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                 ? _playlistRowActions(movePlaylist,
                     _bookmarkActions(entry, onPlay, offlineSong: offlineSong))
                 : null,
-        onLongPress: _itemLongPress(item, onPlay),
+        onLongPress: _itemLongPress(item),
         onTap: enabled ? onOpen : null);
     return MusicSongRowSwipe(
       key: _itemKey(item),
@@ -825,7 +827,8 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
         focusNode: _librarySelectFocus,
         tooltip: label ?? AppLocalizations.of(context)!.musicQueueSelect,
         icon: const Icon(Icons.checklist_rounded),
-        onPressed: () => _startLibrarySelection(filter),
+        onPressed: () => _startLibrarySelection(filter,
+            savedSongs: filter == _LibraryFilter.songs),
       );
 
   Widget _saveFilteredPlaylistButton(
@@ -888,6 +891,8 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
   Widget _playlistSelectionBar(List<String> visible, List<Video> selected,
       String title, PlaylistReference reference,
       {required bool Function() isCurrent,
+      LocalMusicLibrary? devices,
+      List<OnDeviceMusicEntry>? Function()? resolveOnDevice,
       Future<void> Function(List<Video>)? onPlay,
       Future<void> Function()? onRemoveFromPlaylist}) {
     final allSelected = selected.isNotEmpty &&
@@ -903,6 +908,8 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
       onClose: _exitPlaylistSelection,
       closeFocus: _playlistExitSelectionFocus,
       isCurrent: isCurrent,
+      deviceLibrary: devices,
+      resolveOnDevice: resolveOnDevice,
       onRemoveFromPlaylist: onRemoveFromPlaylist,
       recommendationSource: reference,
       onPlay: onPlay ??
@@ -914,7 +921,9 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
   Widget _savedSongsSelectionBar(List<_LibraryItem> visible,
       List<_LibraryItem> all, Set<String> scope, MusicCollectionOrder order,
       {MusicOfflineView? offline, Map<String, Video> offlineSongs = const {}}) {
-    final title = AppLocalizations.of(context)!.musicSavedSongs;
+    final locals = AppLocalizations.of(context)!;
+    final filter = _filter;
+    final title = locals.musicSavedSongs;
     final session = MusicLibrarySession(context.read<AppCubit>());
     final offlineEnabled = offline?.enabled == true;
     final selected = [
@@ -922,7 +931,7 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
         if (scope.contains(item.bookmark!.id)) item.bookmark!,
     ];
     final selectedIds = selected.map((entry) => entry.id).toList();
-    final visibleIds = [for (final item in visible) item.bookmark!.id];
+    final visibleIds = {for (final item in visible) item.bookmark!.id};
     final allSelected = selected.isNotEmpty && visibleIds.every(scope.contains);
     bool isCurrent() {
       if (!mounted ||
@@ -932,8 +941,8 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
         return false;
       }
       final settings = context.read<SettingsCubit?>();
-      final currentOrder = MusicCollectionOrder.decode(settings
-          ?.state.settings[_libraryOrderSetting(_LibraryFilter.songs)]?.value);
+      final currentOrder = MusicCollectionOrder.decode(
+          settings?.state.settings[_libraryOrderSetting(filter)]?.value);
       if (currentOrder != order) return false;
       final live = <_LibraryItem>[
         for (final entry in session.library.entries)
@@ -944,6 +953,18 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
       return listEquals(selectedIds, [
         for (final item in _sortedLibraryItems(live, order)) item.bookmark!.id,
       ]);
+    }
+
+    Future<void> removeSavedSongs() async {
+      final removed = await confirmMusicSavedSongRemoval(
+          context, session.library, selectedIds,
+          isCurrent: isCurrent);
+      if (removed &&
+          mounted &&
+          session.isCurrent &&
+          identical(_savedSongsSelection, scope)) {
+        _exitLibrarySelection();
+      }
     }
 
     return MusicSongSelectionBar(
@@ -961,6 +982,12 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
       onClose: _exitLibrarySelection,
       closeFocus: _libraryExitSelectionFocus,
       isCurrent: isCurrent,
+      removal: selected.isEmpty
+          ? null
+          : (
+              label: locals.musicRemoveSelectedSavedSongs,
+              run: removeSavedSongs
+            ),
       onPlay: (tracks) => offlineEnabled
           ? _playOffline(tracks, offline!, title: title)
           : MusicScreen.playTracks(context, tracks, queueTitle: title),
@@ -1320,10 +1347,6 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
     final session = selectionScope == null
         ? null
         : MusicLibrarySession(context.read<AppCubit>());
-    final selectedSongs = [
-      for (final (index, song) in songs.indexed)
-        if (selection.contains(keys[index].value)) song,
-    ];
     bool selectionIsCurrent() {
       if (!mounted ||
           session?.isCurrent != true ||
@@ -1568,6 +1591,26 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
               for (final (position, index) in visible.indexed)
                 keys[index]: position,
             };
+            final selectedIndices = [
+              for (final index in offline.enabled ? visible : displayIndices)
+                if (selection.contains(keys[index].value)) index,
+            ];
+            final deviceSelection = devices.selectionId;
+            List<OnDeviceMusicEntry>? resolveDeviceSongs() {
+              if (!selectionIsCurrent() ||
+                  !devices.acceptsSessionSelection(deviceSelection)) {
+                return null;
+              }
+              final entries = <OnDeviceMusicEntry>[];
+              for (final index in selectedIndices) {
+                final track = devices.playlistTrackById(songs[index].videoId,
+                    visibleOnly: true);
+                if (track == null) return null;
+                entries.add(OnDeviceMusicEntry.device(track));
+              }
+              return entries;
+            }
+
             final view = CustomScrollView(
               key: ValueKey((library.profileId, playlist.playlistId)),
               controller: _playlistScroll,
@@ -1579,18 +1622,22 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                     child: Material(
                       color: Theme.of(context).scaffoldBackgroundColor,
                       child: _playlistSelecting
-                          ? _playlistSelectionBar([
-                              for (final index in visible) keys[index].value
-                            ], [
-                              if (offline.enabled)
-                                ...offlineQueue(visible.where((index) =>
-                                    selection.contains(keys[index].value)))
-                              else
-                                for (final (index, song) in songs.indexed)
-                                  if (selection.contains(keys[index].value))
-                                    song,
-                            ], playlist.title, reference,
+                          ? _playlistSelectionBar(
+                              [for (final index in visible) keys[index].value],
+                              offline.enabled
+                                  ? offlineQueue(selectedIndices)
+                                  : [
+                                      for (final index in selectedIndices)
+                                        songs[index]
+                                    ],
+                              playlist.title,
+                              reference,
                               isCurrent: selectionIsCurrent,
+                              devices: devices,
+                              resolveOnDevice:
+                                  selectedIndices.isNotEmpty && selectedIndices.every((index) => isLocalMusicPlaybackId(songs[index].videoId))
+                                      ? resolveDeviceSongs
+                                      : null,
                               onPlay: offline.enabled
                                   ? (tracks) => _playOffline(tracks, offline,
                                       title: title, reference: reference)
@@ -1598,14 +1645,8 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                               onRemoveFromPlaylist: playlist.isEditLocked ||
                                       playlist.playlistId == localWatchLaterId
                                   ? null
-                                  : () => removeSelected(offline.enabled
-                                      ? [
-                                          for (final index in visible)
-                                            if (selection
-                                                .contains(keys[index].value))
-                                              songs[index],
-                                        ]
-                                      : selectedSongs))
+                                  : () =>
+                                      removeSelected(selectedIndices.map((index) => songs[index])))
                           : _playlistSearching
                               ? Row(children: [
                                   Expanded(child: _playlistSearchField()),
@@ -2017,7 +2058,10 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
     bool isCurrent() =>
         mounted && folderSession?.isCurrent == true && _folderId == folder?.id;
     final selection = _savedSongsSelection;
-    selection?.retainAll(sourceItems.map((item) => item.bookmark!.id));
+    final savedSongItems = sourceItems
+        .where((item) => item.bookmark?.kind == MusicLibraryKind.song)
+        .toList();
+    selection?.retainAll(savedSongItems.map((item) => item.bookmark!.id));
     final offlineSongs = {
       if (offline?.entries case final entries?)
         for (final song in entries)
@@ -2127,9 +2171,9 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                   icon: const Icon(Icons.playlist_add_check),
                 ),
               if (_filter == _LibraryFilter.songs && !finding) searchButton,
-              if (_filter == _LibraryFilter.songs && items.isNotEmpty)
-                _librarySelectButton(const ValueKey('music-saved-songs-select'),
-                    _LibraryFilter.songs),
+              if (filter == _LibraryFilter.songs && items.isNotEmpty)
+                _librarySelectButton(
+                    const ValueKey('music-saved-songs-select'), filter),
               if (collections.isNotEmpty)
                 _librarySelectButton(
                   const ValueKey('music-library-select-collections'),
@@ -2239,7 +2283,8 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
       if (collectionSelection != null)
         _collectionSelectionBar(collections, collectionSelection, library)
       else if (selection != null)
-        _savedSongsSelectionBar(items, items, selection, order,
+        _savedSongsSelectionBar(offlineEnabled ? items : savedSongItems,
+            savedSongItems, selection, order,
             offline: offline, offlineSongs: offlineSongs)
       else
         toolbar(),
@@ -2373,13 +2418,22 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
       ? _collectionSelection?.contains(_itemKey(item).value)
       : null;
 
-  VoidCallback? _itemLongPress(
-      _LibraryItem item, Future<void> Function() onOpen) {
-    if (_collectionSelection != null) return null;
+  bool? _itemSelected(_LibraryItem item) =>
+      item.bookmark?.kind == MusicLibraryKind.song
+          ? _savedSongsSelection?.contains(item.bookmark!.id)
+          : _collectionSelected(item);
+
+  VoidCallback? _itemLongPress(_LibraryItem item) {
+    if (_librarySelection != null) return null;
     if (_isCollection(item)) {
-      return () => _startLibrarySelection(_filter, _itemKey(item).value);
+      return () => _startLibrarySelection(_filter, rowId: _itemKey(item).value);
     }
-    return _bookmarkLongPress(item.bookmark, onOpen);
+    if (item.bookmark case final song?
+        when song.kind == MusicLibraryKind.song) {
+      return () =>
+          _startLibrarySelection(_filter, rowId: song.id, savedSongs: true);
+    }
+    return null;
   }
 
   Future<void> _openItem(_LibraryItem item, List<_LibraryItem> items,
@@ -2389,9 +2443,10 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
       if (_isCollection(item)) _toggleLibrarySelection(_itemKey(item).value);
       return;
     }
-    if (_savedSongsSelection != null &&
-        item.bookmark?.kind == MusicLibraryKind.song) {
-      _toggleLibrarySelection(item.bookmark!.id);
+    if (_savedSongsSelection != null) {
+      if (item.bookmark?.kind == MusicLibraryKind.song) {
+        _toggleLibrarySelection(item.bookmark!.id);
+      }
       return;
     }
     if (item.playlist case final playlist?) {
@@ -2503,12 +2558,12 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
           final shortcut = shortcuts[index];
           return ListTile(
               key: _shortcutKey(shortcut),
-              enabled: _collectionSelection == null,
+              enabled: _librarySelection == null,
               minTileHeight: minHeight,
               minVerticalPadding: minPadding,
               leading: Icon(_shortcutIcon(shortcut)),
               title: Text(_shortcutTitle(shortcut, locals)),
-              onTap: _collectionSelection == null
+              onTap: _librarySelection == null
                   ? () => _selectFilter(shortcut)
                   : null);
         }
@@ -2516,19 +2571,19 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
           final folder = folders[index - shortcuts.length];
           return ListTile(
             key: _folderKey(folder),
-            enabled: _collectionSelection == null,
+            enabled: _librarySelection == null,
             leading: const Icon(Icons.folder_outlined),
             title: Text(folder.name),
             trailing:
-                _collectionSelection == null ? folderMenu?.call(folder) : null,
-            onTap: _collectionSelection == null
+                _librarySelection == null ? folderMenu?.call(folder) : null,
+            onTap: _librarySelection == null
                 ? () => setState(() => _folderId = folder.id)
                 : null,
           );
         }
         final item = items[index - itemStart];
         final move =
-            _collectionSelection == null ? movePlaylist?.call(item) : null;
+            _librarySelection == null ? movePlaylist?.call(item) : null;
         Future<void> open() =>
             _openItem(item, allItems, onOpenSong: onOpenSong);
         if (item.bookmark != null) {
@@ -2549,6 +2604,7 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
         final selected = _collectionSelected(item);
         return ListTile(
             key: _itemKey(item),
+            enabled: _savedSongsSelection == null,
             minTileHeight: minHeight,
             minVerticalPadding: minPadding,
             selected: selected ?? false,
@@ -2569,8 +2625,8 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                             ? Icons.check_box
                             : Icons.check_box_outline_blank)),
                   ]),
-            onLongPress: _itemLongPress(item, open),
-            onTap: open);
+            onLongPress: _itemLongPress(item),
+            onTap: _savedSongsSelection == null ? open : null);
       }, childCount: count, findChildIndexCallback: (key) => indices[key]);
       return fastScroll(searchToolbar == null
           ? ListView.custom(
@@ -2628,9 +2684,8 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                 child: Icon(Icons.folder_outlined,
                     size: 64, color: colors.onSurfaceVariant)),
             artworkRadius: 7,
-            action:
-                _collectionSelection == null ? folderMenu?.call(folder) : null,
-            onOpen: _collectionSelection == null
+            action: _librarySelection == null ? folderMenu?.call(folder) : null,
+            onOpen: _librarySelection == null
                 ? () => setState(() => _folderId = folder.id)
                 : null,
           );
@@ -2642,7 +2697,7 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
             songTitleLines: presentation.titleLines(2),
             pinned: pinnedPlaylistIds.contains(item.playlist?.playlistId),
             movePlaylist:
-                _collectionSelection == null ? movePlaylist?.call(item) : null);
+                _librarySelection == null ? movePlaylist?.call(item) : null);
       }, childCount: count, findChildIndexCallback: (key) => indices[key]);
       return searchToolbar == null
           ? GridView.custom(
@@ -2671,8 +2726,7 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
           child: Icon(_shortcutIcon(shortcut),
               size: 64, color: colors.onSurfaceVariant)),
       artworkRadius: 25,
-      onOpen:
-          _collectionSelection == null ? () => _selectFilter(shortcut) : null,
+      onOpen: _librarySelection == null ? () => _selectFilter(shortcut) : null,
     );
   }
 
@@ -2704,9 +2758,8 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
     final artist = entry?.kind == MusicLibraryKind.artist;
     final playlist = local != null || entry?.kind == MusicLibraryKind.playlist;
     final plays = entry?.kind == MusicLibraryKind.song;
-    final selected = _collectionSelected(item) ??
-        (entry == null ? null : _savedSongsSelection?.contains(entry.id));
-    final enabled = _collectionSelection == null || selected != null;
+    final selected = _itemSelected(item);
+    final enabled = _librarySelection == null || selected != null;
     final colors = Theme.of(context).colorScheme;
     final defaultArtwork = _bookmarkArtwork(
         entry,
@@ -2756,7 +2809,7 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
       onOpen: enabled
           ? () => _openItem(item, items, songTap: true, onOpenSong: onOpenSong)
           : null,
-      onLongPress: _itemLongPress(item, play),
+      onLongPress: _itemLongPress(item),
     );
   }
 
@@ -2979,40 +3032,18 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
 
     Future<void> remove() async {
       if (!isCurrent()) return;
-      final removable = selected
-          .where((video) =>
-              !manager.isMusicDownloadRequiredByPlaylist(video.videoId))
-          .toList();
-      if (removable.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text(locals.musicDownloadHeldByPlaylist)));
-        return;
-      }
-      final approval = manager.captureMusicDeletion(removable);
-      final confirmed = await showDialog<bool>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: Text(
-              locals.musicRemoveSelectedDownloadsConfirm(removable.length)),
-          actions: [
-            TextButton(
-                onPressed: () => Navigator.pop(context, false),
-                child: Text(locals.cancel)),
-            TextButton(
-                onPressed: () => Navigator.pop(context, true),
-                child: Text(locals.musicRemoveSelectedDownloads)),
-          ],
-        ),
+      final removed = await confirmMusicDownloadRemoval(
+        context,
+        manager,
+        selected,
+        isCurrent: ownerCurrent,
+        revalidate: (_) async => isCurrent(),
       );
-      if (confirmed != true || !isCurrent()) return;
-      final removed =
-          await manager.deleteMusicSelection(approval, isCurrent: ownerCurrent);
-      if (!mounted || !ownerCurrent()) return;
-      if (liveSelection().isEmpty) {
+      if (removed != null &&
+          removed > 0 &&
+          ownerCurrent() &&
+          liveSelection().isEmpty) {
         _exitLibrarySelection();
-      } else if (removed < removable.length) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text(locals.musicLibraryActionError)));
       }
     }
 
@@ -3080,8 +3111,8 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
               file: video, child: Text(video.musicMetadata!.title)),
           subtitle: Text(status),
           onLongPress: selected == null
-              ? () => _startLibrarySelection(
-                  _LibraryFilter.downloads, video.videoId)
+              ? () => _startLibrarySelection(_LibraryFilter.downloads,
+                  rowId: video.videoId)
               : null,
           onTap: selected != null
               ? () => _toggleLibrarySelection(video.videoId)

@@ -45,6 +45,9 @@ class MusicListeningHistory {
   Future<void> removeTracks(Set<String> trackIds) =>
       _database.removeMusicListeningTracks(trackIds);
 
+  Future<void> removeEvents(Iterable<MusicListeningEvent> events) =>
+      _database.removeMusicListeningEvents(events);
+
   Future<void> clear() => _database.removeMusicListeningTracks(null);
 
   /// Import explicit history without changing the automatic recording setting.

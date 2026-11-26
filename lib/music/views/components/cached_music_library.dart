@@ -11,7 +11,10 @@ import '../../../l10n/generated/app_localizations.dart';
 import '../../../player/states/player.dart';
 import '../../../settings/models/db/server.dart';
 import '../../../utils.dart' show prettyDurationCustom;
+import '../../../utils/motion.dart';
+import '../../models/music_song_selection.dart';
 import '../../services/cached_music.dart';
+import 'music_song_selection_bar.dart';
 
 class CachedMusicLibrary extends StatefulWidget {
   const CachedMusicLibrary({
@@ -36,13 +39,13 @@ class CachedMusicLibrary extends StatefulWidget {
 
 class _CachedMusicLibraryState extends State<CachedMusicLibrary>
     with WidgetsBindingObserver {
+  final _selection = MusicSongSelection<(String, String)>();
   List<CachedMusicSong>? _songs;
   int _request = 0;
   bool _checking = false;
   bool _keeping = false;
   bool _failed = false;
   bool _songEvicted = false;
-  bool _currentRoute = false;
   bool _visible = false;
   late bool _foreground;
 
@@ -57,7 +60,6 @@ class _CachedMusicLibraryState extends State<CachedMusicLibrary>
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    _currentRoute = ModalRoute.isCurrentOf(context) ?? true;
     _updateVisibility();
   }
 
@@ -80,10 +82,11 @@ class _CachedMusicLibraryState extends State<CachedMusicLibrary>
   }
 
   void _updateVisibility({bool ownerChanged = false}) {
-    final visible = widget.active && _currentRoute && _foreground;
+    final visible = widget.active && _foreground;
     if (!ownerChanged && visible == _visible) return;
     _visible = visible;
     final request = ++_request;
+    _selection.clear();
     _songs = null;
     _checking = false;
     _failed = false;
@@ -151,14 +154,18 @@ class _CachedMusicLibraryState extends State<CachedMusicLibrary>
     }
   }
 
+  (String, String) _songId(CachedMusicSong song) =>
+      (song.videoId, song.rendition);
+
   Future<void> _refresh({
     CachedMusicSong? selected,
-    CachedMusicSong? remove,
+    List<CachedMusicSong>? playInOrder,
+    List<CachedMusicSong> remove = const [],
   }) async {
     final server = widget.server;
     if (!_visible || server == null) return;
     final onPlay = widget.onPlay;
-    final player = remove != null || (selected != null && onPlay == null)
+    final player = remove.isNotEmpty || (selected != null && onPlay == null)
         ? context.read<PlayerCubit?>()
         : null;
     final messenger = ScaffoldMessenger.maybeOf(context);
@@ -173,17 +180,19 @@ class _CachedMusicLibraryState extends State<CachedMusicLibrary>
       _failed = false;
       _songEvicted = false;
     });
-    if (remove != null) {
+    final messages = <String>{};
+    for (final song in remove) {
+      if (!current()) return;
       final playing = player?.state.currentlyPlaying;
       final cached = CachedMusicPlayback.of(playing);
       String message;
       try {
         final result = cached != null &&
-                playing?.videoId == remove.videoId &&
-                cached.rendition == remove.rendition &&
+                playing?.videoId == song.videoId &&
+                cached.rendition == song.rendition &&
                 cached.owner == cachedMusicOwner(server)
             ? CachedMusicRemoval.inUse
-            : await removeCachedMusicSong(server, remove);
+            : await removeCachedMusicSong(server, song);
         message = switch (result) {
           CachedMusicRemoval.removed => locals.musicCachedSongRemoved,
           CachedMusicRemoval.missing => locals.musicCachedSongEvicted,
@@ -192,7 +201,10 @@ class _CachedMusicLibraryState extends State<CachedMusicLibrary>
       } catch (_) {
         message = locals.musicRemoveCachedSongError;
       }
-      if (!current()) return;
+      messages.add(message);
+    }
+    if (!current()) return;
+    for (final message in messages) {
       if (messenger?.mounted == true) {
         messenger!.showSnackBar(SnackBar(content: Text(message)));
       }
@@ -205,6 +217,7 @@ class _CachedMusicLibraryState extends State<CachedMusicLibrary>
       if (current()) {
         setState(() {
           _songs = null;
+          _selection.clear();
           _checking = false;
           _failed = true;
         });
@@ -212,13 +225,23 @@ class _CachedMusicLibraryState extends State<CachedMusicLibrary>
       return;
     }
     if (!current()) return;
-    final index = selected == null
+    final byId = {for (final song in songs) _songId(song): song};
+    final queue = playInOrder == null
+        ? songs
+        : [
+            for (final song in playInOrder)
+              if (byId[_songId(song)] case final current?) current,
+          ];
+    final index = selected == null ||
+            (playInOrder != null && queue.length != playInOrder.length)
         ? -1
-        : songs.indexWhere((song) =>
-            song.videoId == selected.videoId &&
-            song.rendition == selected.rendition);
+        : queue.indexWhere((song) => _songId(song) == _songId(selected));
     setState(() {
       _songs = songs;
+      _selection.retain(byId.keys);
+      if (remove.isNotEmpty && !byId.keys.any(_selection.contains)) {
+        _selection.clear();
+      }
       _checking = index >= 0;
       _songEvicted = selected != null && index < 0;
     });
@@ -226,14 +249,14 @@ class _CachedMusicLibraryState extends State<CachedMusicLibrary>
     try {
       if (onPlay != null) {
         await onPlay(
-          songs,
+          queue,
           startIndex: index,
           server: server,
           queueTitle: locals.musicCachedSongs,
         );
       } else {
         await player!.playCachedMusicSongs(
-          songs,
+          queue,
           startIndex: index,
           server: server,
           queueTitle: locals.musicCachedSongs,
@@ -261,6 +284,11 @@ class _CachedMusicLibraryState extends State<CachedMusicLibrary>
     return _CachedMusicSongMenu(
       enabled: !_checking,
       items: [
+        MenuItemButton(
+          onPressed: busy ? null : () => _startSelection(song),
+          leadingIcon: const Icon(Icons.check_box_outline_blank),
+          child: Text(locals.musicSelectSong),
+        ),
         if (manager != null)
           MenuItemButton(
             onPressed: busy
@@ -271,11 +299,76 @@ class _CachedMusicLibraryState extends State<CachedMusicLibrary>
             child: Text(locals.musicCachedSongKeep),
           ),
         MenuItemButton(
-          onPressed: busy ? null : () => unawaited(_refresh(remove: song)),
+          onPressed: busy ? null : () => unawaited(_refresh(remove: [song])),
           leadingIcon: const Icon(Icons.delete_outline),
           child: Text(locals.musicRemoveCachedSong),
         ),
       ],
+    );
+  }
+
+  void _startSelection(CachedMusicSong song) =>
+      setState(() => _selection.start(_songId(song)));
+
+  Future<void> _confirmCacheRemoval(
+    List<CachedMusicSong> songs,
+    bool Function() isCurrent,
+    AppLocalizations locals,
+  ) async {
+    if (_checking || _keeping || !isCurrent()) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      useRootNavigator: false,
+      animationStyle: AppMotion.dialogStyle(context),
+      builder: (context) => AlertDialog(
+        title: Text(locals.musicRemoveCachedSong),
+        content: Text(locals.musicRemoveCachedSongsConfirm(songs.length)),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: Text(locals.cancel)),
+          TextButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: Text(locals.musicRemoveCachedSong)),
+        ],
+      ),
+    );
+    if (confirmed == true && isCurrent()) await _refresh(remove: songs);
+  }
+
+  Widget _selectionBar(List<CachedMusicSong> songs, Server server,
+      AppLocalizations locals, bool Function() viewIsCurrent) {
+    final owner = cachedMusicOwner(server)!;
+    final selected = _selection.selectedRows(songs, _songId);
+    final ids = songs.map(_songId);
+    final byId = {for (final song in selected) _songId(song): song};
+    bool current() =>
+        viewIsCurrent() &&
+        _selection.active &&
+        selected.every((song) => _selection.contains(_songId(song)));
+
+    return MusicSongSelectionBar(
+      selected: [for (final song in selected) song.playbackEntry(owner)],
+      allSelected: _selection.allSelected(ids),
+      onToggleAll: _checking || songs.isEmpty
+          ? null
+          : () => setState(() => _selection.toggleAll(ids)),
+      onClose: () => setState(_selection.clear),
+      isCurrent: current,
+      onPlay: (tracks) async {
+        if (_checking || _keeping) return;
+        final queue = [
+          for (final track in tracks)
+            byId[(track.videoId, CachedMusicPlayback.of(track)!.rendition)]!,
+        ];
+        await _refresh(selected: queue.first, playInOrder: queue);
+      },
+      removal: selected.isEmpty || _checking || _keeping
+          ? null
+          : (
+              label: locals.musicRemoveCachedSong,
+              run: () => _confirmCacheRemoval(selected, current, locals),
+            ),
     );
   }
 
@@ -289,67 +382,90 @@ class _CachedMusicLibraryState extends State<CachedMusicLibrary>
     final manager = context.read<DownloadManagerCubit?>();
     final viewIsCurrent = _captureCurrentView(server);
     final songs = _songs;
-    return Column(
-      children: [
-        Padding(
-          padding: const EdgeInsetsDirectional.only(start: 16, end: 6),
-          child: Row(
-            children: [
-              Expanded(child: Text(locals.musicCachedSongsHint)),
-              IconButton(
-                key: const ValueKey('music-cached-songs-refresh'),
-                tooltip: locals.refresh,
-                onPressed: _checking ? null : _refresh,
-                icon: const Icon(Icons.refresh),
+    final selecting = _selection.active;
+    return PopScope(
+      canPop: !selecting,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && selecting) setState(_selection.clear);
+      },
+      child: Column(
+        children: [
+          if (selecting)
+            _selectionBar(songs ?? const [], server, locals, viewIsCurrent)
+          else
+            Padding(
+              padding: const EdgeInsetsDirectional.only(start: 16, end: 6),
+              child: Row(
+                children: [
+                  Expanded(child: Text(locals.musicCachedSongsHint)),
+                  IconButton(
+                    key: const ValueKey('music-cached-songs-refresh'),
+                    tooltip: locals.refresh,
+                    onPressed: _checking ? null : _refresh,
+                    icon: const Icon(Icons.refresh),
+                  ),
+                ],
               ),
-            ],
+            ),
+          if (_songEvicted)
+            Semantics(
+              liveRegion: true,
+              child: Text(locals.musicCachedSongEvicted),
+            ),
+          Expanded(
+            child: switch (songs) {
+              null when _failed =>
+                Center(child: Text(locals.musicCachedSongsError)),
+              null => const Center(child: CircularProgressIndicator()),
+              [] => Center(child: Text(locals.musicCachedSongsEmpty)),
+              _ => ListView.builder(
+                  itemCount: songs.length,
+                  findChildIndexCallback: (key) {
+                    final index = songs.indexWhere(
+                      (song) => ValueKey((song.videoId, song.rendition)) == key,
+                    );
+                    return index < 0 ? null : index;
+                  },
+                  itemBuilder: (context, index) {
+                    final song = songs[index];
+                    final id = _songId(song);
+                    final selected = _selection.contains(id);
+                    void toggle() => setState(() => _selection.toggle(id));
+                    return ListTile(
+                      key: ValueKey(id),
+                      selected: selected,
+                      leading: selecting
+                          ? MusicSongSelectButton(
+                              selected: selected, onPressed: toggle)
+                          : const Icon(Icons.music_note),
+                      title: Text(song.title),
+                      subtitle: song.artist.isEmpty ? null : Text(song.artist),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (song.lengthSeconds > 0)
+                            Text(prettyDurationCustom(
+                                Duration(seconds: song.lengthSeconds))),
+                          if (!selecting)
+                            _songActions(
+                                song, locals, server, manager, viewIsCurrent),
+                        ],
+                      ),
+                      onTap: _checking
+                          ? null
+                          : selecting
+                              ? toggle
+                              : () => unawaited(_refresh(selected: song)),
+                      onLongPress: selecting || _checking || _keeping
+                          ? null
+                          : () => _startSelection(song),
+                    );
+                  },
+                ),
+            },
           ),
-        ),
-        if (_songEvicted)
-          Semantics(
-            liveRegion: true,
-            child: Text(locals.musicCachedSongEvicted),
-          ),
-        Expanded(
-          child: switch (songs) {
-            null when _failed =>
-              Center(child: Text(locals.musicCachedSongsError)),
-            null => const Center(child: CircularProgressIndicator()),
-            [] => Center(child: Text(locals.musicCachedSongsEmpty)),
-            _ => ListView.builder(
-                itemCount: songs.length,
-                findChildIndexCallback: (key) {
-                  final index = songs.indexWhere(
-                    (song) => ValueKey((song.videoId, song.rendition)) == key,
-                  );
-                  return index < 0 ? null : index;
-                },
-                itemBuilder: (context, index) {
-                  final song = songs[index];
-                  return ListTile(
-                    key: ValueKey((song.videoId, song.rendition)),
-                    leading: const Icon(Icons.music_note),
-                    title: Text(song.title),
-                    subtitle: song.artist.isEmpty ? null : Text(song.artist),
-                    trailing: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        if (song.lengthSeconds > 0)
-                          Text(prettyDurationCustom(
-                              Duration(seconds: song.lengthSeconds))),
-                        _songActions(
-                            song, locals, server, manager, viewIsCurrent),
-                      ],
-                    ),
-                    onTap: () {
-                      if (!_checking) unawaited(_refresh(selected: song));
-                    },
-                  );
-                },
-              ),
-          },
-        ),
-      ],
+        ],
+      ),
     );
   }
 }

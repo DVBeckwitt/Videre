@@ -14,6 +14,7 @@ import '../../../utils/views/components/thumbnail.dart';
 import '../../../videos/models/video.dart';
 import '../../../videos/states/history.dart';
 import '../../../videos/views/components/history_video.dart';
+import '../../models/device_playlist_track.dart';
 import '../../models/music_library_entry.dart';
 import '../../models/on_device_music_entry.dart';
 import '../../models/song_artwork.dart';
@@ -21,7 +22,9 @@ import '../../services/local_music_library.dart';
 import '../../services/music_listening_history.dart';
 import '../components/local_music_folder.dart' show supportsLocalMusicFolders;
 import '../components/music_collection_panes.dart';
+import '../components/music_derived_song_selection.dart';
 import '../components/music_library_actions.dart';
+import '../components/music_song_selection_bar.dart';
 import 'music.dart';
 
 enum _AutomaticCollection {
@@ -227,6 +230,31 @@ class _AutomaticCollectionPageState extends State<_AutomaticCollectionPage> {
     }
   }
 
+  Future<bool> _removeLikes(List<String> ids, bool Function() isCurrent) async {
+    final locals = AppLocalizations.of(context)!;
+    final confirmed = await widget.session.showDialog<bool>(
+      context,
+      (context) => AlertDialog(
+        title: Text(locals.musicRemoveSelectedLikedSongs),
+        content: Text(locals.musicRemoveSelectedLikedSongsConfirm(ids.length)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(locals.cancel),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(locals.musicRemoveSelectedLikedSongs),
+          ),
+        ],
+      ),
+    );
+    return confirmed == true &&
+        isCurrent() &&
+        await widget.session.library
+            .removeLikedSongs(ids, isCurrent: isCurrent);
+  }
+
   @override
   Widget build(BuildContext context) {
     final locals = AppLocalizations.of(context)!;
@@ -327,66 +355,103 @@ class _AutomaticCollectionPageState extends State<_AutomaticCollectionPage> {
         ],
       ),
     );
-    return MusicCollectionPanes(
-      details: details,
-      buildTracks: (_, split) => CustomScrollView(
-        slivers: [
-          if (!split) SliverToBoxAdapter(child: details),
-          SliverList.builder(
-            itemCount: tracks.length,
-            itemBuilder: (context, index) {
-              final track = tracks[index];
-              final song = track.video;
-              return _songRow(
-                song,
-                play: track.legacyDownload
-                    ? () => unawaited(_play(() => openHistoryEntry(
-                        context, HistorySource.music, song, television: isTv)))
-                    : () => _playSongs(songs, title,
-                        index: positions[song.videoId]!),
-                liked: likedById[song.videoId],
-              );
-            },
-          ),
-          if (deviceSongs.isNotEmpty) ...[
-            SliverToBoxAdapter(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _heading(locals.onDevice),
-                  if (playableDeviceCount > 0)
-                    Center(
-                      child: _playControls(locals,
-                          play: () => _playDevice(deviceSongs, title),
-                          shuffle: playableDeviceCount > 1
-                              ? () =>
-                                  _playDevice(deviceSongs, title, shuffle: true)
-                              : null),
-                    ),
-                ],
-              ),
-            ),
+    final deviceById = {for (final song in deviceSongs) song.id: song};
+    final selectable = {
+      for (final track in tracks)
+        track.video.videoId: track.legacyDownload ? null : track.video,
+      for (final song in deviceSongs)
+        if (_deviceEntry(song)?.deviceTrack case final track?)
+          song.id: devicePlaylistVideo(track)
+        else
+          song.id: null,
+    };
+    List<OnDeviceMusicEntry>? resolveDeviceSongs(List<String> ids) {
+      final resolved = [
+        for (final id in ids)
+          if (deviceById[id] case final song?)
+            if (_deviceEntry(song) case final entry?) entry,
+      ];
+      return resolved.length == ids.length ? resolved : null;
+    }
+
+    return MusicDerivedSongSelection(
+      key: ValueKey(widget.collection),
+      songs: selectable,
+      isCurrent: () => widget.session.isCurrent,
+      deviceLibrary: _deviceLibrary,
+      resolveOnDevice: resolveDeviceSongs,
+      removal: _liked
+          ? (label: locals.musicRemoveSelectedLikedSongs, run: _removeLikes)
+          : null,
+      builder: (context, selection) => MusicCollectionPanes(
+        details: details,
+        buildTracks: (_, split) => CustomScrollView(
+          slivers: [
+            if (!split) SliverToBoxAdapter(child: details),
             SliverList.builder(
-              itemCount: deviceSongs.length,
+              itemCount: tracks.length,
               itemBuilder: (context, index) {
-                final song = deviceSongs[index];
-                final device = _deviceEntry(song);
-                return ListTile(
-                  key: ValueKey('music-automatic-track-${song.id}'),
-                  leading: const Icon(Icons.audio_file_outlined),
-                  title: Text(device?.title ?? song.title),
-                  subtitle: Text(device == null
-                      ? locals.localMusicHiddenFileUnavailable
-                      : device.artist ?? song.subtitle),
-                  onTap: device == null
-                      ? null
-                      : () => _playDevice(deviceSongs, title, from: song.id),
-                  trailing: _liked ? _unlikeButton(locals, song) : null,
+                final track = tracks[index];
+                final song = track.video;
+                return _songRow(
+                  song,
+                  selection: selection,
+                  play: track.legacyDownload
+                      ? () => unawaited(_play(() => openHistoryEntry(
+                          context, HistorySource.music, song,
+                          television: isTv)))
+                      : () => _playSongs(songs, title,
+                          index: positions[song.videoId]!),
+                  liked: likedById[song.videoId],
                 );
               },
             ),
+            if (deviceSongs.isNotEmpty) ...[
+              SliverToBoxAdapter(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _heading(locals.onDevice),
+                    if (playableDeviceCount > 0)
+                      Center(
+                        child: _playControls(locals,
+                            play: () => _playDevice(deviceSongs, title),
+                            shuffle: playableDeviceCount > 1
+                                ? () => _playDevice(deviceSongs, title,
+                                    shuffle: true)
+                                : null),
+                      ),
+                  ],
+                ),
+              ),
+              SliverList.builder(
+                itemCount: deviceSongs.length,
+                itemBuilder: (context, index) {
+                  final song = deviceSongs[index];
+                  final device = _deviceEntry(song);
+                  return ListTile(
+                    key: ValueKey('music-automatic-track-${song.id}'),
+                    leading: const Icon(Icons.audio_file_outlined),
+                    title: Text(device?.title ?? song.title),
+                    subtitle: Text(device == null
+                        ? locals.localMusicHiddenFileUnavailable
+                        : device.artist ?? song.subtitle),
+                    selected: selection.selected(song.id) ?? false,
+                    onTap: selection.active
+                        ? () => selection.toggle(song.id)
+                        : device == null
+                            ? null
+                            : () =>
+                                _playDevice(deviceSongs, title, from: song.id),
+                    onLongPress: () => selection.start(song.id),
+                    trailing: _selectionActions(
+                        selection, song.id, _liked ? song : null),
+                  );
+                },
+              ),
+            ],
           ],
-        ],
+        ),
       ),
     );
   }
@@ -422,8 +487,9 @@ class _AutomaticCollectionPageState extends State<_AutomaticCollectionPage> {
       );
 
   Widget _songRow(Video song,
-      {required VoidCallback play, MusicLibraryEntry? liked}) {
-    final locals = AppLocalizations.of(context)!;
+      {required VoidCallback play,
+      required MusicDerivedSongSelectionState selection,
+      MusicLibraryEntry? liked}) {
     final music = song.musicMetadata;
     final artist = music?.artist ?? song.author ?? '';
     final images = displaySongThumbnails(
@@ -431,7 +497,9 @@ class _AutomaticCollectionPageState extends State<_AutomaticCollectionPage> {
         artTrack: music?.isArtTrack == true);
     return ListTile(
       key: ValueKey('music-automatic-track-${song.videoId}'),
-      onTap: play,
+      selected: selection.selected(song.videoId) ?? false,
+      onTap: selection.active ? () => selection.toggle(song.videoId) : play,
+      onLongPress: () => selection.start(song.videoId),
       leading: ExcludeSemantics(
         child: SizedBox.square(
           dimension: 48,
@@ -452,7 +520,20 @@ class _AutomaticCollectionPageState extends State<_AutomaticCollectionPage> {
       subtitle: artist.isEmpty
           ? null
           : Text(artist, maxLines: 1, overflow: TextOverflow.ellipsis),
-      trailing: liked == null ? null : _unlikeButton(locals, liked),
+      trailing: _selectionActions(selection, song.videoId, liked),
+    );
+  }
+
+  Widget _selectionActions(MusicDerivedSongSelectionState selection, String id,
+      MusicLibraryEntry? liked) {
+    final button = MusicSongSelectButton(
+      selected: selection.selected(id),
+      onPressed: () => selection.toggle(id),
+    );
+    if (liked == null || selection.active) return button;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [button, _unlikeButton(AppLocalizations.of(context)!, liked)],
     );
   }
 

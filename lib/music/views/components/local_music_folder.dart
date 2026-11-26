@@ -15,6 +15,7 @@ import '../../../player/states/player.dart';
 import '../../../player/views/components/player_modal_back_handler.dart';
 import '../../../settings/states/settings.dart';
 import '../../../utils.dart' show selectKeys;
+import '../../../videos/models/video.dart';
 import '../../models/local_music_browse.dart';
 import '../../models/device_playlist_track.dart';
 import '../../models/local_music_track.dart';
@@ -40,8 +41,10 @@ import 'local_music_tag_editor.dart';
 import 'music_fast_scroll.dart';
 import 'local_music_repair.dart';
 import 'music_library_actions.dart';
+import 'music_download_removal.dart';
 import 'music_track_details.dart';
 import 'music_file_sharing.dart';
+import 'music_song_selection_bar.dart';
 import 'music_song_row_swipe.dart';
 import 'music_ringtone.dart';
 
@@ -327,22 +330,32 @@ class _LocalMusicFolderState extends State<LocalMusicFolder>
     if (!isCurrent()) return;
     Navigator.of(context).push<void>(MaterialPageRoute(
         builder: (_) => _withSelectKeys(LocalMusicFolderBrowser(
+              library: library,
               catalogChanges: Listenable.merge([library, _downloads]),
               currentEntries: () => isCurrent() ? _currentEntries() : null,
+              sourceScope: _preferenceScope,
               order: sort.order,
               refresh: () =>
                   isCurrent() && !library.busy ? library.refresh : null,
               unavailableMessage: () =>
                   localMusicSourceStatus(library, locals) ??
                   locals.localMusicLocationsUnavailable,
-              row: (context, tracks, index, folder, autofocus) => _buildTrack(
-                  context, tracks[index], sort, profile, library.selectionId,
-                  () {
+              row: (context, tracks, index, folder, autofocus,
+                      {required selected,
+                      required onToggleSelection,
+                      required onStartSelection}) =>
+                  _buildTrack(context, tracks[index], sort, profile,
+                      library.selectionId, () {
                 if (isCurrent()) {
                   unawaited(_play(tracks, index,
                       routeContext: context, folder: folder, songTap: true));
                 }
-              }, showFileName: true, autofocus: autofocus),
+              },
+                      showFileName: true,
+                      autofocus: autofocus,
+                      selected: selected,
+                      onToggleSelection: onToggleSelection,
+                      onStartSelection: onStartSelection),
             ))));
   }
 
@@ -719,15 +732,13 @@ class _LocalMusicFolderState extends State<LocalMusicFolder>
                 (!_library.enabled || _library.loaded) &&
                 !roots.any(_library.isProviderUnreachable) &&
                 _library.error == null,
-            row: (visible, index, {selected, onToggleSelection}) => _buildTrack(
-                context,
-                visible[index],
-                sort,
-                profile,
-                selection,
-                () => _play(visible, index, songTap: true),
-                selected: selected,
-                onToggleSelection: onToggleSelection),
+            row: (visible, index,
+                    {selected, onToggleSelection, onStartSelection}) =>
+                _buildTrack(context, visible[index], sort, profile, selection,
+                    () => _play(visible, index, songTap: true),
+                    selected: selected,
+                    onToggleSelection: onToggleSelection,
+                    onStartSelection: onStartSelection),
             header:
                 Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               if (enabled) ...[
@@ -976,6 +987,7 @@ class _LocalMusicFolderState extends State<LocalMusicFolder>
     bool autofocus = false,
     bool? selected,
     VoidCallback? onToggleSelection,
+    VoidCallback? onStartSelection,
   }) {
     final locals = AppLocalizations.of(context)!;
     final track = entry.deviceTrack;
@@ -1003,6 +1015,8 @@ class _LocalMusicFolderState extends State<LocalMusicFolder>
       if (!currentSource()) return;
       try {
         switch (action) {
+          case _TrackAction.select:
+            onStartSelection?.call();
           case _TrackAction.playNext:
             await _enqueue(entry, next: true);
           case _TrackAction.addToQueue:
@@ -1151,6 +1165,7 @@ class _LocalMusicFolderState extends State<LocalMusicFolder>
       onTap: () {
         if (currentSource()) play();
       },
+      onLongPress: onStartSelection,
       trailing: PopupMenuButton<_TrackAction>(
         tooltip: locals.localMusicSongActions(entry.title),
         onSelected: runAction,
@@ -1173,6 +1188,10 @@ class _LocalMusicFolderState extends State<LocalMusicFolder>
             PopupMenuItem(
                 value: _TrackAction.addToQueue,
                 child: _withSelectKeys(Text(locals.addToQueueList))),
+            if (onStartSelection != null)
+              PopupMenuItem(
+                  value: _TrackAction.select,
+                  child: _withSelectKeys(Text(locals.musicSelectSong))),
             if (requestTarget != null)
               PopupMenuItem(
                   value: _TrackAction.addToRequests,
@@ -1296,7 +1315,9 @@ class _LocalTrackBrowser extends StatefulWidget {
   final bool complete;
   final Widget header;
   final Widget Function(List<OnDeviceMusicEntry>, int,
-      {bool? selected, VoidCallback? onToggleSelection}) row;
+      {bool? selected,
+      VoidCallback? onToggleSelection,
+      VoidCallback? onStartSelection}) row;
 
   @override
   State<_LocalTrackBrowser> createState() => _LocalTrackBrowserState();
@@ -1319,9 +1340,10 @@ class _LocalTrackBrowserState extends State<_LocalTrackBrowser> {
   Map<String, OnDeviceMusicEntry>? _selected;
   Completer<void>? _shareCancellation;
 
-  void _startSelection() {
-    if (!widget.preferenceScopeIsCurrent()) return;
-    setState(() => _selected = {});
+  void _startSelection([OnDeviceMusicEntry? entry]) {
+    if (_selected != null || !widget.preferenceScopeIsCurrent()) return;
+    FocusManager.instance.primaryFocus?.unfocus();
+    setState(() => _selected = {if (entry != null) entry.id: entry});
     _focusSelectionControl(_closeSelectionFocus, selecting: true);
   }
 
@@ -1358,19 +1380,13 @@ class _LocalTrackBrowserState extends State<_LocalTrackBrowser> {
     cancellation?.complete();
   }
 
-  Future<void> _shareSelection() async {
-    final selected = _selected;
-    if (selected == null ||
-        selected.length < 2 ||
-        _shareCancellation != null ||
-        !widget.preferenceScopeIsCurrent()) {
-      return;
-    }
+  List<OnDeviceMusicEntry>? _resolveSelection(
+      List<OnDeviceMusicEntry> selected) {
     final current = {
       for (final entry in widget.currentEntries()) entry.id: entry,
     };
     final entries = <OnDeviceMusicEntry>[];
-    for (final entry in selected.values) {
+    for (final entry in selected) {
       final live = current[entry.id];
       final selectedTrack = entry.deviceTrack;
       final liveTrack = live?.deviceTrack;
@@ -1379,13 +1395,26 @@ class _LocalTrackBrowserState extends State<_LocalTrackBrowser> {
           liveTrack?.visibilityKey != selectedTrack?.visibilityKey ||
           liveTrack?.documentVisibilityKey !=
               selectedTrack?.documentVisibilityKey) {
-        final locals = AppLocalizations.of(context)!;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(locals.musicShareSelectedAudioError)),
-        );
-        return;
+        return null;
       }
       entries.add(live);
+    }
+    return entries;
+  }
+
+  Future<void> _shareSelection(List<OnDeviceMusicEntry> selected) async {
+    if (selected.length < 2 ||
+        _shareCancellation != null ||
+        !widget.preferenceScopeIsCurrent()) {
+      return;
+    }
+    final entries = _resolveSelection(selected);
+    if (entries == null) {
+      final locals = AppLocalizations.of(context)!;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(locals.musicShareSelectedAudioError)),
+      );
+      return;
     }
     final cancellation = Completer<void>();
     setState(() => _shareCancellation = cancellation);
@@ -1410,33 +1439,119 @@ class _LocalTrackBrowserState extends State<_LocalTrackBrowser> {
     }
   }
 
-  Widget _selectionBar(AppLocalizations locals, int count) => Row(
-        children: [
-          IconButton(
-            focusNode: _closeSelectionFocus,
-            tooltip: MaterialLocalizations.of(context).closeButtonTooltip,
-            icon: const Icon(Icons.close),
-            onPressed: _closeSelection,
-          ),
-          Expanded(
-            child: Semantics(
-              liveRegion: true,
-              child: Text(
-                locals.musicQueueSelected(count),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-          ),
-          IconButton(
-            tooltip: locals.musicShareSelectedAudio,
-            icon: const Icon(Icons.share_outlined),
-            onPressed: count >= 2 && _shareCancellation == null
-                ? _shareSelection
-                : null,
-          ),
-        ],
+  Video? _playlistSong(OnDeviceMusicEntry entry) {
+    if (entry.deviceTrack case final track?) return devicePlaylistVideo(track);
+    return MusicLibraryActions.downloadedPlaylistSong(entry.download!);
+  }
+
+  Widget _selectionBar(
+    AppLocalizations locals,
+    Map<String, OnDeviceMusicEntry> selection,
+    List<OnDeviceMusicEntry> visible,
+  ) {
+    final selected = [
+      for (final entry in widget.tracks)
+        if (selection[entry.id] case final selected?) selected,
+    ];
+    final allSelected = visible.isNotEmpty &&
+        visible.every((entry) => selection.containsKey(entry.id));
+    List<OnDeviceMusicEntry>? resolve() {
+      if (!mounted ||
+          !identical(_selected, selection) ||
+          !widget.preferenceScopeIsCurrent() ||
+          selected.length != selection.length ||
+          !selected.every((entry) => identical(selection[entry.id], entry))) {
+        return null;
+      }
+      return _resolveSelection(selected);
+    }
+
+    final manager = context.read<DownloadManagerCubit?>();
+    final downloads = [
+      for (final entry in selected)
+        if (entry.download case final file?) file,
+    ];
+    Future<void> deleteDownloads(DownloadManagerCubit manager) async {
+      final profile = db.profileId;
+      bool ownerCurrent() =>
+          mounted &&
+          identical(_selected, selection) &&
+          widget.preferenceScopeIsCurrent() &&
+          identical(context.read<DownloadManagerCubit?>(), manager) &&
+          !manager.isClosed;
+
+      final removed = await confirmMusicDownloadRemoval(
+        context,
+        manager,
+        downloads,
+        isCurrent: ownerCurrent,
+        revalidate: (files) async {
+          final expected = {
+            for (final entry in selected)
+              entry.download!.videoId: entry.downloadFileProof,
+          };
+          final live = await manager.storage.probeMusicFiles(profile, files);
+          return resolve() != null &&
+              live.length == files.length &&
+              live.every(
+                (file) => expected[file.download.videoId] == file.identity,
+              );
+        },
       );
+      if (removed != null &&
+          removed > 0 &&
+          ownerCurrent() &&
+          !downloads.any(manager.state.videos.contains)) {
+        _closeSelection();
+      }
+    }
+
+    return Row(children: [
+      Expanded(
+        child: MusicSongSelectionBar(
+          selected: [
+            for (final entry in selected)
+              if (_playlistSong(entry) case final song?) song,
+          ],
+          selectedCount: selected.length,
+          allSelected: allSelected,
+          onToggleAll: visible.isEmpty
+              ? null
+              : () {
+                  _cancelShare();
+                  setState(() {
+                    selection.clear();
+                    if (!allSelected) {
+                      selection.addEntries(
+                          visible.map((entry) => MapEntry(entry.id, entry)));
+                    }
+                  });
+                },
+          closeFocus: _closeSelectionFocus,
+          onClose: _closeSelection,
+          isCurrent: () => resolve() != null,
+          resolveOnDevice: resolve,
+          deviceLibrary: widget.library,
+          removal: manager == null ||
+                  downloads.isEmpty ||
+                  downloads.length != selected.length
+              ? null
+              : (
+                  label: locals.musicRemoveSelectedDownloads,
+                  run: () => deleteDownloads(manager),
+                ),
+        ),
+      ),
+      if (supportsMusicFileSharing)
+        IconButton(
+          tooltip: locals.musicShareSelectedAudio,
+          icon: const Icon(Icons.share_outlined),
+          onPressed: selected.length >= 2 && _shareCancellation == null
+              ? () => _shareSelection(selected)
+              : null,
+        ),
+    ]);
+  }
 
   _LocalMusicFilters get _activeFilters {
     final saved = widget.filters;
@@ -1604,7 +1719,9 @@ class _LocalTrackBrowserState extends State<_LocalTrackBrowser> {
     final material = MaterialLocalizations.of(context);
     final terms = musicSearchTerms(_search.text);
     final (artist: artist, album: album) = _activeFilters;
-    final canFilter = widget.saveFilters != null && !_savingFilters;
+    final selected = _selected;
+    final canFilter =
+        selected == null && widget.saveFilters != null && !_savingFilters;
     final visible = terms.isEmpty && artist == null && album == null
         ? widget.tracks
         : widget.tracks.where((track) {
@@ -1628,7 +1745,10 @@ class _LocalTrackBrowserState extends State<_LocalTrackBrowser> {
     final indexes = {
       for (final (index, track) in visible.indexed) ValueKey(track.id): index
     };
-    final selected = _selected;
+    if (selected != null) {
+      final trackIds = widget.tracks.map((entry) => entry.id).toSet();
+      selected.removeWhere((id, _) => !trackIds.contains(id));
+    }
     Widget tagFilter(String label, String? selected,
             {required bool isArtist}) =>
         InputChip(
@@ -1657,6 +1777,7 @@ class _LocalTrackBrowserState extends State<_LocalTrackBrowser> {
                   children: [
                     TextField(
                       controller: _search,
+                      enabled: selected == null,
                       textInputAction: TextInputAction.search,
                       onChanged: (_) => setState(() {}),
                       decoration: InputDecoration(
@@ -1675,9 +1796,7 @@ class _LocalTrackBrowserState extends State<_LocalTrackBrowser> {
                             isArtist: true),
                         tagFilter(locals.localMusicSortAlbum, album?.label,
                             isArtist: false),
-                        if (selected == null &&
-                            supportsMusicFileSharing &&
-                            widget.tracks.length >= 2)
+                        if (selected == null && visible.isNotEmpty)
                           TextButton.icon(
                             focusNode: _selectFocus,
                             onPressed: _startSelection,
@@ -1707,7 +1826,9 @@ class _LocalTrackBrowserState extends State<_LocalTrackBrowser> {
               return widget.row(visible, index,
                   selected: selected?.containsKey(entry.id),
                   onToggleSelection:
-                      selected == null ? null : () => _toggleSelection(entry));
+                      selected == null ? null : () => _toggleSelection(entry),
+                  onStartSelection:
+                      selected == null ? () => _startSelection(entry) : null);
             },
           ),
         ]);
@@ -1736,7 +1857,7 @@ class _LocalTrackBrowserState extends State<_LocalTrackBrowser> {
           if (!didPop && selecting) _closeSelection();
         },
         child: Column(children: [
-          if (selected != null) _selectionBar(locals, selected.length),
+          if (selected != null) _selectionBar(locals, selected, visible),
           Expanded(child: scroll),
         ]),
       ),
@@ -1750,6 +1871,7 @@ Widget _withSelectKeys(Widget child) => Shortcuts(shortcuts: {
     }, child: child);
 
 enum _TrackAction {
+  select,
   playNext,
   addToQueue,
   addToRequests,

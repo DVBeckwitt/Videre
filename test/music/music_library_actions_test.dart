@@ -10,6 +10,7 @@ import 'package:clipious/downloads/models/download_formats.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/downloads/models/music_download_format.dart';
 import 'package:clipious/downloads/models/music_offline_policy.dart';
+import 'package:clipious/downloads/services/explicit_music_download.dart';
 import 'package:clipious/downloads/views/components/downloaded_video.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
@@ -23,6 +24,7 @@ import 'package:clipious/music/services/music_listening_history.dart';
 import 'package:clipious/music/views/components/music_library_actions.dart';
 import 'package:clipious/music/views/components/music_playback_artwork.dart';
 import 'package:clipious/music/views/components/music_recommendation_collection.dart';
+import 'package:clipious/music/views/components/music_song_selection_bar.dart';
 import 'package:clipious/music/views/screens/music.dart';
 import 'package:clipious/music/views/screens/music_automatic_collections.dart';
 import 'package:clipious/player/models/playback_queue.dart';
@@ -1798,7 +1800,7 @@ void main() {
   }
 
   testWidgets(
-      'holding a recommendation collection sliver row opens song actions',
+      'recommendation row hold selects and overflow still opens song actions',
       (tester) async {
     const tracks = [
       MusicTrack(
@@ -1829,6 +1831,14 @@ void main() {
     await tester.longPress(row);
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
+    expect(find.text('1 selected'), findsOneWidget);
+    expect(current.calls, isEmpty);
+    expect(current.state.position, position);
+    await tester.tap(find.byTooltip('Close'));
+    await tester.pumpAndSettle();
+    await tester.tap(
+        find.descendant(of: row, matching: find.byTooltip('Music actions')));
+    await tester.pumpAndSettle();
     for (final action in ['play', 'play-next', 'add-to-queue']) {
       expect(find.byKey(ValueKey('music-song-$action')), findsOneWidget);
     }
@@ -2181,6 +2191,48 @@ void main() {
 
   Finder membershipRow(String id) =>
       find.byKey(ValueKey(('music-playlist-membership', id)));
+
+  testWidgets(
+      'adding selected downloads pins the exact file in a catalog queue',
+      (tester) async {
+    final file = DownloadedVideo(
+        videoId: second.videoId,
+        title: second.title!,
+        profileId: db.profileId,
+        lengthSeconds: 90,
+        quality: 'best',
+        downloadComplete: true,
+        audioOnly: true,
+        musicMetadata: second.musicMetadata);
+    await tester.runAsync(() => db.upsertDownload(file));
+    final fingerprint = musicDownloadFileFingerprint(file, 'a0' * 32)!;
+    var completed = 0;
+    final current = await showSongActions(tester,
+        initial: playingPlaylist(),
+        body: (_) => MusicSongSelectionBar(
+            selected: [second.copyWith(explicitMusicDownload: fingerprint)],
+            allSelected: false,
+            onToggleAll: null,
+            onClose: () => completed++,
+            isCurrent: () => true,
+            resolveDownloads: (_) => [file]));
+    current.enqueueZone = await tester.runAsync(() async => Zone.current);
+    final actions = find.byTooltip('Actions for selected songs');
+    await tester.tap(actions);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Add to queue'));
+    await waitForSaveFlow(tester, () => completed == 1, 'Queue insertion');
+    final state = current.state;
+    expect(state.videos, hasLength(3));
+    final added = state.videos.last;
+    expect(added.videoId, second.videoId);
+    expect(added.explicitMusicDownload, fingerprint);
+    expect(state.playQueue, [second.videoId, playbackQueueId(added)]);
+    expect(state.currentlyPlaying, same(first));
+    expect(state.position, const Duration(seconds: 37));
+    expect(current.calls, isEmpty);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
 
   Future<void> openMembershipEditor(WidgetTester tester) async {
     await showSongActions(tester);

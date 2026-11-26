@@ -225,6 +225,56 @@ void main() {
         findsOneWidget);
   }, variant: android);
 
+  testWidgets('cached multi-select confirms exact renditions in display order',
+      (tester) async {
+    final first = _song('aaaaaaaaaaa', 'First song', 'a');
+    final middle = _song('bbbbbbbbbbb', 'Untouched song', 'b');
+    final last = _song('ccccccccccc', 'Last song', 'c');
+    final rows = [first, middle, last];
+    final removed = <String>[];
+    messenger.setMockMethodCallHandler(_channel, (call) async {
+      if (call.method == 'cachedMusicSongs') return rows;
+      expect(call.method, 'removeCachedMusicSong');
+      final rendition = call.arguments['rendition'] as String;
+      removed.add(rendition);
+      rows.removeWhere((song) => song['rendition'] == rendition);
+      return 'removed';
+    });
+
+    await open(tester);
+    await tester.pumpAndSettle();
+    await tester.longPress(find.text('Last song'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('First song'));
+    await tester.pumpAndSettle();
+    expect(find.text('2 selected'), findsOneWidget);
+    expect(player.selections, isEmpty);
+
+    Future<void> openConfirmation() async {
+      await tester.tap(find.byTooltip('Actions for selected songs'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Remove from playback cache'));
+      await tester.pumpAndSettle();
+      expect(find.text('Remove these 2 songs from the playback cache?'),
+          findsOneWidget);
+    }
+
+    await openConfirmation();
+    await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+    await tester.pumpAndSettle();
+    expect(removed, isEmpty);
+    expect(find.text('2 selected'), findsOneWidget);
+
+    await openConfirmation();
+    await tester
+        .tap(find.widgetWithText(TextButton, 'Remove from playback cache'));
+    await tester.pumpAndSettle();
+    expect(removed, [first['rendition'], last['rendition']]);
+    expect(find.text('Untouched song'), findsOneWidget);
+    expect(find.text('First song'), findsNothing);
+    expect(find.text('Last song'), findsNothing);
+  }, variant: android);
+
   testWidgets('Removal defers while a cached rendition is playing or in use',
       (tester) async {
     final first = _song('aaaaaaaaaaa', 'First song', 'a');

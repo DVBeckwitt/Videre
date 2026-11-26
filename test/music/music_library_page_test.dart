@@ -1494,7 +1494,7 @@ void main() {
   }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
 
   testWidgets(
-      'filtered playlist selection plays duplicate occurrences in source order',
+      'filtered playlist selection plays duplicate occurrences in display order',
       (tester) async {
     const playlist = Playlist(
         playlistId: 'local:takes',
@@ -1530,6 +1530,12 @@ void main() {
     await show(tester, downloads: downloads);
     await tester.tap(find.text(playlist.title));
     await tester.pumpAndSettle();
+    await chooseOrder(
+        tester,
+        'music-playlist-sort',
+        'Title',
+        () => settings.state.settings.values
+            .any((setting) => setting.value == 'title:ascending'));
     await tester.tap(find.byTooltip('Search playlist'));
     await tester.pumpAndSettle();
     final query = find.byKey(const ValueKey('music-local-playlist-query'));
@@ -1567,9 +1573,9 @@ void main() {
     await tester.tap(find.text('Play'));
     await tester.pumpAndSettle();
     expect(player.online.map((entry) => entry.musicMetadata!.title),
-        ['First take', 'Bridge', 'Last take']);
+        ['Bridge', 'First take', 'Last take']);
     expect(player.online.map((entry) => entry.videoId),
-        ['recording01', 'bridge00001', 'recording01']);
+        ['bridge00001', 'recording01', 'recording01']);
     expect(player.source, isNull,
         reason: 'A subset cannot own the progress of the whole playlist.');
     expect(player.learningSource, PlaylistReference.forPlaylist(playlist, db));
@@ -3602,6 +3608,114 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets(
+      'Library song selection adds in display order and confirms bookmark removal',
+      (tester) async {
+    final destination = (await tester.runAsync(() async {
+      for (final (id, title) in [
+        ('zulu0000001', 'Zulu'),
+        ('middle00001', 'Middle'),
+        ('alpha000001', 'Alpha'),
+      ]) {
+        await library.save(MusicLibraryEntry(
+            kind: MusicLibraryKind.song,
+            id: id,
+            title: title,
+            subtitle: 'Band'));
+      }
+      return service
+          .createLocalPlaylistWithEntries('Selection destination', []);
+    }))!;
+    player.showCurrentSong(song);
+    await show(tester);
+    await tester.tap(find.byKey(const ValueKey('music-library-layout')));
+    await tester.pumpAndSettle();
+
+    Future<void> selectPair() async {
+      await tester.longPress(find.text('Zulu'));
+      await tester.pumpAndSettle();
+      expect(find.text('1 selected'), findsOneWidget);
+      final second = find.widgetWithText(ListTile, 'Alpha');
+      expect(tester.widget<ListTile>(second).selected, isFalse);
+      await tester.ensureVisible(second);
+      await tester.tap(second);
+      await tester.pumpAndSettle();
+      expect(player.online, isEmpty);
+      expect(tester.widget<ListTile>(second).selected, isTrue);
+      expect(find.text('2 selected'), findsOneWidget);
+    }
+
+    Future<void> choose(String label) async {
+      await tester
+          .tap(find.byKey(const ValueKey('music-playlist-selection-actions')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(label));
+      await tester.pumpAndSettle();
+    }
+
+    await selectPair();
+    await choose('Add to queue');
+    expect(player.queuedPlaylists.single.next, isFalse);
+    expect(
+      player.queuedPlaylists.single.videos.map((entry) => entry.videoId),
+      ['alpha000001', 'zulu0000001'],
+    );
+    expect(player.state.currentlyPlaying?.videoId, song.videoId);
+
+    await selectPair();
+    await choose('Save to playlist');
+    Iterable<Video> saved() => service
+        .getLocalPlaylists()
+        .singleWhere((list) => list.playlistId == destination)
+        .videos;
+    await tester.runAsync(() async {
+      await tester.tap(find.text('Selection destination').last);
+      await waitFor(() => saved().length == 2);
+      await tester.pumpAndSettle();
+    });
+    await tester.pumpAndSettle();
+    expect(
+        saved().map((entry) => entry.videoId), ['alpha000001', 'zulu0000001']);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(find.text('2 selected'), findsNothing);
+
+    await selectPair();
+    await tester.tap(find.text('Zulu'));
+    await tester.pumpAndSettle();
+    expect(find.text('1 selected'), findsOneWidget);
+    await choose('Remove from Saved Songs');
+    expect(find.text('Remove this song from Saved Songs?'), findsOneWidget);
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    expect(find.text('1 selected'), findsOneWidget);
+    expect(library.entries, hasLength(3));
+
+    await choose('Remove from Saved Songs');
+    await tester.runAsync(() async {
+      await tester
+          .tap(find.widgetWithText(FilledButton, 'Remove from Saved Songs'));
+      await tester.pumpAndSettle();
+      await waitFor(() => library.entries.length == 2);
+    });
+    await tester.pumpAndSettle();
+    expect(find.text('Alpha'), findsNothing);
+    expect(find.text('1 selected'), findsNothing);
+    expect(find.text('Middle'), findsOneWidget);
+    expect(find.text('Zulu'), findsOneWidget);
+    expect(
+        saved().map((entry) => entry.videoId), ['alpha000001', 'zulu0000001']);
+
+    await tester.longPress(find.text('Zulu'));
+    await tester.pumpAndSettle();
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(find.text('1 selected'), findsNothing);
+    await tester.tap(find.text('Middle'));
+    await tester.pumpAndSettle();
+    expect(player.online[player.start!].videoId, 'middle00001');
+  });
+
   Future<void> seedChorusSongs(WidgetTester tester) async {
     await tester.runAsync(() => db.saveSetting(SettingsValue(
         musicLibrarySettingName,
@@ -5236,11 +5350,11 @@ void main() {
         await tester.tap(
             find.byKey(const ValueKey('music-playlist-selection-actions')));
         await tester.pumpAndSettle();
-        await tester.tap(find.text('Remove downloads'));
+        await tester.tap(find.text('Delete downloads'));
         await tester.pumpAndSettle();
         expect(find.byType(AlertDialog), findsOneWidget);
         expect(
-            find.text('Remove 2 downloads from this device?'), findsOneWidget);
+            find.text('Delete 2 downloads from this device?'), findsOneWidget);
         expect(manager.capturedApprovals, hasLength(prior + 1));
         final approval = manager.capturedApprovals.last;
         expect(approval.rows, [ready, queued]);
@@ -5268,7 +5382,7 @@ void main() {
       await tester.tap(find
           .descendant(
               of: find.byType(AlertDialog),
-              matching: find.text('Remove downloads'))
+              matching: find.text('Delete downloads'))
           .last);
       await tester.pumpAndSettle();
       expect(manager.capturedApprovals, hasLength(replaced ? 1 : 2));
