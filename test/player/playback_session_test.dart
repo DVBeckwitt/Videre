@@ -17,9 +17,13 @@ import 'package:clipious/music/models/local_music_browse.dart';
 import 'package:clipious/music/models/local_music_track.dart';
 import 'package:clipious/music/models/music_song_tap_queue_scope.dart';
 import 'package:clipious/music/models/music_background_playback.dart';
+import 'package:clipious/music/models/music_library_entry.dart';
+import 'package:clipious/music/models/music_track.dart';
 import 'package:clipious/music/models/on_device_music_entry.dart';
 import 'package:clipious/music/models/song_transition.dart';
 import 'package:clipious/music/services/local_music_library.dart';
+import 'package:clipious/music/services/music_catalog_service.dart';
+import 'package:clipious/music/services/music_library_service.dart';
 import 'package:clipious/music/services/music_listening_history.dart';
 import 'package:clipious/music/services/cached_music.dart';
 import 'package:clipious/player/audio_playback_sources.dart';
@@ -101,6 +105,50 @@ class _GuestService extends Service {
         ? throw StateError('Metadata unavailable')
         : Video(videoId: id);
   }
+}
+
+class _MediaRadioCatalog extends MusicCatalogService {
+  final requests = <String>[];
+  final called = Completer<void>();
+  Future<List<MusicTrack>>? held;
+
+  static const related = [
+    MusicTrack(
+        videoId: 'radio-match', title: 'Related song', artists: ['Artist']),
+  ];
+
+  @override
+  Future<List<MusicTrack>> getRelatedSongs(Iterable<String> seedIds,
+      {bool Function()? isCurrent}) async {
+    requests.add(seedIds.single);
+    if (!called.isCompleted) called.complete();
+    final pending = held;
+    return pending == null ? related : await pending;
+  }
+}
+
+String _mediaAction(MediaHandler handler, String label) =>
+    handler.playbackState.value.controls
+        .singleWhere((control) => control.label == label)
+        .customAction!
+        .name;
+
+Iterable<String> _mediaActionLabels(MediaHandler handler) =>
+    handler.playbackState.value.controls
+        .where((control) => control.customAction != null)
+        .map((control) => control.label);
+
+class _MediaActionPlayer extends PlayerCubit {
+  _MediaActionPlayer(super.initialState, super.settings);
+
+  @override
+  Future<void> onReady() async {}
+
+  void reportDecoderPlay() => setEvent(
+      const MediaEvent(state: MediaState.playing, type: MediaEventType.play));
+
+  void reportDecoderPause() => setEvent(
+      const MediaEvent(state: MediaState.pause, type: MediaEventType.pause));
 }
 
 class _RecordingHistoryService extends _GuestService {
@@ -1353,14 +1401,15 @@ void main() {
           controls.where((control) => control.customAction == null), transport);
       expect(
           handler.playbackState.value.androidCompactActionIndices, [0, 1, 3]);
-      final firstAction = controls[2].customAction!.name;
+      final firstAction = _mediaAction(handler, 'Save to playlist');
       final beforeTap = player.state;
       await handler.customAction(firstAction);
       expect(player.state, same(beforeTap));
+      player.musicMediaSave.open();
+      expect(player.musicMediaSave.hasReadyRequest, isTrue);
 
       await player.skipToVideo(1);
-      final secondAction =
-          handler.playbackState.value.controls[2].customAction!.name;
+      final secondAction = _mediaAction(handler, 'Save to playlist');
       expect(secondAction, isNot(firstAction));
       player.musicMediaSave.open();
       expect(player.musicMediaSave.take()?.entry.videoId, first.videoId);
@@ -1377,6 +1426,148 @@ void main() {
       expect(player.state.currentQueueId, second.videoId);
       expect(player.state.offlineVideos.map((entry) => entry.videoId),
           [first.videoId, second.videoId]);
+    });
+
+    test(
+        'media Like tracks the library and rejects stale occurrence and service taps',
+        () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+      await player.close();
+      player = _SessionPlayer(PlayerState.init(null), settings);
+      player.audioSession = await AudioSession.instance;
+      final handler = app_main.mediaHandler = MediaHandler(player);
+      final library = MusicLibraryService.forProfile(db, db.profileId);
+      const first = DownloadedVideo(
+          videoId: 'first-song1',
+          title: 'First song',
+          lengthSeconds: 100,
+          quality: 'audio',
+          downloadComplete: true,
+          audioOnly: true,
+          musicMetadata: MusicMetadata(title: 'First song', artist: 'Artist'));
+      final other = first.copyWith(videoId: 'other-song2', title: 'Other song');
+      await db.upsertDownload(first);
+      await db.upsertDownload(other);
+      handler.playbackState.add(PlaybackState(
+        controls: [
+          MediaControl.skipToPrevious,
+          MediaControl.play,
+          MediaControl.stop,
+          MediaControl.skipToNext,
+        ],
+        processingState: AudioProcessingState.ready,
+      ));
+      await player.playOfflineVideos([first, other, first], fromMusic: true);
+      expect(_mediaActionLabels(handler), ['Like song', 'Save to playlist']);
+      expect(
+          handler.playbackState.value.androidCompactActionIndices, [0, 1, 3]);
+      final like = _mediaAction(handler, 'Like song');
+      await handler.customAction(like);
+      expect(library.isLiked(first.videoId), isTrue);
+      final initialUnlike = _mediaAction(handler, 'Unlike song');
+
+      await player.skipToVideo(2);
+      final repeatedUnlike = _mediaAction(handler, 'Unlike song');
+      expect(repeatedUnlike, isNot(initialUnlike));
+      await handler.customAction(initialUnlike);
+      expect(library.isLiked(first.videoId), isTrue);
+
+      final priorService = service;
+      service = _GuestService();
+      await handler.customAction(repeatedUnlike);
+      expect(library.isLiked(first.videoId), isTrue);
+      service = priorService;
+      app.setGlobalLoading(true);
+      await handler.customAction(repeatedUnlike);
+      expect(library.isLiked(first.videoId), isTrue);
+      app.setGlobalLoading(false);
+      await handler.customAction(repeatedUnlike);
+      expect(library.isLiked(first.videoId), isFalse);
+
+      final live = _mediaAction(handler, 'Like song');
+      expect(live, isNot(like));
+      await handler.customAction(like);
+      expect(library.isLiked(first.videoId), isFalse);
+      await library.setSongLiked(
+          MusicLibraryEntry.song(catalogMusicVideoForPlayback(first)!),
+          liked: true);
+      final lastUnlike = _mediaAction(handler, 'Unlike song');
+      expect(lastUnlike, isNot(repeatedUnlike));
+      expect(library.isLiked(other.videoId), isFalse);
+
+      final database = db as SembastSqfDb;
+      final originalProfile = database.profileId;
+      final nextProfile = await database.createProfile('Another person');
+      await database.useProfile(nextProfile.id);
+      await handler.customAction(lastUnlike);
+      expect(library.isLiked(first.videoId), isTrue);
+      final nextLibrary = MusicLibraryService.forProfile(db, nextProfile.id);
+      expect(nextLibrary.isLiked(first.videoId), isFalse);
+      await database.useProfile(originalProfile);
+    });
+
+    test(
+        'media Radio dispatches the displayed seed and rejects a stale tap or result',
+        () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+      final previousCatalog = musicCatalogService;
+      final catalog = _MediaRadioCatalog();
+      musicCatalogService = catalog;
+      addTearDown(() => musicCatalogService = previousCatalog);
+      await player.close();
+      final radioPlayer = _MediaActionPlayer(PlayerState.init(null), settings);
+      addTearDown(radioPlayer.close);
+      radioPlayer.audioSession = await AudioSession.instance;
+      final handler = app_main.mediaHandler = MediaHandler(radioPlayer);
+      const first = Video(
+          videoId: 'radio-first',
+          title: 'First song',
+          lengthSeconds: 100,
+          musicMetadata: MusicMetadata(title: 'First song', artist: 'Artist'));
+      final second = first.copyWith(
+          videoId: 'radio-other',
+          title: 'Second song',
+          musicMetadata:
+              const MusicMetadata(title: 'Second song', artist: 'Artist'));
+      await radioPlayer
+          .playVideo([first, second], fromMusic: true, audio: true);
+      radioPlayer.reportDecoderPlay();
+      expect(_mediaActionLabels(handler), ['Like song', 'Start related radio']);
+      final firstRadio = _mediaAction(handler, 'Start related radio');
+      radioPlayer.pause();
+      radioPlayer.reportDecoderPause();
+      expect(_mediaActionLabels(handler), ['Like song', 'Save to playlist']);
+      await handler.customAction(firstRadio);
+      expect(catalog.requests, isEmpty);
+      radioPlayer.play();
+      radioPlayer.reportDecoderPlay();
+
+      final held = Completer<List<MusicTrack>>();
+      catalog.held = held.future;
+      final inFlight = handler.customAction(firstRadio);
+      await catalog.called.future.timeout(const Duration(seconds: 2));
+      expect(catalog.requests, [first.videoId]);
+
+      await radioPlayer.skipToVideo(1);
+      radioPlayer.reportDecoderPlay();
+      final secondRadio = _mediaAction(handler, 'Start related radio');
+      expect(secondRadio, isNot(firstRadio));
+      await handler.customAction(firstRadio);
+      expect(catalog.requests, [first.videoId]);
+      held.complete(_MediaRadioCatalog.related);
+      await inFlight;
+      expect(radioPlayer.state.videos.map((entry) => entry.videoId),
+          [first.videoId, second.videoId]);
+
+      catalog.held = null;
+      await handler.customAction(secondRadio);
+      expect(catalog.requests, [first.videoId, second.videoId]);
+      expect(radioPlayer.state.currentlyPlaying?.videoId, second.videoId);
+      expect(radioPlayer.state.videos.map((entry) => entry.videoId),
+          [second.videoId, 'radio-match']);
+      expect(radioPlayer.musicQueueTitle, 'Radio · Second song');
     });
 
     test('local enqueue preserves an active online queue', () async {

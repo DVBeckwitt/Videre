@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:ui' show Locale, PlatformDispatcher;
 
 import 'package:audio_service/audio_service.dart';
-import 'package:clipious/music/services/music_media_save.dart';
+import 'package:clipious/music/services/music_media_controls.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:logging/logging.dart';
@@ -511,8 +511,8 @@ class MediaHandler extends BaseAudioHandler with SeekHandler {
   @override
   Future<dynamic> customAction(String name,
       [Map<String, dynamic>? extras]) async {
-    if (name.startsWith(musicMediaSaveActionPrefix)) {
-      PlayerCubit.requestMediaPlaylistSave(this, name);
+    if (isMusicMediaAction(name)) {
+      await PlayerCubit.dispatchMusicMediaAction(this, name);
       return;
     }
     return super.customAction(name, extras);

@@ -274,6 +274,11 @@ With the phone locked, queue autoplay follows the same order and song
 transition settings. Use the lock-screen media controls to pause, resume
 or skip a song.
 
+On Android 13 and later, the expanded media controls can also like or unlike
+the current song. While an eligible online song is playing, choose **Start
+related radio** to play related songs after it. If the card runs out of action
+slots, pause playback to see **Save to playlist**.
+
 For rewinding within a song on Android, the audio player keeps up to 90 seconds
 of recently played audio in memory. The available window can be shorter for
 high-bitrate tracks. Seeking further back uses the normal playback source.
