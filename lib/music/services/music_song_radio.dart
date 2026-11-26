@@ -7,6 +7,8 @@ import 'package:clipious/utils/video_post_processing.dart'
 final _onlineSongId = RegExp(r'^[a-zA-Z0-9_-]{11}$');
 const _relatedSongLimit = 6;
 
+enum MusicSongRadioResult { started, empty, unavailable, superseded }
+
 bool canUseOnlineMusicSong(Video song) =>
     _onlineSongId.hasMatch(song.videoId) &&
     song.musicMetadata != null &&

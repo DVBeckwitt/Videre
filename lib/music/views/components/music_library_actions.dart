@@ -1112,6 +1112,16 @@ class MusicLibraryActions extends StatefulWidget {
       final selection = player.musicSelectionRequestRevision;
       final transport = player.transportIntentRevision;
       final preview = action == _LibraryAction.preview;
+      final playlist = player.playlistGeneration;
+      final queue = player.musicQueueRevision;
+      bool operationCurrent() =>
+          current() &&
+          (preview ||
+              (playlist == player.playlistGeneration &&
+                  queue == player.musicQueueRevision));
+      final radioTitle =
+          preview ? null : locals.musicRadioTitle(song.musicMetadata!.title);
+      final keepMounted = !preview && player.isCurrentMusicSongRadioSeed(song);
       ({Video song, bool Function() isCurrent})? fullSong;
       final songs = await showDialog<List<Video>>(
           context: context,
@@ -1121,8 +1131,12 @@ class MusicLibraryActions extends StatefulWidget {
               player: player,
               preview: preview,
               isSessionCurrent: () => session.isCurrent,
-              isCurrent: current,
+              isCurrent: operationCurrent,
               sessionChanges: session.app.stream,
+              startCurrentRadio: keepMounted
+                  ? (isCurrent) => player.startCurrentMusicSongRadio(song,
+                      queueTitle: radioTitle!, isCurrent: isCurrent)
+                  : null,
               previewSaveAction: (song, isCurrent) => _PreviewSaveAction(
                   key: ObjectKey(song),
                   session: session,
@@ -1161,19 +1175,18 @@ class MusicLibraryActions extends StatefulWidget {
       }
       if (!context.mounted ||
           songs == null ||
-          !current() ||
+          !operationCurrent() ||
           source?.isCurrent == false ||
           player.playbackOccurrenceRevision != occurrence ||
           player.musicSelectionRequestRevision != selection ||
           player.transportIntentRevision != transport) {
         return;
       }
-      final title = locals.musicRadioTitle(song.musicMetadata!.title);
       if (inPlayer && isTv) {
         await player.playVideo(songs,
-            queueTitle: title, audio: true, fromMusic: true);
+            queueTitle: radioTitle, audio: true, fromMusic: true);
       } else {
-        await MusicScreen.playTracks(context, songs, queueTitle: title);
+        await MusicScreen.playTracks(context, songs, queueTitle: radioTitle);
       }
     } else if (action == _LibraryAction.startMix) {
       await MusicScreen.playSeededMix(context, videos.single,

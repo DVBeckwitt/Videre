@@ -25,6 +25,7 @@ import 'package:clipious/music/views/components/music_playback_artwork.dart';
 import 'package:clipious/music/views/components/music_recommendation_collection.dart';
 import 'package:clipious/music/views/screens/music.dart';
 import 'package:clipious/music/views/screens/music_automatic_collections.dart';
+import 'package:clipious/player/models/media_event.dart';
 import 'package:clipious/player/models/playback_queue.dart';
 import 'package:clipious/player/models/named_music_queue.dart';
 import 'package:clipious/player/states/player.dart';
@@ -753,6 +754,22 @@ void main() {
         position: const Duration(seconds: 37),
       );
 
+  PlayerState mountedRadioPlaylist({bool playing = true}) {
+    final mounted = first.copyWith(
+      queueEntryId: '${first.videoId}#1',
+      playbackSourceId: Object(),
+      lengthSeconds: 120,
+    );
+    return playingPlaylist().copyWith(
+      isPlaying: playing,
+      isMini: false,
+      currentlyPlaying: mounted,
+      videos: [first, mounted, second],
+      playedVideos: [playbackQueueId(first)],
+      mediaEvent: const MediaEvent(state: MediaState.ready),
+    );
+  }
+
   _SongOperationCatalog useSongOperationCatalog() {
     final previous = musicCatalogService;
     final next = _SongOperationCatalog();
@@ -764,6 +781,13 @@ void main() {
   Future<void> openPreview(WidgetTester tester, {bool menuOpen = false}) async {
     if (!menuOpen) await openSongMenu(tester);
     await tester.tap(find.text('Preview song'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+  }
+
+  Future<void> openRadio(WidgetTester tester, {bool menuOpen = false}) async {
+    if (!menuOpen) await openSongMenu(tester);
+    await tester.tap(find.text('Start related radio'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
   }
@@ -1014,14 +1038,12 @@ void main() {
     expect(current.state.playQueue.toList(), [second.videoId]);
   });
 
-  testWidgets('related radio starts the seed and at most six unique songs',
+  testWidgets('related radio starts a different occurrence of the same song',
       (tester) async {
     final catalog = useSongOperationCatalog();
-    final current = await showSongActions(tester, initial: playingPlaylist());
-    await openSongMenu(tester);
-    await tester.tap(find.text('Start related radio'));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 300));
+    final initial = mountedRadioPlaylist();
+    final current = await showSongActions(tester, initial: initial);
+    await openRadio(tester);
     expect(catalog.seeds, [first.videoId]);
     expect(catalog.radioIsCurrent!(), isTrue);
     final matches = List.generate(
@@ -1037,18 +1059,65 @@ void main() {
     ]);
     await tester.pumpAndSettle();
     expect(current.calls.single.audio, isTrue);
+    expect(current.calls.single.fromMusic, isTrue);
+    expect(current.calls.single.startAt, Duration.zero);
+    expect(playbackQueueId(current.calls.single.videos.first),
+        playbackQueueId(first));
     expect(current.calls.single.videos.map((video) => video.videoId),
         [first.videoId, ...matches.take(6).map((track) => track.videoId)]);
   });
 
+  for (final playing in [true, false]) {
+    testWidgets('Now Playing starts radio with playing=$playing at 37 seconds',
+        (tester) async {
+      final catalog = useSongOperationCatalog();
+      final initial = mountedRadioPlaylist(playing: playing);
+      final mounted = initial.currentlyPlaying!;
+      final current = await showSongActions(tester,
+          initial: initial,
+          body: (_) => Builder(
+              builder: (context) => TextButton(
+                  onPressed: () => MusicLibraryActions.showPlayingSongMenu(
+                      context, mounted,
+                      television: false),
+                  child: const Text('Now Playing actions'))));
+      final occurrence = current.playbackOccurrenceRevision;
+      final positionGeneration = current.playbackPositionGeneration;
+      await tester.tap(find.text('Now Playing actions'));
+      await tester.pumpAndSettle();
+      await openRadio(tester, menuOpen: true);
+      expect(catalog.seeds, [mounted.videoId]);
+      expect(current.state, same(initial));
+
+      const related = MusicTrack(videoId: 'related0001', title: 'Related');
+      catalog.related.complete(const [related]);
+      await tester.pumpAndSettle();
+
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(current.calls, isEmpty);
+      expect(current.state.currentlyPlaying, same(mounted));
+      expect(current.state.currentQueueId, playbackQueueId(mounted));
+      expect(current.playbackOccurrenceRevision, occurrence);
+      expect(current.playbackPositionGeneration, positionGeneration);
+      expect(current.state.position, initial.position);
+      expect(current.state.isPlaying, playing);
+      expect(current.requestedPlaying, playing);
+      expect(current.state.mediaCommand, same(initial.mediaCommand));
+      expect(current.state.videos.map(playbackQueueId),
+          [playbackQueueId(mounted), related.videoId]);
+      expect(current.state.playedVideos, isEmpty);
+      expect(current.state.playQueue, [related.videoId]);
+      expect(current.musicQueueTitle, 'Radio · First song');
+    });
+  }
+
   testWidgets('cancelling related lookup leaves the queue intact',
       (tester) async {
     final catalog = useSongOperationCatalog();
-    final current = await showSongActions(tester, initial: playingPlaylist());
-    await openSongMenu(tester);
-    await tester.tap(find.text('Start related radio'));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 300));
+    final initial = mountedRadioPlaylist();
+    final current = await showSongActions(tester,
+        initial: initial, body: (_) => songRow(initial.currentlyPlaying!));
+    await openRadio(tester);
     await tester.tap(find.text('Cancel'));
     await tester.pumpAndSettle();
     expect(catalog.radioIsCurrent!(), isFalse);
@@ -1056,8 +1125,81 @@ void main() {
         .complete(const [MusicTrack(videoId: 'secondsong2', title: 'Related')]);
     await tester.pumpAndSettle();
     expect(current.calls, isEmpty);
-    expect(current.state.playQueue.toList(), [second.videoId]);
+    expect(current.state, same(initial));
   });
+
+  testWidgets('a queue edit prevents the current radio lookup from applying',
+      (tester) async {
+    final catalog = useSongOperationCatalog();
+    final initial = mountedRadioPlaylist();
+    final current = await showSongActions(tester,
+        initial: initial, body: (_) => songRow(initial.currentlyPlaying!));
+    await openRadio(tester);
+    expect(catalog.radioIsCurrent!(), isTrue);
+    final playlistGeneration = current.playlistGeneration;
+    current.playVideoNext(const Video(videoId: 'queuedafter', title: 'Queued'));
+    final edited = current.state;
+    expect(edited.playQueue, ['queuedafter', second.videoId]);
+    expect(current.playlistGeneration, playlistGeneration);
+
+    catalog.related
+        .complete(const [MusicTrack(videoId: 'related0001', title: 'Related')]);
+    await tester.pumpAndSettle();
+    expect(catalog.radioIsCurrent!(), isFalse);
+    expect(current.calls, isEmpty);
+    expect(current.state, same(edited));
+  });
+
+  testWidgets(
+      'a profile switch prevents the current radio lookup from applying',
+      (tester) async {
+    final catalog = useSongOperationCatalog();
+    final next =
+        (await tester.runAsync(() => db.createProfile('Another person')))!;
+    final initial = mountedRadioPlaylist();
+    final current = await showSongActions(tester,
+        initial: initial, body: (_) => songRow(initial.currentlyPlaying!));
+    await openRadio(tester);
+    expect(catalog.radioIsCurrent!(), isTrue);
+
+    await tester.runAsync(() async {
+      await db.useProfile(next.id);
+      app.profileChanged(next.id);
+    });
+    catalog.related
+        .complete(const [MusicTrack(videoId: 'related0001', title: 'Related')]);
+    await tester.pumpAndSettle();
+    expect(catalog.radioIsCurrent!(), isFalse);
+    expect(find.byType(AlertDialog), findsNothing);
+    expect(current.calls, isEmpty);
+    expect(current.state, same(initial));
+  });
+
+  for (final failed in [false, true]) {
+    testWidgets(
+        'an ${failed ? 'unsuccessful' : 'empty'} current radio lookup '
+        'leaves playback alone', (tester) async {
+      final catalog = useSongOperationCatalog();
+      final initial = mountedRadioPlaylist(playing: false);
+      final current = await showSongActions(tester,
+          initial: initial, body: (_) => songRow(initial.currentlyPlaying!));
+      await openRadio(tester);
+
+      if (failed) {
+        catalog.related.completeError(StateError('Lookup unavailable'));
+      } else {
+        catalog.related.complete(const []);
+      }
+      await tester.pumpAndSettle();
+      expect(
+          find.text(failed
+              ? 'Related songs couldn’t be loaded.'
+              : 'No related songs are available for this song.'),
+          findsOneWidget);
+      expect(current.calls, isEmpty);
+      expect(current.state, same(initial));
+    });
+  }
 
   testWidgets('Play full song cancels preview loading and starts Music at zero',
       (tester) async {

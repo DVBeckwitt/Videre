@@ -68,6 +68,7 @@ import '../../music/services/local_music_library.dart';
 import '../../music/services/music_home_widget.dart';
 import '../../music/services/music_library_service.dart';
 import '../../music/services/music_catalog_service.dart';
+import '../../music/services/music_song_radio.dart';
 import '../../music/services/music_lyrics_widget.dart';
 import '../../music/services/music_listening_history.dart';
 import '../../music/services/cached_music.dart';
@@ -513,6 +514,10 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         : reference.displayTitle ?? _musicQueueTitle;
   }
 
+  int _musicQueueRevision = 0;
+  int get musicQueueRevision => _musicQueueRevision;
+  int _musicSongRadioRequest = 0;
+
   int get playlistGeneration => _playlistGeneration;
   int get playbackOccurrenceRevision => _videoSwitchGeneration;
   int get transportIntentRevision => _transportIntentRevision;
@@ -574,7 +579,9 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   StreamSubscription<Object?>? _carBrowseSubscription;
   StreamSubscription<bool>? _carQueueLockSubscription;
 
-  Object? get androidAutoSession {
+  Object? get androidAutoSession => _playbackSessionScope;
+
+  Object? get _playbackSessionScope {
     final app = settings.appCubit.state;
     final proxy = NetworkProxy.instance;
     if (isClosed ||
@@ -1517,8 +1524,9 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       bool complete = true,
       String? queueTitle,
       String? passageQueueId,
-      MusicCardOrigin? cardOrigin}) {
-    if (!_isDisposing) _retireSleepFade();
+      MusicCardOrigin? cardOrigin,
+      bool retainSleepFade = false}) {
+    if (!_isDisposing && !retainSleepFade) _retireSleepFade();
     _mediaSessionHandler?.clearCarQueue();
     _musicMix = null;
     _musicMixSteering = MusicMixSteering.balanced;
@@ -1745,10 +1753,13 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     if (before.currentQueueId != after.currentQueueId && after.isAudio) {
       _adjacentMusic.recentlyPlayed = before.currentlyPlaying;
     }
-    if ((before.offlineVideos != after.offlineVideos ||
-            before.videos != after.videos ||
-            before.playQueue != after.playQueue ||
-            before.playedVideos != after.playedVideos ||
+    final queueChanged = before.offlineVideos != after.offlineVideos ||
+        before.videos != after.videos ||
+        before.playQueue != after.playQueue ||
+        before.playedVideos != after.playedVideos ||
+        before.musicQueueShuffled != after.musicQueueShuffled;
+    if (queueChanged) _musicQueueRevision++;
+    if ((queueChanged ||
             before.isHidden != after.isHidden ||
             before.isClosing != after.isClosing ||
             before.isAudio != after.isAudio) &&
@@ -6912,6 +6923,115 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
           _bindPlaylist(null, [], queueTitle: queueTitle);
           _requestedPlaying = null;
         });
+  }
+
+  bool isCurrentMusicSongRadioSeed(Video seed) {
+    final mounted = state.currentlyPlaying;
+    return state.isAudio &&
+        mounted != null &&
+        mounted.videoId == seed.videoId &&
+        playbackQueueId(mounted) == playbackQueueId(seed);
+  }
+
+  /// Replaces the current Music queue with the mounted seed and its radio tail.
+  /// The caller can additionally guard a row, route, or external action token.
+  Future<MusicSongRadioResult> startCurrentMusicSongRadio(
+    Video seed, {
+    required String queueTitle,
+    bool Function()? isCurrent,
+    MusicCatalogService? catalog,
+  }) async {
+    final session = _playbackSessionScope;
+    final mounted = state.currentlyPlaying;
+    if (session == null ||
+        mounted == null ||
+        !isCurrentMusicSongRadioSeed(seed) ||
+        !canUseOnlineMusicSong(seed) ||
+        !canUseOnlineMusicSong(mounted) ||
+        isCurrent?.call() == false) {
+      return MusicSongRadioResult.superseded;
+    }
+    final request = ++_musicSongRadioRequest;
+    final occurrence = playbackOccurrenceRevision;
+    final selection = musicSelectionRequestRevision;
+    final playlist = playlistGeneration;
+    final queue = musicQueueRevision;
+    final recommendations =
+        RecommendationService.forProfile(db, _profileDatabase.profileId);
+    final eligibility = recommendations.generation(RecommendationDomain.music);
+
+    bool current() =>
+        request == _musicSongRadioRequest &&
+        session == _playbackSessionScope &&
+        (_sessionOwner == null || _sessionOwner == this) &&
+        activePodcast == null &&
+        occurrence == playbackOccurrenceRevision &&
+        selection == musicSelectionRequestRevision &&
+        playlist == playlistGeneration &&
+        queue == musicQueueRevision &&
+        eligibility == recommendations.generation(RecommendationDomain.music) &&
+        !_sessionTransitionPending &&
+        !_backendSwitchPending &&
+        !_preparingSelectedSong &&
+        !_manualSelectionPending &&
+        !_hasPendingMusicHandoff &&
+        hasOpeningMusicCrossfade?.call() != true &&
+        !state.isHidden &&
+        !state.isClosing &&
+        isCurrentMusicSongRadioSeed(seed) &&
+        _samePlaybackSource(mounted, state.currentlyPlaying!) &&
+        switch (state.mediaEvent.state) {
+          MediaState.idle ||
+          MediaState.loading ||
+          MediaState.error ||
+          MediaState.completed =>
+            false,
+          _ => isCurrent?.call() != false,
+        };
+
+    if (!current()) return MusicSongRadioResult.superseded;
+    final List<Video> songs;
+    try {
+      songs = await loadMusicSongRadio(seed,
+          isCurrent: current,
+          eligible: recommendations.eligibleMusic,
+          catalog: catalog);
+    } catch (_) {
+      return current()
+          ? MusicSongRadioResult.unavailable
+          : MusicSongRadioResult.superseded;
+    }
+    if (!current()) return MusicSongRadioResult.superseded;
+    if (songs.isEmpty) return MusicSongRadioResult.empty;
+
+    final queuedSeed = _queueEntry(playbackQueueId(mounted));
+    final entries = assignPlaybackQueueIds([
+      queuedSeed is Video ? queuedSeed : mounted,
+      ...songs.skip(1),
+    ]);
+    final ids = entries.map(playbackQueueId);
+    if (_activeNamedMusicQueueId != null) {
+      unawaited(_saveSession(state));
+      _setActiveNamedMusicQueue(null);
+    }
+    _queuedDeviceSelectionId = null;
+    _androidResumeSource = null;
+    _androidRemoteOccurrence = null;
+    _bindPlaylist(null, [], queueTitle: queueTitle, retainSleepFade: true);
+    _musicHistoryEntries
+      ..clear()
+      ..addAll(ids);
+    _musicHistoryPlaylist = false;
+    _musicRecommendationSources.clear();
+    // Only change queue fields so the active source and transport stay mounted.
+    emit(state.copyWith(
+      videos: entries,
+      offlineVideos: [],
+      playedVideos: [],
+      playQueue: ListQueue.of(ids.skip(1)),
+      musicQueueShuffled: false,
+    ));
+    return MusicSongRadioResult.started;
   }
 
   /// Prepare a mix from one explicitly selected catalog recording. A newer

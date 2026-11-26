@@ -8,7 +8,10 @@ import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' as app_main;
 import 'package:clipious/media_handler.dart';
+import 'package:clipious/music/models/music_track.dart';
 import 'package:clipious/music/models/song_transition.dart';
+import 'package:clipious/music/services/music_catalog_service.dart';
+import 'package:clipious/music/services/music_song_radio.dart';
 import 'package:clipious/player/audio_playback_sources.dart';
 import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/player/models/media_command.dart';
@@ -52,6 +55,18 @@ class _SessionPlayer extends PlayerCubit {
 
   @override
   Future<void> onReady() async {}
+}
+
+class _RadioCatalog extends MusicCatalogService {
+  final related = Completer<List<MusicTrack>>();
+  List<String>? seeds;
+
+  @override
+  Future<List<MusicTrack>> getRelatedSongs(Iterable<String> seedIds,
+      {bool Function()? isCurrent}) {
+    seeds = seedIds.toList();
+    return related.future;
+  }
 }
 
 class _TransportPlatform extends JustAudioPlatform {
@@ -1131,6 +1146,121 @@ void main() {
       }
     });
   });
+
+  for (final (description, playing, skipBeforeLookupReturns) in [
+    ('keeps the playing native decoder', true, false),
+    ('keeps the paused native decoder', false, false),
+    ('ignores the lookup after skipping the seed', true, true),
+  ]) {
+    testWidgets('Music radio $description', (tester) async {
+      _mockIdleMusicOutput(tester);
+      await tester.runAsync(() async {
+        final originalPlatform = JustAudioPlatform.instance;
+        final platform = _TransportPlatform();
+        JustAudioPlatform.instance = platform;
+        addTearDown(() => JustAudioPlatform.instance = originalPlatform);
+        db = await SembastSqfDb.createInMemory();
+        addTearDown(db.close);
+        const server = Server(url: 'https://instance.example');
+        await db.upsertServer(server);
+        await db.useServer(server);
+        await db.saveSetting(
+            SettingsValue(SponsorSegmentType.sponsor.settingsName(), 'false'));
+        final app = TestAppCubit(AppState(0, server, HomeLayout()));
+        await app.initState();
+        app.intentDataStreamSubscription =
+            const Stream<void>.empty().listen((_) {});
+        addTearDown(app.close);
+        final settings = TestSettingsCubit(SettingsState.init(), app);
+        addTearDown(settings.close);
+        final player = _SessionPlayer(PlayerState.init(null), settings,
+            ownAudioDecoder: true);
+        player.audioSession = await AudioSession.instance;
+        final handler = app_main.mediaHandler = MediaHandler(player);
+        addTearDown(player.close);
+
+        Future<void> waitFor(bool Function() ready) async {
+          final deadline = Stopwatch()..start();
+          while (!ready() && deadline.elapsed < const Duration(seconds: 3)) {
+            await Future<void>.delayed(const Duration(milliseconds: 5));
+          }
+          expect(ready(), isTrue);
+        }
+
+        final seed = _playableVideo('radioSeed01', server, music: true)
+            .copyWith(queueEntryId: 'radioSeed01#2');
+        final oldTail = _playableVideo('radioOld001', server, music: true);
+        await player.playVideo([seed, oldTail], audio: true, fromMusic: true);
+        await waitFor(() =>
+            platform.loaded(seed.videoId).any((native) => native.plays == 1) &&
+            player.state.isPlaying);
+        final native = platform.loaded(seed.videoId).single;
+        final decoder = player.runtimeAudioDecoder!.audioPlayer!;
+        if (!playing) {
+          await handler.pause();
+          await waitFor(() => native.pauses > 0 && !player.state.isPlaying);
+        }
+        const midway = Duration(seconds: 12);
+        player.seek(midway);
+        await waitFor(() =>
+            native.seeks.lastOrNull == midway &&
+            player.state.position >= midway &&
+            decoder.position >= midway);
+        final mounted = player.state.currentlyPlaying;
+        final command = player.state.mediaCommand;
+        final generation = player.backendPlaybackGeneration;
+        List<int> nativeCalls() => [
+              native.loads.length,
+              native.seeks.length,
+              native.plays,
+              native.pauses
+            ];
+        final callsBeforeRadio = nativeCalls();
+
+        final catalog = _RadioCatalog();
+        final request = player.startCurrentMusicSongRadio(seed,
+            queueTitle: 'Related radio', catalog: catalog);
+        await waitFor(() => catalog.seeds != null);
+        expect(catalog.seeds, [seed.videoId]);
+        expect(player.state.playQueue, [oldTail.videoId]);
+        if (skipBeforeLookupReturns) {
+          player.playNext();
+          await waitFor(() => player.state.currentQueueId == oldTail.videoId);
+        }
+        catalog.related.complete(const [
+          MusicTrack(
+              videoId: 'radioNext01',
+              title: 'Related song',
+              artists: ['Artist']),
+        ]);
+        if (skipBeforeLookupReturns) {
+          expect(await request, MusicSongRadioResult.superseded);
+          expect(player.state.currentQueueId, oldTail.videoId);
+          expect(player.state.playQueue, isEmpty);
+          return;
+        }
+        expect(await request, MusicSongRadioResult.started);
+        await Future<void>.delayed(Duration.zero);
+
+        expect(player.state.playQueue, ['radioNext01']);
+        expect(player.state.videos.map((video) => video.videoId),
+            [seed.videoId, 'radioNext01']);
+        expect(player.musicQueueTitle, 'Related radio');
+        expect(player.state.currentQueueId, seed.queueEntryId);
+        expect(player.state.currentlyPlaying, same(mounted));
+        expect(player.state.mediaCommand, same(command));
+        expect(player.backendPlaybackGeneration, generation);
+        expect(player.runtimeAudioDecoder!.audioPlayer, same(decoder));
+        expect(platform.loaded(seed.videoId).single, same(native));
+        expect(native.events.isClosed, isFalse);
+        expect(nativeCalls(), callsBeforeRadio);
+        expect(player.state.isPlaying, playing);
+        expect(decoder.playing, playing);
+        expect(
+            decoder.position, playing ? greaterThanOrEqualTo(midway) : midway);
+      });
+    }, variant: TargetPlatformVariant.only(TargetPlatform.android));
+  }
 
   test('Android audio retains instance URI and headers at the native boundary',
       () async {
