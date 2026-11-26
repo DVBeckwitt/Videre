@@ -69,6 +69,7 @@ const strictValidationTargets = [
   './test/player/sponsor_initial_settings_test.dart',
   './test/player/playback_cache_identity_test.dart',
   './test/player/flow_mini_geometry_test.dart',
+  './test/player/mini_video_autoplay_test.dart',
   './test/videos/view/flow_video_home_test.dart',
   './test/videos/view/flow_video_card_test.dart',
   './test/music',

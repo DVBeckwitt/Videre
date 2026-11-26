@@ -1,12 +1,17 @@
 import 'dart:async';
+import 'dart:io' show File;
 import 'dart:math' as math;
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
+import '../../../downloads/models/downloaded_video.dart';
+import '../../../globals.dart' show db;
 import '../../../l10n/generated/app_localizations.dart';
 import '../../../main.dart' show isTv;
+import '../../../utils/views/components/thumbnail.dart';
+import '../../../videos/models/video.dart';
 import '../../models/flow_mini_geometry.dart';
 import '../../models/media_event.dart';
 import '../../states/player.dart';
@@ -482,6 +487,203 @@ class FlowFloatingMiniControls extends StatelessWidget {
             : Icon(icon, size: math.min(24, size * .60)),
       ),
     );
+  }
+}
+
+/// Switches the floating surface to the pending autoplay transition.
+class FlowFloatingMiniOverlay extends StatelessWidget {
+  final bool largeWindow;
+  final double scale;
+
+  const FlowFloatingMiniOverlay(
+      {super.key, required this.largeWindow, required this.scale});
+
+  @override
+  Widget build(BuildContext context) {
+    final player = context.read<PlayerCubit>();
+    return ValueListenableBuilder<VideoAutoplayCountdown?>(
+      valueListenable: player.videoAutoplayCountdown,
+      child: FlowFloatingMiniControls(largeWindow: largeWindow, scale: scale),
+      builder: (context, countdown, controls) {
+        if (countdown == null) return controls!;
+        return _FlowFloatingMiniAutoplay(
+          key: ValueKey(countdown.token),
+          countdown: countdown,
+          largeWindow: largeWindow,
+          scale: scale,
+          onPlayNow: () => player.playVideoAutoplayNow(countdown.token),
+          onCancel: () => player.cancelVideoAutoplay(countdown.token),
+        );
+      },
+    );
+  }
+}
+
+class _FlowFloatingMiniAutoplay extends StatefulWidget {
+  final VideoAutoplayCountdown countdown;
+  final bool largeWindow;
+  final double scale;
+  final VoidCallback onPlayNow;
+  final VoidCallback onCancel;
+
+  const _FlowFloatingMiniAutoplay({
+    required super.key,
+    required this.countdown,
+    required this.largeWindow,
+    required this.scale,
+    required this.onPlayNow,
+    required this.onCancel,
+  });
+
+  @override
+  State<_FlowFloatingMiniAutoplay> createState() =>
+      _FlowFloatingMiniAutoplayState();
+}
+
+class _FlowFloatingMiniAutoplayState extends State<_FlowFloatingMiniAutoplay> {
+  late final Future<File?> _savedArtwork = _readSavedArtwork();
+
+  Future<File?> _readSavedArtwork() async {
+    final video = widget.countdown.next;
+    if (video is! DownloadedVideo || video.profileId != db.profileId)
+      return null;
+    final file = File(await video.thumbnailPath);
+    return await file.exists() ? file : null;
+  }
+
+  Widget _artwork(BuildContext context) {
+    final video = widget.countdown.next;
+    if (video is DownloadedVideo && video.profileId == db.profileId) {
+      return FutureBuilder<File?>(
+        future: _savedArtwork,
+        builder: (context, snapshot) {
+          final file = snapshot.data;
+          return file == null
+              ? const SizedBox.shrink()
+              : Image.file(file,
+                  fit: BoxFit.cover,
+                  excludeFromSemantics: true,
+                  errorBuilder: (context, error, stack) =>
+                      const SizedBox.shrink());
+        },
+      );
+    }
+    if (video is Video && video.thumbnails.isNotEmpty) {
+      return Thumbnail(
+        thumbnails: video.thumbnails,
+        images:
+            video.deArrowThumbnailUrl == null ? video.videoThumbnails : null,
+        decoration: BoxDecoration(color: Theme.of(context).colorScheme.surface),
+        fallback: const SizedBox.shrink(),
+      );
+    }
+    return const SizedBox.shrink();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final countdown = widget.countdown;
+    final locals = AppLocalizations.of(context)!;
+    final title = switch (countdown.next) {
+      Video(:final title) => title?.trim(),
+      DownloadedVideo(:final title) => title.trim(),
+      _ => null,
+    };
+    final labelStyle =
+        Theme.of(context).textTheme.labelMedium?.copyWith(color: Colors.white);
+    final buttonStyle = IconButton.styleFrom(
+      foregroundColor: Colors.white,
+      backgroundColor: Colors.black54,
+      minimumSize: Size.zero,
+      padding: EdgeInsets.zero,
+      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    );
+    final progress = 1 -
+        countdown.secondsRemaining / PlayerCubit.videoAutoplayCountdownSeconds;
+
+    return LayoutBuilder(builder: (context, constraints) {
+      final size = constraints.biggest;
+      final inset = math.min(4.0, size.shortestSide / 10);
+      final playSize = math.min(
+          (widget.largeWindow ? 52.0 : 44.0) * widget.scale.clamp(1, 1.6),
+          size.shortestSide / 2);
+      final cancelSpace =
+          (math.max(size.width, size.height) - playSize) / 2 - inset;
+      final cancelSize = math.min(widget.largeWindow ? 48.0 : 44.0,
+          math.min(size.shortestSide / 2, cancelSpace));
+      final labelHeight = math.min(24.0, (size.height - playSize) / 2 - inset);
+
+      return Stack(fit: StackFit.expand, children: [
+        const ColoredBox(color: Colors.black),
+        IgnorePointer(child: _artwork(context)),
+        const IgnorePointer(child: ColoredBox(color: Colors.black54)),
+        PositionedDirectional(
+          start: 2 * inset,
+          end: cancelSize + inset,
+          top: inset,
+          height: labelHeight,
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: AlignmentDirectional.centerStart,
+            child: Text(locals.videoAutoplayNextIn(countdown.secondsRemaining),
+                style: labelStyle),
+          ),
+        ),
+        PositionedDirectional(
+          end: inset,
+          top: inset,
+          width: cancelSize,
+          height: cancelSize,
+          child: IconButton(
+            key: const ValueKey('flow-mini-autoplay-cancel'),
+            tooltip: locals.cancel,
+            onPressed: widget.onCancel,
+            icon: const Icon(Icons.close_rounded),
+            iconSize: math.min(24.0, cancelSize * .6),
+            style: buttonStyle,
+          ),
+        ),
+        Center(
+          child: SizedBox.square(
+            dimension: playSize,
+            child: Stack(fit: StackFit.expand, children: [
+              IconButton(
+                key: const ValueKey('flow-mini-autoplay-play-now'),
+                tooltip: locals.videoAutoplayPlayNow,
+                onPressed: widget.onPlayNow,
+                icon: const Icon(Icons.skip_next_rounded),
+                iconSize: math.min(30.0, playSize * .6),
+                style: buttonStyle,
+              ),
+              ExcludeSemantics(
+                child: IgnorePointer(
+                  child: CircularProgressIndicator(
+                    color: Colors.white,
+                    backgroundColor: Colors.white38,
+                    value: progress,
+                    strokeWidth: math.min(3.0, playSize / 8),
+                  ),
+                ),
+              ),
+            ]),
+          ),
+        ),
+        if (title != null && title.isNotEmpty && labelHeight >= 18)
+          PositionedDirectional(
+            start: 2 * inset,
+            end: 2 * inset,
+            bottom: inset,
+            height: labelHeight,
+            child: Align(
+              alignment: AlignmentDirectional.bottomStart,
+              child: Text(title,
+                  style: labelStyle,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis),
+            ),
+          ),
+      ]);
+    });
   }
 }
 

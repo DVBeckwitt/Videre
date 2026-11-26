@@ -132,6 +132,19 @@ typedef _PreparedMusicSelection = ({
   List<SponsorSegment> savedSponsors,
 });
 
+typedef VideoAutoplayCountdown = ({
+  IdedVideo next,
+  int secondsRemaining,
+  Object token,
+});
+
+typedef _VideoAutoplayOwner = ({
+  int generation,
+  int intentRevision,
+  String from,
+  String to,
+});
+
 const double targetHeight = 66;
 const skipToVideoThrottleName = 'skip-to-video';
 const stepMultiplier = 1.15;
@@ -468,6 +481,16 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   bool _playlistMembershipKnown = false;
   int _playlistGeneration = 0;
   String _passageQueueId = const Uuid().v4();
+  static const videoAutoplayCountdownSeconds = 5;
+  final _videoAutoplayCountdown = ValueNotifier<VideoAutoplayCountdown?>(null);
+  Timer? _videoAutoplayTimer;
+  StreamSubscription<SettingsState>? _videoAutoplaySettings;
+  _VideoAutoplayOwner? _videoAutoplayOwner;
+  int? _videoAutoplayEndedGeneration;
+
+  ValueListenable<VideoAutoplayCountdown?> get videoAutoplayCountdown =>
+      _videoAutoplayCountdown;
+
   bool _waitingForPlaylist = false;
   bool _waitingForPlaylistUserSkip = false;
   bool _playlistSourceComplete = true;
@@ -1674,8 +1697,13 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         if (_waitingForPlaylist &&
             (state.playQueue.isNotEmpty || snapshot.complete)) {
           _waitingForPlaylist = false;
-          if (_waitingForPlaylistUserSkip || !_inMusicQueue) {
-            unawaited(_playNextNow(userInitiated: _waitingForPlaylistUserSkip));
+          if (_waitingForPlaylistUserSkip) {
+            unawaited(_playNextNow(userInitiated: true));
+          } else if (!_inMusicQueue) {
+            if (settings.state.autoplayQueue &&
+                !_maybeStartVideoAutoplayCountdown()) {
+              unawaited(_playNextNow());
+            }
           } else if (_musicHandoff != null || _mayAdvanceMusic) {
             // Receiving a retried page does not restore playback permission
             // lost to a pause, focus change, or disabled queue autoplay.
@@ -1821,6 +1849,10 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     super.onChange(change);
     final before = change.currentState;
     final after = change.nextState;
+    final autoplay = _videoAutoplayOwner;
+    if (autoplay != null && !_videoAutoplayIsCurrent(autoplay, after)) {
+      _clearVideoAutoplayCountdown();
+    }
     if (before.currentQueueId != after.currentQueueId) {
       _musicRequests.observe(after);
     }
@@ -1851,7 +1883,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
                 !(handoff.to == _musicRequestsBoundary &&
                     hasMusicRequestSuccessor &&
                     _firstPlayableUpcomingId(after) == null) &&
-                _nextMusicQueueId(after) != handoff.to))) {
+                _nextPlayableQueueId(after) != handoff.to))) {
       _clearMusicHandoff(endAudioWait: true);
     }
     if (before.currentQueueId != after.currentQueueId && after.isAudio) {
@@ -3057,6 +3089,9 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       _clearPlaybackRecovery();
       _mediaVolumePause = null;
     }
+    if (event.state == MediaState.error || event.state == MediaState.idle) {
+      _clearVideoAutoplayCountdown();
+    }
     final handoff = _musicHandoff;
     if (event.type == MediaEventType.play ||
         event.type == MediaEventType.pause ||
@@ -3716,7 +3751,11 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     switch (event.state) {
       case MediaState.completed:
         // A repeated EOF cannot restart a pause or advance a second entry.
-        if (_hasPendingMusicHandoff) return;
+        if (_hasPendingMusicHandoff ||
+            (!state.isAudio &&
+                _videoAutoplayEndedGeneration == _videoSwitchGeneration)) {
+          return;
+        }
         final stopAtEnd = (_sleepAtEndQueueId != null &&
                 _sleepAtEndQueueId == state.currentQueueId) ||
             _countFinishedSleepTrack();
@@ -3793,6 +3832,10 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         onProgress(event.value);
         break;
       case MediaEventType.play:
+        if (event.state == MediaState.playing && intendsPlayback) {
+          _videoAutoplayEndedGeneration = null;
+          _clearVideoAutoplayCountdown();
+        }
         _setPlaying(_requestedPlaying != false);
         // Source setup can autoplay after a notification or PiP pause request.
         if (_requestedPlaying == false) {
@@ -3884,6 +3927,8 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   @override
   close() async {
     _isDisposing = true;
+    _clearVideoAutoplayCountdown();
+    _videoAutoplayCountdown.dispose();
     _stopSleepFadeClock();
     _sleepFadePause = null;
     final musicHomeWidget = _musicHomeWidget;
@@ -4690,7 +4735,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         current == null ? state.currentQueueId : playbackQueueId(current);
     final id = previous
         ? state.playedVideos.where(_canOpenQueueId).lastOrNull
-        : _nextMusicQueueId(state);
+        : _nextPlayableQueueId(state);
     if (id == null || id == activeId) return null;
     final target = _queueEntry(id);
     return _isMusicEntry(target) ? target : null;
@@ -4724,7 +4769,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       .where((id) => _canOpenQueueId(id, snapshot))
       .firstOrNull;
 
-  String? _nextMusicQueueId(PlayerState snapshot) {
+  String? _nextPlayableQueueId(PlayerState snapshot) {
     final next = _firstPlayableUpcomingId(snapshot);
     if (next != null) return next;
     if (!playlistComplete || _queueRepeatMode != PlayerRepeat.repeatAll) {
@@ -4780,7 +4825,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     final mode = _queueRepeatMode;
     return mode == PlayerRepeat.repeatOne ||
             (mode == PlayerRepeat.repeatAll &&
-                _nextMusicQueueId(state) == state.currentQueueId)
+                _nextPlayableQueueId(state) == state.currentQueueId)
         ? mode
         : null;
   }
@@ -4793,7 +4838,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     if (hasMusicRequestSuccessor && _firstPlayableUpcomingId(state) == null) {
       return _musicRequestsBoundary;
     }
-    final next = _nextMusicQueueId(state);
+    final next = _nextPlayableQueueId(state);
     if (next == null || next == state.currentQueueId) return null;
     final target = _queueEntry(next);
     if (target == null || (target is DownloadedVideo && !target.audioOnly)) {
@@ -4914,7 +4959,112 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         : handoff.to == _nextMusicBoundaryId;
   }
 
+  bool _maybeStartVideoAutoplayCountdown() {
+    if (state.isAudio) return false;
+    // An asynchronous playlist checkpoint or duplicate EOF can return after
+    // cancellation. Only new playback can arm a countdown on this source again.
+    if (_videoAutoplayEndedGeneration == _videoSwitchGeneration) return true;
+    if (isTv ||
+        !state.isMini ||
+        state.isDragging ||
+        state.isPip ||
+        state.fullScreenState == FullScreenState.fullScreen) {
+      return false;
+    }
+    final from = state.currentQueueId;
+    final to = _nextPlayableQueueId(state);
+    if (from == null || to == null || to == from) return false;
+    final next = _queueEntry(to);
+    final owner = (
+      generation: _videoSwitchGeneration,
+      intentRevision: _transportIntentRevision,
+      from: from,
+      to: to,
+    );
+    if (next == null || !_videoAutoplayIsCurrent(owner, state)) return false;
+
+    final token = Object();
+    _videoAutoplayEndedGeneration = owner.generation;
+    _videoAutoplayOwner = owner;
+    _videoAutoplaySettings = settings.stream.listen((updated) {
+      if (!updated.autoplayQueue ||
+          updated.playerRepeatMode == PlayerRepeat.repeatOne ||
+          !_videoAutoplayIsCurrent(owner, state)) {
+        _clearVideoAutoplayCountdown();
+      }
+    });
+    _videoAutoplayTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!_videoAutoplayIsCurrent(owner, state)) {
+        _clearVideoAutoplayCountdown();
+        return;
+      }
+      final remaining = videoAutoplayCountdownSeconds - timer.tick;
+      if (remaining <= 0) {
+        _advanceVideoAutoplay(token);
+      } else {
+        _videoAutoplayCountdown.value =
+            (next: next, secondsRemaining: remaining, token: token);
+      }
+    });
+    _videoAutoplayCountdown.value = (
+      next: next,
+      secondsRemaining: videoAutoplayCountdownSeconds,
+      token: token,
+    );
+    return true;
+  }
+
+  bool _videoAutoplayIsCurrent(
+          _VideoAutoplayOwner owner, PlayerState snapshot) =>
+      !isClosed &&
+      !_isDisposing &&
+      !_switchingProfile &&
+      !snapshot.isHidden &&
+      !snapshot.isClosing &&
+      !snapshot.isAudio &&
+      !_sessionTransitionPending &&
+      shouldStartPlayback &&
+      owner.generation == _videoSwitchGeneration &&
+      owner.intentRevision == _transportIntentRevision &&
+      owner.from == snapshot.currentQueueId &&
+      settings.state.autoplayQueue &&
+      _queueRepeatMode != PlayerRepeat.repeatOne &&
+      owner.to == _nextPlayableQueueId(snapshot);
+
+  void cancelVideoAutoplay(Object token) {
+    if (_videoAutoplayCountdown.value?.token == token) {
+      _clearVideoAutoplayCountdown();
+    }
+  }
+
+  void playVideoAutoplayNow(Object token) =>
+      _advanceVideoAutoplay(token, userInitiated: true);
+
+  void _advanceVideoAutoplay(Object token, {bool userInitiated = false}) {
+    final owner = _videoAutoplayOwner;
+    if (owner == null || _videoAutoplayCountdown.value?.token != token) return;
+    final advance = _videoAutoplayIsCurrent(owner, state);
+    _clearVideoAutoplayCountdown();
+    if (advance) {
+      // Give this accepted transition a fresh skip cooldown while its source
+      // opens, even if the ending video was shorter than the last cooldown.
+      EasyThrottle.cancel(skipToVideoThrottleName);
+      playNext(userInitiated: userInitiated);
+    }
+  }
+
+  void _clearVideoAutoplayCountdown() {
+    if (_videoAutoplayOwner == null) return;
+    _videoAutoplayOwner = null;
+    _videoAutoplayTimer?.cancel();
+    _videoAutoplayTimer = null;
+    unawaited(_videoAutoplaySettings?.cancel());
+    _videoAutoplaySettings = null;
+    _videoAutoplayCountdown.value = null;
+  }
+
   void _advanceAfterSongEnd() {
+    if (_maybeStartVideoAutoplayCountdown()) return;
     var handoff = _musicHandoff;
     if (handoff == null || handoff.generation != _videoSwitchGeneration) {
       if (_musicReplayMode == null &&
@@ -5047,6 +5197,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   }
 
   Future<void> _playNextNow({bool userInitiated = false}) async {
+    _clearVideoAutoplayCountdown();
     final next = _firstPlayableUpcomingId(state);
     if (hasMusicRequestSuccessor && next == null) {
       final generation = _videoSwitchGeneration;
@@ -5832,6 +5983,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     if (isClosed || _switchingProfile || canInstallQueue?.call() == false) {
       return;
     }
+    _clearVideoAutoplayCountdown();
     final stagedQueue = canInstallQueue != null;
     var committedQueue = false;
     if (preparedMusic != null) {
@@ -7904,6 +8056,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
 
   void play() {
     if (_switchingProfile || isClosed || _isDisposing) return;
+    _clearVideoAutoplayCountdown();
     _clearMusicHandoff();
     _mediaVolumePause = null;
     _transportIntentRevision++;
@@ -7966,6 +8119,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   }
 
   void pause() {
+    _clearVideoAutoplayCountdown();
     _mediaVolumePause = null;
     _releaseMusicEndWait();
     _clearMusicHandoff(endAudioWait: true);
@@ -9376,6 +9530,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   void _seek(Duration position,
       {bool Function()? canExecute, Duration? seekLimit}) {
     if (!canSeekCurrentMedia) return;
+    _clearVideoAutoplayCountdown();
     _clearMusicHandoff(endAudioWait: true);
     _interruptPlaybackClocks();
     _recoveryProgressPosition = null;

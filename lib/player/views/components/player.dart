@@ -713,7 +713,7 @@ class _PlayerState extends State<Player> {
                                                                                                       if (!cubit.state.isClosing) cubit.showBigPlayer();
                                                                                                     },
                                                                                                     onDismiss: cubit.hide,
-                                                                                                    child: FlowFloatingMiniControls(
+                                                                                                    child: FlowFloatingMiniOverlay(
                                                                                                       largeWindow: isTablet,
                                                                                                       wide: _floatingMotion.isWide,
                                                                                                       scale: miniBounds.width / geometry.sizeAt(1).width,
