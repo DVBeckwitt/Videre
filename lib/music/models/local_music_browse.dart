@@ -151,26 +151,70 @@ class LocalMusicTrackSort {
         LocalMusicTrackSortField.size => _size(row.sizeBytes),
       };
 
-  String? _titleSortName(OnDeviceMusicEntry row) =>
-      localMusicSortName(row.title, sortTag: row.deviceTrack?.titleSort);
+  List<OnDeviceMusicEntry> order(List<OnDeviceMusicEntry> tracks) =>
+      _orderTracks(tracks, descending,
+          field == LocalMusicTrackSortField.title ? null : sortValueFor);
+}
 
-  List<OnDeviceMusicEntry> order(List<OnDeviceMusicEntry> tracks) {
-    final titles = {for (final row in tracks) row: _titleSortName(row)};
-    final values = field == LocalMusicTrackSortField.title
-        ? titles
-        : {for (final row in tracks) row: sortValueFor(row)};
-    return [...tracks]..sort((a, b) {
-        final comparison = _compareKnown(
-          values[a],
-          values[b],
-          _compareSortValues,
-          descending,
-        );
-        if (comparison != 0) return comparison;
-        final title = compareLocalMusicSortNames(titles[a], titles[b]);
-        return title != 0 ? title : a.id.compareTo(b.id);
-      });
+String? _titleSortName(OnDeviceMusicEntry row) =>
+    localMusicSortName(row.title, sortTag: row.deviceTrack?.titleSort);
+
+List<OnDeviceMusicEntry> _orderTracks(List<OnDeviceMusicEntry> tracks,
+    bool descending, Object? Function(OnDeviceMusicEntry)? sortValue) {
+  final titles = {for (final row in tracks) row: _titleSortName(row)};
+  final values = sortValue == null
+      ? titles
+      : {for (final row in tracks) row: sortValue(row)};
+  return [...tracks]..sort((a, b) {
+      final comparison = _compareKnown(
+        values[a],
+        values[b],
+        _compareSortValues,
+        descending,
+      );
+      if (comparison != 0) return comparison;
+      final title = compareLocalMusicSortNames(titles[a], titles[b]);
+      return title != 0 ? title : a.id.compareTo(b.id);
+    });
+}
+
+enum LocalMusicDetailSongSort {
+  source(null),
+  title(LocalMusicTrackSortField.title),
+  artist(LocalMusicTrackSortField.artist),
+  album(LocalMusicTrackSortField.album),
+  releaseDate(null),
+  duration(LocalMusicTrackSortField.duration);
+
+  const LocalMusicDetailSongSort(this.trackField);
+
+  final LocalMusicTrackSortField? trackField;
+}
+
+class LocalMusicDetailSongOrder {
+  const LocalMusicDetailSongOrder({
+    this.field = LocalMusicDetailSongSort.source,
+    this.descending = false,
+  });
+
+  final LocalMusicDetailSongSort field;
+  final bool descending;
+
+  bool get isSorted => field != LocalMusicDetailSongSort.source;
+
+  List<LocalMusicTrack> order(List<LocalMusicTrack> tracks) {
+    if (!isSorted) return tracks;
+    final rows = tracks.map(OnDeviceMusicEntry.device).toList();
+    final trackField = field.trackField;
+    final sorted = trackField == null
+        ? _orderTracks(rows, descending, _releaseDate)
+        : LocalMusicTrackSort(trackField, descending).order(rows);
+    return sorted.map((row) => row.deviceTrack!).toList();
   }
+
+  // Indexed dates are YYYY, YYYY-MM, or YYYY-MM-DD.
+  static String? _releaseDate(OnDeviceMusicEntry row) =>
+      row.deviceTrack!.releaseDate ?? row.deviceTrack!.originalReleaseDate;
 }
 
 int _compareSortValues(Object a, Object b) => switch (a) {

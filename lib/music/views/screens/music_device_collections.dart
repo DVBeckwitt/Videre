@@ -10,8 +10,10 @@ import '../../models/local_music_browse.dart';
 import '../../models/local_music_artist.dart';
 import '../../models/local_music_genre.dart';
 import '../../models/local_music_track.dart';
+import '../../models/on_device_music_entry.dart';
 import '../../services/local_music_library.dart';
 import '../components/local_music_category_sort_menu.dart';
+import '../components/local_music_detail_song_sort_menu.dart';
 import '../components/device_music_artwork.dart';
 import '../components/music_library_actions.dart';
 import 'music.dart';
@@ -48,9 +50,7 @@ Future<void> openMusicDeviceCollections(
       ));
 }
 
-class _DeviceCollectionPage extends StatelessWidget {
-  static const _genreOrderSetting = 'music-device-genre-index-order';
-
+class _DeviceCollectionPage extends StatefulWidget {
   const _DeviceCollectionPage({
     required this.library,
     required this.profile,
@@ -67,42 +67,71 @@ class _DeviceCollectionPage extends StatelessWidget {
   final MusicDeviceCollection kind;
   final Object? collectionKey;
 
+  @override
+  State<_DeviceCollectionPage> createState() => _DeviceCollectionPageState();
+}
+
+class _DeviceCollectionPageState extends State<_DeviceCollectionPage> {
+  static const _genreOrderSetting = 'music-device-genre-index-order';
+
+  var _songOrder = const LocalMusicDetailSongOrder();
+
   bool get _active =>
-      session.isCurrent &&
-      library.visibilityProfile == profile &&
-      library.acceptsSessionSelection(selectionId);
+      widget.session.isCurrent &&
+      widget.library.visibilityProfile == widget.profile &&
+      widget.library.acceptsSessionSelection(widget.selectionId);
 
   List<LocalMusicTrack> _members(Object key) {
     if (!_active) return const [];
-    if (kind == MusicDeviceCollection.genres) {
+    if (widget.kind == MusicDeviceCollection.genres) {
       return [
-        for (final track in library.visibleTracks)
+        for (final track in widget.library.visibleTracks)
           if (track.genres.any((genre) => localMusicGenreNameKey(genre) == key))
             track
       ];
     }
-    final playlist = library.indexedPlaylists
+    final playlist = widget.library.indexedPlaylists
         .where((playlist) => playlist.id == key)
         .firstOrNull;
     return playlist == null
         ? const []
-        : library.indexedPlaylistTracks(playlist);
+        : widget.library.indexedPlaylistTracks(playlist);
   }
 
   Future<void> _play(BuildContext context, Object key, String title,
       {int index = 0, String? expectedTrackId}) async {
-    final tracks = _members(key);
+    final tracks = _songOrder.order(_members(key));
     if (index >= tracks.length ||
         (expectedTrackId != null &&
             tracks[index].playbackId != expectedTrackId)) {
       return;
     }
     try {
-      await MusicScreen.playLocalTracks(context, tracks,
+      if (_songOrder.isSorted) {
+        final library = widget.library;
+        bool current() =>
+            mounted &&
+            _active &&
+            identical(library, widget.library) &&
+            widget.collectionKey == key &&
+            tracks.every((track) =>
+                identical(library.visibleTrackById(track.playbackId), track));
+        await MusicScreen.playOnDeviceTracks(
+          context,
+          tracks.map(OnDeviceMusicEntry.device).toList(),
           startIndex: index,
           queueTitle: title,
           songTap: expectedTrackId != null,
-          collectionDetail: kind == MusicDeviceCollection.playlists);
+          retainQueueOrder: true,
+          isCurrent: current,
+        );
+      } else {
+        await MusicScreen.playLocalTracks(context, tracks,
+            startIndex: index,
+            queueTitle: title,
+            songTap: expectedTrackId != null,
+            collectionDetail: widget.kind == MusicDeviceCollection.playlists);
+      }
     } catch (_) {
       if (!context.mounted || !_active) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -112,13 +141,13 @@ class _DeviceCollectionPage extends StatelessWidget {
 
   String? _labelFor(Object key) {
     if (!_active) return null;
-    if (kind == MusicDeviceCollection.playlists) {
-      return library.indexedPlaylists
+    if (widget.kind == MusicDeviceCollection.playlists) {
+      return widget.library.indexedPlaylists
           .where((playlist) => playlist.id == key)
           .firstOrNull
           ?.name;
     }
-    for (final track in library.visibleTracks) {
+    for (final track in widget.library.visibleTracks) {
       for (final genre in track.genres) {
         if (localMusicGenreNameKey(genre) == key) return genre.trim();
       }
@@ -131,7 +160,7 @@ class _DeviceCollectionPage extends StatelessWidget {
     if (!_active) return const {};
     if (genreOrder == null) {
       final labels = <Object, _BrowseCollection>{
-        for (final playlist in library.indexedPlaylists)
+        for (final playlist in widget.library.indexedPlaylists)
           playlist.id: (label: playlist.name, tracks: const []),
       };
       final entries = labels.entries.toList()
@@ -140,7 +169,7 @@ class _DeviceCollectionPage extends StatelessWidget {
       return Map.fromEntries(entries);
     }
     final groups = <String, _BrowseCollection>{};
-    for (final track in library.visibleTracks) {
+    for (final track in widget.library.visibleTracks) {
       final seen = <String>{};
       for (final genre in track.genres) {
         final key = localMusicGenreNameKey(genre);
@@ -175,7 +204,7 @@ class _DeviceCollectionPage extends StatelessWidget {
         return ListTile(
           key: ValueKey(collection.key),
           autofocus: isTv && index == 0,
-          leading: kind == MusicDeviceCollection.genres
+          leading: widget.kind == MusicDeviceCollection.genres
               ? DeviceMusicCoverMosaic(
                   tracks: collection.value.tracks,
                   fallbackIcon: Icons.library_music_outlined,
@@ -188,11 +217,11 @@ class _DeviceCollectionPage extends StatelessWidget {
             MusicScreen.openDeviceCollection(
               context,
               _DeviceCollectionPage(
-                library: library,
-                profile: profile,
-                selectionId: selectionId,
-                session: session,
-                kind: kind,
+                library: widget.library,
+                profile: widget.profile,
+                selectionId: widget.selectionId,
+                session: widget.session,
+                kind: widget.kind,
                 collectionKey: collection.key,
               ),
             );
@@ -211,21 +240,28 @@ class _DeviceCollectionPage extends StatelessWidget {
       context,
       MusicDeviceArtistPage(
         artistKey: artist.key,
-        selectionId: selectionId,
-        library: library,
+        selectionId: widget.selectionId,
+        library: widget.library,
       ),
     );
   }
 
   Widget _trackList(
       BuildContext context, AppLocalizations locals, Object key, String title) {
-    final tracks = _members(key);
-    if (tracks.isEmpty) return Center(child: Text(locals.musicNoResults));
-    final artists = kind == MusicDeviceCollection.genres
-        ? (groupLocalMusicArtists(tracks)
+    final members = _members(key);
+    if (members.isEmpty) return Center(child: Text(locals.musicNoResults));
+    final isGenre = widget.kind == MusicDeviceCollection.genres;
+    final tracks = _songOrder.order(members);
+    final artists = isGenre
+        ? (groupLocalMusicArtists(members)
           ..sort((a, b) => a.key.compareTo(b.key)))
         : const <LocalMusicArtist>[];
     final songStart = artists.isEmpty ? 0 : artists.length + 2;
+    final songIndexes = {
+      if (isGenre)
+        for (final (index, track) in tracks.indexed)
+          ValueKey(('song', track.playbackId)): songStart + index,
+    };
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -243,8 +279,9 @@ class _DeviceCollectionPage extends StatelessWidget {
         ),
         Expanded(
           child: ListView.builder(
-            key: PageStorageKey((kind, key)),
+            key: PageStorageKey((widget.kind, key)),
             itemCount: songStart + tracks.length,
+            findChildIndexCallback: isGenre ? (key) => songIndexes[key] : null,
             itemBuilder: (context, index) {
               if (index < songStart) {
                 if (index == 0 || index == songStart - 1) {
@@ -275,7 +312,9 @@ class _DeviceCollectionPage extends StatelessWidget {
               final songIndex = index - songStart;
               final track = tracks[songIndex];
               return ListTile(
-                key: ValueKey((track.playbackId, songIndex)),
+                key: isGenre
+                    ? ValueKey(('song', track.playbackId))
+                    : ValueKey((track.playbackId, songIndex)),
                 leading: const Icon(Icons.music_note_outlined),
                 title: Text(track.title,
                     maxLines: 2, overflow: TextOverflow.ellipsis),
@@ -294,21 +333,32 @@ class _DeviceCollectionPage extends StatelessWidget {
   Widget build(BuildContext context) {
     final locals = AppLocalizations.of(context)!;
     return BlocBuilder<AppCubit, AppState>(
-      bloc: session.app,
+      bloc: widget.session.app,
       builder: (context, _) => ListenableBuilder(
-        listenable: library,
+        listenable: widget.library,
         builder: (context, _) {
-          final key = collectionKey;
-          final order = key == null && kind == MusicDeviceCollection.genres
-              ? LocalMusicCategorySortMenu.readOrder(
-                  context, _genreOrderSetting)
-              : null;
-          final title =
-              (key == null ? null : _labelFor(key)) ?? kind._label(locals);
+          final key = widget.collectionKey;
+          final order =
+              key == null && widget.kind == MusicDeviceCollection.genres
+                  ? LocalMusicCategorySortMenu.readOrder(
+                      context, _genreOrderSetting)
+                  : null;
+          final label = key == null ? null : _labelFor(key);
+          final title = label ?? widget.kind._label(locals);
           final page = Scaffold(
             appBar: AppBar(
               title: Text(title),
               actions: [
+                if (label != null &&
+                    widget.kind == MusicDeviceCollection.genres)
+                  LocalMusicDetailSongSortMenu(
+                    order: _songOrder,
+                    includeArtist: true,
+                    onChanged: (order) {
+                      if (!_active) return;
+                      setState(() => _songOrder = order);
+                    },
+                  ),
                 if (order != null)
                   LocalMusicCategorySortMenu(
                     settingName: _genreOrderSetting,

@@ -6,8 +6,10 @@ import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/music/models/device_music_artwork_preferences.dart';
 import 'package:clipious/music/models/local_music_album.dart';
+import 'package:clipious/music/models/local_music_browse.dart';
 import 'package:clipious/music/models/local_music_artist.dart';
 import 'package:clipious/music/models/local_music_track.dart';
+import 'package:clipious/music/models/on_device_music_entry.dart';
 import 'package:clipious/music/services/local_music_library.dart';
 import 'package:clipious/music/views/components/device_music_artwork.dart';
 import 'package:clipious/music/views/components/local_music_folder.dart';
@@ -33,6 +35,24 @@ class _Player extends Cubit<PlayerState> implements PlayerCubit {
 
   final queues = <({List<LocalMusicTrack> tracks, int start, String? title})>[];
   bool? lastSongTap;
+  bool? lastRetainQueueOrder;
+
+  @override
+  final musicSelectionFailureRevision = ValueNotifier(0);
+
+  @override
+  Future<void> playOnDeviceMusic(List<OnDeviceMusicEntry> tracks,
+      {int startIndex = 0,
+      String? queueTitle,
+      bool collectionDetail = false,
+      bool retainQueueOrder = false,
+      bool Function()? isCurrent,
+      bool songTap = false}) async {
+    if (isCurrent?.call() == false) return;
+    await playLocalMusic(tracks.map((entry) => entry.deviceTrack!).toList(),
+        startIndex: startIndex, queueTitle: queueTitle, songTap: songTap);
+    lastRetainQueueOrder = retainQueueOrder;
+  }
 
   @override
   Future<void> playLocalMusic(List<LocalMusicTrack> tracks,
@@ -42,6 +62,12 @@ class _Player extends Cubit<PlayerState> implements PlayerCubit {
       bool collectionDetail = false}) async {
     queues.add((tracks: List.of(tracks), start: startIndex, title: queueTitle));
     lastSongTap = songTap;
+  }
+
+  @override
+  Future<void> close() async {
+    musicSelectionFailureRevision.dispose();
+    await super.close();
   }
 
   @override
@@ -487,6 +513,116 @@ void main() {
     await tester.pumpAndSettle();
     expect(piano, findsNothing);
     expect(player.queues, hasLength(2));
+  });
+
+  testWidgets('genre song sorts set the visible and Play all order',
+      (tester) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(800, 1000);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    const source = 'content://provider/tree/music';
+    const titles = ['Zulu', 'Alpha', 'Middle', 'Beta'];
+    final (library: _, :player, reopen: _) = await showLibrary(
+      tester,
+      source: source,
+      tracks: [
+        {
+          'uri': '$source/document/1',
+          'title': titles[0],
+          'artist': 'Alpha artist',
+          'album': 'Middle album',
+          'releaseDate': '2005',
+          'durationMs': 4001,
+          'genre': 'Jazz',
+        },
+        {
+          'uri': '$source/document/2',
+          'title': titles[1],
+          'artist': 'Zulu artist',
+          'album': 'Zulu album',
+          'originalReleaseDate': '1995-04',
+          'durationMs': 3000,
+          'genre': 'Jazz',
+        },
+        {
+          'uri': '$source/document/3',
+          'title': titles[2],
+          'releaseDate': '2005-13',
+          'genre': 'Jazz',
+        },
+        {
+          'uri': '$source/document/4',
+          'title': titles[3],
+          'artist': 'Middle artist',
+          'album': 'Alpha album',
+          'releaseDate': '2005',
+          'durationMs': 4000,
+          'genre': 'Jazz',
+        },
+      ],
+    );
+
+    await tester.tap(find.text('Genres'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Jazz'));
+    await tester.pumpAndSettle();
+
+    List<String> visibleSongs() => [...titles]..sort((a, b) => tester
+        .getTopLeft(find.text(a))
+        .dy
+        .compareTo(tester.getTopLeft(find.text(b)).dy));
+
+    Future<void> sortBy(String choice) async {
+      await tester.tap(find.byTooltip('Sort by'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(
+          CheckedPopupMenuItem<LocalMusicDetailSongOrder>, choice));
+      await tester.pumpAndSettle();
+    }
+
+    Future<void> playAll(List<String> expected) async {
+      expect(visibleSongs(), expected);
+      await tester.tap(find.text('Play all'));
+      await tester.pumpAndSettle();
+      expect(player.queues.last.tracks.map((track) => track.title), expected);
+      expect(player.queues.last.start, 0);
+      expect(player.queues.last.title, 'Jazz');
+    }
+
+    final defaultSongs = visibleSongs();
+    await playAll(defaultSongs);
+
+    for (final (choice, expected) in [
+      ('Title', ['Alpha', 'Beta', 'Middle', 'Zulu']),
+      ('Artist', ['Zulu', 'Beta', 'Alpha', 'Middle']),
+      ('Album', ['Beta', 'Zulu', 'Alpha', 'Middle']),
+      ('Release date', ['Alpha', 'Beta', 'Zulu', 'Middle']),
+      ('Duration', ['Alpha', 'Beta', 'Zulu', 'Middle']),
+      ('Descending', ['Zulu', 'Beta', 'Alpha', 'Middle']),
+      ('Release date', ['Beta', 'Zulu', 'Alpha', 'Middle']),
+      ('Artist', ['Alpha', 'Beta', 'Zulu', 'Middle']),
+      ('Album', ['Alpha', 'Zulu', 'Beta', 'Middle']),
+      ('Title', ['Zulu', 'Middle', 'Beta', 'Alpha']),
+    ]) {
+      final playing = player.queues.last;
+      final playCount = player.queues.length;
+      await sortBy(choice);
+      expect(player.queues, hasLength(playCount));
+      expect(player.queues.last.tracks, same(playing.tracks));
+      await playAll(expected);
+      expect(player.lastRetainQueueOrder, isTrue);
+    }
+
+    final songs = visibleSongs();
+    await tester.tap(find.text('Beta'));
+    await tester.pumpAndSettle();
+    expect(player.queues.last.tracks.map((track) => track.title), songs);
+    expect(player.queues.last.start, songs.indexOf('Beta'));
+    expect(player.lastSongTap, isTrue);
+
+    await sortBy('Default order');
+    await playAll(defaultSongs);
   });
 
   testWidgets(

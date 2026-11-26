@@ -5,6 +5,7 @@ import 'package:clipious/main.dart' show isTv;
 import 'package:clipious/music/models/local_music_album.dart';
 import 'package:clipious/music/models/local_music_album_editions.dart';
 import 'package:clipious/music/models/local_music_artist.dart';
+import 'package:clipious/music/models/local_music_browse.dart';
 import 'package:clipious/music/models/music_artist_identity.dart';
 import 'package:clipious/music/models/local_music_track.dart';
 import 'package:clipious/music/models/on_device_music_entry.dart';
@@ -18,6 +19,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../components/music_artist_alias_dialog.dart';
 import '../components/local_music_category_sort_menu.dart';
+import '../components/local_music_detail_song_sort_menu.dart';
 import '../components/device_music_artwork.dart';
 import '../components/music_collection_panes.dart';
 import 'music.dart';
@@ -67,6 +69,7 @@ class _MusicDeviceArtistPageState extends State<MusicDeviceArtistPage> {
   late final AppState _session;
   bool _checking = true;
   int _request = 0;
+  var _songOrder = const LocalMusicDetailSongOrder();
 
   LocalMusicLibrary get _library =>
       widget.library ?? LocalMusicLibrary.instance;
@@ -115,10 +118,12 @@ class _MusicDeviceArtistPageState extends State<MusicDeviceArtistPage> {
   @override
   void didUpdateWidget(MusicDeviceArtistPage oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.library != widget.library ||
-        oldWidget.selectionId != widget.selectionId) {
-      _load();
+    final sourceChanged = oldWidget.library != widget.library ||
+        oldWidget.selectionId != widget.selectionId;
+    if (sourceChanged || oldWidget.artistKey != widget.artistKey) {
+      _songOrder = const LocalMusicDetailSongOrder();
     }
+    if (sourceChanged) _load();
   }
 
   Future<void> _load({bool refresh = false}) async {
@@ -190,7 +195,7 @@ class _MusicDeviceArtistPageState extends State<MusicDeviceArtistPage> {
   Future<void> _play(String? id) async {
     final artist = _checking ? null : _currentArtist;
     if (artist == null) return;
-    final tracks = artist.tracks;
+    final tracks = _songOrder.order(artist.tracks);
     final index = id == null ? 0 : tracks.indexWhere((t) => t.playbackId == id);
     if (index < 0) return;
     final library = _library;
@@ -209,6 +214,7 @@ class _MusicDeviceArtistPageState extends State<MusicDeviceArtistPage> {
         startIndex: index,
         queueTitle: artist.name,
         songTap: id != null,
+        retainQueueOrder: _songOrder.isSorted,
         isCurrent: current,
       );
     } catch (_) {
@@ -298,8 +304,13 @@ class _MusicDeviceArtistPageState extends State<MusicDeviceArtistPage> {
 
   Widget _artist(AppLocalizations locals, LocalMusicArtist artist,
       MusicLibraryService aliases) {
-    final members = artist.tracks;
-    final albumKeys = members.map((track) => track.albumKey).nonNulls.toSet();
+    final albumKeys =
+        artist.tracks.map((track) => track.albumKey).nonNulls.toSet();
+    final members = _songOrder.order(artist.tracks);
+    final indexes = {
+      for (final (index, track) in members.indexed)
+        ValueKey(track.playbackId): index,
+    };
     // Read the release kind from the whole visible release, including tracks
     // on which this artist has no credit.
     final albums = browseLocalMusicAlbumEditions(
@@ -351,6 +362,10 @@ class _MusicDeviceArtistPageState extends State<MusicDeviceArtistPage> {
           widget.artistKey,
         )),
         itemCount: members.length + (split ? 0 : 1),
+        findChildIndexCallback: (key) {
+          final index = indexes[key];
+          return index == null ? null : index + (split ? 0 : 1);
+        },
         itemBuilder: (context, index) {
           if (!split && index == 0) return details;
           final trackIndex = split ? index : index - 1;
@@ -476,6 +491,14 @@ class _MusicDeviceArtistPageState extends State<MusicDeviceArtistPage> {
                   order: order,
                   isCurrent: () =>
                       _sourceCurrent && !_checking && _library.error == null,
+                ),
+              if (artist != null)
+                LocalMusicDetailSongSortMenu(
+                  order: _songOrder,
+                  onChanged: (order) {
+                    if (_checking || _currentArtist?.key != artist.key) return;
+                    setState(() => _songOrder = order);
+                  },
                 ),
               if (artist != null &&
                   MusicArtistIdentity.device(artist.key).isValid)
