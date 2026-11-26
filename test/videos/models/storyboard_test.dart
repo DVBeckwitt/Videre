@@ -59,6 +59,48 @@ void main() {
     expect(end.row, 1);
   });
 
+  test('finds adjacent tiles on either side of a sheet boundary', () {
+    final board = Storyboard.fromJson(metadata);
+    const duration = Duration(seconds: 7);
+    final before = board.frameAt(const Duration(milliseconds: 4500), duration,
+        offset: -1)!;
+    final after =
+        board.frameAt(const Duration(milliseconds: 3500), duration, offset: 1)!;
+    expect((before.url, before.column, before.row),
+        ('https://i.ytimg.com/sb/id/L2/M0.jpg?sig=a%2Fb', 1, 1));
+    expect((after.url, after.column, after.row),
+        ('https://i.ytimg.com/sb/id/L2/M1.jpg?sig=a%2Fb', 0, 0));
+  });
+
+  test('skips neighbors before the start and beyond the video duration', () {
+    final board = Storyboard.fromJson(metadata);
+    const duration = Duration(milliseconds: 2500);
+
+    expect(board.frameAt(Duration.zero, duration, offset: -1), isNull);
+    final firstNeighbor =
+        board.frameAt(const Duration(seconds: -1), duration, offset: 1)!;
+    expect((firstNeighbor.column, firstNeighbor.row), (1, 0));
+
+    expect(board.frameAt(duration, duration, offset: 1), isNull);
+    final lastNeighbor =
+        board.frameAt(const Duration(hours: 1), duration, offset: -1)!;
+    expect((lastNeighbor.column, lastNeighbor.row), (1, 0));
+  });
+
+  test('skips neighbors in unaddressable and nonexistent sheets', () {
+    const position = Duration(seconds: 3);
+    const duration = Duration(seconds: 7);
+    final singleSheet =
+        Storyboard.fromJson({...metadata, 'storyboardCount': 1});
+    final noPlaceholder = Storyboard.fromJson(
+        {...metadata, 'templateUrl': 'https://i.ytimg.com/sb/id/L2/M0.jpg'});
+
+    for (final board in [singleSheet, noPlaceholder]) {
+      expect(board.frameAt(position, duration), isNotNull);
+      expect(board.frameAt(position, duration, offset: 1), isNull);
+    }
+  });
+
   test('rejects dimensions that would overflow the sheet size limits', () {
     expect(
         Storyboard.parseList([
