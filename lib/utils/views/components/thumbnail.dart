@@ -14,12 +14,17 @@ import 'package:clipious/utils/views/components/selected_server.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
+import 'artwork_image_builder.dart';
+
 class Thumbnail extends StatelessWidget {
   final Widget? child;
 
   /// Decorative content to show while optional artwork is loading or missing.
   /// Candidate retries and account-scoped caching still follow the same policy.
   final Widget? fallback;
+
+  /// Presents a decoded image with its cached provider and rendered child.
+  final ArtworkImageBuilder? artworkImageBuilder;
   final double? height;
   final double? width;
 
@@ -42,6 +47,7 @@ class Thumbnail extends StatelessWidget {
       {super.key,
       this.child,
       this.fallback,
+      this.artworkImageBuilder,
       this.thumbnails,
       this.images,
       this.useInvidiousProxy = true,
@@ -69,6 +75,7 @@ class Thumbnail extends StatelessWidget {
             context.select<AppCubit?, bool>((app) =>
                 app != null && app.state.profileId != owner.profileId));
     ColorScheme colors = Theme.of(context).colorScheme;
+    final artworkFallback = artworkImageBuilder == null ? null : fallback;
     return wrongMusicProfile ||
             ((useInvidiousProxy || instanceOnly) && server == null)
         ? Container(
@@ -119,11 +126,12 @@ class Thumbnail extends StatelessWidget {
               child: BlocBuilder<ThumbnailCubit, ThumbnailState>(
                   builder: (context, state) {
                 if (state.selected == null) {
-                  return _ErrorWidget(
-                      decoration: decoration,
-                      width: width,
-                      height: height,
-                      fallback: fallback);
+                  return artworkFallback ??
+                      _ErrorWidget(
+                          decoration: decoration,
+                          width: width,
+                          height: height,
+                          fallback: fallback);
                 } else {
                   final cubit = context.read<ThumbnailCubit>();
 
@@ -175,20 +183,24 @@ class Thumbnail extends StatelessWidget {
                     httpHeaders: server?.headersForUrl(url),
                     memCacheWidth: decodeWidth,
                     memCacheHeight: decodeHeight,
-                    imageBuilder: (context, imageProvider) => AnimatedContainer(
-                      height: height,
-                      width: width,
-                      decoration: decoration.copyWith(
-                          image: DecorationImage(
-                              image: ResizeImage.resizeIfNeeded(
-                                  decodeWidth, decodeHeight, imageProvider),
-                              fit: BoxFit.cover)),
-                      // duration: animationDuration,
-                      duration:
-                          AppMotion.duration(context, animationDuration ~/ 2),
-                      curve: Curves.easeInOutQuad,
-                      child: child,
-                    ),
+                    imageBuilder: (context, imageProvider) {
+                      final provider = ResizeImage.resizeIfNeeded(
+                          decodeWidth, decodeHeight, imageProvider);
+                      final image = AnimatedContainer(
+                        height: height,
+                        width: width,
+                        decoration: decoration.copyWith(
+                            image: DecorationImage(
+                                image: provider, fit: BoxFit.cover)),
+                        duration:
+                            AppMotion.duration(context, animationDuration ~/ 2),
+                        curve: Curves.easeInOutQuad,
+                        child: child,
+                      );
+                      return artworkImageBuilder?.call(
+                              context, provider, image) ??
+                          image;
+                    },
                     imageUrl: url,
                     placeholderFadeInDuration: AppMotion.fadeDuration(context),
                     fadeInDuration: AppMotion.fadeDuration(context),
@@ -202,30 +214,32 @@ class Thumbnail extends StatelessWidget {
                           cubit.onThumbnailFailed();
                         }
                       });
-                      return _ErrorWidget(
-                        decoration: decoration,
-                        width: width,
-                        height: height,
-                        fallback: fallback,
-                      );
+                      return artworkFallback ??
+                          _ErrorWidget(
+                            decoration: decoration,
+                            width: width,
+                            height: height,
+                            fallback: fallback,
+                          );
                     },
                     progressIndicatorBuilder: (context, url, progress) =>
+                        artworkFallback ??
                         Container(
-                      height: height,
-                      width: width,
-                      alignment: Alignment.center,
-                      decoration:
-                          decoration.copyWith(color: colors.secondaryContainer),
-                      // duration: animationDuration,
-                      child: fallback ??
-                          const SizedBox(
-                              height: 20,
-                              width: 20,
-                              child: MotionLoadingIndicator(
-                                  child: CircularProgressIndicator(
-                                strokeWidth: 1,
-                              ))),
-                    ),
+                          height: height,
+                          width: width,
+                          alignment: Alignment.center,
+                          decoration: decoration.copyWith(
+                              color: colors.secondaryContainer),
+                          // duration: animationDuration,
+                          child: fallback ??
+                              const SizedBox(
+                                  height: 20,
+                                  width: 20,
+                                  child: MotionLoadingIndicator(
+                                      child: CircularProgressIndicator(
+                                    strokeWidth: 1,
+                                  ))),
+                        ),
                   );
                 }
               }),

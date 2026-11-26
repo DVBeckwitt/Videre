@@ -21,6 +21,7 @@ class MusicTimedLyrics extends StatefulWidget {
   final MusicLyrics lyrics;
   final MusicMetadata track;
   final bool edited;
+  final bool inline;
   final MusicLyricsReaderPreferences preferences;
   final Duration seekLimit;
   final Duration delay;
@@ -33,6 +34,7 @@ class MusicTimedLyrics extends StatefulWidget {
     required this.lyrics,
     required this.track,
     required this.edited,
+    this.inline = false,
     required this.preferences,
     required this.seekLimit,
     required this.delay,
@@ -124,9 +126,13 @@ class _MusicTimedLyricsState extends State<MusicTimedLyrics> {
       final target = active < 0 ? 0 : active;
       final row = _lineKeys[target]?.currentContext;
       if (row != null) {
-        unawaited(Scrollable.ensureVisible(row,
+        final duration = animate ? AppMotion.duration(row) : Duration.zero;
+        // Following lyrics inside Now Playing must leave its outer scroll
+        // position alone so the playback controls stay where the user left them.
+        unawaited(Scrollable.of(row).position.ensureVisible(
+            row.findRenderObject()!,
             alignment: _alignment,
-            duration: animate ? AppMotion.duration(row) : Duration.zero,
+            duration: duration,
             curve: Curves.easeInOut));
       } else if (_anchor != target) {
         // Recenter the lazy viewport for a seek across many unbuilt rows.
@@ -426,8 +432,10 @@ class _MusicTimedLyricsState extends State<MusicTimedLyrics> {
           ),
         ),
       ),
-      if (!_selecting) _seekControls(position, active),
-      _selectionControls(context),
+      if (!widget.inline) ...[
+        if (!_selecting) _seekControls(position, active),
+        _selectionControls(context),
+      ],
     ]);
   }
 }

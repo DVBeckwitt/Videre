@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:clipious/utils/views/components/artwork_image_builder.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
@@ -18,6 +19,7 @@ class CommunityMusicArtwork extends StatefulWidget {
   final MusicMetadata? music;
   final int? durationSeconds;
   final Widget fallback;
+  final ArtworkImageBuilder? artworkImageBuilder;
   final bool allowLookup;
   final MusicCommunityCoverCache? cache;
 
@@ -27,6 +29,7 @@ class CommunityMusicArtwork extends StatefulWidget {
     this.music,
     this.durationSeconds,
     required this.fallback,
+    this.artworkImageBuilder,
     this.allowLookup = false,
     this.cache,
   });
@@ -206,11 +209,16 @@ class _CommunityMusicArtworkState extends State<CommunityMusicArtwork>
           builder: (context, snapshot) {
             final cover = snapshot.data;
             if (cover == null) return widget.fallback;
-            return Image.file(
-              cover,
+            final provider = FileImage(cover);
+            return Image(
+              image: provider,
               fit: BoxFit.cover,
-              frameBuilder: (context, child, frame, synchronous) =>
-                  synchronous || frame != null ? child : widget.fallback,
+              frameBuilder: (context, child, frame, synchronous) {
+                if (!synchronous && frame == null) return widget.fallback;
+                return widget.artworkImageBuilder
+                        ?.call(context, provider, child) ??
+                    child;
+              },
               errorBuilder: (context, error, stack) => widget.fallback,
             );
           },
