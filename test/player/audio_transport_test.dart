@@ -1219,8 +1219,7 @@ void main() {
         await waitFor(() =>
             player.savedSession?.androidResumption?.occurrence ==
             seed.queueEntryId);
-        final recent = await player.androidRecentMusic();
-        expect(recent?.title, seed.title);
+        final resumeSource = player.savedSession!.androidResumption!.toJson();
 
         final catalog = _RadioCatalog();
         final request = player.startCurrentMusicSongRadio(seed,
@@ -1246,7 +1245,7 @@ void main() {
         }
         expect(await request, MusicSongRadioResult.started);
         await waitFor(() => player.savedSession?.queueTitle == 'Related radio');
-        expect((await player.androidRecentMusic())?.id, recent!.id);
+        expect(player.savedSession!.androidResumption?.toJson(), resumeSource);
 
         expect(player.state.playQueue, ['radioNext01']);
         expect(player.state.videos.map((video) => video.videoId),

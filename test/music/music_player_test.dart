@@ -1409,15 +1409,15 @@ void main() {
     await tester.pumpAndSettle();
     await openSongActions(tester);
     await tapSongAction(tester, menu);
-    await chooseAndWait(
-      tester,
-      find.text('Verse'),
-      () {
-        if (player.state.currentQueueId != markedId) return false;
-        player.setEvent(const MediaEvent(state: MediaState.ready));
-        return true;
-      },
-    );
+    final bookmarkRoute = ModalRoute.of(tester.element(sheet))!;
+    await tester.runAsync(() async {
+      await tester.tap(find.text('Verse'));
+      // The player publishes the new occurrence before the jump finishes.
+      await bookmarkRoute.popped.timeout(const Duration(seconds: 5));
+      player.setEvent(const MediaEvent(state: MediaState.ready));
+    });
+    await tester.pumpAndSettle();
+    expect(player.state.currentQueueId, markedId);
     expect(player.state.position, position);
     expect(player.state.isPlaying, isFalse);
     expect(sheet, findsNothing);
