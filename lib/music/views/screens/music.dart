@@ -150,9 +150,13 @@ class _OnlineSearchListing {
 }
 
 class _ArtistReleaseListing {
-  _ArtistReleaseListing(MusicArtistPage page) : uploads = page.songs;
+  _ArtistReleaseListing(MusicArtistPage page, this.requestedArtistId)
+      : uploads = page.songs;
 
+  final String requestedArtistId;
   List<MusicTrack> uploads;
+  final requestedUploadContinuations = <String>{};
+  String? uploadContinuation;
   bool uploadsLoading = false;
   bool uploadsFailed = false;
   final releases = <String, MusicCollection>{};
@@ -172,6 +176,7 @@ class MusicScreen extends StatefulWidget {
   final int startIndex;
   final String? playlistId;
   final String? artistId;
+  final String? artistName;
   final String? initialQuery;
   final bool embedded;
   final Duration startAt;
@@ -186,6 +191,7 @@ class MusicScreen extends StatefulWidget {
       this.startIndex = 0,
       this.playlistId,
       this.artistId,
+      this.artistName,
       this.initialQuery,
       this.startAt = Duration.zero,
       this.embedded = false});
@@ -194,10 +200,11 @@ class MusicScreen extends StatefulWidget {
       _MusicTvAudio(video: video, offlineVideo: offlineVideo);
 
   static void openPlayingArtist(BuildContext context, String id,
-      {required bool television}) {
+      {required bool television, String? artistName}) {
     final player = context.read<PlayerCubit>();
     if (television) {
-      unawaited(openPlayingSource(context, MusicScreen(artistId: id),
+      unawaited(openPlayingSource(
+          context, MusicScreen(artistId: id, artistName: artistName),
           television: true));
     } else {
       // The phone player overlays Main's nested pages as their sibling.
@@ -205,7 +212,7 @@ class MusicScreen extends StatefulWidget {
       final pages =
           router.root.innerRouterOf<StackRouter>(MainRoute.name) ?? router;
       player.showMiniPlayer();
-      pages.push(MusicRoute(artistId: id));
+      pages.push(MusicRoute(artistId: id, artistName: artistName));
     }
   }
 
@@ -1231,7 +1238,7 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
     } else if (widget.videoId != null) {
       await _openSong(widget.videoId!, startAt: widget.startAt);
     } else if (widget.artistId != null) {
-      await _openArtist(widget.artistId!);
+      await _openArtist(widget.artistId!, name: widget.artistName);
     } else if (widget.initialQuery?.trim().isNotEmpty == true) {
       _searchIntentRevision++;
       _searchSource = _MusicSearchSource.online;
@@ -1506,13 +1513,18 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
     _playlistFindButton.requestFocus();
   }
 
-  Future<void> _openArtist(String id) async {
-    if (!_loading && _artistPage?.artist.id == id) return;
+  Future<void> _openArtist(String id, {String? name}) async {
+    if (!_loading &&
+        (_artistPage?.artist.id == id ||
+            _artistReleases?.requestedArtistId == id)) {
+      return;
+    }
     await _run(
       (generation, session) async {
-        final artist = await musicCatalogService.getArtistOverview(id);
+        final artist =
+            await musicCatalogService.getArtistOverview(id, artistName: name);
         if (_active(generation, session)) {
-          final releases = _ArtistReleaseListing(artist);
+          final releases = _ArtistReleaseListing(artist, id);
           setState(() {
             _artistPage = artist;
             _artistReleases = releases;
@@ -1523,7 +1535,7 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
           unawaited(_loadArtistReleases(artist.artist.id, releases, session));
         }
       },
-      () => _openArtist(id),
+      () => _openArtist(id, name: name),
       browse: true,
     );
   }
@@ -1541,13 +1553,15 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
     bool current() => _artistListingCurrent(listing, session);
     if (!current() || listing.uploadsLoading) return;
     final proxy = NetworkProxy.instance.config;
+    final continuation = listing.uploadContinuation;
     setState(() {
       listing.uploadsLoading = true;
       listing.uploadsFailed = false;
     });
     try {
-      final tracks = await musicCatalogService.getArtistUploads(
+      final page = await musicCatalogService.getArtistUploadsPage(
         artistId,
+        continuation: continuation,
         isCurrent: () =>
             current() &&
             !NetworkProxy.instance.isChanging &&
@@ -1557,7 +1571,19 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
       if (!identical(NetworkProxy.instance.config, proxy)) {
         listing.uploadsFailed = true;
       } else {
-        listing.uploads = tracks;
+        final seen = {for (final track in listing.uploads) track.videoId};
+        listing.uploads = [
+          ...listing.uploads,
+          for (final track in page.songs)
+            if (seen.add(track.videoId)) track,
+        ];
+        if (continuation != null) {
+          listing.requestedUploadContinuations.add(continuation);
+        }
+        listing.uploadContinuation =
+            listing.requestedUploadContinuations.contains(page.continuation)
+                ? null
+                : page.continuation;
       }
     } catch (_) {
       if (current()) listing.uploadsFailed = true;
@@ -1994,7 +2020,7 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
             TextButton(
                 style: TextButton.styleFrom(
                     padding: EdgeInsets.zero, alignment: Alignment.centerLeft),
-                onPressed: () => _openArtist(id),
+                onPressed: () => _openArtist(id, name: credit.name),
                 child: Text(library.artistDisplayName(
                     MusicArtistIdentity.catalog(id), credit.name)))
           else
@@ -2321,7 +2347,7 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
                     child: Text(name)),
                 subtitle: name == artist.name ? null : Text(artist.name),
                 trailing: const Icon(Icons.chevron_right),
-                onTap: () => _openArtist(artist.id));
+                onTap: () => _openArtist(artist.id, name: artist.name));
           case MusicCatalogPlaylistHit(:final playlist):
             return ListTile(
                 key: listing.paginated ? ValueKey(hit.key) : null,
@@ -2855,7 +2881,10 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
     return ListenableBuilder(
       listenable: librarySession.library.changes,
       builder: (context, _) {
-        final saved = _savedArtistTracks(librarySession, artistPage.artist.id);
+        final saved = _savedArtistTracks(librarySession, {
+          artistPage.artist.id,
+          if (listing != null) listing.requestedArtistId,
+        });
         return MusicCollectionPanes(
           detailsKey: PageStorageKey((
             'music-catalog-artist-details',
@@ -2892,6 +2921,11 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
                   ),
               ],
               _sectionTitle(locals.musicChannelUploads),
+              if (uploads.isNotEmpty) ...[
+                if (!split) playAll,
+                for (var i = 0; i < uploads.length; i++)
+                  _song(uploads, i, layout, queueTitle: artistPage.artist.name),
+              ],
               if (listing?.uploadsLoading == true)
                 _artistSectionProgress(locals.musicChannelUploads)
               else if (listing?.uploadsFailed == true)
@@ -2907,11 +2941,23 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
                     child: Text(locals.retry),
                   ),
                 )
-              else if (uploads.isNotEmpty) ...[
-                if (!split) playAll,
-                for (var i = 0; i < uploads.length; i++)
-                  _song(uploads, i, layout, queueTitle: artistPage.artist.name),
-              ] else
+              else if (listing?.uploadContinuation != null)
+                Align(
+                  alignment: AlignmentDirectional.centerStart,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: TextButton(
+                      key: const ValueKey('music-more-artist-uploads'),
+                      onPressed: () => _loadArtistUploads(
+                        artistPage.artist.id,
+                        listing!,
+                        session,
+                      ),
+                      child: Text(locals.loadMore),
+                    ),
+                  ),
+                )
+              else if (uploads.isEmpty)
                 Padding(
                   padding: const EdgeInsets.all(24),
                   child: Text(locals.musicArtistEmpty),
@@ -2923,12 +2969,13 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
     );
   }
 
-  List<MusicTrack> _savedArtistTracks(MusicLibrarySession session, String id) {
+  List<MusicTrack> _savedArtistTracks(
+      MusicLibrarySession session, Set<String> artistIds) {
     if (!session.isCurrent) return const [];
     return [
       for (final entry in session.library.entries)
         if (entry.kind == MusicLibraryKind.song &&
-            entry.artistCredits.any((credit) => credit.id == id))
+            entry.artistCredits.any((credit) => artistIds.contains(credit.id)))
           MusicTrack(
             videoId: entry.id,
             title: entry.title,

@@ -577,6 +577,8 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
     await Navigator.of(context).push<void>(MaterialPageRoute(
         builder: (_) => MusicScreen(
               artistId: entry.kind == MusicLibraryKind.artist ? entry.id : null,
+              artistName:
+                  entry.kind == MusicLibraryKind.artist ? entry.title : null,
               playlistId:
                   entry.kind == MusicLibraryKind.playlist ? entry.id : null,
             )));

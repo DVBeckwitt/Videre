@@ -189,14 +189,23 @@ abstract class MusicCatalogService {
   Future<MusicArtistPage> getArtist(String id) async =>
       throw const MusicCatalogUnsupported();
 
-  /// Loads the channel separately when the adapter can defer its uploads.
-  Future<MusicArtistPage> getArtistOverview(String id) => getArtist(id);
+  /// Loads the channel before its uploads when supported. The display name can
+  /// help the provider check whether an unavailable Topic channel has a match.
+  Future<MusicArtistPage> getArtistOverview(String id, {String? artistName}) =>
+      getArtist(id);
 
   Future<List<MusicTrack>> getArtistUploads(
     String id, {
     bool Function()? isCurrent,
   }) async =>
       throw const MusicCatalogUnsupported();
+
+  Future<MusicArtistUploads> getArtistUploadsPage(String id,
+          {String? continuation, bool Function()? isCurrent}) async =>
+      continuation == null
+          ? MusicArtistUploads(
+              songs: await getArtistUploads(id, isCurrent: isCurrent))
+          : const MusicArtistUploads();
 
   Future<MusicArtistReleases> getArtistReleases(String id,
           {String? continuation, bool Function()? isCurrent}) async =>

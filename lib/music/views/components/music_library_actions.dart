@@ -364,8 +364,9 @@ enum _PlayingSongAction {
 
 class _OpenPlayingArtist {
   final String id;
+  final String name;
 
-  const _OpenPlayingArtist(this.id);
+  const _OpenPlayingArtist(this.id, this.name);
 }
 
 enum _PlaylistSelectionAction {
@@ -1380,9 +1381,7 @@ class MusicLibraryActions extends StatefulWidget {
     final artists = <String, String>{
       if (!onDevice)
         for (final credit in music.artistCredits)
-          if (normalizeChannelId(credit.id) case final id?)
-            id: session.library.artistDisplayName(
-                MusicArtistIdentity.catalog(id), credit.name),
+          if (normalizeChannelId(credit.id) case final id?) id: credit.name,
     };
     ModalRoute<dynamic>? route;
     Widget first(Widget child) => Builder(builder: (context) {
@@ -1481,10 +1480,11 @@ class MusicLibraryActions extends StatefulWidget {
       for (final artist in artists.entries)
         PopupMenuItem(
             key: ValueKey(('music-player-open-artist', artist.key)),
-            value: _OpenPlayingArtist(artist.key),
+            value: _OpenPlayingArtist(artist.key, artist.value),
             child: Text(artists.length == 1
                 ? locals.musicOpenArtist
-                : locals.musicOpenNamedArtist(artist.value))),
+                : locals.musicOpenNamedArtist(session.library.artistDisplayName(
+                    MusicArtistIdentity.catalog(artist.key), artist.value)))),
     ];
     final profileChanges = app.stream.listen((_) => dismissStaleMenu());
     final playbackChanges = player.stream.listen((_) => dismissStaleMenu());
@@ -1493,7 +1493,7 @@ class MusicLibraryActions extends StatefulWidget {
       if (!context.mounted || !current() || action == null) return;
       if (action is _OpenPlayingArtist) {
         MusicScreen.openPlayingArtist(context, action.id,
-            television: television);
+            television: television, artistName: action.name);
       } else if (action == _PlayingSongAction.saveDevice && track != null) {
         await saveDeviceTrack(context, LocalMusicLibrary.instance, track,
             inPlayer: true, isCurrent: current);

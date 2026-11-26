@@ -132,10 +132,15 @@ class _Catalog extends MusicCatalogService {
   VideoLoadObserver? songObserver;
   final songRequests = <String>[];
   final artistRequests = <String>[];
+  final artistOverviewRequests = <(String, String?)>[];
+  final releaseArtistIds = <String>[];
   final releaseRequests = <String?>[];
   final releasePages = <String?, MusicArtistReleases>{};
   Object? releaseFailure;
   final uploadRequests = <Completer<List<MusicTrack>>>[];
+  final uploadArtistIds = <String>[];
+  final uploadPages = <String?, MusicArtistUploads>{};
+  final uploadPageRequests = <String?>[];
   final playlistRequests = <String>[];
   Completer<MusicArtistPage>? pendingArtist;
   Completer<MusicCollection>? pendingPlaylist;
@@ -225,16 +230,35 @@ class _Catalog extends MusicCatalogService {
   }
 
   @override
+  Future<MusicArtistPage> getArtistOverview(String id, {String? artistName}) {
+    artistOverviewRequests.add((id, artistName));
+    return getArtist(id);
+  }
+
+  @override
   Future<List<MusicTrack>> getArtistUploads(String id,
       {bool Function()? isCurrent}) {
+    uploadArtistIds.add(id);
     final request = Completer<List<MusicTrack>>();
     uploadRequests.add(request);
     return request.future;
   }
 
   @override
+  Future<MusicArtistUploads> getArtistUploadsPage(String id,
+      {String? continuation, bool Function()? isCurrent}) async {
+    if (uploadPages.isEmpty) {
+      return super.getArtistUploadsPage(id,
+          continuation: continuation, isCurrent: isCurrent);
+    }
+    uploadPageRequests.add(continuation);
+    return uploadPages[continuation] ?? const MusicArtistUploads();
+  }
+
+  @override
   Future<MusicArtistReleases> getArtistReleases(String id,
       {String? continuation, bool Function()? isCurrent}) async {
+    releaseArtistIds.add(id);
     releaseRequests.add(continuation);
     if (releaseFailure case final error?) throw error;
     return releasePages[continuation] ?? const MusicArtistReleases();
@@ -3779,13 +3803,21 @@ void main() {
   testWidgets('artist saved songs match catalog identity rather than names',
       (tester) async {
     const identity = 'UCabcdefghijklmnopqrstuv';
+    const topic = 'UC1234567890123456789012';
     const other = 'UCzyxwvutsrqponmlkjihgfe';
     catalog.pendingArtist = Completer<MusicArtistPage>()
       ..complete(const MusicArtistPage(
         artist: MusicArtist(id: identity, name: 'Artist'),
+        loadsUploadsSeparately: true,
       ));
     final library = MusicLibraryService.forProfile(db, db.profileId);
     await tester.runAsync(() async {
+      await library.save(const MusicLibraryEntry(
+        kind: MusicLibraryKind.song,
+        id: 'topic000001',
+        title: 'Saved with the Topic credit',
+        artistCredits: [MusicArtistCredit(name: 'Artist', id: topic)],
+      ));
       await library.save(const MusicLibraryEntry(
         kind: MusicLibraryKind.song,
         id: 'matched0001',
@@ -3799,11 +3831,44 @@ void main() {
         artistCredits: [MusicArtistCredit(name: 'Artist', id: other)],
       ));
     });
-    await show(tester, screen: const MusicScreen(artistId: identity));
+    await show(tester,
+        screen:
+            const MusicScreen(artistId: topic, artistName: 'Artist - Topic'));
+    catalog.uploadRequests.single.complete([first]);
     await tester.pumpAndSettle();
     expect(find.text('Saved songs'), findsOneWidget);
     expect(find.text('Matching saved song'), findsOneWidget);
+    expect(find.text('Saved with the Topic credit'), findsOneWidget);
     expect(find.text('Different saved song'), findsNothing);
+    expect(catalog.artistOverviewRequests, [(topic, 'Artist - Topic')]);
+    expect(catalog.releaseArtistIds, [identity]);
+    expect(catalog.uploadArtistIds, [identity]);
+  });
+
+  testWidgets('artist uploads page without repeating songs or continuations',
+      (tester) async {
+    catalog.pendingArtist = Completer<MusicArtistPage>()
+      ..complete(const MusicArtistPage(
+        artist: artist,
+        loadsUploadsSeparately: true,
+      ));
+    catalog.uploadPages[null] =
+        const MusicArtistUploads(songs: [first], continuation: 'next');
+    catalog.uploadPages['next'] =
+        const MusicArtistUploads(songs: [first, second], continuation: 'next');
+    await show(tester, screen: const MusicScreen(artistId: 'UCartist'));
+    await tester.pumpAndSettle();
+
+    final more = find.byKey(const ValueKey('music-more-artist-uploads'));
+    expect(find.text(first.title), findsOneWidget);
+    await tester.ensureVisible(more);
+    await tester.tap(more);
+    await tester.pumpAndSettle();
+
+    expect(catalog.uploadPageRequests, [null, 'next']);
+    expect(find.text(first.title), findsOneWidget);
+    expect(find.text(second.title), findsOneWidget);
+    expect(more, findsNothing);
   });
 
   testWidgets('artist releases page into the existing playlist flow',

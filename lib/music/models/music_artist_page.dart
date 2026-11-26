@@ -21,6 +21,14 @@ class MusicArtistPage {
   });
 }
 
+/// One page of uploads exposed by the artist's channel.
+class MusicArtistUploads {
+  final List<MusicTrack> songs;
+  final String? continuation;
+
+  const MusicArtistUploads({this.songs = const [], this.continuation});
+}
+
 /// A page of public release playlists from the artist's channel.
 class MusicArtistReleases {
   final List<MusicCollection> releases;

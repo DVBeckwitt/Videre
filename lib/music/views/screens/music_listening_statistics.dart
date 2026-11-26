@@ -116,7 +116,7 @@ class _MusicListeningStatisticsPageState
           await _playRecording(event, locals, current);
           return;
         case ListeningArtist(:final channelId):
-          page = MusicScreen(artistId: channelId);
+          page = MusicScreen(artistId: channelId, artistName: rank.title);
         case ListeningAlbum(:final playlistId):
           page = MusicScreen(playlistId: playlistId);
         case ListeningPlaylist(:final reference):

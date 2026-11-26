@@ -622,6 +622,7 @@ class MusicRoute extends PageRouteInfo<MusicRouteArgs> {
     int startIndex = 0,
     String? playlistId,
     String? artistId,
+    String? artistName,
     String? initialQuery,
     Duration startAt = Duration.zero,
     bool embedded = false,
@@ -638,6 +639,7 @@ class MusicRoute extends PageRouteInfo<MusicRouteArgs> {
             startIndex: startIndex,
             playlistId: playlistId,
             artistId: artistId,
+            artistName: artistName,
             initialQuery: initialQuery,
             startAt: startAt,
             embedded: embedded,
@@ -664,6 +666,7 @@ class MusicRoute extends PageRouteInfo<MusicRouteArgs> {
         startIndex: args.startIndex,
         playlistId: args.playlistId,
         artistId: args.artistId,
+        artistName: args.artistName,
         initialQuery: args.initialQuery,
         startAt: args.startAt,
         embedded: args.embedded,
@@ -683,6 +686,7 @@ class MusicRouteArgs {
     this.startIndex = 0,
     this.playlistId,
     this.artistId,
+    this.artistName,
     this.initialQuery,
     this.startAt = Duration.zero,
     this.embedded = false,
@@ -706,6 +710,8 @@ class MusicRouteArgs {
 
   final String? artistId;
 
+  final String? artistName;
+
   final String? initialQuery;
 
   final Duration startAt;
@@ -714,7 +720,7 @@ class MusicRouteArgs {
 
   @override
   String toString() {
-    return 'MusicRouteArgs{key: $key, videoId: $videoId, artistCredits: $artistCredits, queue: $queue, queueTitle: $queueTitle, cardOrigin: $cardOrigin, startIndex: $startIndex, playlistId: $playlistId, artistId: $artistId, initialQuery: $initialQuery, startAt: $startAt, embedded: $embedded}';
+    return 'MusicRouteArgs{key: $key, videoId: $videoId, artistCredits: $artistCredits, queue: $queue, queueTitle: $queueTitle, cardOrigin: $cardOrigin, startIndex: $startIndex, playlistId: $playlistId, artistId: $artistId, artistName: $artistName, initialQuery: $initialQuery, startAt: $startAt, embedded: $embedded}';
   }
 }
 

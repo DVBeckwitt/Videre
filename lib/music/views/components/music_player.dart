@@ -1309,9 +1309,11 @@ class _MusicPlayerState extends State<MusicPlayer>
         DownloadedVideo() => entry.musicMetadata,
         _ => null,
       };
-      if (current?.artistCredits.any((credit) => credit.id == id) == true) {
+      final credit =
+          current?.artistCredits.where((credit) => credit.id == id).firstOrNull;
+      if (credit != null) {
         MusicScreen.openPlayingArtist(context, id,
-            television: widget.television);
+            television: widget.television, artistName: credit.name);
       }
     }
 

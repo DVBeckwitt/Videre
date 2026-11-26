@@ -2720,8 +2720,9 @@ class Service {
           enrichResults: true);
 
   Future<VideosWithContinuation> getMusicChannelVideos(String channelId,
-          Server server, Future<void> Function() beforeRequest) =>
-      _getChannelVideos(channelId, null,
+          Server server, Future<void> Function() beforeRequest,
+          {String? continuation}) =>
+      _getChannelVideos(channelId, continuation,
           saveLastSeen: false,
           serverOverride: server,
           sortBy: ChannelSortBy.popular,
@@ -2744,8 +2745,15 @@ class Service {
         serverOverride: serverOverride);
     final response = await _get(req, beforeRequest: beforeRequest);
 
-    var videosWithContinuation =
-        VideosWithContinuation.fromJson(handleResponse(response));
+    final data = handleResponse(response);
+    if (!enrichResults &&
+        data is Map<String, dynamic> &&
+        data['continuation'] is! String) {
+      // Keep usable Music uploads even if the instance supplied an invalid
+      // cursor. The catalog validates opaque string cursors before reuse.
+      data.remove('continuation');
+    }
+    var videosWithContinuation = VideosWithContinuation.fromJson(data);
     videosWithContinuation.videos = (await postProcessVideos(
             videosWithContinuation.videos,
             enrichResults: enrichResults))
