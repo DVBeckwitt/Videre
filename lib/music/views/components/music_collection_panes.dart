@@ -18,14 +18,18 @@ class MusicCollectionPanes extends StatelessWidget {
   final Widget Function(BuildContext context, bool split) buildTracks;
   final Key? detailsKey;
 
+  /// Whether the available width after insets can show both panes.
+  static bool shouldSplit(double width) =>
+      !isTv &&
+      getDeviceType() == DeviceType.tablet &&
+      width.isFinite &&
+      width >= 720;
+
   @override
   Widget build(BuildContext context) {
     final labels = AppLocalizations.of(context)!;
     return LayoutBuilder(builder: (context, constraints) {
-      final split = !isTv &&
-          getDeviceType() == DeviceType.tablet &&
-          constraints.hasBoundedWidth &&
-          constraints.maxWidth >= 720;
+      final split = shouldSplit(constraints.maxWidth);
       return Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         if (split) ...[
           SizedBox(

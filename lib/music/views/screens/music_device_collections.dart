@@ -13,6 +13,7 @@ import '../../models/local_music_track.dart';
 import '../../services/local_music_library.dart';
 import '../components/local_music_category_sort_menu.dart';
 import '../components/device_music_artwork.dart';
+import '../components/music_collection_panes.dart';
 import '../components/music_library_actions.dart';
 import 'music.dart';
 import 'music_device_artist.dart';
@@ -220,29 +221,26 @@ class _DeviceCollectionPage extends StatelessWidget {
   Widget _trackList(
       BuildContext context, AppLocalizations locals, Object key, String title) {
     final tracks = _members(key);
-    if (tracks.isEmpty) return Center(child: Text(locals.musicNoResults));
     final artists = kind == MusicDeviceCollection.genres
         ? (groupLocalMusicArtists(tracks)
           ..sort((a, b) => a.key.compareTo(b.key)))
         : const <LocalMusicArtist>[];
     final songStart = artists.isEmpty ? 0 : artists.length + 2;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          child: Align(
-            alignment: AlignmentDirectional.centerStart,
-            child: FilledButton.icon(
-              autofocus: isTv,
-              onPressed: () => _play(context, key, title),
-              icon: const Icon(Icons.play_arrow),
-              label: Text(locals.musicPlayAll),
-            ),
-          ),
+    final playAll = Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: Align(
+        alignment: AlignmentDirectional.centerStart,
+        child: FilledButton.icon(
+          autofocus: isTv,
+          onPressed: () => _play(context, key, title),
+          icon: const Icon(Icons.play_arrow),
+          label: Text(locals.musicPlayAll),
         ),
-        Expanded(
-          child: ListView.builder(
+      ),
+    );
+    final songList = tracks.isEmpty
+        ? Center(child: Text(locals.musicNoResults))
+        : ListView.builder(
             key: PageStorageKey((kind, key)),
             itemCount: songStart + tracks.length,
             itemBuilder: (context, index) {
@@ -284,9 +282,32 @@ class _DeviceCollectionPage extends StatelessWidget {
                     index: songIndex, expectedTrackId: track.playbackId),
               );
             },
+          );
+    return MusicCollectionPanes(
+      details: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+            child: Semantics(
+              header: true,
+              child:
+                  Text(title, style: Theme.of(context).textTheme.headlineSmall),
+            ),
           ),
-        ),
-      ],
+          if (tracks.isNotEmpty) playAll,
+        ],
+      ),
+      buildTracks: (_, split) => Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (!split && tracks.isNotEmpty) playAll,
+          Expanded(
+            key: const ValueKey('music-device-collection-tracks'),
+            child: songList,
+          ),
+        ],
+      ),
     );
   }
 
@@ -303,26 +324,34 @@ class _DeviceCollectionPage extends StatelessWidget {
               ? LocalMusicCategorySortMenu.readOrder(
                   context, _genreOrderSetting)
               : null;
-          final title =
-              (key == null ? null : _labelFor(key)) ?? kind._label(locals);
-          final page = Scaffold(
-            appBar: AppBar(
-              title: Text(title),
-              actions: [
-                if (order != null)
-                  LocalMusicCategorySortMenu(
-                    settingName: _genreOrderSetting,
-                    order: order,
-                    isCurrent: () => _active,
-                  ),
-              ],
-            ),
-            body: SafeArea(
-              child: key == null
-                  ? _browse(locals, _indexCollections(order))
-                  : _trackList(context, locals, key, title),
-            ),
-          );
+          final categoryTitle = kind._label(locals);
+          final collectionTitle = key == null ? null : _labelFor(key);
+          final body = switch ((key, collectionTitle)) {
+            (null, _) => _browse(locals, _indexCollections(order)),
+            (final key?, final title?) =>
+              _trackList(context, locals, key, title),
+            _ => Center(child: Text(locals.musicNoResults)),
+          };
+          final page = LayoutBuilder(builder: (context, constraints) {
+            final contentWidth =
+                constraints.maxWidth - MediaQuery.paddingOf(context).horizontal;
+            final split = MusicCollectionPanes.shouldSplit(contentWidth);
+            return Scaffold(
+              appBar: AppBar(
+                title: Text(
+                    split ? categoryTitle : collectionTitle ?? categoryTitle),
+                actions: [
+                  if (order != null)
+                    LocalMusicCategorySortMenu(
+                      settingName: _genreOrderSetting,
+                      order: order,
+                      isCurrent: () => _active,
+                    ),
+                ],
+              ),
+              body: SafeArea(child: body),
+            );
+          });
           return Shortcuts(shortcuts: {
             for (final key in selectKeys)
               SingleActivator(key): const ActivateIntent(),
