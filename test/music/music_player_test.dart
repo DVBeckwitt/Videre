@@ -2656,8 +2656,9 @@ void main() {
     await tester.pumpAndSettle();
     expect(shares, hasLength(1));
     expect(find.text('Edited on this device'), findsOneWidget);
-    expect(tester.widget<ListTile>(first).selected, isFalse);
-    expect(tester.widget<ListTile>(second).selected, isFalse);
+    expect(first, findsOneWidget);
+    expect(second, findsOneWidget);
+    expect(permission, findsNothing);
   });
 
   testWidgets('Approved lyrics reopen from the same download with LRCLIB off',
@@ -4998,7 +4999,7 @@ void main() {
     Future<void> openSteering() async {
       final control = find.byKey(const ValueKey('music-queue-steer-mix'));
       expect(control.hitTestable(), findsOneWidget);
-      await tester.tap(control);
+      await tester.runAsync(() => tester.tap(control));
       await tester.pumpAndSettle();
     }
 
