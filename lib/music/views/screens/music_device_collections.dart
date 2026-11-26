@@ -13,6 +13,7 @@ import '../../models/local_music_track.dart';
 import '../../services/local_music_library.dart';
 import '../components/local_music_category_sort_menu.dart';
 import '../components/device_music_artwork.dart';
+import '../components/music_fast_scroll.dart';
 import '../components/music_library_actions.dart';
 import 'music.dart';
 import 'music_device_artist.dart';
@@ -160,14 +161,18 @@ class _DeviceCollectionPage extends StatelessWidget {
   }
 
   Widget _browse(
-      AppLocalizations locals, Map<Object, _BrowseCollection> labels) {
+    BuildContext context,
+    AppLocalizations locals,
+    Map<Object, _BrowseCollection> labels,
+    LocalMusicCategoryOrder? genreOrder,
+  ) {
     if (labels.isEmpty) return Center(child: Text(locals.musicNoResults));
     final collections = labels.entries.toList();
     final indexes = {
       for (final (index, collection) in collections.indexed)
         ValueKey(collection.key): index,
     };
-    return ListView.builder(
+    final list = ListView.builder(
       itemCount: collections.length,
       findChildIndexCallback: (key) => indexes[key],
       itemBuilder: (context, index) {
@@ -199,6 +204,18 @@ class _DeviceCollectionPage extends StatelessWidget {
           },
         );
       },
+    );
+    if (genreOrder == null) return list;
+    return MusicFastScroll(
+      scope: (library, profile, selectionId, genreOrder.value),
+      sections: musicDeviceCategoryFastScrollSections(
+        context,
+        collections,
+        sort: genreOrder.field,
+        name: (collection) => collection.value.label,
+        tracks: (collection) => collection.value.tracks,
+      ),
+      child: list,
     );
   }
 
@@ -319,7 +336,7 @@ class _DeviceCollectionPage extends StatelessWidget {
             ),
             body: SafeArea(
               child: key == null
-                  ? _browse(locals, _indexCollections(order))
+                  ? _browse(context, locals, _indexCollections(order), order)
                   : _trackList(context, locals, key, title),
             ),
           );

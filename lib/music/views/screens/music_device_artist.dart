@@ -5,6 +5,7 @@ import 'package:clipious/main.dart' show isTv;
 import 'package:clipious/music/models/local_music_album.dart';
 import 'package:clipious/music/models/local_music_album_editions.dart';
 import 'package:clipious/music/models/local_music_artist.dart';
+import 'package:clipious/music/models/local_music_browse.dart';
 import 'package:clipious/music/models/music_artist_identity.dart';
 import 'package:clipious/music/models/local_music_track.dart';
 import 'package:clipious/music/models/on_device_music_entry.dart';
@@ -20,6 +21,7 @@ import '../components/music_artist_alias_dialog.dart';
 import '../components/local_music_category_sort_menu.dart';
 import '../components/device_music_artwork.dart';
 import '../components/music_collection_panes.dart';
+import '../components/music_fast_scroll.dart';
 import 'music.dart';
 import 'music_device_album.dart';
 
@@ -219,8 +221,12 @@ class _MusicDeviceArtistPageState extends State<MusicDeviceArtistPage> {
     }
   }
 
-  Widget _filteredIndex(BuildContext context, AppLocalizations locals,
-      List<LocalMusicArtist> artists, MusicLibraryService aliases) {
+  Widget _filteredIndex(
+      BuildContext context,
+      AppLocalizations locals,
+      List<LocalMusicArtist> artists,
+      MusicLibraryService aliases,
+      LocalMusicCategoryOrder order) {
     final settings = context.read<SettingsCubit?>();
     final albumArtistsOnly = context.select((SettingsCubit? settings) =>
         settings?.state.settings[_albumArtistsOnlySetting]?.value == 'true');
@@ -249,7 +255,23 @@ class _MusicDeviceArtistPageState extends State<MusicDeviceArtistPage> {
         Expanded(
           child: visibleArtists.isEmpty
               ? Center(child: Text(locals.musicNoResults))
-              : _index(visibleArtists, aliases),
+              : MusicFastScroll(
+                  scope: (
+                    _library,
+                    widget.selectionId,
+                    order.value,
+                    albumArtistsOnly,
+                  ),
+                  sections: musicDeviceCategoryFastScrollSections(
+                    context,
+                    visibleArtists,
+                    sort: order.field,
+                    name: (artist) => aliases.artistDisplayName(
+                        MusicArtistIdentity.device(artist.key), artist.name),
+                    tracks: (artist) => artist.tracks,
+                  ),
+                  child: _index(visibleArtists, aliases),
+                ),
         ),
       ],
     );
@@ -462,7 +484,7 @@ class _MusicDeviceArtistPageState extends State<MusicDeviceArtistPage> {
             key: (artist) => artist.key,
             tracks: (artist) => artist.tracks,
           );
-          body = _filteredIndex(context, locals, artists, aliases);
+          body = _filteredIndex(context, locals, artists, aliases, order);
         } else {
           body = _unavailable(locals);
         }
