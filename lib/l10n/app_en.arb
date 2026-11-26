@@ -3218,6 +3218,8 @@
   "subtitleTimingReset": "Reset",
   "subtitleTimingSaveFailed": "Could not save subtitle timing. Please try again.",
   "videoChapters": "Chapters",
+  "previousChapter": "Previous chapter",
+  "nextChapter": "Next chapter",
   "localSubtitleAttach": "Attach subtitle file",
   "localSubtitleRelink": "Relink subtitle file",
   "localSubtitleRemove": "Remove subtitle file",

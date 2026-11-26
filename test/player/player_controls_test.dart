@@ -27,6 +27,7 @@ import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:clipious/videos/models/video.dart';
+import 'package:clipious/videos/models/video_chapter.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -42,6 +43,14 @@ class _ControlsTestPlayer extends TestPlayerCubit {
 
   void replaceOccurrence() => emit(state.copyWith(
       currentlyPlaying: const Video(videoId: 'next-track', lengthSeconds: 60)));
+
+  void replaceWithChapteredVideo() => emit(state.copyWith(
+        currentlyPlaying: const Video(
+          videoId: 'description-chapters',
+          lengthSeconds: 60,
+          description: '0:00 Intro\n0:30 Setup',
+        ),
+      ));
 }
 
 class _SpeedBoostVideo extends VideoPlayerCubit {
@@ -185,14 +194,18 @@ void main() {
   }
 
   Future<_SpeedBoostVideo> createPlayingVideo(WidgetTester tester,
-      {double aspectRatio = 16 / 9, int lengthSeconds = 60}) async {
-    final video = Video(videoId: 'boost-test', lengthSeconds: lengthSeconds);
+      {double aspectRatio = 16 / 9,
+      int lengthSeconds = 60,
+      Video? source,
+      bool playing = true}) async {
+    final video =
+        source ?? Video(videoId: 'boost-test', lengthSeconds: lengthSeconds);
     await tester.runAsync(player.close);
     player = _ControlsTestPlayer(
       PlayerState.init(null).copyWith(
         isMini: false,
         isHidden: false,
-        isPlaying: true,
+        isPlaying: playing,
         currentlyPlaying: video,
         forwardStep: settings.state.skipStep,
         rewindStep: settings.state.skipStep,
@@ -791,6 +804,104 @@ void main() {
     expect(videoPlayer.speedChanges, [2]);
     await hold.up();
     expect(videoPlayer.speedChanges, [2, 1.37]);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('fullscreen chapter controls and gestures seek while paused',
+      (tester) async {
+    final videoPlayer = await createPlayingVideo(
+      tester,
+      source: const Video(videoId: 'chapters', lengthSeconds: 90, chapters: [
+        VideoChapter(title: 'Intro', start: Duration(seconds: 10)),
+        VideoChapter(title: 'Setup', start: Duration(seconds: 30)),
+        VideoChapter(title: 'Results', start: Duration(seconds: 60)),
+      ]),
+      playing: false,
+    );
+    player.setFullScreen(FullScreenState.fullScreen);
+    await tester.pumpWidget(hostControls(SizedBox(
+      width: 540,
+      height: 320,
+      child: PlayerControls(mediaPlayerCubit: videoPlayer),
+    )));
+    await tester.pumpAndSettle();
+
+    final bounds = tester.getRect(find.byType(PlayerControls));
+    Future<void> doubleTapWithTwoFingers(double x) async {
+      for (var tap = 0; tap < 2; tap++) {
+        final first = await tester
+            .startGesture(bounds.topLeft + Offset(x, bounds.height / 3));
+        final second = await tester.startGesture(
+            bounds.topLeft + Offset(x + 30, bounds.height / 3 + 16));
+        await first.up();
+        await second.up();
+        await tester.pump(const Duration(milliseconds: 60));
+      }
+      await tester.pump(kDoubleTapTimeout);
+    }
+
+    Finder chapterButton(String label) => find.byWidgetPredicate(
+        (widget) => widget is IconButton && widget.tooltip == label);
+    final previous = chapterButton('Previous chapter');
+    final next = chapterButton('Next chapter');
+    expect(tester.widget<IconButton>(previous).onPressed, isNull);
+    await doubleTapWithTwoFingers(70);
+    expect(player.state.position, Duration.zero);
+    expect(player.state.mediaCommand?.type, MediaCommandType.enterFullScreen);
+    await tester.tap(next);
+    await tester.pump();
+    expect(player.state.position, const Duration(seconds: 10));
+    expect(player.state.mediaCommand?.type, MediaCommandType.seek);
+
+    await doubleTapWithTwoFingers(410);
+    expect(player.state.position, const Duration(seconds: 30));
+    await doubleTapWithTwoFingers(70);
+    expect(player.state.position, const Duration(seconds: 10));
+
+    player.seek(const Duration(seconds: 34));
+    await tester.pump();
+    await tester.tap(previous);
+    await tester.pump();
+    expect(player.state.position, const Duration(seconds: 30));
+
+    await tester.tap(next);
+    await tester.pump();
+    final lastSeek = player.state.mediaCommand;
+    expect(player.state.position, const Duration(seconds: 60));
+    expect(tester.widget<IconButton>(next).onPressed, isNull);
+    await doubleTapWithTwoFingers(410);
+    expect(player.state.mediaCommand, same(lastSeek));
+    expect(player.state.isPlaying, isFalse);
+    expect(videoPlayer.speedChanges, isEmpty);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('chapter actions require fullscreen and loaded chapters',
+      (tester) async {
+    final videoPlayer = await createPlayingVideo(tester);
+    player.setFullScreen(FullScreenState.fullScreen);
+    await tester.pumpWidget(hostControls(SizedBox(
+      width: 540,
+      height: 320,
+      child: PlayerControls(mediaPlayerCubit: videoPlayer),
+    )));
+    final chapterAction = find.byTooltip('Next chapter');
+    expect(chapterAction, findsNothing);
+    expect(player.skipFullscreenChapter(forward: true), isFalse);
+
+    player.setFullScreen(FullScreenState.notFullScreen);
+    player.replaceWithChapteredVideo();
+    await tester.pump();
+    expect(chapterAction, findsNothing);
+    expect(player.skipFullscreenChapter(forward: true), isFalse);
+
+    player.setFullScreen(FullScreenState.fullScreen);
+    await tester.pumpAndSettle();
+    expect(player.fullscreenChapterTargets.next?.start,
+        const Duration(seconds: 30));
+    expect(chapterAction, findsOneWidget);
+    await tester.tap(chapterAction);
+    expect(player.state.position, const Duration(seconds: 30));
     await tester.pumpWidget(const SizedBox.shrink());
   });
 

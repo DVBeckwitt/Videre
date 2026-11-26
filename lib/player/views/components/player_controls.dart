@@ -520,6 +520,25 @@ class PlayerControls extends StatelessWidget {
                 !isMini &&
                 !isPip &&
                 videoPlayer is VideoPlayerCubit;
+            final gestureOccurrence = context.select((PlayerCubit player) => (
+                  player.state.currentQueueId,
+                  player.playbackOccurrenceRevision
+                ));
+            final chapterActions = context.select((PlayerCubit player) {
+              final targets = player.fullscreenChapterTargets;
+              return (
+                previous: targets.previous != null,
+                next: targets.next != null
+              );
+            });
+            final hasChapterActions =
+                chapterActions.previous || chapterActions.next;
+            void skipChapter(bool forward) {
+              if (player.skipFullscreenChapter(forward: forward)) {
+                cubit.hideControlsDebounce();
+              }
+            }
+
             final indicatorStyle = Theme.of(context).textTheme.bodySmall;
             final indicatorLineHeight = MediaQuery.textScalerOf(context)
                     .scale(indicatorStyle?.fontSize ?? 12) *
@@ -565,7 +584,7 @@ class PlayerControls extends StatelessWidget {
               child: _PlayerSurface(
                 wrapVideoGestures: flowGestures
                     ? (child) => FlowVideoGestures(
-                          key: ValueKey(player.state.currentQueueId),
+                          key: ValueKey(gestureOccurrence),
                           video: currentlyPlaying,
                           duration: playerState.duration,
                           readPosition: () => player.state.position,
@@ -587,6 +606,11 @@ class PlayerControls extends StatelessWidget {
                             }
                             player.togglePlaying();
                           },
+                          skipChapter: hasChapterActions &&
+                                  !playerState.draggingPositionSlider
+                              ? (forward) =>
+                                  player.skipFullscreenChapter(forward: forward)
+                              : null,
                           rewind: cubit.doubleTapRewind,
                           fastForward: cubit.doubleTapFastForward,
                           seek: (position) => cubit
@@ -871,6 +895,30 @@ class PlayerControls extends StatelessWidget {
                                               mainAxisAlignment:
                                                   MainAxisAlignment.end,
                                               children: [
+                                                if (hasChapterActions) ...[
+                                                  IconButton(
+                                                    tooltip:
+                                                        locals.previousChapter,
+                                                    onPressed: chapterActions
+                                                            .previous
+                                                        ? () =>
+                                                            skipChapter(false)
+                                                        : null,
+                                                    icon: const Icon(
+                                                        Icons.skip_previous),
+                                                  ),
+                                                  IconButton(
+                                                    tooltip: locals.nextChapter,
+                                                    onPressed: chapterActions
+                                                            .next
+                                                        ? () =>
+                                                            skipChapter(true)
+                                                        : null,
+                                                    icon: const Icon(
+                                                        Icons.skip_next),
+                                                  ),
+                                                  const Spacer(),
+                                                ],
                                                 playerState.muted
                                                     ? IconButton(
                                                         onPressed: () {
