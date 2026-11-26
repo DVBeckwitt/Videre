@@ -3,7 +3,7 @@
     android:initialLayout="@layout/music_home_widget"
     android:minWidth="250dp"
     android:minHeight="110dp"
-    android:minResizeWidth="212dp"
+    android:minResizeWidth="168dp"
     android:minResizeHeight="110dp"
     android:previewLayout="@layout/music_home_widget"
     android:resizeMode="horizontal|vertical"

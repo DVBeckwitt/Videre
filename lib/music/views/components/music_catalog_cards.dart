@@ -1,4 +1,6 @@
+import 'package:clipious/music/models/music_card_origin.dart';
 import 'package:clipious/music/models/music_track.dart';
+import 'package:clipious/music/views/components/music_card_playback.dart';
 import 'package:clipious/music/views/components/community_music_artwork.dart';
 import 'package:clipious/utils/models/image_object.dart';
 import 'package:clipious/utils/views/components/thumbnail.dart';
@@ -16,6 +18,7 @@ class MusicCatalogCard extends StatefulWidget {
   final bool artist;
   final Widget? badge;
   final bool showPlayIndicator;
+  final MusicCardOrigin? cardOrigin;
 
   const MusicCatalogCard({
     super.key,
@@ -28,6 +31,7 @@ class MusicCatalogCard extends StatefulWidget {
     this.artist = false,
     this.badge,
     this.showPlayIndicator = false,
+    this.cardOrigin,
   });
 
   @override
@@ -42,6 +46,9 @@ class _MusicCatalogCardState extends State<MusicCatalogCard> {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
     final radius = BorderRadius.circular(widget.artist ? 1000 : 6);
+    final origin = widget.cardOrigin;
+    final playing =
+        origin == null ? null : watchMusicCardPlaying(context, origin);
     final song = widget.song;
     final images = song?.displayThumbnails ?? widget.thumbnails;
     final artwork = widget.artist
@@ -67,11 +74,14 @@ class _MusicCatalogCardState extends State<MusicCatalogCard> {
               );
     final card = Semantics(
       button: true,
+      onTapHint: musicCardPlaybackHint(context, playing),
       child: Material(
         color: Colors.transparent,
         borderRadius: BorderRadius.circular(6),
         child: InkWell(
-          onTap: widget.onOpen,
+          onTap: origin == null
+              ? widget.onOpen
+              : () => activateMusicCard(context, origin, widget.onOpen),
           onLongPress: widget.onLongPress,
           onFocusChange: (focused) {
             setState(() => _focused = focused);
@@ -104,15 +114,23 @@ class _MusicCatalogCardState extends State<MusicCatalogCard> {
                           durationSeconds: song.durationSeconds,
                           fallback: artwork,
                         ),
-                      if (widget.showPlayIndicator)
-                        const PositionedDirectional(
+                      if (widget.showPlayIndicator || playing != null)
+                        PositionedDirectional(
                           end: 8,
                           bottom: 8,
                           child: CircleAvatar(
                             radius: 18,
-                            backgroundColor: Colors.black54,
-                            foregroundColor: Colors.white,
-                            child: Icon(Icons.play_arrow_rounded, size: 22),
+                            backgroundColor: playing == null
+                                ? Colors.black54
+                                : colors.primaryContainer,
+                            foregroundColor: playing == null
+                                ? Colors.white
+                                : colors.onPrimaryContainer,
+                            child: Icon(
+                                playing == true
+                                    ? Icons.pause_rounded
+                                    : Icons.play_arrow_rounded,
+                                size: 22),
                           ),
                         ),
                     ]),

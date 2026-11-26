@@ -2,23 +2,27 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:videre_proxy/videre_proxy.dart';
 
+import '../../../downloads/states/download_manager.dart';
 import '../../../l10n/generated/app_localizations.dart';
 import '../../../player/states/player.dart';
 import '../../../utils/motion.dart';
 
 Future<void> showPlaybackCacheSettings(BuildContext context) {
   final player = context.read<PlayerCubit>();
+  final downloads = context.read<DownloadManagerCubit?>();
   return showDialog<void>(
     context: context,
     useRootNavigator: false,
     animationStyle: AppMotion.dialogStyle(context),
-    builder: (context) => _PlaybackCacheSettings(beforeChange: player.hide),
+    builder: (context) =>
+        _PlaybackCacheSettings(beforeChange: player.hide, downloads: downloads),
   );
 }
 
 class _PlaybackCacheSettings extends StatefulWidget {
   final VoidCallback beforeChange;
-  const _PlaybackCacheSettings({required this.beforeChange});
+  final DownloadManagerCubit? downloads;
+  const _PlaybackCacheSettings({required this.beforeChange, this.downloads});
 
   @override
   State<_PlaybackCacheSettings> createState() => _PlaybackCacheSettingsState();
@@ -55,9 +59,15 @@ class _PlaybackCacheSettingsState extends State<_PlaybackCacheSettings> {
     final status = _status;
     if (status == null || _busy) return;
     widget.beforeChange();
-    await _run(() => PlaybackCache.configure(
-        enabled: enabled ?? status.enabled,
-        maxBytes: limit ?? status.maxBytes));
+    await _run(() async {
+      final configured = await PlaybackCache.configure(
+          enabled: enabled ?? status.enabled,
+          maxBytes: limit ?? status.maxBytes);
+      if (configured.maxBytes < status.maxBytes) {
+        await widget.downloads?.reconcileOfflineDiscoveryBudget();
+      }
+      return configured;
+    });
   }
 
   Future<void> _clear() async {
@@ -116,6 +126,7 @@ class _PlaybackCacheSettingsState extends State<_PlaybackCacheSettings> {
                 child: Text(locals.playbackCacheUnavailable),
               ),
             if (status?.supported == true) ...[
+              Text(locals.playbackCacheDiscoveryHint),
               SwitchListTile(
                 contentPadding: EdgeInsets.zero,
                 title: Text(locals.playbackCache),

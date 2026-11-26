@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="ringtone_confirm_title">Set as ringtone</string>
+    <string name="ringtone_confirm_message">Use “%1$s” as your phone ringtone?</string>
+    <string name="ringtone_confirm_settings_message">Use “%1$s” as your phone ringtone? Allow Videre to modify system settings, then return here to finish.</string>
+    <string name="ringtone_confirm_button">Set ringtone</string>
+</resources>

@@ -618,6 +618,7 @@ class MusicRoute extends PageRouteInfo<MusicRouteArgs> {
     List<MusicArtistCredit> artistCredits = const [],
     List<Video> queue = const [],
     String? queueTitle,
+    MusicCardOrigin? cardOrigin,
     int startIndex = 0,
     String? playlistId,
     String? artistId,
@@ -633,6 +634,7 @@ class MusicRoute extends PageRouteInfo<MusicRouteArgs> {
             artistCredits: artistCredits,
             queue: queue,
             queueTitle: queueTitle,
+            cardOrigin: cardOrigin,
             startIndex: startIndex,
             playlistId: playlistId,
             artistId: artistId,
@@ -658,6 +660,7 @@ class MusicRoute extends PageRouteInfo<MusicRouteArgs> {
         artistCredits: args.artistCredits,
         queue: args.queue,
         queueTitle: args.queueTitle,
+        cardOrigin: args.cardOrigin,
         startIndex: args.startIndex,
         playlistId: args.playlistId,
         artistId: args.artistId,
@@ -676,6 +679,7 @@ class MusicRouteArgs {
     this.artistCredits = const [],
     this.queue = const [],
     this.queueTitle,
+    this.cardOrigin,
     this.startIndex = 0,
     this.playlistId,
     this.artistId,
@@ -694,6 +698,8 @@ class MusicRouteArgs {
 
   final String? queueTitle;
 
+  final MusicCardOrigin? cardOrigin;
+
   final int startIndex;
 
   final String? playlistId;
@@ -708,7 +714,60 @@ class MusicRouteArgs {
 
   @override
   String toString() {
-    return 'MusicRouteArgs{key: $key, videoId: $videoId, artistCredits: $artistCredits, queue: $queue, queueTitle: $queueTitle, startIndex: $startIndex, playlistId: $playlistId, artistId: $artistId, initialQuery: $initialQuery, startAt: $startAt, embedded: $embedded}';
+    return 'MusicRouteArgs{key: $key, videoId: $videoId, artistCredits: $artistCredits, queue: $queue, queueTitle: $queueTitle, cardOrigin: $cardOrigin, startIndex: $startIndex, playlistId: $playlistId, artistId: $artistId, initialQuery: $initialQuery, startAt: $startAt, embedded: $embedded}';
+  }
+}
+
+/// generated route for
+/// [MusicShortcutScreen]
+class MusicShortcutRoute extends PageRouteInfo<MusicShortcutRouteArgs> {
+  MusicShortcutRoute({
+    Key? key,
+    required MusicDestination destination,
+    bool Function()? canStartShuffle,
+    List<PageRouteInfo>? children,
+  }) : super(
+          MusicShortcutRoute.name,
+          args: MusicShortcutRouteArgs(
+            key: key,
+            destination: destination,
+            canStartShuffle: canStartShuffle,
+          ),
+          initialChildren: children,
+          argsEquality: false,
+        );
+
+  static const String name = 'MusicShortcutRoute';
+
+  static PageInfo page = PageInfo(
+    name,
+    builder: (data) {
+      final args = data.argsAs<MusicShortcutRouteArgs>();
+      return MusicShortcutScreen(
+        key: args.key,
+        destination: args.destination,
+        canStartShuffle: args.canStartShuffle,
+      );
+    },
+  );
+}
+
+class MusicShortcutRouteArgs {
+  const MusicShortcutRouteArgs({
+    this.key,
+    required this.destination,
+    this.canStartShuffle,
+  });
+
+  final Key? key;
+
+  final MusicDestination destination;
+
+  final bool Function()? canStartShuffle;
+
+  @override
+  String toString() {
+    return 'MusicShortcutRouteArgs{key: $key, destination: $destination, canStartShuffle: $canStartShuffle}';
   }
 }
 

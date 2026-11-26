@@ -1,21 +1,17 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../../app/states/app.dart';
 import '../../../downloads/models/downloaded_video.dart';
-import '../../../downloads/services/download_playback_source.dart';
-import '../../../downloads/services/download_storage.dart';
 import '../../../downloads/services/explicit_music_download.dart';
 import '../../../downloads/states/download_manager.dart';
 import '../../../globals.dart' show db;
 import '../../../l10n/generated/app_localizations.dart';
-import '../../../player/models/backend_playback.dart';
 import '../../../utils/interfaces/db.dart';
 import '../../../videos/models/video.dart';
 import '../../models/music_library_entry.dart';
 import '../../services/music_library_service.dart';
+import '../../services/music_offline_collection.dart';
 
 typedef _OfflineRequest = ({
   IDbClient database,
@@ -25,24 +21,6 @@ typedef _OfflineRequest = ({
   Video? song,
   String? pinnedFileProof,
 });
-
-// Android's storage worker uses a bounded queue shared with other file probes.
-Future<void>? _pendingFileCheck;
-
-Future<String?> _checkFile(
-    DownloadedVideo file, bool Function() isCurrent) async {
-  final preceding = _pendingFileCheck;
-  final done = Completer<void>();
-  _pendingFileCheck = done.future;
-  try {
-    if (preceding != null) await preceding;
-    if (!isCurrent()) return null;
-    return await DownloadStorage().musicFileProof(file, verifyCompletion: true);
-  } finally {
-    if (identical(_pendingFileCheck, done.future)) _pendingFileCheck = null;
-    done.complete();
-  }
-}
 
 /// Passive indicators for the exact item represented by a Music row.
 class MusicStatusTitle extends StatefulWidget {
@@ -133,52 +111,16 @@ class _MusicStatusTitleState extends State<MusicStatusTitle>
         database.profileId == session.profileId &&
         context.read<AppCubit?>()?.state == session;
 
-    try {
-      final file = readyMusicDownload(database, id, fingerprint: fingerprint);
-      final provenance = file?.playbackProvenance;
-      if (file == null ||
-          provenance == null ||
-          provenance.profileId != file.profileId ||
-          provenance.accountId != file.accountId ||
-          provenance.contentId != id ||
-          !provenance.audioOnly ||
-          provenance.container != file.container) {
-        return false;
-      }
-      BackendPlayback? route;
-      if (song != null) {
-        final server = session.server;
-        if (server == null) return false;
-        final prepared = await prepareDownloadedPlaybackVideo(
+    return await verifyOfflineMusicDownload(
           database: database,
-          video: song,
-          audioOnly: true,
-          server: server,
+          session: session,
+          id: id,
+          fingerprint: fingerprint,
+          song: song,
+          pinnedFileProof: pinnedFileProof,
           isCurrent: current,
-        );
-        final admitted = admittedMusicDownload(prepared);
-        if (!current() ||
-            admitted == null ||
-            musicDownloadFingerprint(admitted) != fingerprint) {
-          return false;
-        }
-        route = prepared!.playbackConnection;
-      }
-      final proof = await _checkFile(file, current);
-      if (!current() ||
-          proof == null ||
-          (pinnedFileProof != null && pinnedFileProof != proof)) {
-        return false;
-      }
-      if (route != null &&
-          !route.matches(await database.getCurrentlySelectedServer())) {
-        return false;
-      }
-      return current() &&
-          readyMusicDownload(database, id, fingerprint: fingerprint) != null;
-    } catch (_) {
-      return false;
-    }
+        ) !=
+        null;
   }
 
   _OfflineRequest? _offlineRequest(IDbClient database, AppState session) {

@@ -24,10 +24,12 @@ import 'package:clipious/utils/models/image_object.dart';
 import 'package:logging/logging.dart';
 import 'package:path/path.dart' as p;
 import 'package:uuid/uuid.dart';
+import 'package:videre_proxy/videre_proxy.dart';
 import 'package:clipious/network/network_proxy.dart';
 import 'package:clipious/network/connectivity.dart';
 import 'package:clipious/podcasts/services/podcast_downloads.dart';
 
+import '../../music/services/cached_music.dart';
 import '../../player/states/player.dart';
 import '../../network/gateway_session_bridge.dart';
 import '../../network/nerdvpn_access.dart';
@@ -36,6 +38,7 @@ import '../../settings/models/errors/invidious_service_error.dart';
 import '../../utils/interfaces/db.dart';
 import '../../videos/models/adaptive_format.dart';
 import '../../videos/models/dearrow.dart';
+import '../../videos/models/music_metadata.dart';
 import '../../videos/models/sponsor_segment.dart';
 import '../../videos/models/sponsor_segment_types.dart';
 import '../../videos/models/video.dart';
@@ -46,6 +49,8 @@ import '../services/download_rename.dart';
 import '../services/download_recovery.dart';
 import '../services/download_storage.dart';
 import '../services/download_mux.dart';
+import '../services/explicit_music_download.dart';
+import '../services/music_download_storage.dart';
 
 part 'download_manager.freezed.dart';
 
@@ -53,6 +58,12 @@ final Logger log = Logger('DownloadState');
 const _wifiSetting = 'downloads-wifi-only';
 const _pausedSetting = 'downloads-paused';
 const _keptOfflineSetting = 'music-playlists-kept-offline';
+const _offlineDiscoverySetting = 'music-offline-discovery';
+const _discoveryPolicy =
+    MusicOfflinePolicy(quality: MusicOfflineQuality.dataSaver);
+
+Future<int> _configuredDiscoveryBudget() async =>
+    (await PlaybackCache.status()).maxBytes;
 
 Future<({int byteLength, String sha256})> _privateDownloadIntegrity(
         String path) =>
@@ -69,6 +80,35 @@ Future<({int byteLength, String sha256})> _privateDownloadIntegrity(
       }
       return (byteLength: after.size, sha256: digest.toString());
     });
+
+// The catalog only admits decoder-confirmed WebM or MP4 audio. Older entries
+// lack MIME metadata. Identify WebM by its EBML header and let the MP4
+// demuxer validate the other input, including files with a leading free box.
+Future<DownloadContainer> _cachedMusicContainer(File file) async {
+  final input = await file.open();
+  try {
+    final header = await input.read(4);
+    if (header.length != 4) {
+      throw const FormatException('Incomplete cached Music header');
+    }
+    return header[0] == 0x1a &&
+            header[1] == 0x45 &&
+            header[2] == 0xdf &&
+            header[3] == 0xa3
+        ? DownloadContainer.webm
+        : DownloadContainer.mp4;
+  } finally {
+    await input.close();
+  }
+}
+
+enum KeepCachedMusicResult {
+  saved,
+  alreadySaved,
+  unavailable,
+  conflictingDownload,
+  failed,
+}
 
 class DownloadProgress {
   final CancelToken cancelToken;
@@ -92,6 +132,7 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
   final DownloadStorage storage;
   final Future<bool> Function()? _readWifi;
   final Stream<bool>? _wifiChanges;
+  final Future<int> Function() _discoveryBudgetBytes;
   final Future<void> Function(
       {required String input,
       required String output,
@@ -113,9 +154,12 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
   final Map<String, ({CancelToken token, Future<bool> result})> _exports = {};
   DownloadFolderPreferences _folders = const DownloadFolderPreferences();
   Future<void> _folderWrite = Future.value();
-  Future<void> _playlistOfflineWork = Future.value();
+  Future<void> _offlineMusicWork = Future.value();
+  CancelToken? _keepingCachedMusic;
   final _playlistOfflineChanges = ValueNotifier(0);
+  final _discoveryOfflineChanges = ValueNotifier(0);
   Map<String, MusicOfflinePolicy>? _keptOfflinePlaylists;
+  List<String>? _offlineDiscovery;
   String? _playlistSource;
   List<Playlist>? _localPlaylistSnapshot;
   Map<String, MusicOfflinePolicy>? _lastPlaylistPins;
@@ -135,8 +179,11 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
       {DownloadStorage? storage,
       this.encodeMusic = runMusicDownloadMux,
       Future<bool> Function()? wifiConnected,
-      Stream<bool>? wifiChanges})
+      Stream<bool>? wifiChanges,
+      Future<int> Function()? discoveryBudgetBytes})
       : storage = storage ?? DownloadStorage(),
+        _discoveryBudgetBytes =
+            discoveryBudgetBytes ?? _configuredDiscoveryBudget,
         _readWifi =
             wifiConnected ?? (Platform.isAndroid ? isWifiConnected : null),
         _wifiChanges = wifiChanges ??
@@ -178,6 +225,8 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
   /// can finish only in its original library; switching waits for all writers.
   Future<void> pauseForProfileSwitch() async {
     _switchingProfile = true;
+    if (!_closing) _discoveryOfflineChanges.value++;
+    _keepingCachedMusic?.cancel();
     for (final export in _exports.values) {
       export.token.cancel();
     }
@@ -211,6 +260,7 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
     _musicDeletionIncarnations.clear();
     _loadLibrary();
     _switchingProfile = false;
+    _discoveryOfflineChanges.value++;
     _watchPlaylistMembership();
     _networkChanged(_wifiConnected);
   }
@@ -284,12 +334,24 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
       // An invalid owner list cannot authorize automatic removal.
       _keptOfflinePlaylists = null;
     }
-    _playlistOfflineChanges.value++;
+    try {
+      final ids = jsonDecode(
+          _library.getSettings(_offlineDiscoverySetting)?.value ?? '[]');
+      _offlineDiscovery = ids is List &&
+              ids.every(
+                  (id) => id is String && DownloadedVideo.isSafeFileId(id))
+          ? List.unmodifiable(ids.cast<String>().toSet())
+          : null;
+    } on FormatException {
+      _offlineDiscovery = null;
+    }
     emit(_withFolders(state.copyWith(
         wifiOnly: _library.getSettings(_wifiSetting)?.value == 'true',
         pausedVideoIds: paused,
         downloadProgresses: {},
         videos: _library.getAllDownloads())));
+    _playlistOfflineChanges.value++;
+    _discoveryOfflineChanges.value++;
   }
 
   void _networkChanged(bool connected) {
@@ -456,6 +518,43 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
 
   Listenable get playlistOfflineChanges => _playlistOfflineChanges;
 
+  Listenable get discoveryOfflineChanges => _discoveryOfflineChanges;
+
+  bool _isDiscoveryProfile(String profileId) =>
+      _canUpdateOfflineMusic && _library.profileId == profileId;
+
+  List<String> offlineDiscoveryIds(String profileId) =>
+      _isDiscoveryProfile(profileId) ? _offlineDiscovery ?? const [] : const [];
+
+  Future<List<MusicFileProbe>> probeOfflineDiscovery(String profileId) async {
+    final ids = offlineDiscoveryIds(profileId);
+    if (ids.isEmpty) return const [];
+    final generation = _generation;
+    final wanted = ids.toSet();
+    final files = await storage.probeMusicFiles(
+        profileId,
+        _library.getAllDownloads().where(
+            (file) => wanted.contains(file.videoId) && file.downloadComplete));
+    if (!_isDiscoveryProfile(profileId) ||
+        generation != _generation ||
+        !identical(ids, _offlineDiscovery)) {
+      return const [];
+    }
+    final readable = {
+      for (final file in files)
+        if (readyMusicDownload(_library, file.download.videoId,
+                fingerprint: musicDownloadFingerprint(file.download)) !=
+            null)
+          file.download.videoId: file,
+    };
+    return [
+      for (final id in ids)
+        if (readable[id] case final file?) file
+    ];
+  }
+
+  /// The legacy playlist marker represents a job owned only by automatic Music
+  /// collections. A manual request clears it for both playlist and discovery.
   bool isMusicDownloadPlaylistOnly(String videoId) =>
       _current && _library.isPlaylistOwnedMusicDownload(videoId);
 
@@ -504,29 +603,28 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
             songs.isEmpty ? null : (complete + inProgress) / songs.length);
   }
 
-  Future<T> _queuePlaylistOfflineWork<T>(Future<T> Function() work) =>
-      _mutate(() {
-        final next = _playlistOfflineWork.then((_) => work());
-        _playlistOfflineWork =
+  Future<T> _queueOfflineMusicWork<T>(Future<T> Function() work) => _mutate(() {
+        final next = _offlineMusicWork.then((_) => work());
+        _offlineMusicWork =
             next.then<void>((_) {}, onError: (Object _, StackTrace __) {});
         return next;
       });
 
-  bool get _canUpdatePlaylistDownloads => _current && !_switchingProfile;
+  bool get _canUpdateOfflineMusic => _current && !_switchingProfile;
 
   void _watchPlaylistMembership() {
     _playlistSubscription = _library.watchSetting(localPlaylistsSetting).listen(
       (_) {
-        if (!_canUpdatePlaylistDownloads ||
+        if (!_canUpdateOfflineMusic ||
             _keptOfflinePlaylists == null ||
             (_keptOfflinePlaylists!.isEmpty &&
                 _library.getPlaylistOwnedMusicDownloadIds().isEmpty)) {
           return;
         }
-        unawaited(_queuePlaylistOfflineWork<void>(() async {
+        unawaited(_queueOfflineMusicWork<void>(() async {
           await _ready;
           await _syncPlaylistDownloads();
-          if (_canUpdatePlaylistDownloads) _playlistOfflineChanges.value++;
+          if (_canUpdateOfflineMusic) _playlistOfflineChanges.value++;
         }).catchError(_logPlaylistOfflineError));
       },
       onError: _logPlaylistOfflineError,
@@ -535,7 +633,7 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
 
   void _logPlaylistOfflineError(Object error) {
     log.warning(
-        'Could not update offline Music playlists (${error.runtimeType})');
+        'Could not update offline Music collections (${error.runtimeType})');
   }
 
   List<Playlist>? _readLocalPlaylists() {
@@ -596,10 +694,10 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
 
   Future<bool> setPlaylistKeptOffline(String playlistId, bool enabled,
           {MusicOfflinePolicy policy = const MusicOfflinePolicy()}) =>
-      _queuePlaylistOfflineWork(() async {
+      _queueOfflineMusicWork(() async {
         await _ready;
         final pins = _keptOfflinePlaylists;
-        if (!_canUpdatePlaylistDownloads || pins == null) return false;
+        if (!_canUpdateOfflineMusic || pins == null) return false;
         if (enabled) {
           final target = _readLocalPlaylists()
               ?.where((item) => item.isLocal && item.playlistId == playlistId)
@@ -612,7 +710,7 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
             return false;
           }
         }
-        if (!_canUpdatePlaylistDownloads) return false;
+        if (!_canUpdateOfflineMusic) return false;
         if (pins.containsKey(playlistId) != enabled) {
           final updated = {...pins};
           if (enabled) {
@@ -627,9 +725,9 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
       });
 
   Future<void> retryPlaylistOffline(String playlistId) =>
-      _queuePlaylistOfflineWork(() async {
+      _queueOfflineMusicWork(() async {
         await _ready;
-        if (!_canUpdatePlaylistDownloads ||
+        if (!_canUpdateOfflineMusic ||
             _keptOfflinePlaylists?.containsKey(playlistId) != true) {
           return;
         }
@@ -644,7 +742,7 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
         }
         await _syncPlaylistDownloads();
         for (final id in ids) {
-          if (!_canUpdatePlaylistDownloads ||
+          if (!_canUpdateOfflineMusic ||
               _playlistSongsInUse()?.containsKey(id) != true) {
             continue;
           }
@@ -659,9 +757,87 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
         }
       });
 
+  /// Saves a snapshot of the current ranked shelf. Only another user action
+  /// can replace it or enable new downloads for this selection.
+  Future<bool> setOfflineDiscovery(String profileId, Iterable<Video> selected) {
+    final songs = eligibleOfflineMusicSongs(selected);
+    if (songs.isEmpty && selected.isNotEmpty) return Future.value(false);
+    final generation = _generation;
+    bool current() =>
+        _isDiscoveryProfile(profileId) && generation == _generation;
+    return _queueOfflineMusicWork(() async {
+      await _ready;
+      if (!current()) return false;
+      final ids = List<String>.unmodifiable(songs.keys);
+      await _library.saveSetting(
+          SettingsValue(_offlineDiscoverySetting, jsonEncode(ids)));
+      _offlineDiscovery = ids;
+      _discoveryOfflineChanges.value++;
+      await _cleanupUnusedOfflineMusic();
+      for (final song in songs.values) {
+        if (!current()) return false;
+        final existing = _library.getDownloadByVideoId(song.videoId);
+        if (existing == null) {
+          await _addDownload(song.videoId,
+              quality: highestAudioDownloadQuality,
+              audioOnly: true,
+              musicPolicy: _discoveryPolicy,
+              video: song,
+              managedOffline: true,
+              privateStorage: true);
+        } else if (_isDiscoveryManaged(song.videoId) &&
+            (existing.downloadFailed ||
+                existing.storageFailed ||
+                existing.authenticationRequired ||
+                state.pausedVideoIds.contains(song.videoId))) {
+          await retryDownload(existing);
+        }
+      }
+      return current();
+    });
+  }
+
+  bool _discoveryWants(String videoId) =>
+      _offlineDiscovery?.contains(videoId) == true;
+
+  bool _isDiscoveryManaged(String videoId) =>
+      _discoveryWants(videoId) &&
+      _playlistSongsInUse()?.containsKey(videoId) != true &&
+      _library.isPlaylistOwnedMusicDownload(videoId);
+
+  Future<int?> _readDiscoveryBudget() async {
+    try {
+      return await _discoveryBudgetBytes().timeout(const Duration(seconds: 5));
+    } on Exception {
+      return null;
+    }
+  }
+
+  Future<int?> _remainingDiscoveryBytes(String videoId) async {
+    if (!_isDiscoveryManaged(videoId)) return null;
+    final profile = _library;
+    final budget = await _readDiscoveryBudget();
+    if (budget == null || budget <= 0) return 0;
+    final usage = await measureMusicDownloadStorage(
+        profile.getAllDownloads().where((file) =>
+            file.videoId != videoId && _isDiscoveryManaged(file.videoId)),
+        profileId: profile.profileId,
+        storage: storage);
+    if (!_isDiscoveryManaged(videoId)) return null;
+    return usage.incomplete ? 0 : (budget - usage.bytes).clamp(0, budget);
+  }
+
+  Future<void> reconcileOfflineDiscoveryBudget() {
+    final generation = _generation;
+    return _queueOfflineMusicWork(() async {
+      await _ready;
+      if (generation == _generation) await _trimDiscoveryOverflow();
+    });
+  }
+
   Future<void> _syncPlaylistDownloads() async {
     final pins = _keptOfflinePlaylists;
-    if (!_canUpdatePlaylistDownloads || pins == null) return;
+    if (!_canUpdateOfflineMusic || pins == null) return;
     final playlists = _readLocalPlaylists();
     if (playlists == null) return;
     final existing = playlists.map((playlist) => playlist.playlistId).toSet();
@@ -671,7 +847,7 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
     if (songs == null) return;
 
     for (final (:video, :policy) in songs.values) {
-      if (!_canUpdatePlaylistDownloads) return;
+      if (!_canUpdateOfflineMusic) return;
       if (_library.getDownloadByVideoId(video.videoId) != null) continue;
       try {
         await _addDownload(video.videoId,
@@ -679,21 +855,228 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
             audioOnly: true,
             musicPolicy: policy,
             video: video,
-            playlistOnly: true);
+            managedOffline: true);
       } catch (error) {
         _logPlaylistOfflineError(error);
       }
     }
+    await _cleanupUnusedOfflineMusic();
+    await _trimDiscoveryOverflow();
+  }
+
+  Future<void> _cleanupUnusedOfflineMusic() async {
+    final playlists = _playlistSongsInUse();
+    if (playlists == null || _offlineDiscovery == null) return;
     for (final id in _library.getPlaylistOwnedMusicDownloadIds()) {
-      if (!_canUpdatePlaylistDownloads) return;
-      if (songs.containsKey(id)) continue;
+      if (!_canUpdateOfflineMusic) return;
+      if (playlists.containsKey(id) || _discoveryWants(id)) continue;
       final video = _library.getDownloadByVideoId(id);
       if (video == null) continue;
       try {
-        await _deleteVideo(video, playlistOnly: true);
+        await _deleteVideo(video, managedOnly: true);
       } catch (error) {
         // Keep the durable ownership marker so the next reconciliation retries.
         _logPlaylistOfflineError(error);
+      }
+    }
+  }
+
+  /// If a playlist lets go of a shared file, discovery can retain it only
+  /// within its budget. The saved shelf order determines which files fit.
+  Future<void> _trimDiscoveryOverflow() async {
+    final candidates = _offlineDiscovery?.where(_isDiscoveryManaged).toList();
+    if (!_canUpdateOfflineMusic || candidates == null || candidates.isEmpty) {
+      return;
+    }
+    final budget = await _readDiscoveryBudget();
+    if (budget == null) return;
+    var remaining = budget;
+    for (final id in candidates) {
+      if (!_canUpdateOfflineMusic) return;
+      final video = _library.getDownloadByVideoId(id);
+      if (video == null ||
+          !video.downloadComplete ||
+          !_isDiscoveryManaged(id)) {
+        continue;
+      }
+      final usage = await measureMusicDownloadStorage([video],
+          profileId: _library.profileId, storage: storage);
+      if (usage.incomplete) return;
+      if (usage.bytes <= remaining) {
+        remaining -= usage.bytes;
+      } else {
+        try {
+          await _deleteVideo(video, managedOnly: true, trimDiscovery: true);
+        } catch (error) {
+          _logPlaylistOfflineError(error);
+          return;
+        }
+      }
+    }
+  }
+
+  /// Shares the mutation queue with playlist reconciliation and deletion.
+  Future<KeepCachedMusicResult> keepCachedMusicSong(
+    Server server,
+    CachedMusicSong song, {
+    MusicOfflinePolicy policy = const MusicOfflinePolicy(),
+  }) {
+    final generation = _generation;
+    final database = db;
+    return _queueOfflineMusicWork(() async {
+      await _ready;
+      final library = _library;
+      final owner = cachedMusicOwner(server);
+      final selection = owner == null
+          ? null
+          : CachedMusicPlayback(owner, song.rendition)
+              .source(server, song.videoId)?['cachedMusic'];
+      bool current() =>
+          _canUpdateOfflineMusic &&
+          identical(db, database) &&
+          generation == _generation &&
+          server.profileId == library.profileId;
+
+      if (selection is! Map<String, Object?> || !current()) {
+        return KeepCachedMusicResult.unavailable;
+      }
+      try {
+        final account = await library.getCurrentlySelectedServer();
+        if (!current() || cachedMusicOwner(account) != owner) {
+          return KeepCachedMusicResult.unavailable;
+        }
+        if (library.getDownloadByVideoId(song.videoId) case final existing?) {
+          final playable = readyMusicDownload(library, song.videoId);
+          if (playable == null ||
+              playable.accountId != account.accountId ||
+              await storage.musicFileProof(playable, verifyCompletion: true) ==
+                  null ||
+              jsonEncode(
+                      library.getDownloadByVideoId(song.videoId)?.toJson()) !=
+                  jsonEncode(existing.toJson())) {
+            return KeepCachedMusicResult.conflictingDownload;
+          }
+          if (!current()) return KeepCachedMusicResult.unavailable;
+          final wasDiscoveryManaged = _isDiscoveryManaged(song.videoId);
+          if (!await library.makeMusicDownloadExplicit(song.videoId)) {
+            return KeepCachedMusicResult.alreadySaved;
+          }
+          _playlistOfflineChanges.value++;
+          if (wasDiscoveryManaged) _discoveryOfflineChanges.value++;
+          return KeepCachedMusicResult.saved;
+        }
+        return await _saveCachedMusicSong(
+            library, account, song, selection, policy, current);
+      } catch (error) {
+        log.warning('Could not keep cached Music (${error.runtimeType})');
+        return current()
+            ? KeepCachedMusicResult.failed
+            : KeepCachedMusicResult.unavailable;
+      }
+    });
+  }
+
+  Future<KeepCachedMusicResult> _saveCachedMusicSong(
+    IDbClient library,
+    Server account,
+    CachedMusicSong song,
+    Map<String, Object?> selection,
+    MusicOfflinePolicy policy,
+    bool Function() current,
+  ) async {
+    final token = _keepingCachedMusic = CancelToken();
+    File? snapshot;
+    File? staged;
+    File? publishedFile;
+    String? publishedDocument;
+    var committed = false;
+    try {
+      final destination = _folders.audio;
+      var folder = destination.folder?.uri;
+      if (folder == null &&
+          storage.supportsSharedMusic &&
+          !destination.usePrivate) {
+        folder = await _deviceMusicFolder();
+        if (!current()) return KeepCachedMusicResult.unavailable;
+        if (folder == null) return KeepCachedMusicResult.failed;
+      }
+      if (!current()) return KeepCachedMusicResult.unavailable;
+
+      final path = await PlaybackCache.copyCachedMusicSong(selection);
+      if (path == null) return KeepCachedMusicResult.unavailable;
+      snapshot = File(path);
+      if (!current()) return KeepCachedMusicResult.unavailable;
+
+      var download = DownloadedVideo(
+        videoId: song.videoId,
+        title: song.title,
+        author: song.artist,
+        musicMetadata: MusicMetadata(title: song.title, artist: song.artist),
+        lengthSeconds: song.lengthSeconds,
+        profileId: library.profileId,
+        accountId: account.accountId,
+        quality: highestAudioDownloadQuality,
+        audioOnly: true,
+        folderUri: folder,
+        musicFormat: MusicDownloadFormat.forDatabase(library),
+        musicPolicy: policy,
+        container: await _cachedMusicContainer(snapshot),
+        downloadComplete: true,
+      );
+      final privatePath = folder == null ? await download.downloadPath : null;
+      staged = File('${privatePath ?? path}.${const Uuid().v4()}.part');
+      await encodeMusic(
+        input: path,
+        output: staged.path,
+        video: download,
+        token: token,
+      );
+      if (!current()) return KeepCachedMusicResult.unavailable;
+      final length = await staged.length();
+      if (length == 0) return KeepCachedMusicResult.failed;
+      if (privatePath != null) {
+        if (await File(privatePath).exists()) {
+          return KeepCachedMusicResult.failed;
+        }
+        publishedFile = await staged.rename(privatePath);
+      } else {
+        publishedDocument = await storage.prepareDocument(
+            folder!, null, download.fileName, download.mimeType);
+        await storage.writeDocument(staged.path, publishedDocument, token);
+        download = download.copyWith(storageUri: publishedDocument);
+      }
+      if (!current()) return KeepCachedMusicResult.unavailable;
+      final files =
+          await storage.probeMusicFiles(library.profileId, [download]);
+      if (files.singleOrNull?.byteLength != length) {
+        return KeepCachedMusicResult.failed;
+      }
+      if (!current()) return KeepCachedMusicResult.unavailable;
+      if (library.getDownloadByVideoId(song.videoId) != null) {
+        return KeepCachedMusicResult.conflictingDownload;
+      }
+      await library.upsertDownload(download);
+      committed = true;
+      _musicDeletionIncarnations.remove(song.videoId);
+      setVideos();
+      _playlistOfflineChanges.value++;
+      return KeepCachedMusicResult.saved;
+    } finally {
+      _keepingCachedMusic = null;
+      if (!committed && publishedDocument != null) {
+        try {
+          await storage.deleteDocument(publishedDocument);
+        } on Exception catch (error) {
+          log.warning('Could not clean up cached Music (${error.runtimeType})');
+        }
+      }
+      for (final file in [snapshot, staged, if (!committed) publishedFile]) {
+        if (file == null) continue;
+        try {
+          if (await file.exists()) await file.delete();
+        } on FileSystemException catch (error) {
+          log.warning('Could not clean up cached Music (${error.runtimeType})');
+        }
       }
     }
   }
@@ -706,7 +1089,7 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
           String? audioTrackId,
           String? captionLabel,
           Video? video}) =>
-      _queuePlaylistOfflineWork(() => _addDownload(videoId,
+      _queueOfflineMusicWork(() => _addDownload(videoId,
           quality: quality,
           audioOnly: audioOnly,
           musicPolicy: musicPolicy,
@@ -723,7 +1106,8 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
       String? audioTrackId,
       String? captionLabel,
       Video? video,
-      bool playlistOnly = false}) async {
+      bool managedOffline = false,
+      bool privateStorage = false}) async {
     await _ready;
     if (!_current ||
         _switchingProfile ||
@@ -736,24 +1120,37 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
     try {
       final existing = _library.getDownloadByVideoId(videoId);
       if (existing != null) {
-        if (playlistOnly || !audioOnly || !existing.audioOnly) return false;
+        if (managedOffline || !audioOnly || !existing.audioOnly) return false;
+        final wasDiscoveryManaged = _isDiscoveryManaged(videoId);
         final promoted = await _library.makeMusicDownloadExplicit(videoId);
-        if (promoted) _playlistOfflineChanges.value++;
+        if (promoted) {
+          _playlistOfflineChanges.value++;
+          if (wasDiscoveryManaged && !existing.downloadComplete) {
+            // Restart the constrained transfer as explicit, retaining its
+            // selected renditions and the profile's Wi-Fi setting.
+            state.downloadProgresses[videoId]?.cancelToken.cancel();
+            await retryDownload(existing);
+          }
+        }
         return promoted;
       }
-      final destination = audioOnly ? _folders.audio : _folders.video;
+      final destination = privateStorage
+          ? privateDownloadDestination
+          : (audioOnly ? _folders.audio : _folders.video);
       var folder = destination.folder?.uri;
       final isMusic = audioOnly && quality == highestAudioDownloadQuality;
       final format = isMusic ? MusicDownloadFormat.forDatabase(_library) : null;
       final shareMusic =
           isMusic && storage.supportsSharedMusic && !destination.usePrivate;
       if (shareMusic && folder == null) {
-        folder = await _deviceMusicFolder(allowPicker: !playlistOnly);
+        folder = await _deviceMusicFolder(allowPicker: !managedOffline);
         if (folder == null || !_current || _switchingProfile) return false;
       }
       final account = await _library.getCurrentlySelectedServer();
       if (!_current || _switchingProfile) return false;
-      if (playlistOnly && _playlistSongsInUse()?.containsKey(videoId) != true) {
+      if (managedOffline &&
+          !_discoveryWants(videoId) &&
+          _playlistSongsInUse()?.containsKey(videoId) != true) {
         return false;
       }
       _musicDeletionIncarnations.remove(videoId);
@@ -774,7 +1171,7 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
           audioTrackId: audioTrackId,
           captionLabel: audioOnly ? null : captionLabel,
           audioOnly: audioOnly);
-      if (playlistOnly) {
+      if (managedOffline) {
         if (!await _library.insertPlaylistOwnedMusicDownload(download)) {
           return false;
         }
@@ -831,7 +1228,10 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
                 !v.authenticationRequired &&
                 !state.waitingForWifiFor(v) &&
                 !state.pausedVideoIds.contains(v.videoId) &&
-                !_deleting.contains(v.videoId))
+                !_deleting.contains(v.videoId) &&
+                (!_library.isPlaylistOwnedMusicDownload(v.videoId) ||
+                    _discoveryWants(v.videoId) ||
+                    _playlistSongsInUse()?.containsKey(v.videoId) == true))
             .firstOrNull;
         if (next == null) break;
         _activeId = next.videoId;
@@ -839,6 +1239,15 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
         await _activeJob;
         _activeId = null;
         _activeJob = null;
+        if (_canUpdateOfflineMusic &&
+            _library.getDownloadByVideoId(next.videoId)?.downloadComplete ==
+                true &&
+            _isDiscoveryManaged(next.videoId)) {
+          // A playlist can release its interest while a transfer is publishing.
+          // Reconcile settled files after the active job has released its slot.
+          unawaited(_queueOfflineMusicWork(_trimDiscoveryOverflow)
+              .catchError(_logPlaylistOfflineError));
+        }
       }
     } finally {
       _processing = false;
@@ -893,6 +1302,9 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
         throw StateError('The download account is no longer available');
       }
       if (token.isCancelled) throw token.cancelError!;
+      final maximumBytes = await _remainingDiscoveryBytes(video.videoId);
+      if (token.isCancelled) throw token.cancelError!;
+      if (maximumBytes == 0) throw const DownloadSizeLimitExceeded();
       final recovery =
           await DownloadRecovery.start(service, library, account, token);
       await recovery.run<void>((route) async {
@@ -1028,6 +1440,7 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
                 identity: identity,
                 beforeRequest: recovery.checkCurrent,
                 expectedSize: size != null && size > 0 ? size : null,
+                maximumBytes: maximumBytes,
                 acceptsContentType: container.acceptsResponseType,
                 headers: server.headersForUrl(url),
                 onProgress: (count, total) =>
@@ -1044,7 +1457,7 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
           final posters = music == null
               ? [if (privateThumbnail(vid.videoThumbnails) case final url?) url]
               : _stockPosterUrls(vid, server, artTrack: music.isArtTrack);
-          if (cover != null || posters.isNotEmpty) {
+          if (maximumBytes == null && (cover != null || posters.isNotEmpty)) {
             unawaited(token.whenCancel.then(artworkToken.cancel));
             // Optional artwork must not delay the first media request. Keep it
             // part of this job so pause, delete and proxy changes can join it.
@@ -1112,6 +1525,12 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
           recovery.checkCurrent();
           await artwork;
           video = video.copyWith(sponsorSegments: await segmentsForJob);
+          recovery.checkCurrent();
+          final remainingBytes = await _remainingDiscoveryBytes(video.videoId);
+          if (remainingBytes != null &&
+              await File(output).length() > remainingBytes) {
+            throw const DownloadSizeLimitExceeded();
+          }
           recovery.checkCurrent();
           if (caption != null) {
             await File(captionPath).copy(await video.subtitlePath);
@@ -1188,6 +1607,14 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
       });
     } catch (error, stack) {
       if (!token.isCancelled && !_closing) {
+        if (error is DownloadSizeLimitExceeded) {
+          try {
+            await _deleteParts(video);
+          } on FileSystemException catch (cleanupError) {
+            log.fine('Could not clear temporary discovery files', cleanupError);
+          }
+          if (token.isCancelled) return;
+        }
         final signInRequired = _accessPauseNeedsSignIn(error);
         if (signInRequired != null) {
           final paused = {...state.pausedVideoIds, video.videoId};
@@ -1458,7 +1885,7 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
     for (final job in approval._jobs) {
       if (!current()) break;
       try {
-        if (await _queuePlaylistOfflineWork(() => _deleteVideo(job.video,
+        if (await _queueOfflineMusicWork(() => _deleteVideo(job.video,
             selectionIsCurrent: () =>
                 current() &&
                 identical(_musicDeletionIncarnations[job.video.videoId],
@@ -1477,10 +1904,12 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
   }
 
   Future<bool> deleteVideo(DownloadedVideo video) =>
-      _queuePlaylistOfflineWork(() => _deleteVideo(video));
+      _queueOfflineMusicWork(() => _deleteVideo(video));
 
   Future<bool> _deleteVideo(DownloadedVideo requested,
-          {bool Function()? selectionIsCurrent, bool playlistOnly = false}) =>
+          {bool Function()? selectionIsCurrent,
+          bool managedOnly = false,
+          bool trimDiscovery = false}) =>
       _mutate(() async {
         await _ready;
         if (!DownloadedVideo.isSafeFileId(requested.videoId) ||
@@ -1495,11 +1924,13 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
         }
         final saved = _library.getDownloadByVideoId(requested.videoId);
         bool canRemove(DownloadedVideo video) {
-          if (!video.audioOnly) return !playlistOnly;
+          if (!video.audioOnly) return !managedOnly;
           final required = _playlistSongsInUse();
-          if (playlistOnly) {
+          if (managedOnly) {
             return required != null &&
+                _offlineDiscovery != null &&
                 !required.containsKey(video.videoId) &&
+                _discoveryWants(video.videoId) == trimDiscovery &&
                 _library.isPlaylistOwnedMusicDownload(video.videoId);
           }
           return required?.containsKey(video.videoId) != true;
@@ -1702,6 +2133,7 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
   Future<void> _closeDownloads() async {
     NetworkProxy.instance.removeBeforeApply(_proxyChanging);
     _closing = true;
+    _keepingCachedMusic?.cancel();
     for (final export in _exports.values) {
       export.token.cancel();
     }
@@ -1714,6 +2146,7 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
     await Future.wait(List.of(_mutations));
     await _activeJob;
     _playlistOfflineChanges.dispose();
+    _discoveryOfflineChanges.dispose();
   }
 }
 

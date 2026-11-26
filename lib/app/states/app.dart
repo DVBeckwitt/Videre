@@ -14,12 +14,15 @@ import 'package:flutter/widgets.dart';
 import '../../globals.dart';
 import '../../home/models/db/home_layout.dart';
 import '../../main.dart' show isTv;
+import '../../music/models/music_layout.dart';
 import '../../music/services/local_music_library.dart';
+import '../../music/services/local_music_video_pairings.dart';
 import '../../music/services/music_artwork_cache.dart';
 import '../../network/content_link.dart';
 import '../../network/network_proxy.dart';
 import '../../playlists/models/playlist.dart';
 import '../../playlists/models/playlist_reference.dart';
+import '../../player/services/watch_local_subtitles.dart';
 import '../../settings/models/db/server.dart';
 import '../../settings/models/db/settings.dart';
 import '../../settings/models/errors/no_server_selected.dart';
@@ -31,6 +34,13 @@ part 'app.freezed.dart';
 
 final log = Logger('HomeState');
 
+typedef _ExternalCandidate = ({
+  String text,
+  bool share,
+  AndroidMusicShortcut? shortcut,
+});
+typedef _ExternalTarget = ({ContentLink? link, AndroidMusicShortcut? shortcut});
+
 class AppCubit extends Cubit<AppState> with WidgetsBindingObserver {
   late final StreamSubscription intentDataStreamSubscription;
   Future<void>? _pendingServerSwitch;
@@ -39,13 +49,16 @@ class AppCubit extends Cubit<AppState> with WidgetsBindingObserver {
   final VoidCallback? _onResume;
   _SessionSelection? _recoverySelection;
   ({
-    List<({String text, bool share})> candidates,
-    ContentLink? fallback,
+    List<_ExternalCandidate> candidates,
+    _ExternalTarget? fallback,
     bool fullStack,
     String profileId
   })? _pendingExternalLink;
   int _sessionGeneration = 0;
   int _linkNavigationGeneration = 0;
+  int _audioNavigationGeneration = 0;
+  ({Uri uri, String profile})? _pendingOpenedAudio;
+  Future<void> Function(Uri, bool Function())? _playOpenedAudio;
   Future<void> Function()? beforeAccountSwitch;
   Future<void> Function()? afterAccountSwitch;
   Future<void> Function()? clearSessionNotifications;
@@ -91,6 +104,7 @@ class AppCubit extends Cubit<AppState> with WidgetsBindingObserver {
         server: server,
         profileId: owner.profileId));
     _openPendingExternalLink();
+    _openPendingAudio();
   }
 
   onReady() async {
@@ -98,10 +112,25 @@ class AppCubit extends Cubit<AppState> with WidgetsBindingObserver {
       // A replacement Activity can attach to a retained engine. The live
       // router determines whether the Home stack needs to be installed.
       intentDataStreamSubscription = AndroidIncomingLinks.events().listen(
-        (batch) => _receiveExternalLinks(
-          [for (final media in batch) (text: media.text, share: media.share)],
-          fullStack: false,
-        ),
+        (batch) {
+          if (batch.audio case final audio?) {
+            _receiveOpenedAudio(audio);
+          } else {
+            _receiveExternalLinks(
+              [
+                for (final link in batch.links)
+                  (
+                    text: link.text,
+                    share: link.share,
+                    shortcut: link.share || isTv
+                        ? null
+                        : AndroidIncomingLinks.musicShortcut(link.text),
+                  ),
+              ],
+              fullStack: false,
+            );
+          }
+        },
         onError: _logIntakeError,
       );
     } else {
@@ -117,6 +146,45 @@ class AppCubit extends Cubit<AppState> with WidgetsBindingObserver {
   void _logIntakeError(Object error, StackTrace trace) {
     log.warning(
         'Could not receive shared content (${error.runtimeType})', null, trace);
+  }
+
+  void bindOpenedAudio(Future<void> Function(Uri, bool Function()) play) {
+    _playOpenedAudio = play;
+    _openPendingAudio();
+  }
+
+  void _receiveOpenedAudio(Uri uri) {
+    if (isClosed || state.globalLoading || state.sessionRecoveryRequired) {
+      return;
+    }
+    _pendingOpenedAudio = (uri: uri, profile: db.profileId);
+    _openPendingAudio();
+  }
+
+  void _openPendingAudio() {
+    final pending = _pendingOpenedAudio;
+    final play = _playOpenedAudio;
+    if (pending == null ||
+        play == null ||
+        isClosed ||
+        state.globalLoading ||
+        state.sessionRecoveryRequired ||
+        state.profileId != db.profileId) {
+      return;
+    }
+    _pendingOpenedAudio = null;
+    if (pending.profile != db.profileId) return;
+    final navigation = ++_audioNavigationGeneration;
+    final session = _sessionGeneration;
+    bool current() =>
+        !isClosed &&
+        !state.globalLoading &&
+        !state.sessionRecoveryRequired &&
+        state.profileId == pending.profile &&
+        db.profileId == pending.profile &&
+        session == _sessionGeneration &&
+        navigation == _audioNavigationGeneration;
+    unawaited(play(pending.uri, current).catchError(_logIntakeError));
   }
 
   Future<void> _receiveInitialShare(ReceiveSharingIntent sharing) async {
@@ -135,11 +203,15 @@ class AppCubit extends Cubit<AppState> with WidgetsBindingObserver {
       for (final media in shared)
         if (media.type == SharedMediaType.url ||
             media.type == SharedMediaType.text)
-          (text: media.path, share: media.type == SharedMediaType.text)
+          (
+            text: media.path,
+            share: media.type == SharedMediaType.text,
+            shortcut: null,
+          )
     ], fullStack: fullStack);
   }
 
-  void _receiveExternalLinks(List<({String text, bool share})> candidates,
+  void _receiveExternalLinks(List<_ExternalCandidate> candidates,
       {required bool fullStack}) {
     if (candidates.isEmpty ||
         isClosed ||
@@ -173,31 +245,32 @@ class AppCubit extends Cubit<AppState> with WidgetsBindingObserver {
     _openPendingExternalLink();
   }
 
-  ContentLink? _parseExternalCandidates(
-      List<({String text, bool share})> candidates,
+  _ExternalTarget? _parseExternalCandidates(List<_ExternalCandidate> candidates,
       {Server? server}) {
-    ContentLink? landing;
+    _ExternalTarget? landing;
     for (final candidate in candidates) {
+      final shortcut = candidate.shortcut;
+      if (shortcut != null) return (link: null, shortcut: shortcut);
       final link = candidate.share
           ? ContentLink.firstInText(candidate.text,
               server: server, allowLandingFallback: true)
           : ContentLink.parseAddress(candidate.text,
               server: server, allowLandingFallback: true);
       if (link?.kind == ContentLinkKind.home) {
-        landing ??= link;
+        landing ??= (link: link, shortcut: null);
       } else if (link != null) {
-        return link;
+        return (link: link, shortcut: null);
       }
     }
     return landing;
   }
 
-  ContentLink? _preferActionableLink(
-      ContentLink? parsed, ContentLink? fallback) {
+  _ExternalTarget? _preferActionableLink(
+      _ExternalTarget? parsed, _ExternalTarget? fallback) {
     if (parsed == null) return fallback;
-    if (parsed.kind == ContentLinkKind.home &&
+    if (parsed.link?.kind == ContentLinkKind.home &&
         fallback != null &&
-        fallback.kind != ContentLinkKind.home) {
+        fallback.link?.kind != ContentLinkKind.home) {
       return fallback;
     }
     return parsed;
@@ -217,10 +290,10 @@ class AppCubit extends Cubit<AppState> with WidgetsBindingObserver {
     if (pending.profileId != state.profileId) return;
     // Cold shares may name the selected Invidious instance before it has been
     // restored. Parse only after session admission, without adopting its host.
-    final link = _preferActionableLink(
+    final target = _preferActionableLink(
         _parseExternalCandidates(pending.candidates, server: state.server),
         pending.fallback);
-    if (link == null) return;
+    if (target == null) return;
     // An intent can arrive before the phone's nested AutoRouter mounts.
     // Install Home with the content in that case so Back has a destination.
     final fullStack = pending.fullStack ||
@@ -228,13 +301,64 @@ class AppCubit extends Cubit<AppState> with WidgetsBindingObserver {
         (isTv
             ? appRouter.current.name == TvWelcomeWizardRoute.name
             : appRouter.innerRouterOf<StackRouter>(MainRoute.name) == null);
-    unawaited(_openContentLink(link, fullStack));
+    if (target.shortcut case final shortcut?) {
+      unawaited(_openMusicShortcut(shortcut, fullStack));
+    } else if (target.link case final link?) {
+      unawaited(_openContentLink(link, fullStack));
+    }
+  }
+
+  Future<void> _openMusicShortcut(
+      AndroidMusicShortcut shortcut, bool fullStack) async {
+    // A newer launcher open supersedes a content link still resolving.
+    final navigation = ++_linkNavigationGeneration;
+    final owner = db;
+    final profile = state.profileId;
+    final session = _sessionGeneration;
+    bool canStartShuffle() =>
+        !isClosed &&
+        !state.globalLoading &&
+        !state.sessionRecoveryRequired &&
+        navigation == _linkNavigationGeneration &&
+        session == _sessionGeneration &&
+        identical(db, owner) &&
+        profile == db.profileId;
+    final route = MusicShortcutRoute(
+      key: UniqueKey(),
+      destination: switch (shortcut) {
+        AndroidMusicShortcut.home => MusicDestination.home,
+        AndroidMusicShortcut.search => MusicDestination.search,
+        AndroidMusicShortcut.library ||
+        AndroidMusicShortcut.shuffleLocal =>
+          MusicDestination.library,
+      },
+      canStartShuffle: shortcut == AndroidMusicShortcut.shuffleLocal
+          ? canStartShuffle
+          : null,
+    );
+    try {
+      if (fullStack) {
+        await appRouter.replaceAll([
+          MainRoute(children: [const MainContentRoute(), route])
+        ]);
+      } else {
+        final pages = appRouter.innerRouterOf<StackRouter>(MainRoute.name)!;
+        if (pages.current.name == MusicShortcutRoute.name) {
+          await pages.replace(route);
+        } else {
+          await pages.push(route);
+        }
+      }
+    } catch (error, trace) {
+      log.warning('Could not open Music launcher shortcut', error, trace);
+    }
   }
 
   @override
   Future<void> close() async {
     WidgetsBinding.instance.removeObserver(this);
     _pendingExternalLink = null;
+    _pendingOpenedAudio = null;
     final closed = super.close();
     await intentDataStreamSubscription.cancel();
     // Active work observes isClosed and restores its original selection;
@@ -484,6 +608,10 @@ class AppCubit extends Cubit<AppState> with WidgetsBindingObserver {
       _requireOpen();
       await PlaybackCache.removeProfile(profileId);
       _requireOpen();
+      await LocalMusicVideoPairings.forgetProfile(profileId);
+      _requireOpen();
+      await const WatchLocalSubtitles().removeProfile(profileId);
+      _requireOpen();
       RecommendationService.forgetProfile(db, profileId);
       await db.deleteProfile(profileId);
     } finally {
@@ -528,6 +656,7 @@ class AppCubit extends Cubit<AppState> with WidgetsBindingObserver {
       if (profileId != oldOwner.profileId || state.server != null) {
         _pendingExternalLink = null;
       }
+      _pendingOpenedAudio = null;
       _sessionGeneration++;
       setGlobalLoading(true);
       try {

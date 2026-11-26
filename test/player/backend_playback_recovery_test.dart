@@ -1013,6 +1013,59 @@ void main() {
     }
   });
 
+  test('subtitle timing persists by video and leaves transport untouched',
+      () async {
+    final video = cubit();
+    const step = VideoPlayerCubit.subtitleTimingStep;
+    const start = Duration(seconds: 12);
+    final original = video.state.video!;
+    final next = _video('replacement', BackendPlayback(preferred));
+    try {
+      await video.playVideo(false, startAt: start);
+      await _flush();
+      final originalTarget = video.subtitleTimingTarget!;
+      final controller = video.videoController!;
+      final playCount = playCalls;
+
+      await video.adjustSubtitleTiming(originalTarget, shift: -step);
+      expect(controller.subtitleOffset.value, -step);
+      await Future.wait([
+        video.adjustSubtitleTiming(originalTarget, shift: step),
+        video.adjustSubtitleTiming(originalTarget, shift: step),
+      ]);
+      expect(controller.subtitleOffset.value, step);
+      expect(video.position(), start);
+      expect(seeks, isEmpty);
+      expect(sources, hasLength(1));
+      expect(playCalls, playCount);
+      expect(nativePlaying, isTrue);
+
+      video.switchVideo(next);
+      await _flush();
+      expect(video.videoController, same(controller));
+      expect(controller.subtitleOffset.value, Duration.zero);
+      final nextTarget = video.subtitleTimingTarget!;
+      await video.adjustSubtitleTiming(nextTarget, shift: -step);
+      await video.adjustSubtitleTiming(originalTarget, shift: -step);
+      expect(controller.subtitleOffset.value, -step);
+
+      video.switchVideo(original);
+      await _flush();
+      expect(controller.subtitleOffset.value, step);
+      await video.adjustSubtitleTiming(video.subtitleTimingTarget!);
+      expect(controller.subtitleOffset.value, Duration.zero);
+
+      video.switchVideo(next);
+      await _flush();
+      expect(controller.subtitleOffset.value, -step);
+      video.switchVideo(original);
+      await _flush();
+      expect(controller.subtitleOffset.value, Duration.zero);
+    } finally {
+      await video.close();
+    }
+  });
+
   test('Android VOD starts at resume and a reused source can start at zero',
       () async {
     final video = cubit();

@@ -8,6 +8,7 @@ import '../../utils/invidious_image.dart';
 import '../../utils/models/image_object.dart';
 import '../../videos/models/video.dart';
 import '../../playlists/models/playlist_reference.dart';
+import 'android_music_resumption.dart';
 import 'playback_queue.dart';
 import 'local_music_playback.dart';
 
@@ -58,8 +59,12 @@ class PlaybackSession {
           : Duration(seconds: seconds, microseconds: positionFractionUs);
   final String? namedQueueId;
   final String? ownerProfileId;
+  final AndroidMusicResumption? androidResumption;
   final String? localSelectionId;
   final bool audio;
+
+  /// Older sessions only recorded traversal, so their mode is unknown.
+  final bool? musicQueueShuffled;
 
   /// Snapshots predating section history have no origin information.
   final Set<String>? musicHistoryEntries;
@@ -85,8 +90,10 @@ class PlaybackSession {
     this.positionMilliseconds,
     this.namedQueueId,
     this.ownerProfileId,
+    this.androidResumption,
     this.localSelectionId,
     this.audio = false,
+    this.musicQueueShuffled,
     this.musicHistoryEntries = const {},
     this.musicHistoryPlaylist = false,
     this.musicRecommendationSources = const {},
@@ -112,7 +119,10 @@ class PlaybackSession {
     return offlineIds.any(_isSavedCopy) ? 3 : 2;
   }
 
-  String encode({bool portableArtwork = false}) {
+  String encode({
+    bool portableArtwork = false,
+    AndroidMusicResumption? androidResumption,
+  }) {
     final version = _version;
     return jsonEncode({
       'version': version,
@@ -148,9 +158,12 @@ class PlaybackSession {
         'positionMilliseconds': positionMilliseconds,
       if (namedQueueId != null) 'namedQueueId': namedQueueId,
       if (ownerProfileId != null) 'ownerProfileId': ownerProfileId,
+      if (androidResumption != null)
+        'androidResumption': androidResumption.toJson(),
       if (hasDeviceEntries && (version >= 4 || localSelectionId != null))
         'localSelectionId': localSelectionId,
       'audio': audio,
+      if (musicQueueShuffled != null) 'musicQueueShuffled': musicQueueShuffled,
       if (musicHistoryEntries != null)
         'musicHistoryEntries': musicHistoryEntries!.toList(),
       if (musicHistoryPlaylist) 'musicHistoryPlaylist': true,
@@ -181,14 +194,10 @@ class PlaybackSession {
   static bool _isSavedCopy(String id) =>
       !isLocalMusicPlaybackId(id) && id.contains('#');
 
-  static final _fingerprint = RegExp(r'^[a-f0-9]{64}$');
   static final _deviceOccurrence =
       RegExp(r'^device:[a-f0-9]{64}(#[1-9][0-9]*)?$');
   static final _selectionId = RegExp(r'^[A-Za-z0-9_-]{1,128}$');
   static final _control = RegExp(r'[\x00-\x1f\x7f]');
-
-  static bool _validFingerprint(Object? value) =>
-      value is String && _fingerprint.stringMatch(value) == value;
 
   /// Restore public display images without retaining local file references,
   /// credentials, or expiring query parameters alongside a file fingerprint.
@@ -251,7 +260,9 @@ class PlaybackSession {
         final marked = entry.containsKey('explicitMusicDownload');
         final fingerprint = entry['explicitMusicDownload'];
         if (marked &&
-            (version < 4 || source || !_validFingerprint(fingerprint))) {
+            (version < 4 ||
+                source ||
+                !isValidOfflineMusicFingerprint(fingerprint))) {
           throw const FormatException('Invalid saved Music fingerprint');
         }
         final cache = CachedMusicPlayback.tryParse(entry['cachedMusic']);
@@ -395,7 +406,8 @@ class PlaybackSession {
       final musicRecommendationSources = <String, String>{
         if (sources is Map)
           for (final entry in sources.entries)
-            if (ids.contains(entry.key) && _validFingerprint(entry.value))
+            if (ids.contains(entry.key) &&
+                isValidOfflineMusicFingerprint(entry.value))
               entry.key as String: entry.value as String,
       };
       final played = List<String>.from(json['played'] ?? []);
@@ -424,9 +436,14 @@ class PlaybackSession {
             ? namedQueueId
             : null,
         ownerProfileId: normalizedQueueTitle(json['ownerProfileId']),
-        localSelectionId:
-            hasDevice ? json['localSelectionId'] as String? : null,
+        androidResumption: json['audio'] == true
+            ? AndroidMusicResumption.tryParse(json['androidResumption'])
+            : null,
+        localSelectionId: hasDevice || hasDeviceVideos
+            ? json['localSelectionId'] as String?
+            : null,
         audio: json['audio'] == true,
+        musicQueueShuffled: json['musicQueueShuffled'] as bool?,
         musicHistoryEntries:
             history?.whereType<String>().where(ids.contains).toSet(),
         musicHistoryPlaylist: json['musicHistoryPlaylist'] == true,

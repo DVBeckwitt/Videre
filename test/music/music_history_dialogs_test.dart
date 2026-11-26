@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui' show SemanticsAction;
 
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/globals.dart';
@@ -69,16 +70,21 @@ void main() {
     ));
   }
 
-  Widget timelineButton() => Builder(
+  Widget timelineButton({
+    String trackId = 'first',
+    String title = 'First song',
+    String label = 'Open timeline',
+  }) =>
+      Builder(
         builder: (context) => TextButton(
           onPressed: () => showMusicListeningTimeline(context,
-              trackId: 'first', title: 'First song'),
-          child: const Text('Open timeline'),
+              trackId: trackId, title: title),
+          child: Text(label),
         ),
       );
 
-  HistoryVideoCache entry(String id, DateTime date) =>
-      HistoryVideoCache(id, 'Track $id', 'Artist', '')..created = date;
+  HistoryVideoCache entry(String id, DateTime date, {String? title}) =>
+      HistoryVideoCache(id, title ?? 'Track $id', 'Artist', '')..created = date;
 
   testWidgets('timeline shows every play for the selected song and old history',
       (tester) async {
@@ -125,6 +131,149 @@ void main() {
     expect(recentDate, findsNothing);
   });
 
+  testWidgets('calendar follows local midnight and opens just one day',
+      (tester) async {
+    tester.view.physicalSize = const Size(800, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final beforeMidnight = DateTime(2024, 2, 29, 23, 59);
+    final midnight = DateTime(2024, 3, 1);
+    final afterMidnight = DateTime(2024, 3, 1, 0, 1);
+    await tester.runAsync(() async {
+      for (final local in [beforeMidnight, midnight, afterMidnight]) {
+        await database
+            .beginMusicListening('first')!
+            .record(entry('first', local.toUtc()));
+      }
+    });
+    await show(tester, timelineButton());
+    await tester.tap(find.text('Open timeline'));
+    await tester.pumpAndSettle();
+    expect(find.byType(ListTile), findsNWidgets(3));
+
+    final dialog = tester.element(find.byType(AlertDialog));
+    final material = MaterialLocalizations.of(dialog);
+    final use24Hours = MediaQuery.alwaysUse24HourFormatOf(dialog);
+    String timeLabel(DateTime date) => material.formatTimeOfDay(
+          TimeOfDay.fromDateTime(date),
+          alwaysUse24HourFormat: use24Hours,
+        );
+    final february = find.text(material.formatMonthYear(beforeMidnight));
+    final march = find.text(material.formatMonthYear(midnight));
+    final leapDay = find.bySemanticsLabel(
+        '${material.formatFullDate(beforeMidnight)}, 1 listen');
+    final repeatDay = find
+        .bySemanticsLabel('${material.formatFullDate(midnight)}, 2 listens');
+    final before = find.text(timeLabel(beforeMidnight));
+    final at = find.text(timeLabel(midnight));
+    final after = find.text(timeLabel(afterMidnight));
+
+    await tester.tap(find.byTooltip('Show calendar'));
+    await tester.pumpAndSettle();
+    expect(march, findsOneWidget);
+    expect(repeatDay, findsOneWidget);
+    expect(
+        tester
+            .getSemantics(repeatDay)
+            .getSemanticsData()
+            .hasAction(SemanticsAction.tap),
+        isTrue);
+    await tester.tap(find.byTooltip('Previous month'));
+    await tester.pumpAndSettle();
+    expect(february, findsOneWidget);
+    await tester.ensureVisible(leapDay);
+    await tester.pumpAndSettle();
+    await tester.tap(leapDay);
+    await tester.pumpAndSettle();
+    expect(before, findsOneWidget);
+    expect(at, findsNothing);
+    expect(after, findsNothing);
+
+    await tester.tap(find.byTooltip('Back to calendar'));
+    await tester.pumpAndSettle();
+    expect(february, findsOneWidget);
+    await tester.tap(find.byTooltip('Next month'));
+    await tester.pumpAndSettle();
+    await tester.tap(repeatDay);
+    await tester.pumpAndSettle();
+    expect(after, findsOneWidget);
+    expect(at, findsOneWidget);
+    expect(before, findsNothing);
+
+    await tester.tap(find.byTooltip('Back to calendar'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Show listening list'));
+    await tester.pumpAndSettle();
+    expect(find.byType(ListTile), findsNWidgets(3));
+  });
+
+  testWidgets('same-title calendars follow recording IDs and live deletion',
+      (tester) async {
+    tester.view.physicalSize = const Size(320, 640);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    const title = 'Same song title';
+    final firstListen = DateTime(2024, 3, 1, 12);
+    await tester.runAsync(() async {
+      await database
+          .beginMusicListening('first')!
+          .record(entry('first', firstListen, title: title));
+      await database.beginMusicListening('first')!.record(entry(
+          'first', firstListen.add(const Duration(minutes: 1)),
+          title: title));
+      await database
+          .beginMusicListening('second')!
+          .record(entry('second', firstListen, title: title));
+    });
+    await show(
+      tester,
+      Column(children: [
+        timelineButton(title: title, label: 'Open first recording'),
+        timelineButton(
+            trackId: 'second', title: title, label: 'Open second recording'),
+      ]),
+      textScale: 2,
+    );
+
+    await tester.tap(find.text('Open first recording'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Show calendar'));
+    await tester.pumpAndSettle();
+    final dialog = tester.element(find.byType(AlertDialog));
+    final material = MaterialLocalizations.of(dialog);
+    final date = material.formatFullDate(firstListen);
+    final repeatDay = find.bySemanticsLabel('$date, 2 listens');
+    await tester.ensureVisible(repeatDay);
+    await tester.pumpAndSettle();
+    await tester.tap(repeatDay);
+    await tester.pumpAndSettle();
+    expect(find.byType(ListTile), findsNWidgets(2));
+
+    final history =
+        MusicListeningHistory.forProfile(database, database.profileId);
+    await tester.runAsync(() => history.removeTracks({'first'}));
+    await tester.pumpAndSettle();
+    expect(find.text('No plays are recorded for this day.'), findsOneWidget);
+    expect(find.byType(ListTile), findsNothing);
+    await tester.tap(find.byTooltip('Back to calendar'));
+    await tester.pumpAndSettle();
+    expect(find.text('No plays are recorded for this song.'), findsOneWidget);
+    await tester.tap(find.text(material.closeButtonLabel));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Open second recording'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Show calendar'));
+    await tester.pumpAndSettle();
+    expect(find.bySemanticsLabel('$date, 1 listen'), findsOneWidget);
+    expect(find.bySemanticsLabel('$date, 2 listens'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('TV focus advances through the timeline and can close it',
       (tester) async {
     app_globals.isTv = true;
@@ -152,6 +301,43 @@ void main() {
     await tester.sendKeyEvent(LogicalKeyboardKey.select);
     await tester.pumpAndSettle();
     expect(find.byType(AlertDialog), findsNothing);
+  });
+
+  testWidgets('TV D-pad opens the calendar and a listening day',
+      (tester) async {
+    app_globals.isTv = true;
+    await tester.runAsync(() async {
+      await database
+          .beginMusicListening('first')!
+          .record(entry('first', DateTime(2024, 3, 2, 12)));
+    });
+    await show(tester, timelineButton());
+    await tester.tap(find.text('Open timeline'));
+    await tester.pumpAndSettle();
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+    await tester.pumpAndSettle();
+    await tester.sendKeyEvent(LogicalKeyboardKey.select);
+    await tester.pumpAndSettle();
+    expect(find.byTooltip('Show listening list'), findsOneWidget);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+    await tester.sendKeyEvent(LogicalKeyboardKey.select);
+    await tester.pumpAndSettle();
+    expect(find.byTooltip('Back to calendar'), findsOneWidget);
+    expect(find.byType(ListTile), findsOneWidget);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+    await tester.pumpAndSettle();
+    await tester.sendKeyEvent(LogicalKeyboardKey.select);
+    await tester.pumpAndSettle();
+    expect(find.byTooltip('Back to calendar'), findsNothing);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.select);
+    await tester.pumpAndSettle();
+    expect(find.byTooltip('Back to calendar'), findsOneWidget);
+    expect(find.byType(ListTile), findsOneWidget);
   });
 
   testWidgets('Music privacy controls are independent and fit large text',

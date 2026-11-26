@@ -10,10 +10,12 @@ import android.content.res.Configuration
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.provider.DocumentsContract
 import android.provider.OpenableColumns
 import android.util.Rational
 import cl.puntito.simple_pip_mode.PipCallbackHelper
@@ -27,11 +29,14 @@ import io.flutter.plugin.common.MethodChannel
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.nio.ByteBuffer
+import java.nio.charset.Charset
 import java.nio.charset.CharacterCodingException
+import java.util.UUID
 import java.util.concurrent.Executors
 
 class MainActivity : AudioServiceActivity() {
     private val callbackHelper = PipCallbackHelper()
+    internal val recordingRingtone = RecordingRingtone(this)
     private val mainHandler = Handler(Looper.getMainLooper())
     private val fileWorker = Executors.newSingleThreadExecutor()
     private var fileChannel: MethodChannel? = null
@@ -42,15 +47,18 @@ class MainActivity : AudioServiceActivity() {
     private var gatewayBrowser: GatewayAuthBrowser? = null
     private var torBrowserChannel: MethodChannel? = null
     private var autoPip = false
+    private var watchSubtitlePickerActive = false
     private var pipAspectRatio = Rational(16, 9)
     private var pendingFile: FileRequest? = null
+    private var pendingM3uCreate: Uri? = null
+    private var pendingM3uOutput: M3uOutput? = null
 
-    private class FileRequest(
-        val result: MethodChannel.Result,
-        val bytes: ByteArray?,
-        val takeout: Boolean,
-        val image: Boolean,
-    )
+    private class FileRequest(val result: MethodChannel.Result, val bytes: ByteArray?, val method: String) {
+        val image get() = method == "openPlaylistCover"
+        val takeout get() = method == "openTakeout"
+        val m3u get() = method == "openM3u" || method == "createM3u"
+    }
+    private data class M3uOutput(val token: String, val uri: Uri)
     private class FileTooLarge : IOException()
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -117,6 +125,9 @@ class MainActivity : AudioServiceActivity() {
             it.setMethodCallHandler { call, result -> gatewayBrowser?.handle(call, result)
                 ?: result.error("GATEWAY_BROWSER_UNAVAILABLE", null, null) }
         }
+        if (!flutterEngine.plugins.has(WatchLocalSubtitlesPlugin::class.java)) {
+            flutterEngine.plugins.add(WatchLocalSubtitlesPlugin())
+        }
         val torBrowser = TorBrowserLauncher(this)
         torBrowserChannel = MethodChannel(messenger, "videre/tor_browser").also {
             it.setMethodCallHandler(torBrowser::handle)
@@ -124,21 +135,29 @@ class MainActivity : AudioServiceActivity() {
     }
 
     private fun pickFile(call: MethodCall, result: MethodChannel.Result) {
-        if (call.method != "save" && call.method != "open" &&
-            call.method != "openTakeout" && call.method != "openPlaylistCover") {
+        if (call.method == "writeM3u" || call.method == "cancelM3uSave") {
+            finishM3uOutput(call, result)
+            return
+        }
+        if (call.method !in setOf("save", "open", "openTakeout", "openPlaylistCover", "openM3u", "createM3u")) {
             result.notImplemented()
             return
         }
-        if (pendingFile != null) {
+        if (pendingFile != null || pendingM3uOutput != null) {
             result.error("FILE_BUSY", "Finish the current file operation first.", null)
             return
         }
         val saving = call.method == "save"
+        val creatingM3u = call.method == "createM3u"
         val args = call.arguments as? Map<*, *>
         val text = args?.get("text") as? String
         val name = args?.get("name") as? String
         if (saving && (text == null || name.isNullOrBlank())) {
             result.error("INVALID_ARGUMENT", "A file name and UTF-8 text are required.", null)
+            return
+        }
+        if (creatingM3u && (name.isNullOrBlank() || !name.endsWith(".m3u8", ignoreCase = true))) {
+            result.error("INVALID_ARGUMENT", "An M3U8 file name is required.", null)
             return
         }
         if (saving && text!!.length > MAX_FILE_BYTES) {
@@ -150,17 +169,31 @@ class MainActivity : AudioServiceActivity() {
             result.error("FILE_TOO_LARGE", "Files must be no larger than 10 MiB.", null)
             return
         }
-        val request = FileRequest(result, bytes,
-            takeout = call.method == "openTakeout", image = call.method == "openPlaylistCover")
+        val request = FileRequest(result, bytes, call.method)
         pendingFile = request
-        val intent = Intent(if (saving) Intent.ACTION_CREATE_DOCUMENT else Intent.ACTION_OPEN_DOCUMENT).apply {
+        val intent = Intent(if (saving || creatingM3u) Intent.ACTION_CREATE_DOCUMENT else Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
             type = when {
+                creatingM3u -> "audio/x-mpegurl"
+                saving && args?.get("mimeType") == "text/csv" -> "text/csv"
                 saving -> "application/json"
                 request.image -> "image/*"
                 else -> "*/*"
             }
-            if (saving) putExtra(Intent.EXTRA_TITLE, name)
+            if (saving && args?.get("mimeType") == "text/plain") {
+                type = "text/plain"
+                // Suppress the legacy PiP trigger when opening the transcript picker.
+                addFlags(Intent.FLAG_ACTIVITY_NO_USER_ACTION)
+            }
+            if (saving || creatingM3u) putExtra(Intent.EXTRA_TITLE, name)
+            if (request.m3u) {
+                // Some local providers advertise M3U as plain text or octet-stream.
+                putExtra(Intent.EXTRA_LOCAL_ONLY, true)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    putExtra(DocumentsContract.EXTRA_INITIAL_URI,
+                        DocumentsContract.buildDocumentUri(M3uStorage.EXTERNAL_STORAGE, "primary:"))
+                }
+            }
             else if (request.image) putExtra(Intent.EXTRA_LOCAL_ONLY, true)
             else if (request.takeout) {
                 putExtra(Intent.EXTRA_LOCAL_ONLY, true)
@@ -168,7 +201,7 @@ class MainActivity : AudioServiceActivity() {
                     "text/plain", "application/csv", "application/zip", "application/x-zip-compressed",
                     "application/octet-stream"))
             }
-            else putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("application/json", "text/plain"))
+            else if (!saving) putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("application/json", "text/plain"))
         }
         try {
             startActivityForResult(intent, FILE_REQUEST_CODE)
@@ -181,6 +214,7 @@ class MainActivity : AudioServiceActivity() {
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (recordingRingtone.onActivityResult(requestCode)) return
         if (requestCode != FILE_REQUEST_CODE) return
         val request = pendingFile ?: return
         if (resultCode != Activity.RESULT_OK) {
@@ -197,6 +231,14 @@ class MainActivity : AudioServiceActivity() {
                 message = "Save the Takeout CSV or ZIP to Downloads on this device, then choose that local file.")
             return
         }
+        val creatingM3u = request.method == "createM3u"
+        if (request.m3u && (!TakeoutFiles.isLocalDocument(uri.scheme, uri.authority) ||
+            (creatingM3u && !DocumentsContract.isDocumentUri(this, uri)))) {
+            if (creatingM3u) fileWorker.execute { discardM3uOutput(uri) }
+            finishFile(request, error = "M3U_LOCAL_FILE", message = "Choose a file on this device.")
+            return
+        }
+        if (creatingM3u) pendingM3uCreate = uri
         // Cloud document providers may block; keep their streams off the UI thread.
         fileWorker.execute {
             try {
@@ -206,38 +248,117 @@ class MainActivity : AudioServiceActivity() {
                     }
                     true
                 } else if (request.takeout) {
-                    val name = if (uri.scheme == "file") java.io.File(uri.path ?: "").name else {
-                        contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
-                            if (it.moveToFirst()) it.getString(0) else null
-                        }
-                    } ?: "takeout.csv"
+                    val name = documentName(uri) ?: "takeout.csv"
                     (contentResolver.openInputStream(uri) ?: throw IOException()).use { input ->
                         TakeoutFiles.read(input, name, cacheDir)
                     }
-                } else {
-                    (contentResolver.openInputStream(uri) ?: throw IOException()).use { input ->
-                        val output = ByteArrayOutputStream()
-                        val buffer = ByteArray(8192)
-                        while (true) {
-                            val count = input.read(buffer)
-                            if (count == -1) break
-                            if (output.size() + count > MAX_FILE_BYTES) throw FileTooLarge()
-                            output.write(buffer, 0, count)
+                } else if (request.m3u) {
+                    val storage = M3uStorage(this)
+                    val location = storage.documentLocation(uri, storage.volumeRoots())
+                    if (creatingM3u) {
+                        mainHandler.post {
+                            if (pendingFile === request) {
+                                val output = M3uOutput(UUID.randomUUID().toString(), uri)
+                                pendingM3uCreate = null
+                                pendingM3uOutput = output
+                                finishFile(request, mapOf("token" to output.token, "location" to location))
+                            }
                         }
-                        val contents = output.toByteArray()
-                        if (request.image) contents
-                        else Charsets.UTF_8.newDecoder().decode(ByteBuffer.wrap(contents)).toString()
+                        return@execute
                     }
-                }
+                    val name = documentName(uri)
+                    if (name == null || !name.endsWith(".m3u8", true) && !name.endsWith(".m3u", true)) {
+                        mainHandler.post { finishFile(request, error = "M3U_FORMAT", message = "Choose an M3U or M3U8 file.") }
+                        return@execute
+                    }
+                    val bytes = readDocument(uri)
+                    val text = try {
+                        decodeUtf8(bytes)
+                    } catch (error: CharacterCodingException) {
+                        // Legacy M3U does not declare an encoding. M3U8 is UTF-8.
+                        if (name.endsWith(".m3u8", true)) throw error
+                        String(bytes, Charset.forName("windows-1252"))
+                    }
+                    mapOf("name" to name.take(1024), "text" to text, "location" to location)
+                } else if (request.image) readDocument(uri)
+                else decodeUtf8(readDocument(uri))
                 mainHandler.post { finishFile(request, value) }
             } catch (error: TakeoutFiles.ReadError) {
                 mainHandler.post { finishFile(request, error = error.code, message = error.message) }
             } catch (_: FileTooLarge) {
                 mainHandler.post { finishFile(request, error = "FILE_TOO_LARGE", message = "Files must be no larger than 10 MiB.") }
             } catch (_: CharacterCodingException) {
-                mainHandler.post { finishFile(request, error = "INVALID_UTF8", message = "Choose a UTF-8 JSON file.") }
+                mainHandler.post { finishFile(request, error = "INVALID_UTF8", message =
+                    if (request.m3u) "Choose an M3U8 file encoded in UTF-8." else "Choose a UTF-8 JSON file.") }
             } catch (_: Exception) {
-                mainHandler.post { finishFile(request, error = "FILE_IO", message = "Could not read or save the file. Check its location and available storage.") }
+                if (creatingM3u) discardM3uOutput(uri)
+                mainHandler.post {
+                    if (creatingM3u && pendingFile === request) pendingM3uCreate = null
+                    finishFile(request, error = "FILE_IO", message = "Could not read or save the file. Check its location and available storage.")
+                }
+            }
+        }
+    }
+
+    private fun documentName(uri: Uri): String? =
+        if (uri.scheme == "file") java.io.File(uri.path ?: "").name else {
+            contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
+                if (it.moveToFirst()) it.getString(0) else null
+            }
+        }
+
+    private fun readDocument(uri: Uri): ByteArray =
+        (contentResolver.openInputStream(uri) ?: throw IOException()).use { input ->
+            val output = ByteArrayOutputStream()
+            val buffer = ByteArray(8192)
+            while (true) {
+                val count = input.read(buffer)
+                if (count == -1) break
+                if (output.size() + count > MAX_FILE_BYTES) throw FileTooLarge()
+                output.write(buffer, 0, count)
+            }
+            output.toByteArray()
+        }
+
+    private fun decodeUtf8(bytes: ByteArray): String =
+        Charsets.UTF_8.newDecoder().decode(ByteBuffer.wrap(bytes)).toString()
+
+    private fun discardM3uOutput(uri: Uri): Boolean =
+        runCatching { DocumentsContract.deleteDocument(contentResolver, uri) }.getOrDefault(false)
+
+    private fun finishM3uOutput(call: MethodCall, result: MethodChannel.Result) {
+        val output = pendingM3uOutput
+        val token = call.argument<String>("token")
+        if (output == null || output.token != token || pendingFile != null) {
+            result.error("M3U_OUTPUT_CLOSED", "Choose where to save the playlist again.", null)
+            return
+        }
+        val writing = call.method == "writeM3u"
+        val text = call.argument<String>("text")
+        val bytes = text?.takeIf { it.length <= MAX_FILE_BYTES }?.toByteArray(Charsets.UTF_8)
+        if (writing && (bytes == null || bytes.size > MAX_FILE_BYTES)) {
+            result.error("FILE_TOO_LARGE", "Files must be no larger than 10 MiB.", null)
+            return
+        }
+        pendingM3uOutput = null
+        val request = FileRequest(result, bytes, call.method)
+        pendingFile = request
+        fileWorker.execute {
+            try {
+                if (writing) {
+                    (contentResolver.openOutputStream(output.uri, "wt") ?: throw IOException()).use {
+                        it.write(bytes!!)
+                    }
+                } else if (!discardM3uOutput(output.uri)) {
+                    mainHandler.post {
+                        finishFile(request, error = "M3U_DISCARD_FAILED", message = "The empty playlist file could not be removed.")
+                    }
+                    return@execute
+                }
+                mainHandler.post { finishFile(request, true) }
+            } catch (_: Exception) {
+                discardM3uOutput(output.uri)
+                mainHandler.post { finishFile(request, error = "FILE_IO", message = "Could not save the playlist.") }
             }
         }
     }
@@ -261,6 +382,10 @@ class MainActivity : AudioServiceActivity() {
         backendBrowser?.close()
         backendBrowser = null
         pendingFile?.let { finishFile(it, error = "ACTIVITY_CLOSED", message = "The file operation was interrupted. Please try again.") }
+        pendingM3uCreate?.let { uri -> fileWorker.execute { discardM3uOutput(uri) } }
+        pendingM3uCreate = null
+        pendingM3uOutput?.let { output -> fileWorker.execute { discardM3uOutput(output.uri) } }
+        pendingM3uOutput = null
         fileChannel?.setMethodCallHandler(null)
         fileChannel = null
         pipChannel?.setMethodCallHandler(null)
@@ -274,7 +399,8 @@ class MainActivity : AudioServiceActivity() {
 
     override fun onDestroy() {
         releaseChannels()
-        fileWorker.shutdownNow()
+        recordingRingtone.close()
+        fileWorker.shutdown()
         super.onDestroy()
     }
 
@@ -286,17 +412,27 @@ class MainActivity : AudioServiceActivity() {
     private fun supportsPip() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
         packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)
 
+    internal fun setWatchSubtitlePickerActive(active: Boolean) {
+        watchSubtitlePickerActive = active
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && supportsPip()) {
+            runCatching { setPictureInPictureParams(pipParams()) }
+        }
+    }
+
     @android.annotation.TargetApi(Build.VERSION_CODES.O)
     private fun pipParams(): PictureInPictureParams {
         val builder = PictureInPictureParams.Builder().setAspectRatio(pipAspectRatio)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) builder.setAutoEnterEnabled(autoPip)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            builder.setAutoEnterEnabled(autoPip && !watchSubtitlePickerActive)
+        }
         return builder.build()
     }
 
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
         // Older Android versions need to enter before onPause reaches Flutter.
-        if (autoPip && supportsPip() && Build.VERSION.SDK_INT < Build.VERSION_CODES.S && !isInPictureInPictureMode) {
+        if (autoPip && !watchSubtitlePickerActive && supportsPip() &&
+            Build.VERSION.SDK_INT < Build.VERSION_CODES.S && !isInPictureInPictureMode) {
             runCatching { enterPictureInPictureMode(pipParams()) }
         }
     }
@@ -335,6 +471,15 @@ internal fun prepareMediaFlutterEngine(engine: FlutterEngine) {
     }
     if (!engine.plugins.has(MusicScreenPrivacyPlugin::class.java)) {
         engine.plugins.add(MusicScreenPrivacyPlugin())
+    }
+    if (!engine.plugins.has(LocalMusicVideoPairingPlugin::class.java)) {
+        engine.plugins.add(LocalMusicVideoPairingPlugin())
+    }
+    if (!engine.plugins.has(MusicOutputPlugin::class.java)) {
+        engine.plugins.add(MusicOutputPlugin())
+    }
+    if (!engine.plugins.has(MusicWaveformPlugin::class.java)) {
+        engine.plugins.add(MusicWaveformPlugin())
     }
     if (!engine.plugins.has(AndroidAutoMediaPlugin::class.java)) {
         engine.plugins.add(AndroidAutoMediaPlugin())

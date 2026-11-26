@@ -7,13 +7,19 @@ class LocalMusicAlbum {
   final String? albumArtist;
   final String? releaseDate;
   final String? originalReleaseDate;
+  final LocalMusicReleaseKind? releaseKind;
   final List<LocalMusicTrack> tracks;
+
+  /// Headings keyed by the first track index of each disc in a multi-disc album.
+  late final Map<int, ({int number, String? subtitle})> discHeadings =
+      _discHeadings(tracks);
 
   LocalMusicAlbum._(this.key, this.title, List<LocalMusicTrack> members)
       : albumArtist = _albumArtist(members),
         releaseDate = _sharedDate(members.map((track) => track.releaseDate)),
         originalReleaseDate =
             _sharedDate(members.map((track) => track.originalReleaseDate)),
+        releaseKind = _sharedReleaseKind(members),
         tracks = orderLocalMusicAlbumTracks(members);
 }
 
@@ -59,6 +65,24 @@ List<LocalMusicTrack> orderLocalMusicAlbumTracks(
 int? _discPosition(LocalMusicTrack track) =>
     track.discNumber ?? (track.trackNumber == null ? null : 1);
 
+Map<int, ({int number, String? subtitle})> _discHeadings(
+    List<LocalMusicTrack> tracks) {
+  final headings = <int, ({int number, String? subtitle})>{};
+  var index = 0;
+  while (index < tracks.length) {
+    final number = _discPosition(tracks[index]);
+    if (number == null) break;
+    final first = index++;
+    var subtitle = tracks[first].discSubtitle;
+    while (index < tracks.length && _discPosition(tracks[index]) == number) {
+      if (tracks[index].discSubtitle != subtitle) subtitle = null;
+      index++;
+    }
+    headings[first] = (number: number, subtitle: subtitle);
+  }
+  return headings.length < 2 ? const {} : Map.unmodifiable(headings);
+}
+
 int _comparePosition(int? a, int? b) {
   if (a == b) return 0;
   if (a == null) return 1;
@@ -73,6 +97,11 @@ String? _albumArtist(List<LocalMusicTrack> tracks) {
       .where((artist) => artist.isNotEmpty)
       .toSet();
   return artists.length == 1 ? artists.single : null;
+}
+
+LocalMusicReleaseKind? _sharedReleaseKind(List<LocalMusicTrack> tracks) {
+  final kinds = tracks.map((track) => track.releaseKind).nonNulls.toSet();
+  return kinds.length == 1 ? kinds.single : null;
 }
 
 String? _sharedDate(Iterable<String?> values) {

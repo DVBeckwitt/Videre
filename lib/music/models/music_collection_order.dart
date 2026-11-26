@@ -1,6 +1,16 @@
 import '../../videos/models/video.dart';
 
-enum MusicCollectionSortField { source, title, artist, album, duration }
+enum MusicCollectionSortField {
+  source,
+  title,
+  artist,
+  album,
+  duration,
+  listeningTime,
+}
+
+typedef MusicPlaylistSortValue = Object? Function(
+    Video song, MusicCollectionSortField field);
 
 class MusicCollectionOrder {
   const MusicCollectionOrder({
@@ -51,6 +61,7 @@ class MusicCollectionOrder {
         final order = switch ((a, b)) {
           (final String text, final String other) => text.compareTo(other),
           (final num number, final num other) => number.compareTo(other),
+          (final Duration time, final Duration other) => time.compareTo(other),
           _ => 0,
         };
         return order == 0
@@ -87,4 +98,5 @@ Object? musicPlaylistTrackSortValue(
           final int seconds when seconds > 0 => seconds,
           _ => null,
         },
+      MusicCollectionSortField.listeningTime => null,
     };

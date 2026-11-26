@@ -10,12 +10,14 @@ internal data class LocalMusicRoot(
     val selectionId: String?,
     val ownsRead: Boolean = false,
     val needsReapproval: Boolean = false,
+    val isDocumentProvider: Boolean = false,
 ) {
     fun channelValue(): Map<String, Any?> = mapOf(
         "uri" to uri,
         "name" to name,
         "selectionId" to selectionId,
         "needsReapproval" to needsReapproval,
+        "isDocumentProvider" to isDocumentProvider,
     )
 
     fun toJson() = JSONObject(channelValue()).put("ownsRead", ownsRead)
@@ -26,7 +28,9 @@ internal data class LocalMusicRoots(val entries: List<LocalMusicRoot>, val selec
 
     fun withRoot(root: LocalMusicRoot): LocalMusicRoots {
         val roots = if (find(root.uri) == null) entries + root else entries.map {
-            if (it.uri == root.uri) root else it
+            if (it.uri == root.uri) {
+                root.copy(isDocumentProvider = it.isDocumentProvider || root.isDocumentProvider)
+            } else it
         }
         return LocalMusicRoots(roots, if (entries.isEmpty()) root.selectionId else selectionId)
     }
@@ -66,7 +70,8 @@ internal data class LocalMusicRoots(val entries: List<LocalMusicRoot>, val selec
                 val entries = List(roots.length()) { index ->
                     val root = roots.getJSONObject(index)
                     LocalMusicRoot(root.getString("uri"), root.getString("name"),
-                        root.selectionId(), root.getBoolean("ownsRead"), root.getBoolean("needsReapproval"))
+                        root.selectionId(), root.getBoolean("ownsRead"), root.getBoolean("needsReapproval"),
+                        isDocumentProvider = root.optBoolean("isDocumentProvider"))
                 }
                 if (entries.isEmpty()) empty else LocalMusicRoots(entries, configuration.selectionId())
             } catch (_: JSONException) {

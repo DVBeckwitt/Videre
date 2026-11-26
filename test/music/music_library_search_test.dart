@@ -8,10 +8,16 @@ import 'package:clipious/downloads/states/download_manager.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
+import 'package:clipious/music/models/music_artist.dart';
+import 'package:clipious/music/models/music_artist_identity.dart';
 import 'package:clipious/music/models/music_library_entry.dart';
+import 'package:clipious/music/models/music_lyrics.dart';
+import 'package:clipious/music/models/music_lyrics_match.dart';
 import 'package:clipious/music/services/local_music_library.dart';
 import 'package:clipious/music/services/music_library_search.dart';
 import 'package:clipious/music/services/music_library_service.dart';
+import 'package:clipious/music/services/music_lyrics_corrections.dart';
+import 'package:clipious/music/services/music_offline_lyrics.dart';
 import 'package:clipious/music/services/on_device_music_downloads.dart';
 import 'package:clipious/music/views/components/music_library_search_results.dart';
 import 'package:clipious/playlists/models/playlist.dart';
@@ -102,9 +108,10 @@ void main() {
   });
 
   List<MusicLibrarySearchHit> search(MusicLibrarySearch reader, String query,
-          {MusicLibrarySearchType type = MusicLibrarySearchType.all}) =>
+          {Set<MusicLibrarySearchType> types =
+              MusicLibrarySearchType.categories}) =>
       reader.search(query,
-          database: database, profileId: database.profileId, type: type);
+          database: database, profileId: database.profileId, types: types);
 
   test('matches saved songs and Music playlists within the active profile',
       () async {
@@ -141,15 +148,15 @@ void main() {
     expect(search(reader, 'CANCIÓN été').map((hit) => hit.key),
         ['bookmark:song:saved-song1', 'playlist:local:songs']);
     expect(
-        search(reader, 'cancion ete', type: MusicLibrarySearchType.songs)
+        search(reader, 'cancion ete', types: {MusicLibrarySearchType.songs})
             .map((hit) => hit.key),
         ['bookmark:song:saved-song1']);
     expect(
-        search(reader, 'cancion', type: MusicLibrarySearchType.playlists)
+        search(reader, 'cancion', types: {MusicLibrarySearchType.playlists})
             .map((hit) => hit.key),
         ['bookmark:playlist:PLrecordings', 'playlist:local:songs']);
     expect(
-        search(reader, 'cancion ete', type: MusicLibrarySearchType.playlists)
+        search(reader, 'cancion ete', types: {MusicLibrarySearchType.playlists})
             .single
             .key,
         'playlist:local:songs');
@@ -163,6 +170,405 @@ void main() {
     expect(search(reader, 'cancion'), isEmpty);
     expect(reader.search('cancion', database: database, profileId: profile),
         isEmpty);
+  });
+
+  test('matches and displays live aliases for distinct saved artist IDs',
+      () async {
+    const firstId = 'UC0123456789abcdefghijAB';
+    const secondId = 'UC0123456789abcdefghijCD';
+    const original = 'Original Group';
+    final reader = MusicLibrarySearch(deviceLibrary: LocalMusicLibrary());
+    addTearDown(reader.dispose);
+    final library =
+        MusicLibraryService.forProfile(database, database.profileId);
+    for (final (songId, title, artistId) in [
+      ('one', 'First song', firstId),
+      ('two', 'Second song', secondId),
+      ('three', 'Unlinked song', null),
+    ]) {
+      await library.save(MusicLibraryEntry(
+          kind: MusicLibraryKind.song,
+          id: songId,
+          title: title,
+          subtitle: original,
+          artistCredits: [MusicArtistCredit(name: original, id: artistId)]));
+    }
+
+    // Prime the original text cache before editing the aliases.
+    expect(search(reader, 'original group'), hasLength(3));
+    final first = MusicArtistIdentity.catalog(firstId);
+    final second = MusicArtistIdentity.catalog(secondId);
+    await library.setArtistAlias(first, 'Écho Collective',
+        isCurrent: () => true);
+    expect(
+        search(reader, 'original echo first').single.key, 'bookmark:song:one');
+    expect(
+        search(reader, 'echo collective').single.subtitle, 'Écho Collective');
+    await library.setArtistAlias(second, 'Écho Collective',
+        isCurrent: () => true);
+    expect(search(reader, 'echo collective').map((hit) => hit.key),
+        unorderedEquals(['bookmark:song:one', 'bookmark:song:two']));
+
+    await library.setArtistAlias(first, null, isCurrent: () => true);
+    expect(search(reader, 'echo collective').single.key, 'bookmark:song:two');
+    final restored =
+        search(reader, 'original first').single as MusicLibrarySearchBookmark;
+    expect(restored.subtitle, original);
+    expect(restored.entry.artistCredits.single.id, firstId);
+    expect(restored.entry.artistCredits.single.name, original);
+  });
+
+  test('matches device and downloaded artist aliases from their own source',
+      () async {
+    const catalogId = 'UC0123456789abcdefghijAB';
+    final file = downloaded.copyWith(
+      musicMetadata: const MusicMetadata(
+        title: 'Catalog download',
+        artist: 'Catalog credit',
+        artistCredits: [
+          MusicArtistCredit(name: 'Catalog credit', id: catalogId)
+        ],
+      ),
+    );
+    messenger.setMockMethodCallHandler(local, (call) async {
+      return switch (call.method) {
+        'getFolder' => {'uri': tree, 'name': 'Music', 'selectionId': 'music'},
+        'checkFolderAccess' => true,
+        'listTracks' => [
+            {
+              'uri': shared,
+              'title': 'Device file',
+              'artist': 'Device credit',
+              'albumArtist': 'Record credit',
+            },
+          ],
+        _ => null,
+      };
+    });
+    final device = LocalMusicLibrary();
+    addTearDown(device.dispose);
+    final reader = MusicLibrarySearch(
+      deviceLibrary: device,
+      downloads: OnDeviceMusicDownloads(
+          storage: _Storage((_, __) async => [proof(file, 'a' * 64)])),
+    );
+    addTearDown(reader.dispose);
+    await reader.refreshFiles(
+        database: database, profileId: database.profileId, downloads: [file]);
+    expect(search(reader, 'credit'), hasLength(2));
+
+    final library =
+        MusicLibraryService.forProfile(database, database.profileId);
+    final deviceArtist = MusicArtistIdentity.device('device credit');
+    await library.setArtistAlias(deviceArtist, 'Local Alias',
+        isCurrent: () => true);
+    await library.setArtistAlias(
+        MusicArtistIdentity.device('record credit'), 'Album Alias',
+        isCurrent: () => true);
+    await library.setArtistAlias(
+        MusicArtistIdentity.catalog(catalogId), 'Online Alias',
+        isCurrent: () => true);
+    expect(search(reader, 'device credit local alias').single.subtitle,
+        'Local Alias');
+    expect(search(reader, 'album alias').single.title, 'Device file');
+    expect(search(reader, 'catalog credit online alias').single.subtitle,
+        'Online Alias');
+    await library.setArtistAlias(deviceArtist, null, isCurrent: () => true);
+    expect(search(reader, 'local alias'), isEmpty);
+    expect(search(reader, 'device credit').single.subtitle, 'Device credit');
+    expect(search(reader, 'online alias').single.title, 'Catalog download');
+  });
+
+  test('searches combinations of actual visible device groups', () async {
+    var authorized = true;
+    var scans = 0;
+    messenger.setMockMethodCallHandler(local, (call) async {
+      if (call.method == 'listTracks') {
+        scans++;
+        return [
+          {
+            'uri': shared,
+            'title': 'First recording',
+            'artist': 'Bôssa Duo',
+            'album': 'Bôssa Sessions',
+            'albumKey': 'a' * 64,
+            'genre': 'Bôssa Nova',
+            'visibilityKey': 'b' * 64,
+          },
+          {
+            'uri': copy,
+            'title': 'Second recording',
+            'artist': 'BÔSSA DUO',
+            'album': 'Bôssa Sessions',
+            'albumKey': 'd' * 64,
+            'genre': 'BÔSSA NOVA',
+            'visibilityKey': 'c' * 64,
+          },
+        ];
+      }
+      return switch (call.method) {
+        'getFolder' => {'uri': tree, 'name': 'Music', 'selectionId': 'music'},
+        'checkFolderAccess' => authorized,
+        _ => null,
+      };
+    });
+    final device = LocalMusicLibrary(visibilityDatabase: () => database);
+    final reader = MusicLibrarySearch(deviceLibrary: device);
+    addTearDown(device.dispose);
+    addTearDown(reader.dispose);
+    await MusicLibraryService.forProfile(database, database.profileId)
+        .save(const MusicLibraryEntry(
+      kind: MusicLibraryKind.playlist,
+      id: 'PLmix',
+      title: 'Bôssa mix',
+    ));
+    await reader.refreshFiles(
+        database: database, profileId: database.profileId, downloads: const []);
+    final scansAfterRefresh = scans;
+
+    const albumTypes = {MusicLibrarySearchType.albums};
+    const artistTypes = {MusicLibrarySearchType.artists};
+    const genreTypes = {MusicLibrarySearchType.genres};
+    const combinedTypes = {
+      MusicLibrarySearchType.albums,
+      MusicLibrarySearchType.genres,
+      MusicLibrarySearchType.playlists,
+    };
+    final albums = search(reader, 'BOSSA SESSIONS', types: albumTypes);
+    expect(albums, everyElement(isA<MusicLibrarySearchAlbum>()));
+    expect(albums.map((hit) => hit.key).toSet(), hasLength(2));
+    final artist = search(reader, 'BOSSA DUO', types: artistTypes).single;
+    expect(artist, isA<MusicLibrarySearchArtist>());
+    final genre = search(reader, 'BOSSA NOVA', types: genreTypes).single;
+    expect(genre, isA<MusicLibrarySearchGenre>());
+    final songs =
+        search(reader, 'BOSSA', types: {MusicLibrarySearchType.songs});
+    expect(songs, hasLength(2));
+    expect(songs, everyElement(isA<MusicLibrarySearchFile>()));
+    final combined = search(reader, 'BOSSA', types: combinedTypes);
+    expect(
+        combined.map((hit) => hit.key),
+        unorderedEquals([
+          ...albums.map((hit) => hit.key),
+          genre.key,
+          'bookmark:playlist:PLmix',
+        ]));
+    expect(
+        search(reader, 'BOSSA').map((hit) => hit.key),
+        unorderedEquals([
+          ...combined.map((hit) => hit.key),
+          artist.key,
+          ...songs.map((hit) => hit.key),
+        ]));
+    expect(search(reader, 'sessions', types: genreTypes), isEmpty);
+    expect(scans, scansAfterRefresh);
+
+    final hidden = await device.hideTrack(
+        device.visibleTracks.singleWhere((track) => track.uri == copy));
+    expect(hidden, isNotNull);
+    final remainingAlbum = search(reader, 'bossa', types: albumTypes).single;
+    expect(albums.map((hit) => hit.key), contains(remainingAlbum.key));
+    expect(search(reader, 'bossa', types: artistTypes).single.key, artist.key);
+    expect(search(reader, 'bossa', types: genreTypes).single.key, genre.key);
+
+    authorized = false;
+    await device.revalidate();
+    expect(search(reader, 'BOSSA', types: combinedTypes).map((hit) => hit.key),
+        ['bookmark:playlist:PLmix']);
+    expect(search(reader, 'BOSSA', types: artistTypes), isEmpty);
+  });
+
+  test('finds explicitly kept recordings by words on one lyric line', () async {
+    final device = LocalMusicLibrary();
+    final reader = MusicLibrarySearch(deviceLibrary: device);
+    addTearDown(device.dispose);
+    addTearDown(reader.dispose);
+    const types = {MusicLibrarySearchType.lyrics};
+    const id = 'loose-song1';
+    const metadata = MusicMetadata(title: 'Night Train', artist: 'Ensemble');
+    final offline = MusicOfflineLyrics(database);
+    await offline.save(
+      id,
+      const MusicLyrics.plain('À la rivière, je chante.\nSous le ciel pâle.'),
+      track: metadata,
+      durationSeconds: 40,
+    );
+
+    final hit = search(reader, 'RIVIERE CHANTE', types: types).single
+        as MusicLibrarySearchRecording;
+    expect(hit.video.videoId, id);
+    expect(hit.title, metadata.title);
+    expect(hit.subtitle, metadata.artist);
+    expect(hit.lyricLine, 'À la rivière, je chante.');
+    expect(search(reader, 'riviere ciel', types: types), isEmpty);
+    expect(search(reader, metadata.title, types: types), isEmpty);
+    expect(search(reader, 'riviere chante'), isEmpty);
+    expect(
+        search(reader, 'riviere chante', types: {MusicLibrarySearchType.songs}),
+        isEmpty);
+
+    final initial = database.profileId;
+    final other = await database.createProfile('Other');
+    await database.useProfile(other.id);
+    expect(search(reader, 'riviere chante', types: types), isEmpty);
+    expect(
+        reader.search('riviere chante',
+            database: database, profileId: initial, types: types),
+        isEmpty);
+    await database.useProfile(initial);
+    expect(search(reader, 'riviere chante', types: types).single.key, hit.key);
+    await offline.remove(id);
+    expect(search(reader, 'riviere chante', types: types), isEmpty);
+  });
+
+  test('a saved song uses its recording metadata and explicit correction',
+      () async {
+    final device = LocalMusicLibrary();
+    final reader = MusicLibrarySearch(deviceLibrary: device);
+    addTearDown(device.dispose);
+    addTearDown(reader.dispose);
+    const types = {MusicLibrarySearchType.lyrics};
+    final owner = database.forProfile(database.profileId);
+    final library =
+        MusicLibraryService.forProfile(database, database.profileId);
+    final metadata = saved.toVideo().musicMetadata!;
+    final offline = MusicOfflineLyrics(owner);
+    await offline.save(
+      saved.id,
+      const MusicLyrics.synced([
+        (start: Duration(seconds: 3), text: 'Bright morning'),
+      ]),
+      track: metadata,
+      durationSeconds: saved.durationSeconds,
+    );
+    await library.save(saved);
+    await library.setSavedSongTitle(saved.id, 'My favorite recording',
+        isCurrent: () => true);
+
+    final hit = search(reader, 'bright morning', types: types).single;
+    expect(hit, isA<MusicLibrarySearchBookmark>());
+    expect(hit.title, 'My favorite recording');
+    expect(hit.lyricLine, 'Bright morning');
+    final corrections = MusicLyricsCorrections(owner);
+    await corrections.save(
+      saved.id,
+      const MusicLyricsCorrection(MusicLyrics.plain('Cloudy evening')),
+    );
+    expect(search(reader, 'bright morning', types: types), isEmpty);
+    expect(search(reader, 'cloudy evening', types: types).single.key, hit.key);
+    await corrections.save(
+      saved.id,
+      const MusicLyricsCorrection(MusicLyrics.unavailable()),
+    );
+    expect(search(reader, 'bright morning', types: types), isEmpty);
+    expect(search(reader, 'cloudy evening', types: types), isEmpty);
+    await corrections.clear(saved.id);
+    expect(search(reader, 'bright morning', types: types).single.key, hit.key);
+  });
+
+  test('a local lyric match expires on sidecar removal and lost grant',
+      () async {
+    var authorized = true;
+    var sidecarPresent = true;
+    var readCalls = 0;
+    messenger.setMockMethodCallHandler(local, (call) async {
+      if (call.method == 'readTrackLyrics') {
+        readCalls++;
+        expect(call.arguments['trackUri'], shared);
+        if (!authorized) return null;
+        return {
+          if (sidecarPresent) 'sidecar': '[ti:Metadata]\n[00:01.00]Nuit en été',
+          'embedded': 'Morning bells',
+        };
+      }
+      return switch (call.method) {
+        'getFolder' => {'uri': tree, 'name': 'Music', 'selectionId': 'music'},
+        'checkFolderAccess' => authorized,
+        'listTracks' => [
+            {'uri': shared, 'title': 'Local song', 'durationMs': 20000},
+          ],
+        _ => null,
+      };
+    });
+    final device = LocalMusicLibrary(visibilityDatabase: () => database);
+    final reader = MusicLibrarySearch(deviceLibrary: device);
+    addTearDown(device.dispose);
+    addTearDown(reader.dispose);
+    const query = 'NUIT ETE';
+    final profile = database.profileId;
+    await reader.refreshFiles(
+        database: database, profileId: profile, downloads: const []);
+    expect(search(reader, 'Local song').single.lyricLine, isNull);
+    expect(readCalls, 0);
+
+    final matches = await reader
+        .findDeviceLyricMatches(query,
+            database: database, profileId: profile, isCurrent: () => true)
+        .toList();
+    final match = matches.single;
+    expect(match.line, 'Nuit en été');
+    expect(match.track.uri, shared);
+    List<MusicLibrarySearchHit> results() => reader.search(query,
+        database: database,
+        profileId: profile,
+        types: {MusicLibrarySearchType.lyrics},
+        deviceLyricMatches: {match.track: match.line});
+    expect(results().single, isA<MusicLibrarySearchFile>());
+
+    sidecarPresent = false;
+    expect(
+        await reader.recheckDeviceLyric(query, match.track,
+            database: database, profileId: profile, isCurrent: () => true),
+        isNull);
+    expect(
+        await reader.recheckDeviceLyric('morning bells', match.track,
+            database: database, profileId: profile, isCurrent: () => true),
+        'Morning bells');
+
+    authorized = false;
+    await device.revalidate();
+    expect(results(), isEmpty);
+    expect(
+        await reader.recheckDeviceLyric(query, match.track,
+            database: database, profileId: profile, isCurrent: () => true),
+        isNull);
+    expect(readCalls, 3);
+  });
+
+  test('an in-flight device lyric read cannot publish to another profile',
+      () async {
+    final started = Completer<void>();
+    final pendingLyrics = Completer<Map<String, String>>();
+    messenger.setMockMethodCallHandler(local, (call) async {
+      if (call.method == 'readTrackLyrics') {
+        started.complete();
+        return pendingLyrics.future;
+      }
+      return switch (call.method) {
+        'getFolder' => {'uri': tree, 'name': 'Music', 'selectionId': 'music'},
+        'checkFolderAccess' => true,
+        'listTracks' => [
+            {'uri': shared, 'title': 'Local song'},
+          ],
+        _ => null,
+      };
+    });
+    final device = LocalMusicLibrary(visibilityDatabase: () => database);
+    final reader = MusicLibrarySearch(deviceLibrary: device);
+    addTearDown(device.dispose);
+    addTearDown(reader.dispose);
+    final initial = database.profileId;
+    final other = await database.createProfile('Other');
+    await reader.refreshFiles(
+        database: database, profileId: initial, downloads: const []);
+    final matches = reader
+        .findDeviceLyricMatches('private line',
+            database: database, profileId: initial, isCurrent: () => true)
+        .toList();
+    await started.future;
+    await database.useProfile(other.id);
+    pendingLyrics.complete({'embedded': 'Private line'});
+    expect(await matches, isEmpty);
   });
 
   test(
@@ -231,12 +637,12 @@ void main() {
         unorderedEquals([shared, copy, null]));
     expect(files().map((hit) => hit.key).toSet(), hasLength(3));
     expect(
-        search(reader, 'Ensemble canción', type: MusicLibrarySearchType.songs)
-            .map((hit) => hit.key),
+        search(reader, 'Ensemble canción',
+            types: {MusicLibrarySearchType.songs}).map((hit) => hit.key),
         search(reader, 'Ensemble canción').map((hit) => hit.key));
     expect(
         search(reader, 'Ensemble canción',
-            type: MusicLibrarySearchType.playlists),
+            types: {MusicLibrarySearchType.playlists}),
         isEmpty);
     expect(
         files()
@@ -253,6 +659,104 @@ void main() {
     await refresh();
     expect(files().single.entry.download, downloaded);
     expect(pickCalls, 0);
+  });
+
+  test('matches embedded sort aliases and displays the original labels',
+      () async {
+    const title = '星の歌';
+    const artist = '月楽団';
+    const titleAlias = 'Hoshi no Uta';
+    messenger.setMockMethodCallHandler(local, (call) async {
+      return switch (call.method) {
+        'getFolder' => {'uri': tree, 'name': 'Music', 'selectionId': 'music'},
+        'checkFolderAccess' => true,
+        'listTracks' => [
+            {
+              'uri': shared,
+              'title': title,
+              'artist': artist,
+              'album': '夜明け',
+              'albumArtist': '空合唱団',
+              'titleSort': titleAlias,
+              'artistSort': 'Tsuki Gakudan',
+              'albumSort': 'Yoake',
+              'albumArtistSort': 'Sora Gasshodan',
+              'fileName': 'track01.mp3',
+            },
+          ],
+        _ => null,
+      };
+    });
+    final library = LocalMusicLibrary(visibilityDatabase: () => database);
+    addTearDown(library.dispose);
+    final reader = MusicLibrarySearch(deviceLibrary: library);
+    addTearDown(reader.dispose);
+    await reader.refreshFiles(
+        database: database, profileId: database.profileId, downloads: []);
+
+    final original = search(reader, title).single;
+    expect(original, isA<MusicLibrarySearchFile>());
+    for (final query in [
+      titleAlias.toUpperCase(),
+      'tsuki gakudan',
+      'yoake',
+      'sora gasshodan',
+      '$title $titleAlias',
+      'track01.mp3',
+    ]) {
+      final hits = search(reader, query);
+      expect(hits, hasLength(1), reason: query);
+      expect(hits.single.key, original.key, reason: query);
+      expect(hits.single.title, title, reason: query);
+      expect(hits.single.subtitle, artist, reason: query);
+    }
+  });
+
+  test('Library Search only hides files with a known explicit advisory',
+      () async {
+    const untagged = '$tree/document/primary%3AMusic%2Funtagged.m4a';
+    messenger.setMockMethodCallHandler(local, (call) async {
+      return switch (call.method) {
+        'getFolder' => {'uri': tree, 'name': 'Music', 'selectionId': 'music'},
+        'checkFolderAccess' => true,
+        'listTracks' => [
+            {'uri': shared, 'title': 'Canción (Edit A)', 'contentAdvisory': 1},
+            {'uri': copy, 'title': 'Canción (Edit B)', 'contentAdvisory': 2},
+            {'uri': untagged, 'title': 'Canción (Explicit Mix)'},
+          ],
+        _ => null,
+      };
+    });
+    final library = LocalMusicLibrary(visibilityDatabase: () => database);
+    addTearDown(library.dispose);
+    final reader = MusicLibrarySearch(
+        deviceLibrary: library,
+        downloads:
+            OnDeviceMusicDownloads(storage: _Storage((_, __) async => [])));
+    addTearDown(reader.dispose);
+    await MusicLibraryService.forProfile(database, database.profileId)
+        .save(saved);
+    await reader.refreshFiles(
+        database: database, profileId: database.profileId, downloads: []);
+
+    final allTitles = [
+      'Canción',
+      'Canción (Edit A)',
+      'Canción (Edit B)',
+      'Canción (Explicit Mix)',
+    ];
+    final visibleTitles = [
+      'Canción',
+      'Canción (Edit B)',
+      'Canción (Explicit Mix)',
+    ];
+    Iterable<String> titles() =>
+        search(reader, 'cancion').map((hit) => hit.title);
+    expect(titles(), unorderedEquals(allTitles));
+    await library.setHideExplicitTracks(true);
+    expect(titles(), unorderedEquals(visibleTitles));
+    await library.setHideExplicitTracks(false);
+    expect(titles(), unorderedEquals(allTitles));
   });
 
   test('a pending earlier profile probe cannot publish after a switch',

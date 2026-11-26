@@ -1,8 +1,12 @@
+import 'package:clipious/downloads/models/downloaded_video.dart';
+import 'package:clipious/music/models/local_music_track.dart';
 import 'package:clipious/music/models/music_artist.dart';
 import 'package:clipious/music/models/music_collection.dart';
 import 'package:clipious/music/models/song_artwork.dart';
+import 'package:clipious/player/models/local_music_playback.dart';
 import 'package:clipious/utils/models/image_object.dart';
 import 'package:clipious/utils/invidious_image.dart';
+import 'package:clipious/videos/models/ided_video.dart';
 import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:clipious/videos/models/video.dart';
 
@@ -11,6 +15,23 @@ enum MusicLibraryKind { song, album, artist, playlist }
 const musicLibraryMaximumBytes = 5 * 1024 * 1024;
 const musicLibraryMaximumEntries = 10000;
 const savedSongTitleMaximumLength = 1024;
+
+Video? catalogMusicVideoForPlayback(IdedVideo entry) {
+  if (isLocalMusicPlaybackId(entry.videoId)) return null;
+  return switch (entry) {
+    Video(:final musicMetadata) when musicMetadata != null => entry,
+    DownloadedVideo(:final musicMetadata, :final lengthSeconds)
+        when musicMetadata != null =>
+      Video(
+          videoId: entry.videoId,
+          title: musicMetadata.title,
+          author: musicMetadata.artist,
+          lengthSeconds: lengthSeconds,
+          musicMetadata: musicMetadata,
+          videoThumbnails: musicMetadata.thumbnails),
+    _ => null,
+  };
+}
 
 String? normalizeSavedSongTitle(Object? value) {
   if (value is! String) return null;
@@ -100,6 +121,15 @@ class MusicLibraryEntry {
         thumbnails: images);
   }
 
+  factory MusicLibraryEntry.deviceSong(LocalMusicTrack track) =>
+      MusicLibraryEntry(
+          kind: MusicLibraryKind.song,
+          id: track.playbackId,
+          title: track.title,
+          subtitle: track.artist ?? '',
+          album: track.album,
+          durationSeconds: track.durationMs ~/ 1000);
+
   factory MusicLibraryEntry.collection(MusicCollection collection,
           {required bool album}) =>
       MusicLibraryEntry(
@@ -131,8 +161,8 @@ class MusicLibraryEntry {
       );
 
   Video toVideo() {
-    if (kind != MusicLibraryKind.song) {
-      throw StateError('Only songs can be played directly');
+    if (kind != MusicLibraryKind.song || _deviceId.hasMatch(id)) {
+      throw StateError('Only catalog songs can be played as videos');
     }
     final covers = coverThumbnails;
     final frames = covers.isEmpty
@@ -181,23 +211,47 @@ class MusicLibraryEntry {
 
   static final _id = RegExp(r'^[A-Za-z0-9_-]{1,128}$');
   static final _songId = RegExp(r'^[A-Za-z0-9_-]{11}$');
+  static final _deviceId = RegExp(r'^device:[0-9a-f]{64}$');
 
   /// Skip malformed rows individually so one damaged bookmark cannot hide the
   /// rest of a person's library. Copy only the explicitly supported fields.
-  static MusicLibraryEntry? tryParse(Object? value) {
+  static MusicLibraryEntry? tryParse(Object? value) => _tryParse(value);
+
+  /// Device Likes retain only the catalog's stable ID and display text.
+  static MusicLibraryEntry? tryParseLikedSong(Object? value) {
+    if (value is! Map || value['kind'] != MusicLibraryKind.song.name) {
+      return null;
+    }
+    return _tryParse(value, allowDevice: true);
+  }
+
+  static MusicLibraryEntry? _tryParse(Object? value,
+      {bool allowDevice = false}) {
     if (value is! Map) return null;
     final kind = MusicLibraryKind.values
         .where((kind) => kind.name == value['kind'])
         .firstOrNull;
     final id = value['id'];
     final title = _text(value['title']);
-    if (kind == null ||
-        id is! String ||
-        _id.stringMatch(id) != id ||
-        title == null) {
+    if (kind == null || id is! String || title == null) {
       return null;
     }
+    final device = allowDevice && _deviceId.stringMatch(id) == id;
+    if (!device && _id.stringMatch(id) != id) return null;
     final duration = value['durationSeconds'];
+    final durationSeconds =
+        duration is int && duration >= 0 && duration <= 604800
+            ? duration
+            : null;
+    if (device) {
+      return MusicLibraryEntry(
+          kind: kind,
+          id: id,
+          title: title,
+          subtitle: _text(value['subtitle']) ?? '',
+          album: _text(value['album']),
+          durationSeconds: durationSeconds);
+    }
     final images = value['thumbnails'];
     final thumbnails = [
       if (images is List)
@@ -224,9 +278,7 @@ class MusicLibraryEntry {
         albumPlaylistId: kind == MusicLibraryKind.song
             ? validMusicAlbumPlaylistId(value['albumPlaylistId'])
             : null,
-        durationSeconds: duration is int && duration >= 0 && duration <= 604800
-            ? duration
-            : null,
+        durationSeconds: durationSeconds,
         usesVideoThumbnails: usesVideoThumbnails,
         isArtTrack:
             kind == MusicLibraryKind.song && value['isArtTrack'] == true,

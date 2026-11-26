@@ -26,6 +26,12 @@ Future<void> showLocalMusicExclusions(
           onChanged: (value) => updateLocalMusicExclusions(context, library,
               profile, () => library.setExcludeRecordings(value)),
         ),
+        SwitchListTile(
+          value: library.hideExplicitTracks,
+          title: Text(locals.localMusicHideExplicitTracks),
+          onChanged: (value) => updateLocalMusicExclusions(context, library,
+              profile, () => library.setHideExplicitTracks(value)),
+        ),
         ListTile(
           leading: const Icon(Icons.folder_open_outlined),
           title: Text(locals.localMusicIncludeFolder),

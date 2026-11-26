@@ -8,10 +8,12 @@ import 'package:clipious/content_filter/community_filter.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' show isTv;
+import 'package:clipious/music/models/music_card_origin.dart';
 import 'package:clipious/music/models/music_track.dart';
 import 'package:clipious/music/services/music_catalog_service.dart';
 import 'package:clipious/music/services/music_library_service.dart';
 import 'package:clipious/music/services/music_starter_artists.dart';
+import 'package:clipious/music/services/music_visibility.dart';
 import 'package:clipious/network/network_proxy.dart';
 import 'package:clipious/recommendations/candidate_sources.dart';
 import 'package:clipious/recommendations/recommendation_service.dart';
@@ -29,8 +31,11 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
+import 'music_card_playback.dart';
 import 'music_catalog_cards.dart';
 import 'community_music_artwork.dart';
+import 'music_discovery_snooze.dart';
+import 'music_dismissal_notice.dart';
 import 'music_library_actions.dart';
 import 'music_recommendation_collection.dart';
 import '../screens/music.dart';
@@ -111,6 +116,7 @@ class _ProfileMusicShelves extends StatefulWidget {
 class _ProfileMusicShelvesState extends State<_ProfileMusicShelves>
     with WidgetsBindingObserver {
   late final RecommendationService _recommendations;
+  late final MusicVisibility _visibility;
   late final MusicLibraryService _library;
   late final RecommendationCandidates _candidates;
   late final MusicStarterArtists _starterArtists;
@@ -122,8 +128,20 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves>
   bool _openingSpeedDial = false;
   int _subscriptionLoad = 0;
   late int _tasteGeneration;
+  late int _dismissalRevision;
+  UndoMusicDismissal? _visibleUndo;
   List<RecommendedItem<MusicTrack>> _picks = const [];
   List<MusicTrack> _localTracks = const [];
+  List<RecommendedItem<MusicTrack>> get _visiblePicks {
+    final visible = _eligible(_picks.map((pick) => pick.item))
+        .map((track) => track.videoId)
+        .toSet();
+    return _picks
+        .where((pick) => visible.contains(pick.item.videoId))
+        .take(_maxQuickPicks)
+        .toList();
+  }
+
   List<MusicTrack> _history = const [];
   List<MusicTrack> _onRepeat = const [];
   List<MusicTrack> _rotation = const [];
@@ -163,6 +181,8 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves>
     NetworkProxy.instance.addBeforeApply(_proxyChanging);
     _recommendations = RecommendationService.forProfile(
         widget.database, widget.session.profileId);
+    _visibility =
+        MusicVisibility.forProfile(widget.database, widget.session.profileId);
     _library = MusicLibraryService.forProfile(
         widget.database, widget.session.profileId);
     _candidates =
@@ -171,6 +191,7 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves>
         MusicStarterArtists(widget.database, widget.session.profileId);
     _subscriptionSource = SubscriptionRecommendationSource(widget.database);
     _tasteGeneration = _recommendations.generation(RecommendationDomain.music);
+    _dismissalRevision = _recommendations.musicDismissalRevision;
     _recommendations.changes.addListener(_recommendationsChanged);
     recommendationSubscriptionRevision.addListener(_subscriptionsChanged);
     _library.changes.addListener(_refresh);
@@ -229,8 +250,13 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves>
 
   void _recommendationsChanged() {
     final generation = _recommendations.generation(RecommendationDomain.music);
+    final dismissalRevision = _recommendations.musicDismissalRevision;
+    final keepPickOrder = generation == _tasteGeneration &&
+        dismissalRevision != _dismissalRevision;
+    _dismissalRevision = dismissalRevision;
     if (generation != _tasteGeneration) {
       _tasteGeneration = generation;
+      _visibleUndo = null;
       _dailyMixes = const [];
       _preparedMixes.clear();
       _subscriptionLoad++;
@@ -238,7 +264,7 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves>
       _subscribedMusic = const [];
       if (_active) unawaited(_warmSubscriptions());
     }
-    unawaited(_refresh());
+    unawaited(_refresh(keepPickOrder: keepPickOrder));
   }
 
   void _subscriptionsChanged() {
@@ -297,19 +323,27 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves>
     if (_current) setState(() {});
   }
 
-  Future<void> _refresh() => _ranking = _refreshShelves();
+  Future<void> _refresh({bool keepPickOrder = false}) => _ranking =
+      _refreshShelves(keepPickOrder: keepPickOrder || _visibleUndo != null);
 
-  Future<void> _refreshShelves() async {
+  Future<void> _refreshShelves({required bool keepPickOrder}) async {
     final generation = ++_generation;
     if (!_current) return;
     final history =
         _recommendations.eligibleMusic(_candidates.listeningHistory(limit: 12));
     final localTracks = _candidates.localMusic();
     final candidates = [..._subscribedMusic, ...localTracks];
+    // Keep dismissed slots while Undo is visible, even if other signals rerank.
+    final candidateIds =
+        keepPickOrder ? candidates.map((track) => track.videoId).toSet() : null;
     setState(() {
       _history = history;
       _localTracks = localTracks;
-      _picks = const [];
+      _picks = candidateIds == null
+          ? const []
+          : _picks
+              .where((pick) => candidateIds.contains(pick.item.videoId))
+              .toList();
     });
     final ranked = await _recommendations.rankMusic(candidates,
         subscriptionChannels: _subscriptionChannels);
@@ -346,9 +380,9 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves>
         ];
     setState(() {
       // An unavailable native ranker is not replaced with an invented score.
-      _picks = ranked.available
-          ? ranked.items.take(_maxQuickPicks).toList()
-          : const [];
+      if (!keepPickOrder || _picks.isEmpty) {
+        _picks = ranked.available ? ranked.items : const [];
+      }
       _onRepeat = resolve(onRepeat);
       _rotation = resolve(rotation.where((id) => !repeatIds.contains(id)));
       _rediscover = resolve(rediscover.where((id) => !repeatIds.contains(id)));
@@ -371,7 +405,8 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves>
   }
 
   Future<void> _open(
-      MusicTrack track, Iterable<MusicTrack> tracks, String queueTitle) async {
+      MusicTrack track, Iterable<MusicTrack> tracks, String queueTitle,
+      {MusicCardOrigin? cardOrigin}) async {
     if (!_current) return;
     final songs = _recommendations.eligibleMusic(tracks);
     final index = songs.indexWhere((song) => song.videoId == track.videoId);
@@ -381,18 +416,22 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves>
         artistCredits: songs[index].artistCredits,
         queue: [for (final song in songs) song.toVideo()],
         queueTitle: queueTitle,
+        cardOrigin: cardOrigin,
         startIndex: index));
   }
 
   Future<void> _openQuickPick(MusicTrack track) async {
-    final tracks = _picks.map((pick) => pick.item);
+    final picks = _visiblePicks;
+    final tracks = picks.map((pick) => pick.item);
     final title = AppLocalizations.of(context)!.musicQuickPicks;
-    if (!isTv || !_current) return _open(track, tracks, title);
+    final cardOrigin = _quickPickOrigin(track);
+    if (!isTv || !_current) {
+      return _open(track, tracks, title, cardOrigin: cardOrigin);
+    }
     final origin = ModalRoute.of(context);
-    final slot =
-        _picks.indexWhere((pick) => pick.item.videoId == track.videoId);
+    final slot = picks.indexWhere((pick) => pick.item.videoId == track.videoId);
     if (slot < 0) return;
-    await _open(track, tracks, title);
+    await _open(track, tracks, title, cardOrigin: cardOrigin);
     await WidgetsBinding.instance.endOfFrame;
     // Playback can change the order or remove the played song while this
     // route is covered. Wait for the active ranking and its rows to mount.
@@ -409,20 +448,26 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves>
       await ranking;
       await WidgetsBinding.instance.endOfFrame;
     } while (!identical(ranking, _ranking));
-    if (!canRestore() || _picks.isEmpty) return;
+    if (!canRestore()) return;
+    final visible = _visiblePicks;
+    if (visible.isEmpty) return;
     final index =
-        _picks.indexWhere((pick) => pick.item.videoId == track.videoId);
-    _pickFocus[index >= 0 ? index : math.min(slot, _picks.length - 1)]
+        visible.indexWhere((pick) => pick.item.videoId == track.videoId);
+    _pickFocus[index >= 0 ? index : math.min(slot, visible.length - 1)]
         ?.requestFocus();
   }
 
-  List<MusicTrack> _eligible(Iterable<MusicTrack> tracks) => _current
-      ? _recommendations
-          .eligibleMusic(tracks)
-          .where((track) => !_hiddenArtists
-              .contains(RecommendationCandidate.music(track).creatorKey))
-          .toList()
-      : const [];
+  List<MusicTrack> _eligible(Iterable<MusicTrack> tracks,
+          {bool applySnooze = true}) =>
+      _current
+          ? _recommendations
+              .eligibleMusic(tracks)
+              .where((track) =>
+                  !_hiddenArtists.contains(
+                      RecommendationCandidate.music(track).creatorKey) &&
+                  (!applySnooze || !_visibility.isSnoozed(track.videoId)))
+              .toList()
+          : const [];
 
   Future<void> _openSpeedDial({String? videoId}) async {
     if (!_active || !_current || _openingSpeedDial) return;
@@ -440,24 +485,29 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves>
     final locals = AppLocalizations.of(context)!;
     _openingSpeedDial = true;
     try {
-      await _open(track, queue,
-          random ? locals.musicRandomPick : locals.musicSpeedDial);
+      await _open(
+          track, queue, random ? locals.musicRandomPick : locals.musicSpeedDial,
+          cardOrigin: random ? null : _speedDialOrigin(track));
     } finally {
       _openingSpeedDial = false;
     }
   }
 
-  Future<void> _playShelf(_LocalShelf shelf,
-      {String? from, bool songTap = false}) async {
+  Future<void> _playShelf(_LocalShelf shelf, MusicCardOrigin origin,
+      {bool songTap = false}) async {
     final songs = _eligible(shelf.tracks);
     if (songs.isEmpty) return;
+    final from = origin.entryId;
     final index =
         from == null ? 0 : songs.indexWhere((track) => track.videoId == from);
     if (index < 0) return;
     try {
       await MusicScreen.playTracks(
           context, [for (final track in songs) track.toVideo()],
-          queueTitle: shelf.title, startIndex: index, songTap: songTap);
+          queueTitle: shelf.title,
+          startIndex: index,
+          cardOrigin: origin,
+          songTap: songTap);
     } catch (_) {
       if (mounted && _current) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -476,7 +526,8 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves>
         _ => null,
       };
 
-  void _openShelf(String title, List<MusicTrack> tracks) {
+  void _openShelf(String title, List<MusicTrack> tracks,
+      {required String collectionId}) {
     if (!_current) return;
     final proxy = NetworkProxy.instance.config;
     final token = _recommendations.generation(RecommendationDomain.music);
@@ -487,11 +538,16 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves>
     Navigator.of(context).push<void>(MaterialPageRoute(
         builder: (_) => MusicRecommendationCollection(
               title: title,
+              collectionId: collectionId,
               tracks: tracks,
               isCurrent: current,
               eligible: _eligible,
-              changes: Listenable.merge(
-                  [_recommendations.changes, communityFilters.changes]),
+              snooze: _visibility,
+              changes: Listenable.merge([
+                _recommendations.changes,
+                communityFilters.changes,
+                _visibility,
+              ]),
             )));
   }
 
@@ -559,10 +615,11 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves>
           .expand((tracks) => tracks)
           .map((track) => track.videoId)
           .toSet();
-      final tracks = _eligible(ranked.items.map((item) => item.item))
-          .where((track) => used.add(track.videoId))
-          .take(14)
-          .toList();
+      final tracks =
+          _eligible(ranked.items.map((item) => item.item), applySnooze: false)
+              .where((track) => used.add(track.videoId))
+              .take(14)
+              .toList();
       setState(
           () => _preparedMixes[key] = tracks.length >= 4 ? tracks : const []);
     } catch (error) {
@@ -590,42 +647,64 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves>
 
   Widget _shelf(BuildContext context, _LocalShelf shelf) {
     final locals = AppLocalizations.of(context)!;
+    final tracks = _eligible(shelf.tracks);
+    MusicCardOrigin origin([String? entryId]) => (
+          surface: MusicCardSurface.homeShelf,
+          collectionId: shelf.id,
+          entryId: entryId,
+        );
+    final playAll = origin();
+    final playing = watchMusicCardPlaying(context, playAll);
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       _ShelfHeading(
         title: shelf.title,
         action: Row(mainAxisSize: MainAxisSize.min, children: [
           IconButton(
             key: ValueKey('music-${shelf.id}-play'),
-            tooltip: locals.musicPlayAll,
-            icon: const Icon(Icons.play_arrow_rounded),
-            onPressed: () => _playShelf(shelf),
+            tooltip:
+                musicCardPlaybackHint(context, playing) ?? locals.musicPlayAll,
+            icon: Icon(playing == true
+                ? Icons.pause_rounded
+                : Icons.play_arrow_rounded),
+            onPressed: () => activateMusicCard(
+                context, playAll, () => _playShelf(shelf, playAll)),
           ),
           IconButton(
             key: ValueKey('music-${shelf.id}-view'),
             tooltip: shelf.title,
             icon: const Icon(Icons.arrow_forward_rounded),
-            onPressed: () => _openShelf(shelf.title, shelf.tracks),
+            onPressed: () => _openShelf(shelf.title, shelf.tracks,
+                collectionId: 'shelf:${shelf.id}'),
           ),
         ]),
       ),
       MusicCatalogShelf(
         key: ValueKey('music-${shelf.id}'),
-        itemCount: shelf.tracks.length,
-        itemBuilder: (_, index) {
-          final song = shelf.tracks[index];
+        itemCount: tracks.length,
+        itemBuilder: (context, index) {
+          final song = tracks[index];
+          final cardOrigin = origin(song.videoId);
+          Future<void> start() => _playShelf(shelf, cardOrigin);
+          final recommendation = MusicSongRecommendation(
+            isCurrent: () => _current,
+            onSnooze: () => showMusicDiscoverySnooze(
+                context, _visibility, song, () => _current),
+          );
           return MusicCatalogCard(
             key: ValueKey('music-${shelf.id}-${song.videoId}'),
             title: song.title,
             subtitle: song.artists.join(', '),
             song: song,
+            cardOrigin: cardOrigin,
             showPlayIndicator: true,
             badge: MusicLibraryActions(
                 videos: [song.toVideo()],
-                onPlay: () => _playShelf(shelf, from: song.videoId)),
-            onOpen: () => _playShelf(shelf, from: song.videoId, songTap: true),
+                recommendation: recommendation,
+                onPlay: start),
+            onOpen: () => _playShelf(shelf, cardOrigin, songTap: true),
             onLongPress: () => MusicLibraryActions.showSongMenu(
                 context, song.toVideo(),
-                onPlay: () => _playShelf(shelf, from: song.videoId)),
+                recommendation: recommendation, onPlay: start),
           );
         },
       ),
@@ -636,18 +715,35 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves>
       MusicTrack track, RecommendationFeedback feedback) async {
     if (!_current) return;
     try {
-      await _recommendations.feedback(
-          track.toVideo(), RecommendationDomain.music, feedback);
-    } catch (_) {
-      if (mounted && _current) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text(AppLocalizations.of(context)!.recommendationError)));
+      if (feedback == RecommendationFeedback.like) {
+        await _recommendations.feedback(
+            track.toVideo(), RecommendationDomain.music, feedback);
+      } else {
+        final undo =
+            await _recommendations.dismissMusicRecommendation(track, feedback);
+        bool canUndo() =>
+            _current && (ModalRoute.of(context)?.isCurrent ?? true);
+        if (undo != null && mounted && canUndo()) {
+          _visibleUndo = undo;
+          await showMusicDismissalNotice(context,
+                  feedback: feedback, undo: undo, isCurrent: canUndo)
+              .whenComplete(() {
+            if (identical(_visibleUndo, undo)) _visibleUndo = null;
+          });
+        }
       }
+    } catch (_) {
+      if (mounted && _current) showMusicRecommendationError(context);
     }
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => ListenableBuilder(
+        listenable: _visibility,
+        builder: (context, _) => _buildShelves(context),
+      );
+
+  Widget _buildShelves(BuildContext context) {
     final locals = AppLocalizations.of(context)!;
     final starterKeys =
         _starterArtists.picks?.map(MusicStarterArtists.artistKey).toSet();
@@ -661,6 +757,7 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves>
         _eligible(_localTracks).take(_maxSpeedDialTracks).toList();
     final showRecentActivity = context.select((SettingsCubit? settings) =>
         settings?.state.musicLayout.showRecentActivity ?? true);
+    final picks = _visiblePicks;
     final onRepeat = _eligible(_onRepeat);
     final rediscover = _eligible(_rediscover);
     final rotation = _eligible(_rotation);
@@ -668,8 +765,7 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves>
       if (_mixScope == _currentMixScope)
         for (final mix in _dailyMixes)
           if (_preparedMixes[_mixKey(mix)] case final prepared?)
-            if (_eligible(prepared) case final tracks when tracks.length >= 4)
-              (mix: mix, tracks: tracks),
+            if (_eligible(prepared).length >= 4) (mix: mix, tracks: prepared),
     ];
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -680,7 +776,7 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves>
             title: locals.musicStarterArtistMatches,
             tracks: starterMatches,
           )),
-        if (_picks.isNotEmpty) ...[
+        if (picks.isNotEmpty) ...[
           _ShelfHeading(
             title: locals.musicQuickPicks,
             action: IconButton(
@@ -691,12 +787,14 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves>
             ),
           ),
           _QuickPickRows(
-            picks: _picks,
+            picks: picks,
             focusForSlot: isTv
                 ? (slot) => _pickFocus.putIfAbsent(slot, FocusNode.new)
                 : null,
             onOpen: _openQuickPick,
             onFeedback: _feedback,
+            onSnooze: (track) => showMusicDiscoverySnooze(
+                context, _visibility, track, () => _current),
             isCurrent: () => _current,
           ),
         ],
@@ -730,6 +828,7 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves>
                   title: track.title,
                   subtitle: track.artists.join(', '),
                   song: track,
+                  cardOrigin: _speedDialOrigin(track),
                   showPlayIndicator: true,
                   onOpen: () => _openSpeedDial(videoId: track.videoId),
                 );
@@ -743,8 +842,14 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves>
             itemCount: _history.length,
             itemBuilder: (context, index) {
               final track = _history[index];
+              final MusicCardOrigin cardOrigin = (
+                surface: MusicCardSurface.keepListening,
+                collectionId: null,
+                entryId: track.videoId,
+              );
               Future<void> open() =>
-                  _open(track, _history, locals.musicKeepListening);
+                  _open(track, _history, locals.musicKeepListening,
+                      cardOrigin: cardOrigin);
               return MusicCatalogCard(
                 key: ValueKey('music-keep-listening-${track.videoId}'),
                 title: track.title,
@@ -755,6 +860,7 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves>
                     prettyDurationCustom(Duration(seconds: seconds)),
                 ].join(' • '),
                 song: track,
+                cardOrigin: cardOrigin,
                 badge: MusicLibraryActions(
                     videos: [track.toVideo()], onPlay: open),
                 onOpen: open,
@@ -777,23 +883,30 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves>
               return MusicCatalogCard(
                 key: ValueKey('music-daily-mix-$index'),
                 title: title,
-                thumbnails:
-                    _mixCovers[mix.seeds.first]?.displayThumbnails ?? const [],
-                onOpen: () => _openShelf(title, tracks),
+                thumbnails: _mixCovers[mix.seeds
+                            .where((id) => !_visibility.isSnoozed(id))
+                            .firstOrNull]
+                        ?.displayThumbnails ??
+                    const [],
+                onOpen: () => _openShelf(title, tracks,
+                    collectionId: 'mix:${_mixKey(mix)}'),
               );
             },
           ),
         ],
         if (onRepeat.length >= 2)
-          _shelf(context,
-              (id: 'on-repeat', title: locals.musicOnRepeat, tracks: onRepeat)),
+          _shelf(context, (
+            id: 'on-repeat',
+            title: locals.musicOnRepeat,
+            tracks: _onRepeat
+          )),
         if (_rotationLabel(locals) case final title? when rotation.length >= 3)
-          _shelf(context, (id: 'rotation', title: title, tracks: rotation)),
+          _shelf(context, (id: 'rotation', title: title, tracks: _rotation)),
         if (rediscover.length >= 3)
           _shelf(context, (
             id: 'rediscover',
             title: locals.musicRediscover,
-            tracks: rediscover
+            tracks: _rediscover
           )),
       ],
     );
@@ -893,6 +1006,7 @@ class _QuickPickRows extends StatefulWidget {
   final FocusNode Function(int)? focusForSlot;
   final Future<void> Function(MusicTrack) onOpen;
   final void Function(MusicTrack, RecommendationFeedback) onFeedback;
+  final Future<void> Function(MusicTrack) onSnooze;
   final bool Function() isCurrent;
 
   const _QuickPickRows(
@@ -900,6 +1014,7 @@ class _QuickPickRows extends StatefulWidget {
       required this.focusForSlot,
       required this.onOpen,
       required this.onFeedback,
+      required this.onSnooze,
       required this.isCurrent});
 
   @override
@@ -975,6 +1090,7 @@ class _QuickPickRowsState extends State<_QuickPickRows> {
                           onOpen: () => widget.onOpen(pick.item),
                           onFeedback: (feedback) =>
                               widget.onFeedback(pick.item, feedback),
+                          onSnooze: () => widget.onSnooze(pick.item),
                           isCurrent: widget.isCurrent,
                         )),
                 ]),
@@ -985,6 +1101,18 @@ class _QuickPickRowsState extends State<_QuickPickRows> {
   }
 }
 
+MusicCardOrigin _quickPickOrigin(MusicTrack track) => (
+      surface: MusicCardSurface.quickPicks,
+      collectionId: null,
+      entryId: track.videoId,
+    );
+
+MusicCardOrigin _speedDialOrigin(MusicTrack track) => (
+      surface: MusicCardSurface.speedDial,
+      collectionId: null,
+      entryId: track.videoId,
+    );
+
 class _QuickPickRow extends StatelessWidget {
   final RecommendedItem<MusicTrack> pick;
   final bool compact;
@@ -992,6 +1120,7 @@ class _QuickPickRow extends StatelessWidget {
   final FocusNode? focusNode;
   final Future<void> Function() onOpen;
   final ValueChanged<RecommendationFeedback> onFeedback;
+  final Future<void> Function() onSnooze;
   final bool Function() isCurrent;
   const _QuickPickRow(
       {super.key,
@@ -1001,6 +1130,7 @@ class _QuickPickRow extends StatelessWidget {
       required this.focusNode,
       required this.onOpen,
       required this.onFeedback,
+      required this.onSnooze,
       required this.isCurrent});
 
   @override
@@ -1009,52 +1139,65 @@ class _QuickPickRow extends StatelessWidget {
     final track = pick.item;
     final images = track.displayThumbnails;
     final recommendation = MusicSongRecommendation(
-        reason: pick.reason, onFeedback: onFeedback, isCurrent: isCurrent);
-    return ListTile(
-      focusNode: focusNode,
-      contentPadding: const EdgeInsetsDirectional.only(start: 2, end: 4),
-      horizontalTitleGap: 12,
-      minLeadingWidth: 0,
-      visualDensity: VisualDensity.compact,
-      onTap: onOpen,
-      onLongPress: () => MusicLibraryActions.showSongMenu(
-          context, track.toVideo(),
-          onPlay: onOpen, recommendation: recommendation),
-      onFocusChange: (focused) {
-        if (focused) Scrollable.ensureVisible(context, alignment: 0.5);
-      },
-      leading: SizedBox.square(
-          dimension: compact ? 40 : 48,
-          child: CommunityMusicArtwork(
-              videoId: track.videoId,
-              music: track.musicMetadata,
-              durationSeconds: track.durationSeconds,
-              fallback: images.isEmpty
-                  ? DecoratedBox(
-                      decoration: BoxDecoration(
-                          color: theme.colorScheme.surfaceContainerHigh,
-                          borderRadius: BorderRadius.circular(6)),
-                      child: const Icon(Icons.music_note_rounded),
-                    )
-                  : Thumbnail(
-                      musicArtwork: true,
-                      images: images,
-                      decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(6))))),
-      title: Text(pick.item.title,
-          maxLines: titleLines,
-          overflow: TextOverflow.ellipsis,
-          style: theme.textTheme.titleSmall
-              ?.copyWith(fontWeight: FontWeight.w700)),
-      subtitle: Text(pick.item.artists.join(', '),
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: theme.textTheme.bodyMedium
-              ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
-      trailing: MusicLibraryActions(
-          videos: [track.toVideo()],
-          onPlay: onOpen,
-          recommendation: recommendation),
+        reason: pick.reason,
+        onFeedback: onFeedback,
+        onSnooze: onSnooze,
+        isCurrent: isCurrent);
+    final origin = _quickPickOrigin(track);
+    final playing = watchMusicCardPlaying(context, origin);
+    final playbackIcon = musicCardPlaybackIcon(playing);
+    void activate() => activateMusicCard(context, origin, onOpen);
+    return Semantics(
+      onTapHint: musicCardPlaybackHint(context, playing),
+      child: ListTile(
+        focusNode: focusNode,
+        contentPadding: const EdgeInsetsDirectional.only(start: 2, end: 4),
+        horizontalTitleGap: 12,
+        minLeadingWidth: 0,
+        visualDensity: VisualDensity.compact,
+        onTap: activate,
+        onLongPress: () => MusicLibraryActions.showSongMenu(
+            context, track.toVideo(),
+            onPlay: onOpen, recommendation: recommendation),
+        onFocusChange: (focused) {
+          if (focused) Scrollable.ensureVisible(context, alignment: 0.5);
+        },
+        leading: SizedBox.square(
+            dimension: compact ? 40 : 48,
+            child: CommunityMusicArtwork(
+                videoId: track.videoId,
+                music: track.musicMetadata,
+                durationSeconds: track.durationSeconds,
+                fallback: images.isEmpty
+                    ? DecoratedBox(
+                        decoration: BoxDecoration(
+                            color: theme.colorScheme.surfaceContainerHigh,
+                            borderRadius: BorderRadius.circular(6)),
+                        child: const Icon(Icons.music_note_rounded),
+                      )
+                    : Thumbnail(
+                        musicArtwork: true,
+                        images: images,
+                        decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(6))))),
+        title: Text(pick.item.title,
+            maxLines: titleLines,
+            overflow: TextOverflow.ellipsis,
+            style: theme.textTheme.titleSmall
+                ?.copyWith(fontWeight: FontWeight.w700)),
+        subtitle: Text(pick.item.artists.join(', '),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: theme.textTheme.bodyMedium
+                ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+        trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+          if (playbackIcon != null) playbackIcon,
+          MusicLibraryActions(
+              videos: [track.toVideo()],
+              onPlay: onOpen,
+              recommendation: recommendation),
+        ]),
+      ),
     );
   }
 }

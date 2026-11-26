@@ -14,6 +14,15 @@ class IncomingLinkInboxTest {
         assertTrue(inbox.takePending().isEmpty())
     }
 
+    @Test fun localShuffleRequiresAFreshPrivateLauncherToken() {
+        assertNull(incomingLinkPayload(MUSIC_SHUFFLE_LOCAL, null, null, null))
+        val token = ShuffleShortcutAdmission.issue()
+        assertNull(incomingLinkPayload(MUSIC_SHUFFLE_LOCAL, null, null, null, "invalid"))
+        assertEquals(IncomingLinkPayload(MUSIC_SHUFFLE_LOCAL, false),
+            incomingLinkPayload(MUSIC_SHUFFLE_LOCAL, null, null, null, token))
+        assertNull(incomingLinkPayload(MUSIC_SHUFFLE_LOCAL, null, null, null, token))
+    }
+
     @Test fun warmLinkBeforeListenerRegistrationIsRetained() {
         val inbox = IncomingLinkInbox("engine-one")
         assertTrue(inbox.offer(short, initial = false, previousMarker = null))
@@ -80,13 +89,43 @@ class IncomingLinkInboxTest {
         }
         val batch = inbox.takePending()
         assertEquals(IncomingLinkInbox.MAX_PENDING_DELIVERIES, batch.size)
-        assertEquals("Shared text 20", batch.first().payload.text)
-        assertEquals("Shared text 5", batch.last().payload.text)
+        assertEquals(IncomingLinkPayload("Shared text 20", true), batch.first().payload)
+        assertEquals(IncomingLinkPayload("Shared text 5", true), batch.last().payload)
         assertTrue(inbox.takePending().isEmpty())
         inbox.offer(short, initial = false, previousMarker = null)
         assertEquals(listOf(IncomingLinkDelivery(short, false)), inbox.takePending())
         // A previous result is immutable with respect to later inbox intake.
         assertEquals(IncomingLinkInbox.MAX_PENDING_DELIVERIES, batch.size)
+    }
+
+    @Test fun audioAndWebOpensShareTheInboxWithoutReplayingAfterReattachment() {
+        val inbox = IncomingLinkInbox("engine-one")
+        val audio = IncomingAudioPayload("content://documents/document/primary%3AMusic%2FSong.flac")
+        assertTrue(inbox.offer(audio, initial = true, previousMarker = null))
+        assertTrue(inbox.offer(short, initial = false, previousMarker = null))
+        assertFalse(inbox.offer(audio, initial = true, previousMarker = inbox.attachmentMarker))
+        assertEquals(listOf(IncomingLinkDelivery(short, false), IncomingLinkDelivery(audio, true)), inbox.takePending())
+        assertTrue(inbox.offer(audio, initial = false, previousMarker = inbox.attachmentMarker))
+        assertEquals(listOf(IncomingLinkDelivery(audio, false)), inbox.takePending())
+    }
+
+    @Test fun audioOpenRequiresASingleTypedContentUriAndAnActualGrant() {
+        val view = "android.intent.action.VIEW"
+        val data = "content://documents/document/primary%3AMusic%2FSong.flac"
+        assertEquals(IncomingAudioPayload(data), incomingAudioPayload(view, data, "audio/flac") { true })
+        assertNull(incomingAudioPayload(view, data, "audio/flac") { false })
+        for ((action, uri, type) in listOf(
+            Triple("android.intent.action.SEND", data, "audio/flac"),
+            Triple(view, "file:///sdcard/Music/Song.flac", "audio/flac"),
+            Triple(view, "https://example.test/music.flac", "audio/flac"),
+            Triple(view, "content:///audio.flac", "audio/flac"),
+            Triple(view, "$data?item=other", "audio/flac"),
+            Triple(view, data, "application/octet-stream"),
+            Triple(view, data, "audio/x-mpegurl"),
+            Triple(view, "content://documents/document/primary%3AMusic%2Fplaylist%2Em3u8", "audio/mpeg"),
+        )) {
+            assertNull(incomingAudioPayload(action, uri, type) { error("Unexpected grant check") })
+        }
     }
 
     @Test fun webViewKeepsFullAddressEvenWithMimeType() {

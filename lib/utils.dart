@@ -105,7 +105,10 @@ Future<void> showAlertDialog(
 }
 
 void showSharingSheet(BuildContext context, ShareLinks links,
-    {bool showTimestampOption = false, bool inPlayer = false}) {
+    {bool showTimestampOption = false,
+    bool inPlayer = false,
+    bool Function()? isCurrent}) {
+  if (isCurrent?.call() == false) return;
   var locals = AppLocalizations.of(context)!;
   final profileId = db.profileId;
   final owner = db.forProfile(profileId);
@@ -124,6 +127,7 @@ void showSharingSheet(BuildContext context, ShareLinks links,
   bool currentSession() =>
       context.mounted &&
       db.profileId == profileId &&
+      isCurrent?.call() != false &&
       (app == null ||
           (!app.isClosed &&
               !app.state.globalLoading &&

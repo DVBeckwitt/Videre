@@ -8,32 +8,61 @@ import '../models/music_listening_event.dart';
 class MusicHistoryTransfer {
   static const _format = 'videre-music-history';
   static const _version = 1;
+  static final _csvSpecialCharacters = RegExp(r'[",\r\n]');
 
   static String encode(List<MusicListeningEvent> events) {
-    // Use the latest labels for each song in the count summary.
-    final ordered = events.toList()
-      ..sort((a, b) {
-        final byDate = b.playedAt.compareTo(a.playedAt);
-        return byDate != 0 ? byDate : a.id.compareTo(b.id);
+    final ordered = _latestFirst(events);
+    final text = jsonEncode({
+      'format': _format,
+      'version': _version,
+      'events': [for (final event in ordered) _portable(event.toJson())],
+      'playCounts': _playCounts(ordered).toList(),
+    });
+    _checkSize(text);
+    return text;
+  }
+
+  static String encodePlayCountsCsv(List<MusicListeningEvent> events) {
+    const columns = ['trackId', 'title', 'artist', 'playCount'];
+    final csv = StringBuffer('${columns.join(',')}\r\n');
+    for (final row in _playCounts(_latestFirst(events))) {
+      final fields = columns.map((column) {
+        final value = row[column]?.toString() ?? '';
+        return value.contains(_csvSpecialCharacters)
+            ? '"${value.replaceAll('"', '""')}"'
+            : value;
       });
+      csv
+        ..write(fields.join(','))
+        ..write('\r\n');
+    }
+    final text = csv.toString();
+    _checkSize(text);
+    return text;
+  }
+
+  static List<MusicListeningEvent> _latestFirst(
+    List<MusicListeningEvent> events,
+  ) =>
+      events.toList()
+        ..sort((a, b) {
+          final byDate = b.playedAt.compareTo(a.playedAt);
+          return byDate != 0 ? byDate : a.id.compareTo(b.id);
+        });
+
+  static Iterable<Map<String, Object>> _playCounts(
+    List<MusicListeningEvent> ordered,
+  ) sync* {
+    // Use the latest labels for each song in the count summary.
     final latest = <String, MusicListeningEvent>{};
     final counts = <String, int>{};
-    final rows = [for (final event in ordered) _portable(event.toJson())];
     for (final event in ordered) {
       latest.putIfAbsent(event.trackId, () => event);
       counts.update(event.trackId, (count) => count + 1, ifAbsent: () => 1);
     }
-    final text = jsonEncode({
-      'format': _format,
-      'version': _version,
-      'events': rows,
-      'playCounts': [
-        for (final event in latest.values)
-          _playCount(event, counts[event.trackId]!),
-      ],
-    });
-    _checkSize(text);
-    return text;
+    for (final event in latest.values) {
+      yield _playCount(event, counts[event.trackId]!);
+    }
   }
 
   static Map<String, Object> _playCount(MusicListeningEvent event, int count) {

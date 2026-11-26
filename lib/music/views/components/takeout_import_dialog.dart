@@ -8,10 +8,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
-Future<bool?> showTakeoutImport(BuildContext context) {
+enum TakeoutImportDestination { savedSongs, likes }
+
+Future<TakeoutImportDestination?> showTakeoutImport(BuildContext context) {
   final session = MusicLibrarySession(context.read<AppCubit>());
-  if (!session.isCurrent) return Future.value(false);
-  return showDialog<bool>(
+  if (!session.isCurrent) return Future.value();
+  return showDialog<TakeoutImportDestination>(
       context: context,
       barrierDismissible: false,
       animationStyle: AppMotion.dialogStyle(context),
@@ -35,15 +37,16 @@ class _TakeoutImportDialogState extends State<_TakeoutImportDialog> {
   bool _cancelled = false;
   String? _error;
   int? _added;
+  TakeoutImportDestination? _imported;
 
   // A shared link can cover this dialog while file work is still running.
   // Keep its result while the route exists, even when it is not on top.
   bool get _active =>
       mounted && !_cancelled && ModalRoute.of(context)?.isActive == true;
 
-  void _close(bool result) {
+  void _close([TakeoutImportDestination? result]) {
     if (!_active) return;
-    final route = ModalRoute.of<bool>(context)!;
+    final route = ModalRoute.of<TakeoutImportDestination>(context)!;
     final navigator = Navigator.of(context);
     _cancelled = true;
     if (route.isCurrent) {
@@ -65,7 +68,7 @@ class _TakeoutImportDialogState extends State<_TakeoutImportDialog> {
           .invokeListMethod<dynamic>('openTakeout');
       if (!_active) return;
       if (result == null) {
-        _close(false);
+        _close();
         return;
       }
       final files = result
@@ -106,7 +109,7 @@ class _TakeoutImportDialogState extends State<_TakeoutImportDialog> {
         _ => AppLocalizations.of(context)!.takeoutImportFailed,
       };
 
-  Future<void> _import() async {
+  Future<void> _import(TakeoutImportDestination destination) async {
     if (!_active || _saving || _added != null) return;
     if (!widget.session.isCurrent) {
       setState(
@@ -115,16 +118,18 @@ class _TakeoutImportDialogState extends State<_TakeoutImportDialog> {
     }
     setState(() => _saving = true);
     try {
-      final added = await widget.session.library
-          .importSongs(_collections![_selected].songs);
+      final added = await widget.session.library.importSongs(
+          _collections![_selected].songs,
+          asLikes: destination == TakeoutImportDestination.likes);
       if (!_active) return;
       if (!widget.session.isCurrent) {
-        _close(false);
+        _close();
         return;
       }
       setState(() {
         _saving = false;
         _added = added;
+        _imported = destination;
       });
     } catch (error) {
       if (_active) {
@@ -140,7 +145,7 @@ class _TakeoutImportDialogState extends State<_TakeoutImportDialog> {
   Widget build(BuildContext context) {
     final locals = AppLocalizations.of(context)!;
     final collection = _collections?[_selected];
-    return PopScope<bool>(
+    return PopScope<TakeoutImportDestination>(
       canPop: !_saving,
       onPopInvokedWithResult: (didPop, _) {
         if (didPop) _cancelled = true;
@@ -163,7 +168,8 @@ class _TakeoutImportDialogState extends State<_TakeoutImportDialog> {
               else if (_added != null) ...[
                 Text(locals.takeoutComplete(
                     _added!, collection!.songs.length - _added!)),
-                if (_added! > 0) ...[
+                if (_added! > 0 &&
+                    _imported == TakeoutImportDestination.savedSongs) ...[
                   const SizedBox(height: 12),
                   Text(locals.takeoutDetailsFollowup),
                 ],
@@ -219,15 +225,24 @@ class _TakeoutImportDialogState extends State<_TakeoutImportDialog> {
         ),
         actions: [
           TextButton(
-              onPressed: _saving ? null : () => _close(_added != null),
+              onPressed: _saving ? null : () => _close(_imported),
               child: Text(_added != null || _error != null
                   ? MaterialLocalizations.of(context).closeButtonLabel
                   : locals.cancel)),
           if (!_reading && _error == null && _added == null)
             FilledButton(
-                onPressed:
-                    _saving || collection!.songs.isEmpty ? null : _import,
+                onPressed: _saving || collection!.songs.isEmpty
+                    ? null
+                    : () => _import(TakeoutImportDestination.savedSongs),
                 child: Text(locals.takeoutConfirm)),
+          if (_error == null &&
+              _added == null &&
+              collection?.kind == TakeoutCollectionKind.likedMusic)
+            OutlinedButton(
+                onPressed: _saving || collection!.songs.isEmpty
+                    ? null
+                    : () => _import(TakeoutImportDestination.likes),
+                child: Text(locals.takeoutImportLikes)),
         ],
       ),
     );

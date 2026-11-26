@@ -67,6 +67,7 @@ abstract class MediaPlayerCubit<T extends MediaPlayerState> extends Cubit<T> {
   bool isPlaying();
 
   void handleCommand(MediaCommand command) {
+    if (command.canExecute?.call() == false) return;
     switch (command.type) {
       case MediaCommandType.speed:
         setSpeed(command.value);

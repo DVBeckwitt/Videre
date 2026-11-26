@@ -1,6 +1,7 @@
 package com.github.dvbeckwitt.videre
 
 import java.io.ByteArrayOutputStream
+import java.io.IOException
 import java.io.InputStream
 import java.nio.ByteBuffer
 import java.nio.charset.CharacterCodingException
@@ -12,15 +13,19 @@ internal object LocalMusicSidecarLyrics {
 
     data class Sibling(val id: String, val fileName: String, val audio: Boolean)
 
+    enum class Format(val extension: String) { TTML("ttml"), SRT("srt"), LRC("lrc") }
+
+    data class Candidate(val id: String, val format: Format)
+
     /** Resolve only within the active track's verified directory. */
-    fun candidates(trackId: String, fileName: String, siblings: Sequence<Sibling>): List<String> {
+    fun candidates(trackId: String, fileName: String, siblings: Sequence<Sibling>): List<Candidate> {
         val stem = fileStem(fileName)
         var trackPresent = false
         var audioWithFileName = 0
         var audioWithStem = 0
         var stemIsAnotherFileName = false
-        val matches = mutableMapOf<String, String>()
-        val ambiguous = mutableSetOf<String>()
+        val matches = mutableMapOf<Pair<String, Format>, Candidate>()
+        val ambiguous = mutableSetOf<Pair<String, Format>>()
         for (sibling in siblings) {
             val name = sibling.fileName
             if (sibling.audio) {
@@ -30,19 +35,48 @@ internal object LocalMusicSidecarLyrics {
                 }
                 if (fileStem(name) == stem) audioWithStem++
                 if (sibling.id != trackId && name == stem) stemIsAnotherFileName = true
-            } else if (name.endsWith(".lrc", ignoreCase = true)) {
-                val prefix = name.dropLast(4)
-                if ((prefix == fileName || prefix == stem) &&
-                    matches.putIfAbsent(prefix, sibling.id) != null) ambiguous.add(prefix)
+            } else {
+                val extension = name.substringAfterLast('.', "")
+                val format = Format.entries.firstOrNull { it.extension.equals(extension, ignoreCase = true) }
+                    ?: continue
+                val prefix = name.substringBeforeLast('.')
+                if (prefix != fileName && prefix != stem) continue
+                val key = prefix to format
+                if (matches.putIfAbsent(key, Candidate(sibling.id, format)) != null) ambiguous.add(key)
             }
         }
         if (!trackPresent || audioWithFileName != 1) return emptyList()
-        return listOfNotNull(
-            matches[fileName]?.takeUnless { fileName in ambiguous },
-            matches[stem]?.takeIf {
-                stem != fileName && stem !in ambiguous && audioWithStem == 1 && !stemIsAnotherFileName
-            },
-        )
+        fun forName(name: String): List<Candidate> = Format.entries.mapNotNull { format ->
+            val key = name to format
+            matches[key]?.takeUnless { key in ambiguous }
+        }
+        val exact = forName(fileName)
+        if (stem == fileName || audioWithStem != 1 || stemIsAnotherFileName) return exact
+        return exact + forName(stem)
+    }
+
+    fun readCandidates(candidates: List<Candidate>, open: (String) -> InputStream?): Map<String, Any> {
+        var timed: List<LocalTimedLyric> = emptyList()
+        for ((id, format) in candidates) {
+            if (timed.isNotEmpty() && format != Format.LRC) continue
+            val text = try {
+                open(id)?.use(::read)
+            } catch (_: IOException) {
+                null
+            } catch (_: SecurityException) {
+                null
+            } ?: continue
+            when (format) {
+                Format.LRC -> return buildMap {
+                    put("sidecar", text)
+                    if (timed.isNotEmpty()) put("timedSidecar", timed.map(LocalTimedLyric::channelValue))
+                }
+                Format.SRT -> timed = LocalMusicSrtLyrics.parse(text)
+                Format.TTML -> timed = LocalMusicTtmlLyrics.parse(text)
+            }
+        }
+        return if (timed.isEmpty()) emptyMap()
+            else mapOf("timedSidecar" to timed.map(LocalTimedLyric::channelValue))
     }
 
     fun read(input: InputStream): String? {

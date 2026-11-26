@@ -6,6 +6,8 @@ import 'package:clipious/downloads/services/explicit_music_download.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' show isTv;
+import 'package:clipious/music/models/device_playlist_track.dart';
+import 'package:clipious/music/models/local_music_track.dart';
 import 'package:clipious/music/models/music_search_text.dart';
 import 'package:clipious/music/models/on_device_music_entry.dart';
 import 'package:clipious/music/services/local_music_library.dart';
@@ -52,6 +54,7 @@ class _HistoryRow {
           ? event.entry.musicMetadata!.artist
           : event.entry.author;
   String? get album => event.entry.musicMetadata?.album;
+  DateTime get localPlayedAt => event.playedAt.toLocal();
   late final String searchText =
       normalizeMusicSearchText([title, artist, album].nonNulls.join(' '));
 }
@@ -76,9 +79,12 @@ class _MusicHistoryScreenState extends State<MusicHistoryScreen> {
   late final IDbClient _owner;
   late final MusicListeningHistory _history;
   late Map<String, _HistoryRow> _rows;
+  late Map<String, _HistoryRow> _listens;
   Set<String>? _selection;
+  bool _everyListen = false;
   bool _finding = false;
   bool _removing = false;
+  int _replayRequest = 0;
 
   @override
   void initState() {
@@ -88,24 +94,25 @@ class _MusicHistoryScreenState extends State<MusicHistoryScreen> {
     _database = db;
     _owner = _database.forProfile(_session.profileId);
     _history = MusicListeningHistory.forProfile(_database, _owner.profileId);
-    _rows = _readRows();
+    _readRows();
     _history.changes.addListener(_reload);
   }
 
-  Map<String, _HistoryRow> _readRows() {
-    // The service emits newest first. Each row represents one exact track
-    // identity, while the timeline retains all its separate listening events.
-    final rows = <String, _HistoryRow>{};
+  void _readRows() {
+    _rows = {};
+    _listens = {};
+    // Both views follow the service's newest-first order.
     for (final event in _history.events()) {
-      rows.putIfAbsent(event.trackId, () => _HistoryRow(event));
+      final row = _HistoryRow(event);
+      _listens[event.id] = row;
+      _rows.putIfAbsent(event.trackId, () => row);
     }
-    return rows;
   }
 
   void _reload() {
     if (!_sameSession(_app.state)) return;
     setState(() {
-      _rows = _readRows();
+      _readRows();
       _selection?.retainAll(_rows.keys);
     });
   }
@@ -155,6 +162,12 @@ class _MusicHistoryScreenState extends State<MusicHistoryScreen> {
     });
     if (_scroll.hasClients) _scroll.jumpTo(0);
     _focusAfterLayout(_finding ? _queryFocus : _findFocus);
+  }
+
+  void _showEveryListen(bool value) {
+    if (value == _everyListen) return;
+    setState(() => _everyListen = value);
+    if (_scroll.hasClients) _scroll.jumpTo(0);
   }
 
   void _startSelection([String? id]) {
@@ -246,6 +259,7 @@ class _MusicHistoryScreenState extends State<MusicHistoryScreen> {
 
   Future<void> _play(List<_HistoryRow> rows, {bool shuffle = false}) async {
     if (!_current || rows.isEmpty) return;
+    final request = ++_replayRequest;
     final locals = AppLocalizations.of(context)!;
     final hasDevice = rows.any((row) => row.isDevice);
     final hasCatalog = rows.any((row) => !row.isDevice);
@@ -260,6 +274,7 @@ class _MusicHistoryScreenState extends State<MusicHistoryScreen> {
     // Recheck the exact event approved by this action across asynchronous work.
     bool rowsCurrent() =>
         mounted &&
+        _replayRequest == request &&
         _sameSession(_app.state) &&
         rows.every((row) => _rows[row.id]?.event.id == row.event.id);
     if (!rowsCurrent()) return;
@@ -272,7 +287,7 @@ class _MusicHistoryScreenState extends State<MusicHistoryScreen> {
         if (!mounted || !_current || !rowsCurrent()) return;
         final entries = [
           for (final row in rows)
-            if (library.visibleTrackById(row.id) case final track?)
+            if (_visibleDeviceTrack(library, row.id) case final track?)
               OnDeviceMusicEntry.device(track),
         ];
         if (entries.length != rows.length) {
@@ -284,6 +299,7 @@ class _MusicHistoryScreenState extends State<MusicHistoryScreen> {
             queueTitle: locals.musicPlaybackHistory,
             isCurrent: () =>
                 mounted &&
+                _replayRequest == request &&
                 _sameSession(_app.state) &&
                 library.acceptsSessionSelection(choice));
         return;
@@ -291,26 +307,103 @@ class _MusicHistoryScreenState extends State<MusicHistoryScreen> {
 
       final videos = <Video>[];
       for (final row in rows) {
-        final entry = row.event.entry;
-        final video = entry.toVideo();
-        if (row.event.source != MusicListeningSource.download) {
+        final video = _historyVideo(row);
+        if (video != null) {
           videos.add(video);
           continue;
         }
-        final download = entry.replayDownload(_owner);
-        if (download != null && readyMusicDownload(_owner, row.id) != null) {
-          videos.add(video.copyWith(
-              explicitMusicDownload: musicDownloadFingerprint(download)));
-        } else if (download != null && rows.length == 1) {
+        final download = row.event.entry.replayDownload(_owner);
+        if (download != null && rows.length == 1) {
           await _playLegacyDownload(download);
           return;
-        } else {
-          _showMessage(locals.musicHistoryPlaybackUnavailable);
-          return;
         }
+        _showMessage(locals.musicHistoryPlaybackUnavailable);
+        return;
       }
       await MusicScreen.playTracks(context, videos,
           queueTitle: locals.musicPlaybackHistory);
+    } catch (_) {
+      _showMessage(locals.musicPlaybackError);
+    }
+  }
+
+  LocalMusicTrack? _visibleDeviceTrack(LocalMusicLibrary library, String id) =>
+      library.visibleTrackById(id) ??
+      library.playlistTrackById(id, visibleOnly: true);
+
+  Video? _historyVideo(_HistoryRow row) {
+    final entry = row.event.entry;
+    if (row.event.source != MusicListeningSource.download) {
+      return entry.toVideo();
+    }
+    final download = entry.replayDownload(_owner);
+    if (download == null || readyMusicDownload(_owner, row.id) == null) {
+      return null;
+    }
+    return entry
+        .toVideo()
+        .copyWith(explicitMusicDownload: musicDownloadFingerprint(download));
+  }
+
+  Future<void> _replayFrom(_HistoryRow selected, List<_HistoryRow> rows) async {
+    if (!_current) return;
+    final request = ++_replayRequest;
+    final locals = AppLocalizations.of(context)!;
+    bool rowsCurrent() =>
+        mounted &&
+        _replayRequest == request &&
+        _sameSession(_app.state) &&
+        rows.every((row) => _listens.containsKey(row.event.id));
+    if (!rowsCurrent()) return;
+
+    try {
+      final library = LocalMusicLibrary.instance;
+      final deviceIds = rows.where((row) => row.isDevice).map((row) => row.id);
+      final hasDevice = deviceIds.isNotEmpty;
+      if (hasDevice) {
+        await library.loadForPlayback(deviceIds);
+        if (!_current || !rowsCurrent()) return;
+      }
+      Video? playableVideo(_HistoryRow row) {
+        if (!row.isDevice) return _historyVideo(row);
+        final track = _visibleDeviceTrack(library, row.id);
+        return track == null ? null : devicePlaylistVideo(track);
+      }
+
+      // A missing source can be skipped elsewhere in the queue. The tapped
+      // occurrence must resolve on its own before playback can start.
+      final queue = [
+        for (final row in rows)
+          if (playableVideo(row) case final video?)
+            (eventId: row.event.id, video: video),
+      ];
+      final startIndex =
+          queue.indexWhere((entry) => entry.eventId == selected.event.id);
+      if (startIndex < 0) {
+        final download = selected.event.entry.replayDownload(_owner);
+        if (download != null) {
+          await _playLegacyDownload(download);
+        } else {
+          _showMessage(locals.musicHistoryPlaybackUnavailable);
+        }
+        return;
+      }
+      if (!mounted) return;
+      final videos = [for (final entry in queue) entry.video];
+      final queuedDeviceIds = videos
+          .map((video) => video.videoId)
+          .where(isLocalMusicPlaybackId)
+          .toSet();
+      final librarySelection = library.selectionId;
+      bool devicesCurrent() =>
+          queuedDeviceIds.isEmpty ||
+          (library.acceptsSessionSelection(librarySelection) &&
+              queuedDeviceIds.every((id) =>
+                  library.playlistTrackById(id, visibleOnly: true) != null));
+      await MusicScreen.playCollectionTracks(context, videos,
+          queueTitle: locals.musicPlaybackHistory,
+          startIndex: startIndex,
+          isCurrent: () => rowsCurrent() && devicesCurrent());
     } catch (_) {
       _showMessage(locals.musicPlaybackError);
     }
@@ -427,12 +520,16 @@ class _MusicHistoryScreenState extends State<MusicHistoryScreen> {
     ]);
   }
 
-  Widget _row(_HistoryRow row, AppLocalizations locals) {
+  Widget _row(_HistoryRow row, AppLocalizations locals,
+      {VoidCallback? replay}) {
     final selected = _selection?.contains(row.id);
-    final date = MaterialLocalizations.of(context)
-        .formatCompactDate(row.event.playedAt.toLocal());
+    final material = MaterialLocalizations.of(context);
+    final timestamp = replay == null
+        ? material.formatCompactDate(row.localPlayedAt)
+        : material.formatTimeOfDay(TimeOfDay.fromDateTime(row.localPlayedAt),
+            alwaysUse24HourFormat: MediaQuery.alwaysUse24HourFormatOf(context));
     return ListTile(
-      key: ValueKey(row.id),
+      key: replay == null ? ValueKey(row.id) : null,
       selected: selected ?? false,
       leading: Icon(selected == null
           ? Icons.music_note_outlined
@@ -441,17 +538,20 @@ class _MusicHistoryScreenState extends State<MusicHistoryScreen> {
               : Icons.check_box_outline_blank),
       title: Text(row.title, maxLines: 1, overflow: TextOverflow.ellipsis),
       subtitle: Text(
-          [row.artist, row.album, date]
+          [row.artist, row.album, timestamp]
               .nonNulls
               .where((value) => value.trim().isNotEmpty)
               .join(' · '),
           maxLines: 2,
           overflow: TextOverflow.ellipsis),
-      onTap: selected == null
-          ? () => _play([row])
-          : () => _toggleSelection(row.id),
-      onLongPress: selected == null ? () => _startSelection(row.id) : null,
-      trailing: selected != null
+      onTap: replay ??
+          (selected == null
+              ? () => _play([row])
+              : () => _toggleSelection(row.id)),
+      onLongPress: replay == null && selected == null
+          ? () => _startSelection(row.id)
+          : null,
+      trailing: replay != null || selected != null
           ? null
           : PopupMenuButton<_HistoryAction>(
               onSelected: (action) {
@@ -476,6 +576,33 @@ class _MusicHistoryScreenState extends State<MusicHistoryScreen> {
     );
   }
 
+  Widget _listenRow(
+      List<_HistoryRow> visible, int index, AppLocalizations locals) {
+    final row = visible[index];
+    final startsDay = index == 0 ||
+        !DateUtils.isSameDay(
+            visible[index - 1].localPlayedAt, row.localPlayedAt);
+    return Column(
+      key: ValueKey(row.event.id),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (startsDay)
+          Semantics(
+            header: true,
+            child: Padding(
+              padding: const EdgeInsetsDirectional.fromSTEB(16, 12, 16, 4),
+              child: Text(
+                MaterialLocalizations.of(context)
+                    .formatFullDate(row.localPlayedAt),
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
+            ),
+          ),
+        _row(row, locals, replay: () => _replayFrom(row, visible)),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final locals = AppLocalizations.of(context)!;
@@ -484,15 +611,33 @@ class _MusicHistoryScreenState extends State<MusicHistoryScreen> {
     final terms = musicSearchTerms(_query.text);
     final visible = [
       if (valid)
-        for (final row in _rows.values)
+        for (final row in (_everyListen ? _listens : _rows).values)
           if (terms.every(row.searchText.contains)) row,
     ];
     final positions = {
-      for (final (index, row) in visible.indexed) ValueKey(row.id): index,
+      for (final (index, row) in visible.indexed)
+        ValueKey(_everyListen ? row.event.id : row.id): index,
     };
     final body = Column(children: [
+      if (_selection == null)
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Wrap(spacing: 8, children: [
+            ChoiceChip(
+              label: Text(locals.musicSongs),
+              selected: !_everyListen,
+              onSelected: (_) => _showEveryListen(false),
+            ),
+            ChoiceChip(
+              label: Text(locals.musicHistoryEveryListen),
+              selected: _everyListen,
+              onSelected: (_) => _showEveryListen(true),
+            ),
+          ]),
+        ),
       if (_finding && _selection == null) _queryField(locals),
-      if (_rows.isNotEmpty || _selection != null) _toolbar(visible, locals),
+      if (!_everyListen && (_rows.isNotEmpty || _selection != null))
+        _toolbar(visible, locals),
       Expanded(
         child: visible.isEmpty
             ? Center(
@@ -507,7 +652,9 @@ class _MusicHistoryScreenState extends State<MusicHistoryScreen> {
                     ScrollViewKeyboardDismissBehavior.onDrag,
                 itemCount: visible.length,
                 findChildIndexCallback: (key) => positions[key],
-                itemBuilder: (context, index) => _row(visible[index], locals),
+                itemBuilder: (context, index) => _everyListen
+                    ? _listenRow(visible, index, locals)
+                    : _row(visible[index], locals),
               ),
       ),
     ]);

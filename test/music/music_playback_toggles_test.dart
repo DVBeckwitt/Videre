@@ -1,12 +1,9 @@
-import 'dart:async';
-
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/music/views/components/music_playback_toggles.dart';
 import 'package:clipious/player/models/music_queue_shuffle.dart';
 import 'package:clipious/player/states/player.dart';
-import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/material.dart';
@@ -37,11 +34,19 @@ class _Player extends Cubit<PlayerState> implements PlayerCubit {
   int musicSelectionRequestRevision = 1;
   @override
   bool canShuffleMusicQueueUpcoming = true;
-  int regenerations = 0;
+  @override
+  bool canToggleMusicQueueShuffle = true;
+  @override
+  bool get musicQueueShuffled => state.musicQueueShuffled ?? false;
+  final shuffleToggles = <bool>[];
   final upcomingShuffles = <MusicQueueShuffle>[];
 
   @override
-  void generatePlayQueue() => regenerations++;
+  Future<void> toggleMusicQueueShuffle({required bool expectedShuffled}) async {
+    if (expectedShuffled != musicQueueShuffled) return;
+    shuffleToggles.add(!expectedShuffled);
+    emit(state.copyWith(musicQueueShuffled: !expectedShuffled));
+  }
 
   @override
   void shuffleMusicQueueUpcoming(MusicQueueShuffle shuffle) =>
@@ -57,18 +62,6 @@ class _Settings extends Cubit<SettingsState> implements SettingsCubit {
             settings: const {},
             packageInfo: PackageInfo(
                 appName: '', packageName: '', version: '', buildNumber: '')));
-
-  late final Completer<void> saving;
-  final writes = <bool>[];
-
-  @override
-  Future<void> setShuffle(bool value) async {
-    writes.add(value);
-    await saving.future;
-    emit(state.copyWith(settings: {
-      playerShuffle: SettingsValue(playerShuffle, value.toString())
-    }));
-  }
 
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
@@ -94,7 +87,6 @@ void main() {
 
   Future<void> show(WidgetTester tester,
       {bool showQueueOptions = false}) async {
-    settings.saving = Completer<void>();
     await tester.pumpWidget(MultiBlocProvider(
         providers: [
           BlocProvider<AppCubit>.value(value: app),
@@ -117,16 +109,13 @@ void main() {
   }
 
   testWidgets(
-      'a pending shuffle tap is shared across surfaces and refreshes the same queue once',
+      'two controls share the active mode and reject a duplicate tap before repaint',
       (tester) async {
     await show(tester);
     await tester.tap(find.byKey(compact));
     await tester.tap(find.byKey(full));
-    expect(settings.writes, [true]);
-    expect(player.regenerations, 0);
-    settings.saving.complete();
+    expect(player.shuffleToggles, [true]);
     await tester.pumpAndSettle();
-    expect(player.regenerations, 1);
     final button = tester.widget<IconButton>(find.byKey(compact));
     expect(button.isSelected, isTrue);
     expect(
@@ -135,24 +124,20 @@ void main() {
         Colors.white);
     await tester.tap(find.byKey(full));
     await tester.pumpAndSettle();
-    expect(settings.writes, [true, false]);
-    expect(player.regenerations, 2);
+    expect(player.shuffleToggles, [true, false]);
   });
 
   for (final changed in ['profile', 'queue']) {
-    testWidgets('pending shuffle leaves a replaced $changed alone',
+    testWidgets('an old shuffle control leaves a replaced $changed alone',
         (tester) async {
       await show(tester);
-      await tester.tap(find.byKey(compact));
       if (changed == 'profile') {
         app.switchSession();
       } else {
         player.playlistGeneration++;
       }
-      settings.saving.complete();
-      await tester.pumpAndSettle();
-      expect(settings.writes, [true]);
-      expect(player.regenerations, 0);
+      await tester.tap(find.byKey(compact));
+      expect(player.shuffleToggles, isEmpty);
     });
   }
 
@@ -172,7 +157,7 @@ void main() {
       expect(player.upcomingShuffles.last, mode);
     }
     expect(player.upcomingShuffles, MusicQueueShuffle.values);
-    expect(settings.writes, isEmpty);
+    expect(player.shuffleToggles, isEmpty);
   });
 
   testWidgets('an open queue shuffle popup ignores an occurrence change',
@@ -186,21 +171,19 @@ void main() {
     expect(player.upcomingShuffles, isEmpty);
   });
 
-  testWidgets('queue shuffle waits for a pending song shuffle write',
+  testWidgets('a locked queue disables both song shuffle controls',
       (tester) async {
+    player.canToggleMusicQueueShuffle = false;
+    player.canShuffleMusicQueueUpcoming = false;
     await show(tester, showQueueOptions: true);
-    await tester.tap(find.byKey(compact));
+    expect(tester.widget<IconButton>(find.byKey(compact)).onPressed, isNull);
     await tester.tap(find.byKey(full));
     await tester.pumpAndSettle();
     final option = find.widgetWithText(
-        PopupMenuItem<Future<void> Function()>, 'Shuffle upcoming by album');
+        PopupMenuItem<Future<void> Function()>, 'Turn song shuffle on');
     expect(
         tester.widget<PopupMenuItem<Future<void> Function()>>(option).enabled,
         isFalse);
-    await tester.tap(option);
-    expect(player.upcomingShuffles, isEmpty);
-    settings.saving.complete();
-    await tester.pumpAndSettle();
-    expect(player.regenerations, 1);
+    expect(player.shuffleToggles, isEmpty);
   });
 }

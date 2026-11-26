@@ -13,8 +13,14 @@ class MusicReplayGainPreferences {
     return ReplayGainMode.values.asNameMap()[stored] ?? ReplayGainMode.off;
   }
 
-  double get preampDb {
-    final stored = _database.getSettings(musicPreampSettingName)?.value;
+  double get taggedPreampDb => _preampDb(musicTaggedPreampSettingName);
+  double get untaggedPreampDb => _preampDb(musicUntaggedPreampSettingName);
+
+  double _preampDb(String key) {
+    // Each setting inherits the legacy value until it is edited. Keeping
+    // the old value as the fallback makes a partial migration safe to retry.
+    final stored = _database.getSettings(key)?.value ??
+        _database.getSettings(musicPreampSettingName)?.value;
     return clampMusicPreampDb(double.tryParse(stored ?? '') ?? 0);
   }
 
@@ -22,8 +28,13 @@ class MusicReplayGainPreferences {
         SettingsValue(musicReplayGainModeSettingName, value.name),
       );
 
-  Future<void> setPreampDb(double value) => _database.saveSetting(
-        SettingsValue(
-            musicPreampSettingName, clampMusicPreampDb(value).toString()),
+  Future<void> setTaggedPreampDb(double value) =>
+      _setPreampDb(musicTaggedPreampSettingName, value);
+
+  Future<void> setUntaggedPreampDb(double value) =>
+      _setPreampDb(musicUntaggedPreampSettingName, value);
+
+  Future<void> _setPreampDb(String key, double value) => _database.saveSetting(
+        SettingsValue(key, clampMusicPreampDb(value).toString()),
       );
 }

@@ -173,6 +173,14 @@ class _NativeAudio implements AudioPlayer {
   bool get androidMusicGainEnabled => false;
 
   @override
+  bool skipSilenceEnabled = false;
+
+  @override
+  Future<void> setSkipSilenceEnabled(bool value) async {
+    skipSilenceEnabled = value;
+  }
+
+  @override
   double volume = 1;
 
   @override
@@ -2154,6 +2162,38 @@ void main() {
       expect(native.playCalls, 1);
       expect(retryService.retryCalls, 0);
       expect(audio.state.error, isNull);
+    } finally {
+      await audio.close();
+      await controller.close();
+    }
+  });
+
+  test('rechecks the scope of a queued seek before it reaches native audio',
+      () async {
+    final video = _video('song', preferred);
+    final controller = _MediaSessionPlayer(
+        PlayerState.init(null).copyWith(
+            isAudio: true,
+            isHidden: false,
+            videos: [video],
+            currentlyPlaying: video),
+        settings);
+    controller.audioSession = await AudioSession.instance;
+    app_main.mediaHandler = MediaHandler(controller);
+    final native = _NativeAudio();
+    final audio =
+        _Audio(AudioPlayerState(video: video), controller, settings, native);
+    try {
+      await audio.playVideo(false);
+      var current = true;
+      final command = MediaCommand(MediaCommandType.seek,
+          value: const Duration(seconds: 8), canExecute: () => current);
+      audio.handleCommand(command);
+      expect(native.seeks, [const Duration(seconds: 8)]);
+
+      current = false;
+      audio.handleCommand(command);
+      expect(native.seeks, [const Duration(seconds: 8)]);
     } finally {
       await audio.close();
       await controller.close();

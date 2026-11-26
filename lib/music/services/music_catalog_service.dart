@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:io';
+
 import 'package:clipious/music/models/music_artist.dart';
 import 'package:clipious/music/models/music_artist_page.dart';
 import 'package:clipious/music/models/music_catalog_search.dart';
@@ -6,6 +9,7 @@ import 'package:clipious/music/models/music_library_entry.dart';
 import 'package:clipious/music/models/music_playlist.dart';
 import 'package:clipious/music/models/music_track.dart';
 import 'package:clipious/music/services/invidious_music_catalog_service.dart';
+import 'package:clipious/network/gateway_session_bridge.dart';
 import 'package:clipious/service.dart' show VideoLoadObserver;
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/errors/invidious_service_error.dart';
@@ -14,6 +18,14 @@ import 'package:clipious/videos/models/video.dart';
 MusicCatalogService musicCatalogService = InvidiousMusicCatalogService();
 
 const musicExploreGenres = ['pop', 'jazz', 'classical', 'electronic'];
+const musicPlaylistOverlapCandidateLimit = 6;
+
+final _publicMusicPlaylistId = RegExp(r'^PL[A-Za-z0-9_-]{1,126}$');
+
+/// Ordinary YouTube playlists can be checked through the catalog's public
+/// playlist endpoint. Dynamic mixes, releases and account lists stay out.
+bool isMusicPlaylistOverlapCandidate(String id) =>
+    _publicMusicPlaylistId.stringMatch(id) == id;
 
 bool musicDiscoveryMustStop(Object error) =>
     error is InvidiousServiceError &&
@@ -22,6 +34,16 @@ bool musicDiscoveryMustStop(Object error) =>
         (error.retryAfter ?? Duration.zero) > Duration.zero ||
         error.isAuthenticationFailure ||
         error.isGatewayAccessFailure);
+
+bool isMusicBrowseConnectionFailure(Object? error) =>
+    error is MusicCatalogConnectionFailure ||
+    error is SocketException ||
+    error is TimeoutException ||
+    error is TlsException ||
+    error is GatewayTransportUnavailable ||
+    (error is InvidiousServiceError &&
+        !error.isGatewayAccessFailure &&
+        const {408, 502, 503, 504}.contains(error.statusCode));
 
 class MusicCatalogException implements Exception {
   final String message;
@@ -32,15 +54,24 @@ class MusicCatalogException implements Exception {
   String toString() => message;
 }
 
+/// Discovery could not finish verifying candidates because the connection failed.
+class MusicCatalogConnectionFailure extends MusicCatalogException {
+  const MusicCatalogConnectionFailure(super.message);
+}
+
 class MusicCatalogUnsupported extends MusicCatalogException {
   const MusicCatalogUnsupported()
       : super('This catalog feature is not available through Invidious.');
 }
 
+enum MusicRecordingAvailability { available, missing }
+
 /// Standard Invidious Music catalog contract with no network implementation. An
 /// unsupported or forgotten override must fail without contacting another host.
 /// Historical direct-catalog parsing fixtures live under test/, not in the app.
 abstract class MusicCatalogService {
+  static const artistMixSeedLimit = 3;
+
   /// Optional suggestions for a draft in Online Search.
   Future<List<String>> searchSuggestions(String query,
           {bool Function()? isCurrent}) async =>
@@ -130,6 +161,12 @@ abstract class MusicCatalogService {
           {VideoLoadObserver? loadObserver}) async =>
       throw const MusicCatalogUnsupported();
 
+  /// Checks one catalog recording with fresh metadata. Only a definitive
+  /// recording-level result is reported as missing. Indeterminate results throw.
+  Future<MusicRecordingAvailability> checkRecordingAvailability(String videoId,
+          {required bool Function() isCurrent}) async =>
+      throw const MusicCatalogUnsupported();
+
   /// A visual counterpart for the active online recording, if its selected
   /// instance supplies one. Local files and downloaded recordings stay local.
   Future<Video?> findMusicVideo(Video song,
@@ -142,6 +179,11 @@ abstract class MusicCatalogService {
           {required bool Function() isCurrent,
           required Future<void> Function(String id, MusicLibraryEntry? details)
               onResult}) async =>
+      throw const MusicCatalogUnsupported();
+
+  /// Verified music from the selected channels and their related recordings.
+  Future<List<MusicTrack>> getArtistMixSongs(Iterable<String> artistIds,
+          {bool Function()? isCurrent}) async =>
       throw const MusicCatalogUnsupported();
 
   Future<MusicArtistPage> getArtist(String id) async =>
@@ -159,6 +201,13 @@ abstract class MusicCatalogService {
   Future<MusicArtistReleases> getArtistReleases(String id,
           {String? continuation, bool Function()? isCurrent}) async =>
       throw const MusicCatalogUnsupported();
+
+  /// Finds overlap among the profile's saved public playlist IDs. Adapters
+  /// that cannot verify public track membership can leave the shelf empty.
+  Future<List<MusicPlaylist>> findPlaylistsWithSongsInCommon(
+          String playlistId, List<String> savedPlaylistIds,
+          {required bool Function() isCurrent}) async =>
+      const [];
 
   /// Reads the first page of a known regional or worldwide Music chart.
   Future<List<MusicTrack>> getChartSongs(String playlistId,

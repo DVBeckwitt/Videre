@@ -6,6 +6,16 @@ import android.os.Build
 import android.os.Process
 import java.security.MessageDigest
 
+internal fun isSystemMediaResumptionBrowser(
+    packages: PackageManager,
+    callingPackage: String,
+    uid: Int,
+): Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
+    (uid == Process.SYSTEM_UID ||
+        (callingPackage == "com.android.systemui" &&
+            packages.getPackagesForUid(uid)?.contains(callingPackage) == true &&
+            packages.checkSignatures("android", callingPackage) == PackageManager.SIGNATURE_MATCH))
+
 internal fun isTrustedMediaBrowser(packages: PackageManager, callingPackage: String, uid: Int): Boolean {
     if (uid == Process.myUid() || uid == Process.SYSTEM_UID) return true
     // Android makes an app visible to the service that it binds.

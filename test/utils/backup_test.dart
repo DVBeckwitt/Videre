@@ -405,7 +405,57 @@ void main() {
     expect(target.getSettings(musicLibrarySettingName)!.value, firstMerge);
   });
 
-  for (final bound in ['bookmarks', 'playlist markers', 'UTF-8 bytes']) {
+  test('backup merges Likes separately and keeps existing metadata and order',
+      () async {
+    const sameSong = MusicLibraryEntry(
+        kind: MusicLibraryKind.song, id: id, title: 'Existing Like');
+    const incomingDuplicate = MusicLibraryEntry(
+        kind: MusicLibraryKind.song, id: id, title: 'Incoming Like label');
+    const savedOnly = MusicLibraryEntry(
+        kind: MusicLibraryKind.song, id: '11111111111', title: 'Saved only');
+    const likedOnly = MusicLibraryEntry(
+        kind: MusicLibraryKind.song, id: '22222222222', title: 'Liked only');
+    final deviceSong = MusicLibraryEntry(
+        kind: MusicLibraryKind.song,
+        id: 'device:${'b' * 64}',
+        title: 'Device song');
+    final original = MusicLibraryService.forProfile(source, source.profileId);
+    final destination =
+        MusicLibraryService.forProfile(target, target.profileId);
+    await original.save(savedOnly);
+    await original.setSongLiked(incomingDuplicate, liked: true);
+    await original.setSongLiked(likedOnly, liked: true);
+    await destination.setSongLiked(sameSong, liked: true);
+    await destination.setSongLiked(deviceSong, liked: true);
+    final destinationOrder =
+        destination.likedSongs.map((entry) => entry.toJson()).toList();
+
+    final backup = UserBackup.parse((await source.exportBackup()).encode());
+    await target.restoreBackup(backup);
+    expect(destination.entries.map((entry) => entry.id), [savedOnly.id]);
+    expect(destination.likedSongs.map((entry) => entry.toJson()),
+        [...destinationOrder, likedOnly.toJson()]);
+    final merged = target.getSettings(musicLibrarySettingName)!.value;
+    await target.restoreBackup(backup);
+    expect(target.getSettings(musicLibrarySettingName)!.value, merged);
+
+    final thirdProfile = await target.createProfile('Round trip');
+    final third = target.forProfile(thirdProfile.id);
+    final mergedBackup =
+        UserBackup.parse((await target.exportBackup()).encode());
+    await third.restoreBackup(mergedBackup);
+    final restored = MusicLibraryService.forProfile(target, thirdProfile.id);
+    expect(restored.entries.single.id, savedOnly.id);
+    expect(restored.likedSongs.map((entry) => entry.toJson()),
+        destination.likedSongs.map((entry) => entry.toJson()));
+  });
+
+  for (final bound in [
+    'bookmarks',
+    'Likes',
+    'playlist markers',
+    'UTF-8 bytes'
+  ]) {
     test('Music merge exceeding $bound rolls back the entire restore',
         () async {
       String musicData({required bool incoming}) {
@@ -426,6 +476,17 @@ void main() {
                           bound == 'UTF-8 bytes' ? '🎵' * 1024 : 'Saved song')
                   .toJson(),
           ],
+          if (bound == 'Likes')
+            'likes': [
+              for (var index = 0;
+                  index < (incoming ? 1 : musicLibraryMaximumEntries);
+                  index++)
+                MusicLibraryEntry(
+                        kind: MusicLibraryKind.song,
+                        id: '${incoming ? 'b' : 'a'}${index.toString().padLeft(10, '0')}',
+                        title: 'Liked song')
+                    .toJson(),
+            ],
           'playlists': [
             if (bound == 'playlist markers')
               for (var index = 0;
@@ -505,6 +566,7 @@ void main() {
   test('device artwork choices restore to the selected profile', () async {
     final person = await target.createProfile('Listener');
     final destination = target.forProfile(person.id);
+    await DeviceMusicArtworkPreferences.setLoadCovers(source, false);
     await DeviceMusicArtworkPreferences.setSource(
         source, DeviceMusicArtworkSource.embeddedOnly);
     await DeviceMusicArtworkPreferences.setQuality(
@@ -515,14 +577,17 @@ void main() {
     final backup = UserBackup.parse((await source.exportBackup()).encode());
     await destination.restoreBackup(backup, replace: true);
     final restored = DeviceMusicArtworkPreferences.forDatabase(destination);
+    expect(restored.loadCovers, isFalse);
     expect(restored.source, DeviceMusicArtworkSource.embeddedOnly);
     expect(restored.quality, DeviceMusicArtworkQuality.high);
     expect(restored.crop, DeviceMusicArtworkCrop.fit);
     final defaults = DeviceMusicArtworkPreferences.forDatabase(target);
+    expect(defaults.loadCovers, isTrue);
     expect(defaults.source, DeviceMusicArtworkSource.preferAdjacent);
     expect(defaults.quality, DeviceMusicArtworkQuality.balanced);
     expect(defaults.crop, DeviceMusicArtworkCrop.crop);
     for (final key in [
+      deviceMusicArtworkLoadingSettingName,
       deviceMusicArtworkSourceSettingName,
       deviceMusicArtworkQualitySettingName,
       deviceMusicArtworkCropSettingName,
@@ -692,8 +757,9 @@ void main() {
       'settings': [setting.toJson()],
     })));
 
-    final restored =
-        MusicLibraryService.forProfile(target, target.profileId).entries.single;
+    final library = MusicLibraryService.forProfile(target, target.profileId);
+    final restored = library.entries.single;
+    expect(library.likedSongs, isEmpty);
     expect(restored.id, id);
     expect(restored.usesVideoThumbnails, isTrue);
     expect(restored.toVideo().musicMetadata!.thumbnails, isEmpty);
@@ -750,6 +816,15 @@ void main() {
         ],
       },
     ];
+    final deviceSong = {
+      ...row,
+      'id': 'device:${'b' * 64}',
+      'title': 'Device song',
+    };
+    final withLikes = {
+      ...valid,
+      'likes': [row, deviceSong],
+    };
     final data = jsonDecode((await source.exportBackup()).encode()) as Map;
     for (final invalid in [
       for (final invalidRow in invalidRows)
@@ -757,6 +832,38 @@ void main() {
           ...valid,
           'entries': [invalidRow]
         },
+      for (final invalidRow in invalidRows)
+        {
+          ...valid,
+          'likes': [invalidRow],
+        },
+      {...valid, 'likes': null},
+      {
+        ...valid,
+        'likes': [
+          {...row, 'kind': 'artist'},
+        ],
+      },
+      {
+        ...valid,
+        'likes': [row, row],
+      },
+      {
+        ...valid,
+        'likes': [
+          {...deviceSong, 'id': 'device:${'B' * 64}'},
+        ],
+      },
+      {
+        ...valid,
+        'likes': [
+          {...deviceSong, 'uri': 'content://media/external/audio/media/1'},
+        ],
+      },
+      {
+        ...valid,
+        'entries': [deviceSong],
+      },
       {...valid, 'stream': 'private'},
       {...valid, 'version': 2},
       {...valid, 'version': 1.0},
@@ -782,6 +889,10 @@ void main() {
     expect(
         UserBackup.validSetting(
             SettingsValue(musicLibrarySettingName, jsonEncode(valid))),
+        isTrue);
+    expect(
+        UserBackup.validSetting(
+            SettingsValue(musicLibrarySettingName, jsonEncode(withLikes))),
         isTrue);
     expect(target.getSettings(musicLibrarySettingName), isNull);
   });

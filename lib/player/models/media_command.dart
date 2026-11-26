@@ -18,8 +18,9 @@ enum MediaCommandType {
 class MediaCommand<T> {
   final MediaCommandType type;
   final T? value;
+  final bool Function()? canExecute;
 
-  const MediaCommand(this.type, {this.value});
+  const MediaCommand(this.type, {this.value, this.canExecute});
 }
 
 class SwitchVideoValue {

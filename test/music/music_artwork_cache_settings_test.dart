@@ -5,7 +5,9 @@ import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/music/models/music_artwork_cache.dart';
+import 'package:clipious/music/services/device_music_artwork_cache.dart';
 import 'package:clipious/music/services/music_artwork_cache.dart';
+import 'package:clipious/player/notification_artwork_cache.dart';
 import 'package:clipious/settings/views/components/music_artwork_cache_settings.dart';
 import 'package:clipious/utils/interfaces/db.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
@@ -63,6 +65,39 @@ class _Cache extends Fake implements MusicArtworkCache {
       usedBytes: 0,
       limitMiB: status.limitMiB,
       hasTransfers: false,
+    );
+  }
+}
+
+class _DeviceCache extends Fake
+    implements DeviceMusicArtworkCache, NotificationArtworkCache {
+  _DeviceCache(this.bytes, this.limitMiB);
+
+  int bytes;
+  final int limitMiB;
+  int reads = 0;
+  int clears = 0;
+  bool failRead = false;
+
+  @override
+  Future<DeviceMusicArtworkCacheStatus> read() async {
+    reads++;
+    if (failRead) throw StateError('Unavailable cache');
+    return (
+      usedBytes: bytes,
+      limitBytes: limitMiB * 1024 * 1024,
+      canClear: bytes > 0,
+    );
+  }
+
+  @override
+  Future<DeviceMusicArtworkCacheStatus> clear() async {
+    clears++;
+    bytes = 0;
+    return (
+      usedBytes: bytes,
+      limitBytes: limitMiB * 1024 * 1024,
+      canClear: false,
     );
   }
 }
@@ -195,4 +230,112 @@ void main() {
     expect(cache.limits, isEmpty);
     expect(clear, findsNothing);
   });
+
+  final deviceEntry = find.byKey(
+    const ValueKey('music-device-artwork-cache-setting'),
+  );
+  final notificationEntry = find.byKey(
+    const ValueKey('music-notification-artwork-cache-setting'),
+  );
+  final deviceClear = find.byKey(
+    const ValueKey('music-device-artwork-cache-clear'),
+  );
+  final deviceConfirm = find.byKey(
+    const ValueKey('music-device-artwork-cache-confirm'),
+  );
+
+  Future<void> showDeviceTiles(
+    WidgetTester tester,
+    _DeviceCache device,
+    _DeviceCache notification,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: Scaffold(
+          body: MusicDeviceArtworkSettings(
+            deviceCache: device,
+            notificationCache: notification,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+  }
+
+  testWidgets(
+    'reads and clears Android artwork stores independently',
+    (tester) async {
+      final device = _DeviceCache(2048, 24);
+      final notification = _DeviceCache(3072, 32);
+      await showDeviceTiles(tester, device, notification);
+      expect(device.reads + notification.reads, 0);
+
+      await tap(tester, deviceEntry);
+      expect(find.text('Stored artwork: 2 KiB'), findsOneWidget);
+      expect(
+        find.text('Storage limit per library source: 24 MiB'),
+        findsOneWidget,
+      );
+      expect(notification.reads, 0);
+      await tap(tester, deviceClear);
+      await tap(tester, find.text('Cancel'));
+      expect(device.clears, 0);
+      await tap(tester, deviceClear);
+      await tap(tester, deviceConfirm);
+      expect(device.clears, 1);
+      expect(find.text('Stored artwork: 0 B'), findsOneWidget);
+      expect(tester.widget<TextButton>(deviceClear).onPressed, isNull);
+      await tap(tester, find.text('Close'));
+
+      await tap(tester, notificationEntry);
+      expect(find.text('Stored artwork: 3 KiB'), findsOneWidget);
+      expect(find.text('Storage limit: 32 MiB'), findsOneWidget);
+      await tap(tester, deviceClear);
+      expect(
+        find.text(
+          'Clears cached copies of notification images. Artwork already displayed in the current notification stays visible.',
+        ),
+        findsOneWidget,
+      );
+      await tap(tester, deviceConfirm);
+      expect(device.clears, 1);
+      expect(notification.clears, 1);
+    },
+    variant: TargetPlatformVariant({TargetPlatform.android}),
+  );
+
+  testWidgets(
+    'retries a failed Android artwork store independently',
+    (tester) async {
+      final device = _DeviceCache(2048, 24);
+      final notification = _DeviceCache(3072, 32)..failRead = true;
+      await showDeviceTiles(tester, device, notification);
+      await tap(tester, notificationEntry);
+      expect(find.text('Could not update artwork storage.'), findsOneWidget);
+      expect(deviceClear, findsNothing);
+
+      notification.failRead = false;
+      await tap(tester, find.text('Refresh'));
+      expect(notification.reads, 2);
+      expect(device.reads, 0);
+      expect(find.text('Stored artwork: 3 KiB'), findsOneWidget);
+    },
+    variant: TargetPlatformVariant({TargetPlatform.android}),
+  );
+
+  testWidgets(
+    'hides the Android artwork controls on iOS',
+    (tester) async {
+      await showDeviceTiles(
+        tester,
+        _DeviceCache(2048, 24),
+        _DeviceCache(3072, 32),
+      );
+      expect(deviceEntry, findsNothing);
+      expect(notificationEntry, findsNothing);
+    },
+    variant: TargetPlatformVariant({TargetPlatform.iOS}),
+  );
 }

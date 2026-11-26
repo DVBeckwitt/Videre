@@ -30,6 +30,18 @@ class MusicListeningHistory {
   List<MusicListeningEvent> events({String? trackId}) =>
       _database.getMusicListeningEvents(trackId: trackId);
 
+  /// Recordings with only unmeasured events have no total.
+  Map<String, Duration> listenedTimeByTrack() {
+    final totals = <String, Duration>{};
+    for (final event in events()) {
+      final elapsed = event.elapsed;
+      if (elapsed == null) continue;
+      totals.update(event.trackId, (total) => total + elapsed,
+          ifAbsent: () => elapsed);
+    }
+    return totals;
+  }
+
   Future<void> removeTracks(Set<String> trackIds) =>
       _database.removeMusicListeningTracks(trackIds);
 

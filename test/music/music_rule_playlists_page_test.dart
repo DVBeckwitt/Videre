@@ -7,6 +7,7 @@ import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' as app_globals;
 import 'package:clipious/music/models/music_library_entry.dart';
 import 'package:clipious/music/services/music_library_service.dart';
+import 'package:clipious/music/services/music_recording_rating_store.dart';
 import 'package:clipious/music/services/music_rule_playlist_store.dart';
 import 'package:clipious/music/views/screens/music_library.dart';
 import 'package:clipious/player/states/player.dart';
@@ -47,7 +48,8 @@ class _Player extends Cubit<PlayerState> implements PlayerCubit {
       String? queueTitle,
       PlaylistReference? recommendationSource,
       bool fromMusic = false,
-      bool songTap = false}) async {
+      bool songTap = false,
+      bool collectionDetail = false}) async {
     expect(audio, isTrue);
     expect(fromMusic, isTrue);
     requests.add((
@@ -94,6 +96,7 @@ void main() {
   late TestSettingsCubit settings;
   late MusicLibraryService library;
   late MusicRulePlaylistStore rules;
+  late MusicRecordingRatingStore ratings;
   late Service previousService;
   late bool previousTv;
 
@@ -105,6 +108,7 @@ void main() {
     db = await SembastSqfDb.createInMemory();
     library = MusicLibraryService.forProfile(db, db.profileId);
     rules = MusicRulePlaylistStore.forProfile(db, db.profileId);
+    ratings = MusicRecordingRatingStore.forProfile(db, db.profileId);
     app = _App();
     player = _Player();
     settings = TestSettingsCubit(SettingsState.init(), app);
@@ -123,8 +127,7 @@ void main() {
       find.byKey(ValueKey('music-rule-playlist-$suffix'));
   Finder track(MusicLibraryEntry entry) => control('track-${entry.id}');
 
-  testWidgets('a saved rule playlist plays the current limited membership',
-      (tester) async {
+  Future<void> openRulePlaylists(WidgetTester tester) async {
     await tester.pumpWidget(MultiBlocProvider(
       providers: [
         BlocProvider<AppCubit>.value(value: app),
@@ -143,14 +146,9 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('music-rule-playlists')));
     await tester.pumpAndSettle();
-    await tester.tap(control('create'));
-    await tester.pumpAndSettle();
+  }
 
-    await tester.enterText(control('name'), 'Chorus picks');
-    await tester.ensureVisible(control('artist'));
-    await tester.enterText(control('artist'), 'chorus');
-    await tester.ensureVisible(control('limit'));
-    await tester.enterText(control('limit'), '2');
+  Future<void> saveRule(WidgetTester tester) async {
     await tester.ensureVisible(control('save'));
     await tester.runAsync(() async {
       final saved = Completer<void>();
@@ -169,6 +167,20 @@ void main() {
       }
     });
     await tester.pumpAndSettle();
+  }
+
+  testWidgets('a saved rule playlist plays the current limited membership',
+      (tester) async {
+    await openRulePlaylists(tester);
+    await tester.tap(control('create'));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(control('name'), 'Chorus picks');
+    await tester.ensureVisible(control('artist'));
+    await tester.enterText(control('artist'), 'chorus');
+    await tester.ensureVisible(control('limit'));
+    await tester.enterText(control('limit'), '2');
+    await saveRule(tester);
 
     await tester.tap(find.text('Chorus picks'));
     await tester.pumpAndSettle();
@@ -202,5 +214,57 @@ void main() {
     expect(playback.ids, [beta.id, alpha.id]);
     expect(playback.startIndex, 1);
     expect(playback.title, 'Chorus picks');
+  });
+
+  testWidgets('editing a rating updates rule membership and Play All',
+      (tester) async {
+    await openRulePlaylists(tester);
+    await tester.runAsync(() async {
+      await library.save(alpha);
+      await library.save(beta);
+      await ratings.setRating(beta.id, 5, isCurrent: () => true);
+    });
+    await tester.pumpAndSettle();
+    await tester.tap(control('create'));
+    await tester.pumpAndSettle();
+    await tester.enterText(control('name'), 'Rated songs');
+    await tester.ensureVisible(control('minimum-rating'));
+    await tester.tap(control('minimum-rating'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('1 star').last);
+    await tester.pumpAndSettle();
+    await saveRule(tester);
+    expect(rules.playlists.single.minimumRating, 1);
+
+    await tester.tap(find.text('Rated songs'));
+    await tester.pumpAndSettle();
+    expect(track(alpha), findsNothing);
+    expect(track(beta), findsOneWidget);
+
+    await tester
+        .runAsync(() => ratings.setRating(alpha.id, 1, isCurrent: () => true));
+    await tester.pumpAndSettle();
+    expect(track(alpha), findsOneWidget);
+    await tester.tap(control('play'));
+    await tester.pumpAndSettle();
+    expect(player.requests.single.ids, [beta.id, alpha.id]);
+
+    await tester.runAsync(
+        () => ratings.setRating(alpha.id, null, isCurrent: () => true));
+    await tester.pumpAndSettle();
+    expect(track(alpha), findsNothing);
+    expect(library.contains(MusicLibraryKind.song, alpha.id), isTrue);
+
+    await tester.tap(control('edit'));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(control('minimum-rating'));
+    expect(find.text('1 star'), findsOneWidget);
+    await tester.tap(control('minimum-rating'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Any rating').last);
+    await tester.pumpAndSettle();
+    await saveRule(tester);
+    expect(rules.playlists.single.minimumRating, isNull);
+    expect(track(alpha), findsOneWidget);
   });
 }

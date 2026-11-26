@@ -7,17 +7,20 @@ class _ManualMusicDecoder {
   final _StandbyAudio slot;
   final Duration startAt;
   final bool Function() isCurrent;
+  final LocalMusicTrack? Function(String) openedAudioTrack;
   final bool borrowedAdjacent;
   final _database = db;
   final _profile = db.profileId;
   final _proxy = NetworkProxy.instance.config;
   final cancelled = Completer<bool>();
   AudioPlaybackSources? admittedPlan;
+  bool? providerCanSeek;
   PlayerException? exhaustedSourceError;
   int sourceIndex = 0;
   bool changedDecoder = false;
 
   _ManualMusicDecoder(this.owner, this.slot, this.startAt, this.isCurrent,
+      this.openedAudioTrack,
       {required this.borrowedAdjacent});
 
   bool get decoderReady =>
@@ -46,6 +49,7 @@ class _ManualMusicDecoder {
         resolveAudioPlaybackSources(
             video: entry is Video ? entry : null,
             offlineVideo: offline,
+            openedAudioTrack: openedAudioTrack,
             sessionId: session,
             isCurrent: active,
             verifyPinnedCompletion: verifyCompletion);
@@ -54,6 +58,13 @@ class _ManualMusicDecoder {
       if (!active()) return false;
       final plan = await resolve();
       if (plan == null || !active()) return false;
+      final provider = providerMusicTrackForPlayback(entry.videoId);
+      if (provider != null) {
+        providerCanSeek =
+            await LocalMusicLibrary.instance.canSeekProviderTrack(provider);
+        if (!active()) return false;
+      }
+      final position = providerCanSeek == false ? null : startAt;
       BackendPlayback? blockedRoute;
       for (var index = 0; index < plan.sources.length; index++) {
         if (blockedRoute != null &&
@@ -69,12 +80,12 @@ class _ManualMusicDecoder {
             // Android completes this call after ExoPlayer reports STATE_READY.
             changedDecoder = true;
             await decoder.setAudioSource(plan.sources[index],
-                initialPosition: startAt);
+                initialPosition: position);
           }
           if (!active()) return false;
-          if (decoder.position != startAt) {
+          if (position != null && decoder.position != position) {
             changedDecoder = true;
-            await decoder.seek(startAt);
+            await decoder.seek(position);
           }
         } on PlayerException catch (error) {
           if (!active() ||

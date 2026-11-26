@@ -12,6 +12,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
+import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
@@ -23,6 +24,8 @@ import okio.ByteString.Companion.encodeUtf8
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -78,8 +81,8 @@ class PlaybackCacheDeviceTest {
         PlaybackMediaCache.factory(context, upstream, source, values, manifest)
 
     private fun songDescriptor(source: String = media, size: Long = payload.size.toLong(),
-                               id: String = "fixture"): Map<String, Any> {
-        val representation = """["representation","140","$size","100","type",null,"track"]"""
+                               id: String = "fixture", itag: String = "140"): Map<String, Any> {
+        val representation = """["representation","$itag","$size","100","type",null,"track"]"""
         return descriptor(listOf(resource(source, representation))) + mapOf(
             "contentId" to id,
             "musicSong" to mapOf("title" to "Fixture song", "artist" to "Fixture artist",
@@ -87,11 +90,13 @@ class PlaybackCacheDeviceTest {
         )
     }
 
+    private fun cachedSongSelection(owner: Map<String, Any>, row: Map<String, Any>): Map<String, Any> =
+        owner + mapOf("contentId" to row.getValue("videoId"), "rendition" to row.getValue("rendition"))
+
     private fun cachedSongFactory(owner: Map<String, Any>, row: Map<String, Any>): Pair<DataSource.Factory, String> {
         val rendition = row.getValue("rendition")
         val uri = "videre-cache://music/$rendition"
-        return PlaybackMediaCache.cachedMusicFactory(context, uri,
-            owner + mapOf("contentId" to row.getValue("videoId"), "rendition" to rendition)) to uri
+        return PlaybackMediaCache.cachedMusicFactory(context, uri, cachedSongSelection(owner, row)) to uri
     }
 
     private data class Read(val bytes: ByteArray, val uri: Uri?)
@@ -153,6 +158,8 @@ class PlaybackCacheDeviceTest {
     fun onlyCompleteDecoderConfirmedSongsAreListedAndReadCacheOnly() {
         val upstream = CountingFactory(mapOf("/videoplayback" to payload))
         val values = songDescriptor()
+        val representation = checkNotNull(PlaybackCacheIdentity.parse(values, media).persistentRepresentation(media))
+        val selection = values + ("rendition" to PlaybackCacheIdentity.digest(representation))
         val source = factory(upstream, values)
         val partial = source.createDataSource()
         try {
@@ -163,6 +170,7 @@ class PlaybackCacheDeviceTest {
         }
         PlaybackMediaCache.confirmDecodedMusic(source)
         assertTrue(PlaybackMediaCache.cachedMusicSongs(values).isEmpty())
+        assertNull(PlaybackMediaCache.copyCachedMusicSong(selection))
         assertArrayEquals(payload, read(source).bytes)
 
         val rows = PlaybackMediaCache.cachedMusicSongs(values)
@@ -191,12 +199,131 @@ class PlaybackCacheDeviceTest {
             assertThrows(CachedMusicUnavailable::class.java) { read(anotherSource, anotherUri) }
         }
 
-        PlaybackMediaCache.clear()
-        assertTrue(PlaybackMediaCache.cachedMusicSongs(values).isEmpty())
-        assertThrows(IOException::class.java) { read(cacheOnly, synthetic) }
-        val (stale, staleUri) = cachedSongFactory(values, row)
-        assertThrows(CachedMusicUnavailable::class.java) { read(stale, staleUri) }
+        val staged = File(checkNotNull(PlaybackMediaCache.copyCachedMusicSong(selection)))
+        try {
+            assertEquals(context.cacheDir.canonicalFile, staged.canonicalFile.parentFile)
+            assertArrayEquals(payload, staged.readBytes())
+            assertNull(PlaybackMediaCache.copyCachedMusicSong(selection + ("accountId" to "another-account")))
+
+            PlaybackMediaCache.clear()
+            assertTrue(PlaybackMediaCache.cachedMusicSongs(values).isEmpty())
+            assertNull(PlaybackMediaCache.copyCachedMusicSong(selection))
+            assertArrayEquals(payload, staged.readBytes())
+            assertThrows(IOException::class.java) { read(cacheOnly, synthetic) }
+            val (stale, staleUri) = cachedSongFactory(values, row)
+            assertThrows(CachedMusicUnavailable::class.java) { read(stale, staleUri) }
+        } finally {
+            staged.delete()
+        }
         assertEquals(networkOpens, upstream.opens.get())
+    }
+
+    @Test(timeout = 15000)
+    fun removingCachedSongDeletesOnlyTheSelectedRendition() {
+        val upstream = CountingFactory(mapOf("/videoplayback" to payload))
+        val values = songDescriptor()
+        val original = factory(upstream, values)
+        assertArrayEquals(payload, read(original).bytes)
+        PlaybackMediaCache.confirmDecodedMusic(original)
+        val row = PlaybackMediaCache.cachedMusicSongs(values).single()
+        val selection = cachedSongSelection(values, row)
+        val (removed, removedUri) = cachedSongFactory(values, row)
+        val lateProof = factory(upstream, values)
+        assertArrayEquals(payload, read(lateProof).bytes)
+
+        val otherAccount = values + ("accountId" to "another-account")
+        for (other in listOf(songDescriptor(itag = "141"), songDescriptor(id = "unrelated"), otherAccount)) {
+            val source = factory(upstream, other)
+            assertArrayEquals(payload, read(source).bytes)
+            PlaybackMediaCache.confirmDecodedMusic(source)
+        }
+
+        val (unrelated, unrelatedUri) = cachedSongFactory(otherAccount, row)
+        val unrelatedReader = unrelated.createDataSource()
+        try {
+            unrelatedReader.open(DataSpec(Uri.parse(unrelatedUri)))
+            assertEquals("removed", PlaybackMediaCache.removeCachedMusicSong(selection))
+            assertEquals("missing", PlaybackMediaCache.removeCachedMusicSong(selection))
+            val sample = ByteArray(1024)
+            assertEquals(sample.size, unrelatedReader.read(sample, 0, sample.size))
+            assertArrayEquals(payload.copyOf(sample.size), sample)
+        } finally {
+            unrelatedReader.close()
+        }
+
+        assertEquals(payload.size.toLong() * 3, PlaybackMediaCache.status()["usedBytes"])
+        assertThrows(CachedMusicUnavailable::class.java) { read(removed, removedUri) }
+        val remaining = PlaybackMediaCache.cachedMusicSongs(values)
+        assertEquals(setOf("fixture", "unrelated"), remaining.map { it["videoId"] }.toSet())
+        assertNotEquals(row["rendition"], remaining.single { it["videoId"] == "fixture" }["rendition"])
+        val opens = upstream.opens.get()
+        for (remainingRow in remaining) {
+            val (source, uri) = cachedSongFactory(values, remainingRow)
+            assertArrayEquals(payload, read(source, uri).bytes)
+        }
+        assertEquals(opens, upstream.opens.get())
+
+        // Late confirmation must not advertise a later non-Music cache fill.
+        val unconfirmed = factory(upstream, values - "musicSong")
+        assertArrayEquals(payload, read(unconfirmed).bytes)
+        PlaybackMediaCache.confirmDecodedMusic(lateProof)
+        assertThrows(CachedMusicUnavailable::class.java) { read(removed, removedUri) }
+    }
+
+    @Test(timeout = 15000)
+    fun removingCachedSongProtectsActiveCacheReadersAndLeavesAnActiveDownloadReadable() {
+        val profile = "cache-removal-${UUID.randomUUID()}"
+        val values = songDescriptor() + ("profileId" to profile)
+        val upstream = CountingFactory(mapOf("/videoplayback" to payload))
+        val stream = factory(upstream, values)
+        assertArrayEquals(payload, read(stream).bytes)
+        PlaybackMediaCache.confirmDecodedMusic(stream)
+        val row = PlaybackMediaCache.cachedMusicSongs(values).single()
+        val selection = cachedSongSelection(values, row)
+        val (cached, cachedUri) = cachedSongFactory(values, row)
+
+        for ((source, uri) in listOf(cached to cachedUri, stream to media)) {
+            val reader = source.createDataSource()
+            try {
+                reader.open(DataSpec(Uri.parse(uri)))
+                assertEquals("inUse", PlaybackMediaCache.removeCachedMusicSong(selection))
+                val sample = ByteArray(1024)
+                assertEquals(sample.size, reader.read(sample, 0, sample.size))
+                assertArrayEquals(payload.copyOf(sample.size), sample)
+            } finally {
+                reader.close()
+            }
+        }
+
+        val savedBytes = payload.reversedArray()
+        val digest = MessageDigest.getInstance("SHA-256").digest(savedBytes).joinToString("") { "%02x".format(it) }
+        val owner = File(context.applicationInfo.dataDir, "app_flutter/downloads/profiles/$profile")
+        check(owner.mkdirs())
+        val file = File(owner, "fixture.webm")
+        try {
+            file.writeBytes(savedBytes)
+            val uri = Uri.fromFile(file).toString()
+            val download = mapOf("uri" to uri, "remoteUri" to media,
+                "byteLength" to savedBytes.size.toLong(), "sha256" to digest)
+            val source = factory(upstream, values + ("download" to download), uri)
+            val reader = source.createDataSource()
+            try {
+                reader.open(DataSpec(Uri.parse(uri)))
+                assertEquals("removed", PlaybackMediaCache.removeCachedMusicSong(selection))
+                val sample = ByteArray(1024)
+                assertEquals(sample.size, reader.read(sample, 0, sample.size))
+                assertArrayEquals(savedBytes.copyOf(sample.size), sample)
+            } finally {
+                reader.close()
+            }
+            assertArrayEquals(savedBytes, read(source, uri).bytes)
+        } finally {
+            file.delete()
+            owner.delete()
+        }
+        assertTrue(PlaybackMediaCache.cachedMusicSongs(values).isEmpty())
+        assertEquals(0L, PlaybackMediaCache.status()["usedBytes"])
+        assertEquals(1, upstream.opens.get())
     }
 
     @Test(timeout = 15000)
@@ -701,6 +828,8 @@ class PlaybackCacheDeviceTest {
         val opens = upstream.opens.get()
         assertTrue(PlaybackMediaCache.cachedMusicSongs(values).isEmpty())
         assertThrows(CachedMusicUnavailable::class.java) { read(cacheOnly, synthetic, length = 1024) }
+        assertNull(PlaybackMediaCache.copyCachedMusicSong(
+            values + ("rendition" to synthetic.substringAfterLast('/'))))
         assertEquals(opens, upstream.opens.get())
     }
 

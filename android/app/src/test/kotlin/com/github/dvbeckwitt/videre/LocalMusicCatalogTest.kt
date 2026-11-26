@@ -1,12 +1,20 @@
 package com.github.dvbeckwitt.videre
 
 import android.database.Cursor
+import android.provider.DocumentsContract.Document
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class LocalMusicCatalogTest {
+    @Test fun providerListingRequiresAnOrdinaryCompleteDocument() {
+        assertTrue(LocalMusicCatalog.providerOffersAudioStream(0))
+        assertTrue(LocalMusicCatalog.providerOffersAudioStream(Document.FLAG_SUPPORTS_RENAME.toLong()))
+        assertFalse(LocalMusicCatalog.providerOffersAudioStream(Document.FLAG_PARTIAL.toLong()))
+        assertFalse(LocalMusicCatalog.providerOffersAudioStream(Document.FLAG_VIRTUAL_DOCUMENT.toLong()))
+    }
+
     @Test fun onlyPositiveIntegerMediaStoreRecordingMetadataIsActionable() {
         assertTrue(positiveRecordingFlag(Cursor.FIELD_TYPE_INTEGER, 1L))
         assertTrue(positiveRecordingFlag(Cursor.FIELD_TYPE_INTEGER, 2L))
@@ -74,6 +82,19 @@ class LocalMusicCatalogTest {
         assertEquals(null, first.copy(parentDocumentId = null).albumKey(tree))
     }
 
+    @Test fun classifiedTracksExposeKindWithoutChangingExactAlbumIdentity() {
+        val tree = "content://documents/tree/library"
+        val metadata = LocalMusicMetadata("Song", "Guest", "Collection", 12, albumArtist = "Ensemble")
+        val row = track().copy(metadata = metadata)
+        val classified = row.copy(metadata = metadata.copy(sortTags =
+            LocalMusicSortTags(releaseKind = LocalMusicReleaseKind.EP)))
+
+        assertEquals(null, row.channelValue(source = tree)["releaseKind"])
+        assertEquals("ep", classified.channelValue(source = tree)["releaseKind"])
+        assertEquals(row.albumKey(tree), classified.albumKey(tree))
+        assertFalse(classified.albumKey(tree) == classified.copy(parentDocumentId = "edition two").albumKey(tree))
+    }
+
     @Test fun systemAlbumsUseTheMediaStoreIdWithinItsVolume() {
         val source = LocalMusicCatalog.SYSTEM_URI
         val first = track().copy(uri = "content://media/vol_a/audio/media/7", mediaAlbumId = 5,
@@ -87,26 +108,66 @@ class LocalMusicCatalogTest {
     }
 
     @Test fun legacyTagRecordsRefreshOnceEvenWhenTheNewTagsAreAbsent() {
-        val tags = LocalMusicMetadata("Title", "Artist", "Album", 12, albumTagsRead = true, genreRead = true,
-            sortTags = LocalMusicSortTags())
+        val tags = LocalMusicMetadata("Title", "Artist", "Album", 12, albumTagsRead = true,
+            sortTags = LocalMusicSortTags(), genreRead = true, tagValues = LocalMusicTagValues())
         val row = track().copy(metadata = tags)
         assertTrue(row.needsTagRead(row.copy(metadata = tags.copy(albumTagsRead = false))))
         assertTrue(row.needsTagRead(row.copy(metadata = tags.copy(sortTags = null))))
         assertTrue(row.needsTagRead(row.copy(metadata = tags.copy(genreRead = false))))
         assertTrue(row.needsTagRead(row.copy(metadata = tags.copy(retryRead = true))))
         assertTrue(row.needsTagRead(row.copy(metadata = tags.copy(replayGainRead = false))))
+        assertTrue(row.needsTagRead(row.copy(metadata = tags.copy(
+            sortTags = LocalMusicSortTags(discSubtitleRead = false),
+        ))))
         assertFalse(row.needsTagRead(row))
+        val legacySortTags = tags.sortTags!!.copy(releaseKindRead = false)
+        assertTrue(row.needsTagRead(row.copy(metadata = tags.copy(sortTags = legacySortTags))))
         assertTrue(row.copy(sizeBytes = 50L).needsTagRead(row))
         assertTrue(row.copy(identityKey = "replacement").needsTagRead(row))
     }
 
     @Test fun legacyTagRecordsRefreshOnceEvenWhenTheGenreTagIsAbsent() {
-        val tags = LocalMusicMetadata("Title", "Artist", "Album", 12, albumTagsRead = true, genreRead = true)
+        val tags = LocalMusicMetadata("Title", "Artist", "Album", 12, albumTagsRead = true,
+            sortTags = LocalMusicSortTags(), genreRead = true, tagValues = LocalMusicTagValues())
         val row = track().copy(metadata = tags)
         assertTrue(row.needsTagRead(row.copy(metadata = tags.copy(genreRead = false))))
         assertFalse(row.needsTagRead(row))
         assertEquals(null, row.channelValue()["genre"])
         assertEquals("Jazz", row.copy(metadata = tags.copy(genre = "Jazz")).channelValue()["genre"])
+    }
+
+    @Test fun skippedEmbeddedCoversAreReadWhenCoverLoadingReturns() {
+        val tags = LocalMusicMetadata("Title", "Artist", "Album", 12, albumTagsRead = true,
+            sortTags = LocalMusicSortTags(), genreRead = true, coverReadDeferred = true, tagValues = LocalMusicTagValues())
+        val deferred = track().copy(metadata = tags)
+        assertFalse(deferred.needsTagRead(deferred, loadCovers = false))
+        assertTrue(deferred.needsTagRead(deferred, loadCovers = true))
+        assertTrue(deferred.copy(modifiedMs = 50L).needsTagRead(deferred, loadCovers = false))
+
+        val read = deferred.copy(metadata = tags.copy(coverReadDeferred = false))
+        assertFalse(read.needsTagRead(read, loadCovers = true))
+    }
+
+    @Test fun indexedTagsKeepNativeListsAndInterpretOnlySingleValues() {
+        val tags = LocalMusicMetadata("Title", "Combined display", "Album", 12,
+            albumTagsRead = true, sortTags = LocalMusicSortTags(), genreRead = true,
+            tagValues = LocalMusicTagValues(
+                artists = listOf("Duo; Name", "AC/DC"),
+                albumArtists = listOf("Partners\\; Together; Another"),
+                genres = listOf("Alternative; Rock", "Hard Rock"),
+            ))
+        val row = track().copy(metadata = tags)
+        val interpreted = row.channelValue(tagSeparators = ";/")
+        assertEquals(listOf("Duo; Name", "AC/DC"), interpreted["artists"])
+        assertEquals(listOf("Partners; Together", "Another"), interpreted["albumArtists"])
+        assertEquals(listOf("Alternative; Rock", "Hard Rock"), interpreted["genres"])
+        assertEquals(listOf("Partners\\; Together; Another"), row.channelValue()["albumArtists"])
+
+        val legacy = row.copy(metadata = tags.copy(artist = "AC/DC", genre = "Rock; Pop", tagValues = null))
+        assertTrue(row.needsTagRead(legacy))
+        assertEquals(listOf("AC/DC"), legacy.channelValue(tagSeparators = ";")["artists"])
+        assertEquals(listOf("Rock", "Pop"), legacy.channelValue(tagSeparators = ";")["genres"])
+        assertEquals(listOf("AC/DC", "Guest"), localMusicTagList(listOf("AC\\/DC/Guest"), null, "/"))
     }
 
     @Test fun onlyAnUninterruptedFolderSelectionRetainsItsSessions() {
@@ -149,6 +210,20 @@ class LocalMusicCatalogTest {
         assertFalse(row.copy(modifiedMs = null).matchesRevision(row.copy(modifiedMs = null)))
         assertEquals(2000L, LocalMusicCatalog.mediaStoreTime(2L))
         assertEquals(null, LocalMusicCatalog.mediaStoreTime(0L))
+    }
+
+    @Test fun advisoryCacheReusesAnUnknownResultOnlyForTheSameAuthorizedRevision() {
+        val indexed = track().copy(
+            contentAdvisory = LocalMusicAdvisory.UNKNOWN, visibilityProof = "provider-proof",
+        )
+        assertEquals(LocalMusicAdvisory.UNKNOWN, indexed.cachedContentAdvisory(indexed))
+        assertEquals(null, indexed.cachedContentAdvisory(indexed.copy(contentAdvisory = null)))
+        assertEquals(null, indexed.cachedContentAdvisory(indexed.copy(sizeBytes = 50L)))
+        assertEquals(null, indexed.cachedContentAdvisory(indexed.copy(identityKey = "replacement")))
+        assertEquals(null, indexed.cachedContentAdvisory(indexed.copy(visibilityProof = "changed")))
+        assertEquals(1, indexed.copy(contentAdvisory = LocalMusicAdvisory.EXPLICIT).channelValue()["contentAdvisory"])
+        assertEquals(2, indexed.copy(contentAdvisory = LocalMusicAdvisory.CLEAN).channelValue()["contentAdvisory"])
+        assertEquals(null, indexed.channelValue()["contentAdvisory"])
     }
 
     @Test fun documentVisibilityRequiresAnAuthorizedRevision() {

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -28,11 +29,13 @@ final _videoId = RegExp(r'^[a-zA-Z0-9_-]{11}$');
 final _lrclib = LrclibMusicLyricsService();
 
 Future<MusicLyrics> loadMusicLyrics(
-    MusicMetadata track, int? durationSeconds, String videoId) {
+    MusicMetadata track, int? durationSeconds, String videoId,
+    {bool Function()? isPlaybackCurrent, Future<void>? retired}) {
   return _withLrclibConsent(
     const MusicLyrics.unavailable(),
-    () => _videoId.hasMatch(videoId),
-    (isCurrent) => _lrclib.load(track, durationSeconds, isCurrent: isCurrent),
+    () => _videoId.hasMatch(videoId) && (isPlaybackCurrent?.call() ?? true),
+    (isCurrent) => _lrclib.load(track, durationSeconds,
+        isCurrent: isCurrent, retired: retired),
   );
 }
 
@@ -106,7 +109,7 @@ class MusicLyricsRequestException implements Exception {
 class LrclibMusicLyricsService {
   final http.Client Function() _createClient;
   final DateTime Function() _now;
-  bool _loading = false;
+  Completer<void>? _active;
   DateTime? _retryAfter;
 
   LrclibMusicLyricsService({
@@ -116,7 +119,7 @@ class LrclibMusicLyricsService {
         _now = now ?? DateTime.now;
 
   Future<MusicLyrics> load(MusicMetadata track, int? playbackSeconds,
-      {required bool Function() isCurrent}) {
+      {required bool Function() isCurrent, Future<void>? retired}) {
     const unavailable = MusicLyrics.unavailable();
     final signature = _signature(track);
     if (signature == null) return Future.value(unavailable);
@@ -142,7 +145,7 @@ class LrclibMusicLyricsService {
         return unavailable;
       }
       return _parseLyrics(json, duration);
-    });
+    }, retired: retired);
   }
 
   Future<List<MusicLyricsMatch>> search({
@@ -200,28 +203,42 @@ class LrclibMusicLyricsService {
     int maxResponseBytes,
     T unavailable,
     bool Function() isCurrent,
-    T Function(Object) decode,
-  ) async {
+    T Function(Object) decode, {
+    Future<void>? retired,
+  }) async {
     if (!isCurrent()) return unavailable;
+    // A replacement reader can mount before the previous one is disposed.
+    while (_active != null && retired != null) {
+      final canceled = await Future.any([
+        _active!.future.then((_) => false),
+        retired.then((_) => true),
+      ]);
+      if (canceled || !isCurrent()) return unavailable;
+    }
     final retryAfter = _retryAfter;
-    if (_loading || (retryAfter != null && _now().isBefore(retryAfter))) {
+    if (_active != null ||
+        (retryAfter != null && _now().isBefore(retryAfter))) {
       throw const MusicLyricsRequestException();
     }
-    _loading = true;
+    final active = _active = Completer<void>();
     http.Client? client;
     try {
       _validateDestination(uri);
       if (!isCurrent()) return unavailable;
       client = _createClient();
-      final payload = await _get(client, uri, maxResponseBytes, isCurrent)
-          .timeout(_timeout);
+      final request = _get(client, uri, maxResponseBytes, isCurrent);
+      final response = retired == null
+          ? request
+          : Future.any([request, retired.then((_) => null)]);
+      final payload = await response.timeout(_timeout);
       return !isCurrent() || payload == null ? unavailable : decode(payload);
     } catch (_) {
       if (!isCurrent()) return unavailable;
       throw const MusicLyricsRequestException();
     } finally {
       client?.close();
-      _loading = false;
+      _active = null;
+      active.complete();
     }
   }
 
@@ -349,23 +366,33 @@ MusicLyrics _parseLyrics(Map<String, dynamic> record, int? playbackSeconds) {
     return const MusicLyrics.instrumental(source: _source);
   }
   final synced = record['syncedLyrics'];
-  final lines = parseLrc(synced is String ? synced : null);
-  if (synced is String && lrcCanSynchronize(synced, lines, playbackSeconds)) {
-    return MusicLyrics.synced(lines, source: _source);
+  final (:lines, :wordsByCue, :displayTextByCue, :breakStarts) =
+      parseEnhancedLrc(
+    synced is String ? synced : null,
+    playbackDuration:
+        playbackSeconds == null ? null : Duration(seconds: playbackSeconds),
+  );
+  if (lrcFitsDuration(lines, playbackSeconds)) {
+    return MusicLyrics.synced(lines,
+        source: _source,
+        wordsByCue: wordsByCue,
+        displayTextByCue: displayTextByCue,
+        breakStarts: breakStarts);
   }
   final plain = record['plainLyrics'];
   final text = cleanLyricsText(plain is String ? plain : null);
   if (text.isNotEmpty) return MusicLyrics.plain(text, source: _source);
-  if (lines.isEmpty) return const MusicLyrics.unavailable();
+  final fallback = lines.isEmpty && synced is String ? parseLrc(synced) : lines;
+  if (fallback.isEmpty) return const MusicLyrics.unavailable();
   // Multiple timestamps on one LRC line can repeat a long string thousands
   // of times. Keep all the words while avoiding a large joined allocation.
-  var size = lines.length - 1;
-  for (final line in lines) {
+  var size = fallback.length - 1;
+  for (final line in fallback) {
     size += line.text.length;
     if (size > maxLyricsCharacters) {
-      return MusicLyrics.plainCues(lines, source: _source);
+      return MusicLyrics.plainCues(fallback, source: _source);
     }
   }
-  return MusicLyrics.plain(lines.map((line) => line.text).join('\n'),
+  return MusicLyrics.plain(fallback.map((line) => line.text).join('\n'),
       source: _source);
 }

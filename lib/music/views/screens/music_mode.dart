@@ -14,6 +14,8 @@ import '../../../utils.dart';
 import '../../../utils/motion.dart';
 import '../../models/music_layout.dart';
 import '../components/music_screen_privacy.dart';
+import '../../services/local_music_library.dart';
+import '../components/local_music_locations.dart';
 import 'music.dart';
 import 'music_discovery.dart';
 import 'music_library.dart';
@@ -50,6 +52,64 @@ class MainMusicTab extends StatelessWidget {
   }
 }
 
+@RoutePage()
+class MusicShortcutScreen extends StatefulWidget {
+  const MusicShortcutScreen(
+      {super.key, required this.destination, this.canStartShuffle});
+
+  final MusicDestination destination;
+  final bool Function()? canStartShuffle;
+
+  @override
+  State<MusicShortcutScreen> createState() => _MusicShortcutScreenState();
+}
+
+class _MusicShortcutScreenState extends State<MusicShortcutScreen> {
+  @override
+  void initState() {
+    super.initState();
+    if (widget.canStartShuffle != null) {
+      WidgetsBinding.instance
+          .addPostFrameCallback((_) => unawaited(_shuffleLocalMusic()));
+    }
+  }
+
+  Future<void> _shuffleLocalMusic() async {
+    if (!mounted) return;
+    final canStartShuffle = widget.canStartShuffle;
+    if (canStartShuffle == null || !canStartShuffle()) return;
+    final route = ModalRoute.of(context);
+    final library = LocalMusicLibrary.instance;
+    await library.loadForShuffle();
+    if (!mounted || !canStartShuffle() || route?.isCurrent == false) return;
+    final locals = AppLocalizations.of(context)!;
+    final tracks = library.visibleTracks;
+    if (tracks.isEmpty) {
+      final message = localMusicSourceStatus(library, locals) ??
+          (library.enabled
+              ? locals.localMusicNoVisibleFiles
+              : locals.localMusicChooseFolder);
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(message)));
+      return;
+    }
+    final selection = library.selectionId;
+    await context.read<PlayerCubit>().shuffleLocalMusic(tracks,
+        queueTitle: locals.onDevice,
+        isCurrent: () =>
+            mounted &&
+            canStartShuffle() &&
+            route?.isCurrent != false &&
+            library.acceptsSessionSelection(selection));
+  }
+
+  @override
+  Widget build(BuildContext context) => MusicModeScreen(
+        appBar: AppBar(title: Text(AppLocalizations.of(context)!.music)),
+        initialDestination: widget.destination,
+      );
+}
+
 class MusicModeScreen extends StatefulWidget {
   static void openSearch(BuildContext context) =>
       context.findAncestorStateOfType<_MusicModeScreenState>()?._openSearch();
@@ -58,6 +118,7 @@ class MusicModeScreen extends StatefulWidget {
   final Widget? mainNavigationBar;
   final Widget? mainNavigationRail;
   final bool inMainPager;
+  final MusicDestination initialDestination;
 
   const MusicModeScreen({
     super.key,
@@ -65,6 +126,7 @@ class MusicModeScreen extends StatefulWidget {
     this.mainNavigationBar,
     this.mainNavigationRail,
     this.inMainPager = false,
+    this.initialDestination = MusicDestination.home,
   });
 
   @override
@@ -80,15 +142,21 @@ class _MusicModeScreenState extends State<MusicModeScreen> {
     for (final destination in MusicDestination.values)
       destination: GlobalKey<_RetainedMusicPageState>(),
   };
-  MusicDestination _page = MusicDestination.home;
+  late MusicDestination _page;
   Object? _pendingSearchFocus;
 
   @override
   void initState() {
     super.initState();
+    _page = widget.initialDestination;
     _order = context.read<SettingsCubit>().state.musicLayout.destinations;
     _pages =
         PageController(initialPage: _order.indexOf(_page), keepPage: false);
+    if (_page == MusicDestination.search) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _pages.positions.length == 1) _openSearch();
+      });
+    }
   }
 
   void _applyOrder(List<MusicDestination> order) {

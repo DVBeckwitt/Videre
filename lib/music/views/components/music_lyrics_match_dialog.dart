@@ -2,6 +2,7 @@ import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/music/models/music_lyrics.dart';
 import 'package:clipious/music/models/music_lyrics_match.dart';
 import 'package:clipious/music/services/lrc_lyrics.dart';
+import 'package:clipious/music/services/music_timed_lyrics_draft.dart';
 import 'package:clipious/utils.dart';
 import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:flutter/material.dart';
@@ -116,8 +117,8 @@ class _MusicLyricsMatchDialogState extends State<MusicLyricsMatchDialog> {
   }
 
   void _edit(MusicLyrics lyrics) {
-    final text = _editableText(lyrics);
-    if (text == null) {
+    final text = musicTimedLyricsDraftFrom(lyrics, includeWordTiming: false);
+    if (text.isEmpty) {
       setState(
           () => _error = AppLocalizations.of(context)!.musicLyricsEditTooLong);
       return;
@@ -137,13 +138,21 @@ class _MusicLyricsMatchDialogState extends State<MusicLyricsMatchDialog> {
       return;
     }
     if (original.kind == MusicLyricsKind.synced) {
-      final cues = parseLrc(text);
-      if (!lrcCanSynchronize(text, cues, widget.durationSeconds)) {
+      final seconds = widget.durationSeconds;
+      final (:lines, :wordsByCue, :displayTextByCue, :breakStarts) =
+          parseEnhancedLrc(_draft.text,
+              playbackDuration:
+                  seconds == null ? null : Duration(seconds: seconds));
+      if (!lrcFitsDuration(lines, seconds)) {
         setState(() => _error = locals.musicLyricsEditInvalidTiming);
         return;
       }
       _save(MusicLyricsCorrection(
-          MusicLyrics.synced(cues, source: original.source),
+          MusicLyrics.synced(lines,
+              source: original.source,
+              wordsByCue: wordsByCue,
+              displayTextByCue: displayTextByCue,
+              breakStarts: breakStarts),
           edited: true));
     } else {
       _save(MusicLyricsCorrection(
@@ -409,23 +418,4 @@ String _previewText(MusicLyrics lyrics) {
   final excerpt = lines.take(16).join('\n');
   if (excerpt.length > 2400) return '${excerpt.substring(0, 2400)}…';
   return lines.length > 16 ? '$excerpt\n…' : excerpt;
-}
-
-String? _editableText(MusicLyrics lyrics) {
-  if (lyrics.text case final text?) return text;
-  final draft = StringBuffer();
-  final timed = lyrics.kind == MusicLyricsKind.synced;
-  for (final cue in lyrics.cues) {
-    if (draft.isNotEmpty) draft.write('\n');
-    if (timed) {
-      final minutes = cue.start.inMinutes.toString().padLeft(2, '0');
-      final seconds = (cue.start.inSeconds % 60).toString().padLeft(2, '0');
-      final millis =
-          (cue.start.inMilliseconds % 1000).toString().padLeft(3, '0');
-      draft.write('[$minutes:$seconds.$millis]');
-    }
-    draft.write(cue.text);
-    if (draft.length > maxLyricsCharacters) return null;
-  }
-  return draft.toString();
 }

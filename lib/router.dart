@@ -6,6 +6,7 @@ import 'package:clipious/app/views/tv/screens/tv_home.dart';
 import 'package:clipious/channels/views/screens/info_tab.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/music/models/music_artist.dart';
+import 'package:clipious/music/models/music_card_origin.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/player/views/screens/video_queue.dart';
 import 'package:clipious/player/views/tv/screens/tv_player_view.dart';
@@ -86,6 +87,7 @@ import 'home/views/screens/trending_tab.dart';
 import 'main.dart';
 import 'music/views/screens/music.dart';
 import 'music/views/screens/music_mode.dart';
+import 'music/models/music_layout.dart';
 
 part 'router.gr.dart';
 
@@ -198,6 +200,7 @@ class AppRouter extends RootStackRouter {
                 AutoRoute(page: DownloadManagerRoute.page),
                 AutoRoute(page: VideoQueueRoute.page),
                 AutoRoute(page: MusicRoute.page),
+                AutoRoute(page: MusicShortcutRoute.page),
                 AutoRoute(page: NavigationSectionRoute.page),
                 AutoRoute(page: PlaylistLibraryRoute.page),
                 AutoRoute(page: SearchRoute.page, path: searchPath, children: [

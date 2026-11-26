@@ -6,6 +6,8 @@ import 'package:audio_session/audio_session.dart';
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
+import 'package:clipious/media_handler.dart';
+import 'package:clipious/music/services/android_music_output.dart';
 import 'package:clipious/network/network_proxy.dart';
 import 'package:clipious/player/models/media_command.dart';
 import 'package:clipious/player/models/media_event.dart';
@@ -124,6 +126,107 @@ void main() {
 
   Future<Video?> refresh(Video video, {bool Function()? current}) =>
       player.refreshCurrentPlayback(video, isCurrent: current ?? () => true);
+
+  void mountMusic() {
+    final song = original.copyWith(
+        musicMetadata: const MusicMetadata(title: 'Song', artist: 'Artist'));
+    player.seed(player.state
+        .copyWith(videos: [song], currentlyPlaying: song, isAudio: true));
+    player.setEvent(
+        const MediaEvent(state: MediaState.playing, type: MediaEventType.play));
+  }
+
+  for (final removalFirst in [false, true]) {
+    test(
+        'wired insertion resumes a Music unplug pause once '
+        '(removal first: $removalFirst)', () async {
+      await settings.setMusicWiredHeadsetAutoplay(true);
+      mountMusic();
+      player.onWiredHeadsetInserted();
+      expect(player.state.mediaCommand, isNull);
+
+      if (removalFirst) player.onWiredHeadsetRemoved();
+      player.pauseForAudioOutputDisconnect();
+      if (!removalFirst) player.onWiredHeadsetRemoved();
+      expect(player.state.mediaCommand!.type, MediaCommandType.pause);
+      expect(player.requestedPlaying, isFalse);
+
+      player.onWiredHeadsetInserted();
+      final play = player.state.mediaCommand;
+      expect(play!.type, MediaCommandType.play);
+      expect(player.requestedPlaying, isTrue);
+
+      player.onWiredHeadsetInserted();
+      expect(player.state.mediaCommand, same(play));
+    });
+  }
+
+  test('a noisy pause without wired removal cannot arm a wired insertion',
+      () async {
+    await settings.setMusicWiredHeadsetAutoplay(true);
+    mountMusic();
+    // For example, disconnecting Bluetooth also sends becoming-noisy.
+    player.pauseForAudioOutputDisconnect();
+    player.onWiredHeadsetInserted();
+    expect(player.state.mediaCommand!.type, MediaCommandType.pause);
+    expect(player.requestedPlaying, isFalse);
+  });
+
+  for (final reason in [
+    'disabled',
+    'disabled during the disconnect pause',
+    'non-Music audio',
+    'already paused',
+    'explicit Pause',
+    'Stop',
+    'focus loss',
+    'permanent focus loss',
+    'profile switch',
+    'new occurrence',
+  ]) {
+    test('wired insertion respects $reason', () async {
+      if (reason != 'disabled') {
+        await settings.setMusicWiredHeadsetAutoplay(true);
+      }
+      if (reason != 'non-Music audio') {
+        mountMusic();
+      } else {
+        player.seed(player.state.copyWith(
+            currentlyPlaying: original.copyWith(queueEntryId: 'watch-audio'),
+            isAudio: true));
+      }
+      if (reason == 'already paused') player.pause();
+      player.pauseForAudioOutputDisconnect();
+      player.onWiredHeadsetRemoved();
+      expect(player.state.mediaCommand!.type, MediaCommandType.pause);
+      switch (reason) {
+        case 'disabled during the disconnect pause':
+          await settings.setMusicWiredHeadsetAutoplay(false);
+        case 'explicit Pause':
+          player.pause();
+        case 'Stop':
+          player.hide();
+        case 'focus loss':
+          player.handleAudioInterruption(
+              AudioInterruptionEvent(true, AudioInterruptionType.pause));
+          player.handleAudioInterruption(
+              AudioInterruptionEvent(false, AudioInterruptionType.pause));
+        case 'permanent focus loss':
+          player.handleAudioInterruption(
+              AudioInterruptionEvent(true, AudioInterruptionType.unknown));
+        case 'profile switch':
+          await player.prepareForProfileSwitch();
+        case 'new occurrence':
+          final song = player.state.currentlyPlaying!;
+          player.seed(player.state.copyWith(
+              currentlyPlaying: song.copyWith(queueEntryId: 'next-song')));
+      }
+      final command = player.state.mediaCommand;
+      player.onWiredHeadsetInserted();
+      expect(player.state.mediaCommand, same(command));
+      expect(player.requestedPlaying, isFalse);
+    });
+  }
 
   test('standard Invidious receives a private, nonserialized source snapshot',
       () {
@@ -320,6 +423,200 @@ void main() {
     expect(player.shouldStartPlayback, isFalse);
   });
 
+  group('Bluetooth reconnect', () {
+    const selected = MusicBluetoothOutputEvent.selected('headset');
+    const disconnected = MusicBluetoothOutputEvent.disconnected('headset');
+    const otherSelected = MusicBluetoothOutputEvent.selected('other');
+    const position = Duration(seconds: 42);
+
+    Video song() => original.copyWith(
+        musicMetadata: const MusicMetadata(title: 'Song', artist: 'Artist'));
+
+    Future<void> start({bool enable = true, bool music = true}) async {
+      if (enable) await settings.setMusicResumeOnBluetoothReconnect(true);
+      await player.playVideo([music ? song() : original],
+          audio: true, fromMusic: music, startAt: position);
+      player.setEvent(const MediaEvent(
+          state: MediaState.playing, type: MediaEventType.play));
+      expect(player.state.isPlaying, isTrue);
+      expect(player.isMusicAudio, music);
+    }
+
+    test('leaves the existing noisy pause in place by default', () async {
+      await start(enable: false);
+      player.handleBluetoothOutput(selected);
+      player.handleBecomingNoisy();
+      final paused = player.state.mediaCommand;
+      player.handleBluetoothOutput(disconnected);
+      player.handleBluetoothOutput(selected);
+
+      expect(paused?.type, MediaCommandType.pause);
+      expect(player.state.mediaCommand, same(paused));
+      expect(player.shouldStartPlayback, isFalse);
+    });
+
+    for (final noisyFirst in [false, true]) {
+      test(
+          'resumes only once after a matching reconnect, noisy first=$noisyFirst',
+          () async {
+        await start();
+        final occurrence = player.state.currentQueueId;
+        player.handleBluetoothOutput(selected);
+        if (noisyFirst) {
+          // The decoder also listens for noisy events and can report first.
+          player.setEvent(const MediaEvent(
+              state: MediaState.playing, type: MediaEventType.pause));
+          player.handleBecomingNoisy();
+        }
+        player.handleBluetoothOutput(disconnected);
+        final paused = player.state.mediaCommand;
+        expect(paused?.type, MediaCommandType.pause);
+        expect(player.shouldStartPlayback, isFalse);
+
+        player.handleBecomingNoisy();
+        player.handleBluetoothOutput(disconnected);
+        player.handleBluetoothOutput(otherSelected);
+        expect(player.state.mediaCommand, same(paused));
+
+        player.handleBluetoothOutput(selected);
+        final resumed = player.state.mediaCommand;
+        expect(resumed?.type, MediaCommandType.play);
+        expect(player.shouldStartPlayback, isTrue);
+        expect(player.state.position, position);
+        expect(player.state.currentQueueId, occurrence);
+        player.handleBluetoothOutput(selected);
+        expect(player.state.mediaCommand, same(resumed));
+      });
+    }
+
+    test('requires a disconnection of the selected Bluetooth output', () async {
+      await start();
+      player.handleBluetoothOutput(selected);
+      final playing = player.state.mediaCommand;
+      player.handleBluetoothOutput(
+          const MusicBluetoothOutputEvent.disconnected('other'));
+      expect(player.state.mediaCommand, same(playing));
+
+      player.handleBecomingNoisy();
+      final paused = player.state.mediaCommand;
+      player.handleBluetoothOutput(
+          const MusicBluetoothOutputEvent.selected(null));
+      player.handleBluetoothOutput(selected);
+
+      expect(paused?.type, MediaCommandType.pause);
+      expect(player.state.mediaCommand, same(paused));
+    });
+
+    test('ignores removal of a different port on the same headset', () async {
+      await start();
+      player.handleBluetoothOutput(
+          const MusicBluetoothOutputEvent.selected('headset', portId: 1));
+      final playing = player.state.mediaCommand;
+      player.handleBluetoothOutput(
+          const MusicBluetoothOutputEvent.disconnected('headset', portId: 2));
+      expect(player.state.mediaCommand, same(playing));
+
+      player.handleBluetoothOutput(
+          const MusicBluetoothOutputEvent.disconnected('headset', portId: 1));
+      expect(player.state.mediaCommand?.type, MediaCommandType.pause);
+      player.handleBluetoothOutput(
+          const MusicBluetoothOutputEvent.selected('headset', portId: 3));
+      expect(player.state.mediaCommand?.type, MediaCommandType.play);
+    });
+
+    test('waits for temporary audio focus loss to end', () async {
+      await start();
+      player.handleBluetoothOutput(selected);
+      player.handleBluetoothOutput(disconnected);
+      final paused = player.state.mediaCommand;
+      player.handleAudioInterruption(
+          AudioInterruptionEvent(true, AudioInterruptionType.pause));
+      player.handleBluetoothOutput(selected);
+      expect(player.state.mediaCommand, same(paused));
+
+      player.handleAudioInterruption(
+          AudioInterruptionEvent(false, AudioInterruptionType.pause));
+      expect(player.state.mediaCommand?.type, MediaCommandType.play);
+    });
+
+    test('keeps a manually paused song paused on connection and reconnection',
+        () async {
+      await start();
+      player.pause();
+      final paused = player.state.mediaCommand;
+      player.handleBluetoothOutput(selected);
+      player.handleBluetoothOutput(disconnected);
+      player.handleBluetoothOutput(selected);
+
+      expect(player.state.mediaCommand, same(paused));
+      expect(player.shouldStartPlayback, isFalse);
+    });
+
+    for (final stop in [false, true]) {
+      test('intervening explicit ${stop ? 'Stop' : 'Pause'} cancels resume',
+          () async {
+        await start();
+        player.handleBluetoothOutput(selected);
+        player.handleBluetoothOutput(disconnected);
+        if (stop) {
+          player.hide();
+        } else {
+          player.pause();
+        }
+        final userCommand = player.state.mediaCommand;
+        player.handleBluetoothOutput(selected);
+
+        expect(userCommand?.type, MediaCommandType.pause);
+        expect(player.state.mediaCommand, same(userCommand));
+        expect(player.shouldStartPlayback, isFalse);
+      });
+    }
+
+    test('a replacement session cannot inherit resume for the same occurrence',
+        () async {
+      await start();
+      final occurrence = player.state.currentQueueId;
+      player.handleBluetoothOutput(selected);
+      player.handleBluetoothOutput(disconnected);
+      await player
+          .playVideo([song()], audio: true, fromMusic: true, playing: false);
+      expect(player.state.currentQueueId, occurrence);
+      final replacement = player.state.mediaCommand;
+      player.handleBluetoothOutput(selected);
+
+      expect(player.state.mediaCommand, same(replacement));
+      expect(player.shouldStartPlayback, isFalse);
+    });
+
+    test('retiring playback for a new profile discards the old resume',
+        () async {
+      await start();
+      final other = await database.createProfile('Other listener');
+      player.handleBluetoothOutput(selected);
+      player.handleBluetoothOutput(disconnected);
+      await player.prepareForProfileSwitch();
+      await database.useProfile(other.id);
+      await player.reloadForProfile();
+      final replacement = player.state.mediaCommand;
+      player.handleBluetoothOutput(selected);
+
+      expect(player.state.mediaCommand, same(replacement));
+      expect(player.state.hasVideo, isFalse);
+    });
+
+    test('does not resume audio from a video', () async {
+      await start(music: false);
+      player.handleBluetoothOutput(selected);
+      player.handleBecomingNoisy();
+      final paused = player.state.mediaCommand;
+      player.handleBluetoothOutput(disconnected);
+      player.handleBluetoothOutput(selected);
+
+      expect(paused?.type, MediaCommandType.pause);
+      expect(player.state.mediaCommand, same(paused));
+    });
+  });
+
   test('Music can require explicit Play after a temporary focus loss',
       () async {
     await settings.setMusicResumeAfterAudioFocusLoss(false);
@@ -371,14 +668,157 @@ void main() {
       () async {
     await settings.setMusicResumeAfterAudioFocusLoss(false);
     await settings.setMusicPauseAtZeroVolume(true);
+    await settings.setMusicResumeOnVolumeRise(true);
     player.switchAudio(true);
     player.handleMediaVolumeChange(0.5);
     player.handleMediaVolumeChange(0);
+    player.handleMediaVolumeChange(0.5);
+    expect(player.state.mediaCommand?.type, isNot(MediaCommandType.play));
     player.handleAudioInterruption(
         AudioInterruptionEvent(true, AudioInterruptionType.pause));
     player.handleAudioInterruption(
         AudioInterruptionEvent(false, AudioInterruptionType.pause));
     expect(player.shouldStartPlayback, isTrue);
+  });
+
+  group('Music volume-rise resume', () {
+    late Video music;
+
+    setUp(() async {
+      await settings.setMusicPauseAtZeroVolume(true);
+      await settings.setMusicResumeOnVolumeRise(true);
+      music = original.copyWith(
+          musicMetadata: const MusicMetadata(title: 'Song', artist: 'Artist'));
+      player.seed(player.state
+          .copyWith(currentlyPlaying: music, videos: [music], isAudio: true));
+    });
+
+    void lowerVolumeToZero() {
+      player.handleMediaVolumeChange(0.5);
+      player.handleMediaVolumeChange(0);
+    }
+
+    test('resumes the same occurrence and playhead once after a volume pause',
+        () {
+      player.handleMediaVolumeChange(0);
+      expect(player.intendsPlayback, isTrue);
+
+      lowerVolumeToZero();
+      expect(player.state.mediaCommand!.type, MediaCommandType.pause);
+      expect(player.intendsPlayback, isFalse);
+      // Native setup can issue a late Play before acknowledging Pause.
+      player.setEvent(const MediaEvent(
+          state: MediaState.playing, type: MediaEventType.play));
+      expect(player.state.mediaCommand!.type, MediaCommandType.pause);
+      player.setEvent(const MediaEvent(
+          state: MediaState.playing, type: MediaEventType.pause));
+      player.handleMediaVolumeChange(0);
+      expect(player.intendsPlayback, isFalse);
+
+      player.handleMediaVolumeChange(0.5);
+      final resume = player.state.mediaCommand;
+      expect(resume!.type, MediaCommandType.play);
+      expect(player.shouldStartPlayback, isTrue);
+      expect(player.state.currentQueueId, 'occurrence-1');
+      expect(player.state.position, const Duration(seconds: 42));
+      player.handleMediaVolumeChange(0.75);
+      expect(player.state.mediaCommand, same(resume));
+    });
+
+    for (final command in ['already paused', 'pause again', 'stop']) {
+      test('media controls take precedence when the user chooses $command',
+          () async {
+        final handler = MediaHandler(player);
+        if (command == 'already paused') await handler.pause();
+        lowerVolumeToZero();
+        if (command == 'pause again') await handler.pause();
+        if (command == 'stop') await handler.stop();
+
+        final pause = player.state.mediaCommand;
+        expect(pause!.type, MediaCommandType.pause);
+        player.handleMediaVolumeChange(0.5);
+        expect(player.state.mediaCommand, same(pause));
+        expect(player.intendsPlayback, isFalse);
+      });
+    }
+
+    test('enabling the preference does not adopt an earlier pause', () async {
+      await settings.setMusicResumeOnVolumeRise(false);
+      lowerVolumeToZero();
+      await settings.setMusicResumeOnVolumeRise(true);
+      player.handleMediaVolumeChange(0.5);
+      expect(player.intendsPlayback, isFalse);
+    });
+
+    test('disabling pause-at-zero cancels automatic resume', () async {
+      lowerVolumeToZero();
+      await settings.setMusicPauseAtZeroVolume(false);
+      player.handleMediaVolumeChange(0.5);
+      expect(player.intendsPlayback, isFalse);
+    });
+
+    test('does not resume a replacement occurrence of the same song', () async {
+      lowerVolumeToZero();
+      await player.playVideo([music.copyWith(queueEntryId: 'occurrence-2')],
+          fromMusic: true, playing: false);
+      expect(player.state.currentQueueId, 'occurrence-2');
+      expect(player.intendsPlayback, isFalse);
+
+      player.handleMediaVolumeChange(0.5);
+      expect(player.intendsPlayback, isFalse);
+    });
+
+    test('does not resume a fresh stream for the same occurrence', () async {
+      lowerVolumeToZero();
+      final replacement = (await refresh(music))!;
+      expect(player.state.currentQueueId, 'occurrence-1');
+      expect(replacement.playbackSourceId, isNot(same(music.playbackSourceId)));
+
+      player.handleMediaVolumeChange(0.5);
+      expect(player.intendsPlayback, isFalse);
+    });
+
+    test('does not resume after an audio mode round trip', () {
+      lowerVolumeToZero();
+      player.switchAudio(false);
+      player.switchAudio(true);
+      player.handleMediaVolumeChange(0.5);
+      expect(player.intendsPlayback, isFalse);
+    });
+
+    test('does not resume after a profile switch', () async {
+      final other = await database.createProfile('Other listener');
+      lowerVolumeToZero();
+      await player.prepareForProfileSwitch();
+      await database.useProfile(other.id);
+      await player.reloadForProfile();
+      await settings.setMusicPauseAtZeroVolume(true);
+      await settings.setMusicResumeOnVolumeRise(true);
+      player.seed(player.state.copyWith(
+          currentlyPlaying: music,
+          videos: [music],
+          isAudio: true,
+          isHidden: false));
+
+      player.handleMediaVolumeChange(0.5);
+      expect(player.state.mediaCommand?.type, isNot(MediaCommandType.play));
+    });
+
+    test('does not resume after a terminal decoder error', () {
+      lowerVolumeToZero();
+      player.setEvent(const MediaEvent(state: MediaState.error));
+      player.handleMediaVolumeChange(0.5);
+      expect(player.intendsPlayback, isFalse);
+    });
+
+    test('raising volume during a focus loss leaves Music paused', () {
+      const pause = AudioInterruptionType.pause;
+      lowerVolumeToZero();
+      player.handleAudioInterruption(AudioInterruptionEvent(true, pause));
+      player.handleMediaVolumeChange(0.5);
+      player.handleAudioInterruption(AudioInterruptionEvent(false, pause));
+      expect(player.intendsPlayback, isFalse);
+    });
   });
 
   test('explicit Play while interrupted defers playback until focus returns',

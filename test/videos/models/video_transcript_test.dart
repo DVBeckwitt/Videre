@@ -321,6 +321,31 @@ void main() {
     });
   });
 
+  test('timestamped text keeps source order, headings and repeated cues', () {
+    final transcript = VideoTranscript.fromJson({
+      'transcript': {
+        'body': [
+          {
+            'type': 'heading',
+            'startMs': 3700001,
+            'endMs': 3700001,
+            'line': 'Caf\u00e9'
+          },
+          {'startMs': 3702387, 'endMs': 3703387, 'line': '&lt;bonjour&gt;'},
+          {'startMs': 1905, 'endMs': 2905, 'line': '&lt;bonjour&gt;'},
+        ]
+      },
+    }, preserveRepeatedLines: true);
+
+    expect(transcript.toText(), 'Caf\u00e9\n\n<bonjour>');
+    expect(
+      transcript.toText(withTimestamps: true),
+      '[01:01:40.001] Caf\u00e9\n\n'
+      '[01:01:42.387] <bonjour>\n'
+      '[00:00:01.905] <bonjour>',
+    );
+  });
+
   group('plainText', () {
     for (final source in ['structured', 'WebVTT']) {
       test('$source copy preserves literal markup and nested entities', () {

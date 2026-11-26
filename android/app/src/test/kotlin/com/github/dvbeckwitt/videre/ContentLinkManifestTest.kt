@@ -23,7 +23,8 @@ class ContentLinkManifestTest {
 
     @Test fun androidDefaultsCoverEveryPathOnExactYouTubeDomains() {
         val filters = mainActivity().elements("intent-filter").filter { filter ->
-            filter.elements("action").any { it.android("name") == "android.intent.action.VIEW" }
+            filter.elements("action").any { it.android("name") == "android.intent.action.VIEW" } &&
+                filter.elements("category").any { it.android("name") == "android.intent.category.BROWSABLE" }
         }
         assertEquals(1, filters.size)
         val hosts = filters.flatMap { filter ->
@@ -49,6 +50,18 @@ class ContentLinkManifestTest {
         assertEquals(hosts.size, hosts.toSet().size)
     }
 
+    @Test fun openWithVidereAcceptsOnlyContentAudio() {
+        val audio = mainActivity().elements("intent-filter").single { filter ->
+            filter.elements("action").any { it.android("name") == "android.intent.action.VIEW" } &&
+                filter.elements("category").none { it.android("name") == "android.intent.category.BROWSABLE" }
+        }
+        assertEquals(listOf("android.intent.action.VIEW"), audio.elements("action").map { it.android("name") })
+        assertEquals(listOf("android.intent.category.DEFAULT"), audio.elements("category").map { it.android("name") })
+        val data = audio.elements("data").single()
+        assertEquals("content", data.android("scheme"))
+        assertEquals("audio/*", data.android("mimeType"))
+    }
+
     @Test fun coldAndWarmLinksUseExportedMainActivityWithoutFlutterAutoRouting() {
         val activity = mainActivity()
         assertEquals("true", activity.android("exported"))
@@ -65,5 +78,41 @@ class ContentLinkManifestTest {
         assertEquals(listOf("text/*"), share.elements("data").map { it.android("mimeType") })
         assertEquals(listOf("android.intent.category.DEFAULT"),
             share.elements("category").map { it.android("name") })
+    }
+
+    @Test fun musicShortcutsUseAPrivateTaskAndOnlyAllowlistedActions() {
+        val factory = DocumentBuilderFactory.newInstance().apply { isNamespaceAware = true }
+        val builder = factory.newDocumentBuilder()
+        val manifest = builder.parse(File("src/main/AndroidManifest.xml")).documentElement
+        val trampoline = manifest.elements("activity").single {
+            it.android("name") == ".MusicShortcutActivity"
+        }
+        assertEquals("false", trampoline.android("exported"))
+        assertTrue(trampoline.hasAttributeNS(android, "taskAffinity"))
+        assertEquals("", trampoline.android("taskAffinity"))
+        assertEquals("@xml/music_shortcuts", mainActivity().elements("meta-data").single {
+            it.android("name") == "android.app.shortcuts"
+        }.android("resource"))
+
+        val shortcuts = builder.parse(File("src/main/res/xml/music_shortcuts.xml"))
+            .documentElement.elements("shortcut")
+        assertEquals(listOf("music_home", "music_search", "music_library", "music_shuffle_local"),
+            shortcuts.map { it.android("shortcutId") })
+        for (shortcut in shortcuts) {
+            val intent = shortcut.elements("intent").single()
+            val action = "com.github.dvbeckwitt.videre.action.${shortcut.android("shortcutId").uppercase()}"
+            assertEquals(action, intent.android("action"))
+            assertEquals("com.github.dvbeckwitt.videre", intent.android("targetPackage"))
+            assertEquals("com.github.dvbeckwitt.videre.MusicShortcutActivity", intent.android("targetClass"))
+            assertEquals(action, musicShortcutAction(action))
+            if (action != MUSIC_SHUFFLE_LOCAL) {
+                assertEquals(IncomingLinkPayload(action, false),
+                    incomingLinkPayload(action, null, null, null))
+            }
+        }
+        assertTrue(builder.parse(File("src/main/res/xml-television/music_shortcuts.xml"))
+            .documentElement.elements("shortcut").isEmpty())
+        assertNull(incomingLinkPayload(
+            "com.github.dvbeckwitt.videre.action.MUSIC_UNKNOWN", null, null, null))
     }
 }

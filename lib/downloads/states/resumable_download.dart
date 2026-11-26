@@ -2,6 +2,11 @@ import 'dart:io';
 
 import 'package:dio/dio.dart';
 
+class DownloadSizeLimitExceeded extends FormatException {
+  const DownloadSizeLimitExceeded()
+      : super('The download exceeds the allowed size');
+}
+
 /// Keeps a partial file only while it still belongs to the same media stream.
 Future<void> downloadResumable(Dio dio, String url, String path,
     {required CancelToken cancelToken,
@@ -15,7 +20,7 @@ Future<void> downloadResumable(Dio dio, String url, String path,
   if (maximumBytes != null &&
       (maximumBytes <= 0 ||
           (expectedSize != null && expectedSize > maximumBytes))) {
-    throw const FormatException('The download exceeds the allowed size');
+    throw const DownloadSizeLimitExceeded();
   }
   final file = File(path);
   final marker = File('$path.identity');
@@ -115,7 +120,7 @@ Future<void> downloadResumable(Dio dio, String url, String path,
 
     if (maximumBytes != null && total > maximumBytes) {
       await body.stream.listen(null).cancel();
-      throw const FormatException('The download exceeds the allowed size');
+      throw const DownloadSizeLimitExceeded();
     }
 
     final output =
@@ -127,7 +132,7 @@ Future<void> downloadResumable(Dio dio, String url, String path,
         if (cancelToken.isCancelled) throw cancelToken.cancelError!;
         if (maximumBytes != null && count + chunk.length > maximumBytes) {
           await output.truncate(0);
-          throw const FormatException('The download exceeds the allowed size');
+          throw const DownloadSizeLimitExceeded();
         }
         if ((responseEnd != null && count + chunk.length > responseEnd) ||
             (total > 0 && count + chunk.length > total)) {

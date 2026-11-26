@@ -4,11 +4,50 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../../app/states/app.dart';
+import '../../../globals.dart';
 import '../../../l10n/generated/app_localizations.dart';
 import '../../../playlists/models/playlist_reference.dart';
 import '../../../settings/states/settings.dart';
 import '../../models/music_collection_order.dart';
+import '../../services/music_listening_history.dart';
 import 'music_library_actions.dart';
+
+class MusicPlaylistOrderBuilder extends StatelessWidget {
+  const MusicPlaylistOrderBuilder({
+    super.key,
+    required this.reference,
+    required this.builder,
+  });
+
+  final PlaylistReference reference;
+  final Widget Function(BuildContext context, MusicCollectionOrder order,
+      MusicPlaylistSortValue sortValue) builder;
+
+  static final _noChanges = Listenable.merge(const []);
+
+  @override
+  Widget build(BuildContext context) {
+    final order = MusicCollectionSortMenu.playlistOrder(context, reference);
+    final history = order.field == MusicCollectionSortField.listeningTime &&
+            db.profileId == reference.profileId
+        ? MusicListeningHistory.forProfile(db, reference.profileId)
+        : null;
+    return ListenableBuilder(
+      listenable: history?.changes ?? _noChanges,
+      builder: (context, _) {
+        final totals = history != null && db.profileId == reference.profileId
+            ? history.listenedTimeByTrack()
+            : const <String, Duration>{};
+        return builder(
+            context,
+            order,
+            (song, field) => field == MusicCollectionSortField.listeningTime
+                ? totals[musicListeningTrackId(song.videoId)]
+                : musicPlaylistTrackSortValue(song, field));
+      },
+    );
+  }
+}
 
 class MusicCollectionSortMenu extends StatelessWidget {
   const MusicCollectionSortMenu({
@@ -17,7 +56,7 @@ class MusicCollectionSortMenu extends StatelessWidget {
     required this.order,
     required this.compact,
     required this.isCurrent,
-    this.fields = MusicCollectionSortField.values,
+    this.fields = standardFields,
     this.savedOrder = false,
     this.onChanged,
   });
@@ -34,6 +73,7 @@ class MusicCollectionSortMenu extends StatelessWidget {
           order: order,
           compact: compact,
           isCurrent: isCurrent,
+          fields: MusicCollectionSortField.values,
           onChanged: onChanged,
         );
 
@@ -44,6 +84,14 @@ class MusicCollectionSortMenu extends StatelessWidget {
   final List<MusicCollectionSortField> fields;
   final bool savedOrder;
   final VoidCallback? onChanged;
+
+  static const standardFields = [
+    MusicCollectionSortField.source,
+    MusicCollectionSortField.title,
+    MusicCollectionSortField.artist,
+    MusicCollectionSortField.album,
+    MusicCollectionSortField.duration,
+  ];
 
   static String playlistSettingName(PlaylistReference reference) =>
       'music-collection-playlist-order:${reference.key}';
@@ -71,6 +119,8 @@ class MusicCollectionSortMenu extends StatelessWidget {
           MusicCollectionSortField.artist => locals.localMusicSortArtist,
           MusicCollectionSortField.album => locals.localMusicSortAlbum,
           MusicCollectionSortField.duration => locals.searchDuration,
+          MusicCollectionSortField.listeningTime =>
+            locals.musicListeningTimeOrder,
         };
     return PopupMenuButton<Future<void> Function()>(
       enabled: settings != null,
@@ -104,7 +154,12 @@ class MusicCollectionSortMenu extends StatelessWidget {
           for (final field in fields)
             CheckedPopupMenuItem(
               checked: field == order.field,
-              value: () => change(field: field),
+              value: () => change(
+                  field: field,
+                  descending: field == MusicCollectionSortField.listeningTime &&
+                          field != order.field
+                      ? true
+                      : null),
               child: Text(label(field)),
             ),
           const PopupMenuDivider(),

@@ -12,6 +12,7 @@ import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/db/person_profile.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/models/db/video_filter.dart';
+import 'package:clipious/subscription_management/models/subscription_group.dart';
 import 'package:clipious/utils/interfaces/db.dart';
 import 'package:clipious/videos/models/db/dearrow_cache.dart';
 import 'package:clipious/videos/models/db/history_video_cache.dart';
@@ -41,11 +42,13 @@ const maxLogs = 1000;
 const singleId = 1;
 const _musicHistoryRecordingPaused = 'music-history-recording-paused';
 const _musicListeningEvents = 'musicListeningEvents';
+const _subscriptionGroups = 'subscriptionGroups';
 
 class _AbandonedAccountSetup implements Exception {}
 
 class SembastSqfDb extends IDbClient {
   static const _playlistOnlyField = 'playlistOnly';
+  static const _authoredMusicLyrics = 'authoredMusicLyrics';
 
   final log = Logger('SembastSqfLDB');
   final Database _database;
@@ -78,6 +81,8 @@ class SembastSqfDb extends IDbClient {
       stringMapStoreFactory.store(_storeName('serviers'));
   StoreRef<String, Map<String, Object?>> get _companionDecisions =>
       stringMapStoreFactory.store(_storeName('mediaCompanionDecisions'));
+  StoreRef<String, Map<String, Object?>> get authoredMusicLyricsStore =>
+      stringMapStoreFactory.store(_storeName(_authoredMusicLyrics));
   StoreRef<String, Map<String, Object?>> get videoFiltersStore =>
       stringMapStoreFactory.store(_storeName('videoFilters'));
   StoreRef<String, Map<String, Object?>> get settingsStore =>
@@ -95,6 +100,8 @@ class SembastSqfDb extends IDbClient {
       stringMapStoreFactory.store(_storeName('progress'));
   StoreRef<String, Map<String, Object?>> get offlineSubscriptions =>
       stringMapStoreFactory.store(_storeName('offline_subscriptions'));
+  StoreRef<String, Map<String, Object?>> get _subscriptionGroupsStore =>
+      stringMapStoreFactory.store(_storeName(_subscriptionGroups));
 
   SembastSqfDb(this._database)
       : _fixedProfileId = null,
@@ -315,6 +322,7 @@ class SembastSqfDb extends IDbClient {
           'searchHistory',
           'serviers',
           'mediaCompanionDecisions',
+          _authoredMusicLyrics,
           'videoFilters',
           'historyVideoCache',
           for (final origin in PlaybackHistoryOrigin.values)
@@ -322,6 +330,7 @@ class SembastSqfDb extends IDbClient {
           _musicListeningEvents,
           'progress',
           'offline_subscriptions',
+          _subscriptionGroups,
         ]) {
           await stringMapStoreFactory.store(storeName(name)).delete(txn);
         }
@@ -584,7 +593,10 @@ class SembastSqfDb extends IDbClient {
     final personal = settingsStore
         .findSync(db)
         .map((e) => SettingsValue.fromJson(e.value))
-        .where((setting) => !_deviceSettings.contains(setting.name));
+        // Watch notes have a direct lookup and are private library data.
+        .where((setting) =>
+            !_deviceSettings.contains(setting.name) &&
+            !setting.name.startsWith(watchNotesSettingPrefix));
     final device = _globalSettingsStore
         .findSync(db)
         .map((e) => SettingsValue.fromJson(e.value))
@@ -787,7 +799,8 @@ class SembastSqfDb extends IDbClient {
   @override
   PlaybackHistoryWrite beginPlaybackHistory(
           PlaybackHistoryOrigin origin, String videoId) =>
-      _newHistoryWrite(origin, videoId, (owner, txn, entry, _, current) async {
+      _newHistoryWrite(origin, videoId,
+          (owner, txn, entry, _, __, current) async {
         if (origin == PlaybackHistoryOrigin.music &&
             await owner._musicRecordingPausedIn(txn)) {
           return false;
@@ -804,16 +817,28 @@ class SembastSqfDb extends IDbClient {
       PlaybackHistoryOrigin origin,
       String videoId,
       Future<bool> Function(SembastSqfDb, Transaction, HistoryVideoCache,
-              PlaylistReference?, bool Function())
+              PlaylistReference?, bool, bool Function())
           write,
-      {bool notify = false}) {
+      {bool notify = false,
+      Future<bool> Function(
+              SembastSqfDb, Transaction, Duration, bool Function())?
+          writeListeningTime}) {
     final owner = forProfile(profileId);
     final pending = PlaybackHistoryWrite(owner.profileId, origin, videoId,
-        (entry, playlist, current) async {
-      final stored = await owner._writeProfile(
-          (owner, txn) => write(owner, txn, entry, playlist, current));
+        (entry, playlist, trackElapsed, current) async {
+      final stored = await owner._writeProfile((owner, txn) =>
+          write(owner, txn, entry, playlist, trackElapsed, current));
       if (notify && stored) playbackHistoryRevision.value++;
-    }, onFinish: _pendingHistory.remove);
+      return stored;
+    },
+        storeListeningTime: writeListeningTime == null
+            ? null
+            : (elapsed, current) async {
+                final stored = await owner._writeProfile((owner, txn) =>
+                    writeListeningTime(owner, txn, elapsed, current));
+                if (stored) playbackHistoryRevision.value++;
+              },
+        onFinish: _pendingHistory.remove);
     _pendingHistory.add(pending);
     return pending;
   }
@@ -847,24 +872,45 @@ class SembastSqfDb extends IDbClient {
   @override
   PlaybackHistoryWrite? beginMusicListening(String trackId) {
     if (musicHistoryRecordingPaused) return null;
-    return _newHistoryWrite(PlaybackHistoryOrigin.music, trackId,
-        (owner, txn, entry, playlist, current) async {
-      if (await owner._musicRecordingPausedIn(txn) || !current()) return false;
-      final event = MusicListeningEvent(
-        id: const Uuid().v4(),
-        entry: entry,
-        source: trackId.startsWith('device:')
-            ? MusicListeningSource.device
-            : entry.playedFromDownload
-                ? MusicListeningSource.download
-                : MusicListeningSource.catalog,
-        playlist: playlist?.profileId == owner.profileId ? playlist : null,
-      );
-      await owner._musicListeningStore
-          .record(event.id)
-          .put(txn, event.toJson());
-      return true;
-    }, notify: true);
+    final eventId = const Uuid().v4();
+    return _newHistoryWrite(
+        PlaybackHistoryOrigin.music,
+        trackId,
+        (owner, txn, entry, playlist, trackElapsed, current) async {
+          if (await owner._musicRecordingPausedIn(txn) || !current()) {
+            return false;
+          }
+          final event = MusicListeningEvent(
+            id: eventId,
+            entry: entry,
+            source: trackId.startsWith('device:')
+                ? MusicListeningSource.device
+                : entry.playedFromDownload
+                    ? MusicListeningSource.download
+                    : MusicListeningSource.catalog,
+            playlist: playlist?.profileId == owner.profileId ? playlist : null,
+            elapsed: trackElapsed ? Duration.zero : null,
+          );
+          await owner._musicListeningStore
+              .record(event.id)
+              .put(txn, event.toJson());
+          return true;
+        },
+        notify: true,
+        writeListeningTime: (owner, txn, elapsed, current) async {
+          if (!current() || await owner._musicRecordingPausedIn(txn)) {
+            return false;
+          }
+          final record = owner._musicListeningStore.record(eventId);
+          final entry = await record.get(txn);
+          final previous = entry?['elapsedMicroseconds'] as int?;
+          final microseconds = elapsed.inMicroseconds;
+          if (previous == null || previous >= microseconds || !current()) {
+            return false;
+          }
+          await record.update(txn, {'elapsedMicroseconds': microseconds});
+          return true;
+        });
   }
 
   @override
@@ -1687,4 +1733,28 @@ class SembastSqfDb extends IDbClient {
   Future<bool> isOfflineSubscribed(String channelId) {
     return offlineSubscriptions.record(channelId).exists(db);
   }
+
+  @override
+  Stream<List<SubscriptionGroup>> watchSubscriptionGroups() {
+    final owner = forProfile(profileId);
+    return owner._subscriptionGroupsStore
+        .query(
+            finder:
+                Finder(sortOrders: [SortOrder('name'), SortOrder(Field.key)]))
+        .onSnapshots(owner.db)
+        .map((records) => records
+            .map((record) =>
+                SubscriptionGroup.fromJson(record.key, record.value))
+            .toList());
+  }
+
+  @override
+  Future<void> saveSubscriptionGroup(SubscriptionGroup group) =>
+      _writeProfile((owner, txn) => owner._subscriptionGroupsStore
+          .record(group.id)
+          .put(txn, group.toJson()));
+
+  @override
+  Future<void> deleteSubscriptionGroup(String id) => _writeProfile(
+      (owner, txn) => owner._subscriptionGroupsStore.record(id).delete(txn));
 }

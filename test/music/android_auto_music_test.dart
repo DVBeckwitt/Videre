@@ -53,6 +53,7 @@ void main() {
   late _Catalog catalog;
   late AndroidAutoMusic browser;
   late List<OnDeviceMusicEntry> device;
+  late Future<List<OnDeviceMusicEntry>> Function() loadDevice;
   late List<Playlist> Function(IDbClient) playlists;
   late List<
       ({
@@ -76,6 +77,7 @@ void main() {
     session = Object();
     catalog = _Catalog();
     device = [];
+    loadDevice = () async => device;
     playlists = (_) => [];
     remotePlays = [];
     devicePlays = [];
@@ -91,7 +93,7 @@ void main() {
       )),
       playDevice: (entries, index, _, __) async =>
           devicePlays.add((entries: entries, index: index)),
-      loadDevice: () async => device,
+      loadDevice: () => loadDevice(),
       loadPlaylists: (owner) => playlists(owner),
     );
   });
@@ -158,6 +160,29 @@ void main() {
     expect(refreshed, hasLength(1));
     expect(await browser.getMediaItem(earlier.id), isNull);
   });
+
+  test(
+    'a queue addition cannot resolve on-device media from a retired scope',
+    () async {
+      device = [OnDeviceMusicEntry.device(deviceTrack)];
+      final deviceFolder = await folder('On device');
+      final row = (await browser.getChildren(deviceFolder.id)).single;
+      expect(browser.isOnDeviceSong(deviceFolder.id), isNull);
+      expect(browser.isOnDeviceSong(row.id), isTrue);
+      expect(
+        (await browser.resolveQueueSong(row.id))?.device?.deviceTrack,
+        deviceTrack,
+      );
+
+      final held = Completer<List<OnDeviceMusicEntry>>();
+      loadDevice = () => held.future;
+      final pending = browser.resolveQueueSong(row.id);
+      session = Object();
+      held.complete(device);
+      expect(await pending, isNull);
+      expect(browser.isOnDeviceSong(row.id), isNull);
+    },
+  );
 
   test('plays the selected occurrence in a local Music playlist', () async {
     await library().markLocalPlaylist('local:music');

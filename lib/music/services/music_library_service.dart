@@ -1,5 +1,9 @@
 import 'dart:convert';
 
+import 'package:clipious/music/models/local_music_artist.dart';
+import 'package:clipious/music/models/local_music_track.dart';
+import 'package:clipious/music/models/music_artist.dart';
+import 'package:clipious/music/models/music_artist_identity.dart';
 import 'package:clipious/music/models/music_library_entry.dart';
 import 'package:clipious/playlists/models/playlist.dart';
 import 'package:clipious/settings/models/db/settings.dart';
@@ -10,6 +14,7 @@ import 'package:flutter/foundation.dart';
 
 const musicLibrarySettingName = 'music-library-v1';
 const musicPlaylistPinsSettingName = 'music-playlist-pins-v1';
+const musicArtistAliasesSettingName = 'music-artist-aliases-v1';
 
 class _ProfileChanges extends ChangeNotifier {
   Future<void> writes = Future.value();
@@ -18,12 +23,15 @@ class _ProfileChanges extends ChangeNotifier {
   Map<String, dynamic> data = {};
   List<MusicLibraryEntry>? entries;
   Map<String, MusicLibraryEntry>? songsById;
+  Map<String, MusicLibraryEntry>? likes;
   Map<String, List<ImageObject>>? coversBySongId;
+  String? storedArtistAliases;
+  Map<String, String> artistAliases = {};
 
   void changed() => notifyListeners();
 }
 
-/// A fixed person's local bookmarks, using the application's settings store.
+/// A fixed person's local bookmarks and Likes.
 class MusicLibraryService {
   static final _owners = Expando<Map<String, _ProfileChanges>>();
   static final _songId = RegExp(r'^[A-Za-z0-9_-]{11}$');
@@ -39,6 +47,108 @@ class MusicLibraryService {
   String get profileId => _database.profileId;
   Listenable get changes => _changes;
 
+  Map<String, String> _readArtistAliases() {
+    final stored = _database.getSettings(musicArtistAliasesSettingName)?.value;
+    if (_changes.storedArtistAliases == stored) return _changes.artistAliases;
+    _changes.storedArtistAliases = stored;
+    final aliases = _changes.artistAliases = {};
+    if (stored == null ||
+        stored.length > musicLibraryMaximumBytes ||
+        utf8.encode(stored).length > musicLibraryMaximumBytes) {
+      return aliases;
+    }
+    try {
+      final rows = jsonDecode(stored);
+      if (rows is Map<String, dynamic> &&
+          rows.length <= musicLibraryMaximumEntries) {
+        for (final row in rows.entries) {
+          final alias = row.value;
+          if (alias is! String ||
+              MusicArtistIdentity.fromStorageKey(row.key) == null) {
+            continue;
+          }
+          if (normalizeMusicArtistAlias(alias) case final name?) {
+            aliases[row.key] = name;
+          }
+        }
+      }
+    } on FormatException {
+      // Ignore damaged local aliases until the next explicit edit.
+    }
+    return aliases;
+  }
+
+  String? artistAlias(MusicArtistIdentity identity) =>
+      _readArtistAliases()[identity.storageKey];
+
+  String artistDisplayName(MusicArtistIdentity identity, String original) =>
+      artistAlias(identity) ?? original;
+
+  String catalogArtistByline(String fallback, List<MusicArtistCredit> credits) {
+    if (credits.isEmpty) return fallback;
+    final aliases = _readArtistAliases();
+    if (aliases.isEmpty) return fallback;
+    var changed = false;
+    final names = <String>[];
+    for (final credit in credits) {
+      final id = credit.id;
+      final alias = id == null
+          ? null
+          : aliases[MusicArtistIdentity.catalog(id).storageKey];
+      changed = changed || alias != null;
+      names.add(alias ?? credit.name);
+    }
+    return changed ? names.join(', ') : fallback;
+  }
+
+  String? deviceArtistByline(LocalMusicTrack track) {
+    final aliases = _readArtistAliases();
+    if (aliases.isEmpty) return track.artist;
+    var changed = false;
+    final names = <String>[];
+    for (final credit in localMusicArtistCredits(track)) {
+      if (!credit.roles.contains(LocalMusicArtistRole.trackArtist)) continue;
+      final alias = aliases[MusicArtistIdentity.device(credit.key).storageKey];
+      changed = changed || alias != null;
+      names.add(alias ?? credit.name);
+    }
+    return changed ? names.join(', ') : track.artist;
+  }
+
+  /// Null removes only this display preference. The original credit is
+  /// still the source for matching, navigation, and export.
+  Future<bool> setArtistAlias(MusicArtistIdentity identity, String? alias,
+      {required bool Function() isCurrent}) async {
+    if (!identity.isValid) throw ArgumentError('Invalid artist identity');
+    final normalized = normalizeMusicArtistAlias(alias);
+    if (alias != null && normalized == null) {
+      throw ArgumentError('Invalid artist alias');
+    }
+    var accepted = false;
+    await _enqueueWrite(() async {
+      if (!isCurrent()) return;
+      accepted = true;
+      final current = _readArtistAliases();
+      final key = identity.storageKey;
+      if (current[key] == normalized) return;
+      final aliases = Map.of(current);
+      if (normalized == null) {
+        aliases.remove(key);
+      } else {
+        aliases[key] = normalized;
+      }
+      final value = jsonEncode(aliases);
+      if (aliases.length > musicLibraryMaximumEntries ||
+          utf8.encode(value).length > musicLibraryMaximumBytes) {
+        throw StateError('The artist alias list is full');
+      }
+      await _database
+          .saveSetting(SettingsValue(musicArtistAliasesSettingName, value));
+      _changes.changed();
+    });
+    return accepted;
+  }
+
   Map<String, dynamic> _read() {
     final stored = _database.getSettings(musicLibrarySettingName)?.value;
     if (stored == _changes.storedValue) return _changes.data;
@@ -46,6 +156,7 @@ class MusicLibraryService {
     _changes.data = {};
     _changes.entries = null;
     _changes.songsById = null;
+    _changes.likes = null;
     _changes.coversBySongId = null;
     try {
       final value = jsonDecode(stored ?? '{}');
@@ -70,6 +181,46 @@ class MusicLibraryService {
         if (entry.kind == MusicLibraryKind.song) entry.id: entry,
     };
     return songs[songId];
+  }
+
+  List<MusicLibraryEntry> get likedSongs =>
+      List.unmodifiable(_likedSongs().values);
+
+  bool isLiked(String id) => _likedSongs().containsKey(id);
+
+  Map<String, MusicLibraryEntry> _likedSongs() {
+    final data = _read();
+    return _changes.likes ??= _likes(data);
+  }
+
+  static Map<String, MusicLibraryEntry> _likes(Map<String, dynamic> data) {
+    final rows = data['likes'];
+    return {
+      if (rows is List)
+        for (final row in rows)
+          if (MusicLibraryEntry.tryParseLikedSong(row) case final song?)
+            song.id: song,
+    };
+  }
+
+  Future<void> setSongLiked(MusicLibraryEntry song,
+      {required bool liked, bool Function()? isCurrent}) {
+    final clean = MusicLibraryEntry.tryParseLikedSong(song.toJson());
+    if (clean == null) throw ArgumentError('Invalid liked song');
+    var changed = false;
+    return _write(null,
+        updateLikes: (songs) {
+          if (isCurrent?.call() == false) return;
+          final index = songs.indexWhere((item) => item.id == clean.id);
+          if (liked == (index >= 0)) return;
+          if (liked) {
+            songs.insert(0, clean);
+          } else {
+            songs.removeAt(index);
+          }
+          changed = true;
+        },
+        shouldWrite: () => changed);
   }
 
   /// Resolve a whole catalog page against one snapshot of this profile's
@@ -150,19 +301,33 @@ class MusicLibraryService {
           (playlist.videos.isEmpty &&
               _playlists(_read()).contains(playlist.playlistId)));
 
-  Future<void> save(MusicLibraryEntry entry) {
+  Future<void> save(MusicLibraryEntry entry) =>
+      _save(entry, replaceExisting: true);
+
+  /// Insert a new bookmark while preserving any existing entry and its order.
+  Future<bool> saveIfAbsent(MusicLibraryEntry entry) =>
+      _save(entry, replaceExisting: false);
+
+  Future<bool> _save(MusicLibraryEntry entry, {required bool replaceExisting}) {
     final clean = MusicLibraryEntry.tryParse(entry.toJson());
     if (clean == null) throw ArgumentError('Invalid music bookmark');
+    var changed = false;
     return _write((entries, _) {
       final index = entries
           .indexWhere((item) => item.kind == clean.kind && item.id == clean.id);
+      if (index >= 0 && !replaceExisting) return;
       final savedTitle = index < 0 ? null : entries.removeAt(index).savedTitle;
       entries.insert(
           0,
           savedTitle == clean.savedTitle
               ? clean
               : clean.withSavedTitle(savedTitle));
-    }, replacedSongId: clean.kind == MusicLibraryKind.song ? clean.id : null);
+      changed = true;
+    },
+            shouldWrite: () => changed,
+            replacedSongId:
+                clean.kind == MusicLibraryKind.song ? clean.id : null)
+        .then((_) => changed);
   }
 
   /// Change a saved song's display title in place. Null restores its metadata
@@ -191,7 +356,8 @@ class MusicLibraryService {
   }
 
   /// Merge a local song list without replacing bookmarks or fetching metadata.
-  Future<int> importSongs(Iterable<MusicLibraryEntry> songs) async {
+  Future<int> importSongs(Iterable<MusicLibraryEntry> songs,
+      {bool asLikes = false}) async {
     final incoming = <String, MusicLibraryEntry>{};
     for (final song in songs) {
       if (song.kind != MusicLibraryKind.song ||
@@ -215,6 +381,19 @@ class MusicLibraryService {
     }
     if (incoming.isEmpty) return 0;
     var imported = 0;
+    if (asLikes) {
+      await _write(null,
+          updateLikes: (likes) {
+            final existing = likes.map((song) => song.id).toSet();
+            for (final song in incoming.values) {
+              if (!existing.add(song.id)) continue;
+              likes.add(song);
+              imported++;
+            }
+          },
+          shouldWrite: () => imported > 0);
+      return imported;
+    }
     await _write((entries, _) {
       final existing = entries
           .where((entry) => entry.kind == MusicLibraryKind.song)
@@ -404,22 +583,28 @@ class MusicLibraryService {
       _changes.writes = _changes.writes.catchError((_) {}).then((_) => write());
 
   Future<void> _write(
-      void Function(List<MusicLibraryEntry>, Set<String>) update,
-      {bool Function()? shouldWrite,
+      void Function(List<MusicLibraryEntry>, Set<String>)? updateLibrary,
+      {void Function(List<MusicLibraryEntry>)? updateLikes,
+      bool Function()? shouldWrite,
       String? replacedSongId}) {
     return _enqueueWrite(() async {
       final data = _read();
       final entries = _entries(data);
       final playlists = _playlists(data);
-      update(entries, playlists);
+      final likes = _likes(data).values.toList();
+      updateLibrary?.call(entries, playlists);
+      updateLikes?.call(likes);
       if (shouldWrite?.call() == false) return;
       final value = jsonEncode({
         'version': 1,
         'entries': entries.map((entry) => entry.toJson()).toList(),
         'playlists': playlists.toList(),
+        if (likes.isNotEmpty)
+          'likes': likes.map((entry) => entry.toJson()).toList(),
       });
       if (entries.length > musicLibraryMaximumEntries ||
           playlists.length > musicLibraryMaximumEntries ||
+          likes.length > musicLibraryMaximumEntries ||
           utf8.encode(value).length > musicLibraryMaximumBytes) {
         throw StateError('The music library is full');
       }

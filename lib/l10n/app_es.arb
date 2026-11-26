@@ -1293,5 +1293,18 @@
   "forceTvUi": "Forzar interfaz de TV",
   "@forceTvUi": {},
   "forceTvUiExplanation": "Fuerza la interfaz a ser la experiencia de TV, puede ser útil para algunos dispositivos que no tengan la configuración del sistema Leanback. Se necesita reiniciar la aplicación",
-  "@forceTvUiExplanation": {}
+  "@forceTvUiExplanation": {},
+  "settingsSearch": "Buscar ajustes",
+  "settingsSearchClear": "Borrar búsqueda de ajustes",
+  "settingsSearchNoResults": "No hay ajustes que coincidan",
+  "settingsSearchReplayGainKeywords": "normalización de volumen nivelar sonoridad volumen uniforme",
+  "settingsSearchPreampKeywords": "ajuste de ganancia aumentar volumen decibelios",
+  "settingsSearchAudioFocusKeywords": "reanudar música después de una llamada notificación o interrupción",
+  "settingsSearchZeroVolumeKeywords": "pausar al silenciar o bajar el volumen",
+  "settingsSearchReconnectKeywords": "reanudar tras perder la conexión caída de red",
+  "settingsSearchTaskRemovalKeywords": "reproducción en segundo plano al cerrar la aplicación",
+  "settingsSearchScrubberKeywords": "barra de progreso barra de búsqueda línea de tiempo",
+  "settingsSearchHistoryPrivacyKeywords": "escucha privada pausar seguimiento de actividad",
+  "settingsSearchEnableSearchHistoryKeywords": "guardar búsquedas recientes recordar consultas sugerencias de búsqueda",
+  "settingsSearchClearSearchHistoryKeywords": "borrar búsquedas recientes eliminar consultas guardadas quitar sugerencias de búsqueda"
 }

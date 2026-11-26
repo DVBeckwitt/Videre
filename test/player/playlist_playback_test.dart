@@ -1336,25 +1336,59 @@ void main() {
         PlaybackSession.decode(jsonEncode(legacy))!.playlistComplete, isFalse);
   });
 
-  test('device playlist occurrences play locally and keep their stored order',
-      () async {
+  Future<({LocalMusicLibrary library, Uri uri, Uri movedUri})> openDeviceFolder(
+      {bool Function()? isAllowed, bool Function()? isMoved}) async {
     const tree = 'content://documents/tree/primary%3AMusic';
-    const uri = '$tree/document/primary%3AMusic%2Ftrack.flac';
+    const uri = '$tree/document/primary%3AMusic%2Ftrack.m4a';
+    const movedUri = '$tree/document/primary%3AMusic%2FNew%2Ftrack.m4a';
+    final oldKey = 'a' * 64;
+    final newTrackKey = 'b' * 64;
+    final oldTrackId = 'device:${'c' * 64}';
+    final newTrackId = 'device:$newTrackKey';
     const channel = MethodChannel('com.github.dvbeckwitt.videre/local_music');
     final messenger =
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
     final library = LocalMusicLibrary.instance;
-    var allowed = true;
+    var confirmed = false;
     messenger.setMockMethodCallHandler(channel, (call) async {
+      final moved = isMoved?.call() ?? false;
       switch (call.method) {
         case 'getFolder' || 'pickFolder':
           return {'uri': tree, 'name': 'Music', 'selectionId': 'device-grant'};
         case 'listTracks':
           return [
-            {'uri': uri, 'title': 'File', 'visibilityKey': 'a' * 64},
+            {
+              'uri': moved ? movedUri : uri,
+              'title': 'File',
+              'visibilityKey': moved ? 'd' * 64 : oldKey,
+              'identityKey': moved ? newTrackKey : 'c' * 64,
+              'contentAdvisory': 1,
+            },
           ];
+        case 'listMovedFileRepairs':
+          return moved && !confirmed
+              ? {
+                  'missing': [
+                    {
+                      'id': oldTrackId,
+                      'title': 'File',
+                      'candidates': [
+                        {'id': newTrackId, 'reason': 'revision'},
+                      ],
+                    },
+                  ],
+                  'missingPlaylistIds': {oldKey: oldTrackId},
+                }
+              : <String, Object>{};
+        case 'confirmMovedFileRepair':
+          expect(call.arguments['candidateId'], newTrackId);
+          confirmed = true;
+          return {
+            'aliases': {oldTrackId: newTrackId},
+            'playlistAliases': {oldKey: newTrackId},
+          };
         case 'checkFolderAccess':
-          return allowed;
+          return isAllowed?.call() ?? true;
         case 'forgetFolder':
           return null;
       }
@@ -1365,6 +1399,50 @@ void main() {
       messenger.setMockMethodCallHandler(channel, null);
     });
     expect(await library.chooseFolder(), isTrue);
+    return (
+      library: library,
+      uri: Uri.parse(uri),
+      movedUri: Uri.parse(movedUri)
+    );
+  }
+
+  test('indexed Music collection starts at the selected mixed queue occurrence',
+      () async {
+    final folder = await openDeviceFolder();
+    final device = devicePlaylistVideo(folder.library.tracks.single)!;
+    Video catalog(String id) => Video(
+        videoId: id, musicMetadata: MusicMetadata(title: id, artist: 'Artist'));
+    final tracks = [
+      device,
+      catalog('catalog0001'),
+      device,
+      catalog('catalog0002'),
+      catalog('catalog0003'),
+    ];
+    await settings.setShuffle(true);
+    expect(settings.state.playerShuffleMode, isTrue);
+
+    await player.playMusicCollectionQueue(tracks,
+        queueTitle: 'Music history', startIndex: 2);
+
+    final queue = player.state.videos;
+    final ids = queue.map(playbackQueueId).toList();
+    expect(queue.map((video) => video.videoId),
+        tracks.map((video) => video.videoId));
+    expect(ids.toSet(), hasLength(tracks.length));
+    expect(player.state.currentlyPlaying?.videoId, device.videoId);
+    expect(player.state.currentQueueId, ids[2]);
+    expect(player.state.playedVideos, ids.take(2).toList());
+    expect(player.state.playQueue, ids.skip(3).toList());
+    expect(metadata.musicRequests, isEmpty);
+  });
+
+  test('device playlist occurrences play locally and keep their stored order',
+      () async {
+    var allowed = true;
+    var moved = false;
+    final (library: library, uri: uri, movedUri: movedUri) =
+        await openDeviceFolder(isAllowed: () => allowed, isMoved: () => moved);
     final device = devicePlaylistVideo(library.tracks.single)!;
     const catalog = Video(
         videoId: 'catalog0001',
@@ -1387,8 +1465,7 @@ void main() {
         offlineVideo: null,
         sessionId: 'test',
         isCurrent: () => true);
-    expect(
-        (audio!.sources.single as ProgressiveAudioSource).uri, Uri.parse(uri));
+    expect((audio!.sources.single as ProgressiveAudioSource).uri, uri);
 
     final snapshot = PlaybackSession.decode(PlaybackSession(
             videos: queue,
@@ -1407,6 +1484,38 @@ void main() {
     await player.skipToVideo(0);
     expect(player.state.currentlyPlaying?.videoId, device.videoId);
     expect(metadata.musicRequests, [catalog.videoId]);
+
+    expect(await library.setHideExplicitTracks(true), isTrue);
+    expect(player.state.currentlyPlaying?.videoId, device.videoId);
+    await expectLater(
+        player.playPlaylist(playlist.videos,
+            reference: reference, startIndex: 2, fromMusic: true, audio: true),
+        throwsStateError);
+    expect(player.state.videos, queue);
+    expect(await library.setHideExplicitTracks(false), isTrue);
+
+    await player.skipToVideo(1);
+    moved = true;
+    await library.refresh();
+    expect(
+        player.state.videos.map(playbackQueueId), queue.map(playbackQueueId));
+    await player.skipToVideo(2);
+    expect(player.state.currentlyPlaying?.videoId, catalog.videoId);
+
+    final missing = library.movedFileRepairs.single;
+    expect(
+        await library.confirmMovedFileRepair(
+            missing, missing.candidates.single),
+        isTrue);
+    await player.skipToVideo(2);
+    expect(player.state.currentQueueId, playbackQueueId(queue.last));
+    final repairedAudio = await resolveAudioPlaybackSources(
+        video: player.state.currentlyPlaying,
+        offlineVideo: null,
+        sessionId: 'test',
+        isCurrent: () => true);
+    expect((repairedAudio!.sources.single as ProgressiveAudioSource).uri,
+        movedUri);
 
     allowed = false;
     await library.revalidate();

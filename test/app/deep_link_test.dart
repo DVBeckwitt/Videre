@@ -7,6 +7,7 @@ import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' as app_globals;
+import 'package:clipious/music/models/music_layout.dart';
 import 'package:clipious/music/views/screens/music.dart';
 import 'package:clipious/network/content_link.dart';
 import 'package:clipious/player/states/player.dart';
@@ -125,6 +126,8 @@ class _AndroidLinkInbox {
     if (_pending.length == 16) _pending.removeAt(0);
     _pending.add({'text': text, 'share': share, 'initial': initial});
   }
+
+  void stageAudio(String uri) => _pending.add({'audioUri': uri});
 
   Future<void> notify() async {
     final reply = await _messenger.handlePlatformMessage(
@@ -859,6 +862,33 @@ void main() {
     expect(appRouter.hasEntries, isFalse);
   });
 
+  test('cold and warm Android audio opens stay scoped to the latest request',
+      () async {
+    final inbox = _AndroidLinkInbox();
+    const cold = 'content://documents/document/song.flac';
+    const warm = 'content://documents/document/another.mp3';
+    inbox.stageAudio(cold);
+    inbox.stageAudio('https://example.com/not-local.mp3');
+    final receiver = AppCubit(AppState(0, null, HomeLayout()));
+    addTearDown(receiver.close);
+    await Future<void>.delayed(Duration.zero);
+    final opened = <(String, bool Function())>[];
+    receiver.bindOpenedAudio((uri, current) async {
+      opened.add((uri.toString(), current));
+    });
+    expect(opened.single.$1, cold);
+    expect(opened.single.$2(), isTrue);
+
+    inbox.stageAudio(warm);
+    await inbox.notify();
+    expect(opened.map((item) => item.$1), [cold, warm]);
+    expect(opened.first.$2(), isFalse);
+    expect(opened.last.$2(), isTrue);
+
+    receiver.setGlobalLoading(true);
+    expect(opened.last.$2(), isFalse);
+  });
+
   test('An Android Activity attaching to the running engine keeps Back history',
       () async {
     final inbox = _AndroidLinkInbox();
@@ -995,6 +1025,87 @@ void main() {
     expect((children.last.args as VideoRouteArgs).videoId, 'dQw4w9WgXcQ');
     expect((children.last.args as VideoRouteArgs).startAt,
         const Duration(seconds: 90));
+  });
+
+  for (final (action, destination, shuffles) in [
+    ('MUSIC_HOME', MusicDestination.home, false),
+    ('MUSIC_SEARCH', MusicDestination.search, false),
+    ('MUSIC_LIBRARY', MusicDestination.library, false),
+    ('MUSIC_SHUFFLE_LOCAL', MusicDestination.library, true),
+  ]) {
+    test('cold Android shortcut retains Home underneath $action', () async {
+      appRouter.dispose();
+      app_globals.isTv = false;
+      appRouter = AppRouter(hasServer: true);
+      final inbox = _AndroidLinkInbox();
+      inbox.stage('com.github.dvbeckwitt.videre.action.$action', initial: true);
+      inbox.stage('com.github.dvbeckwitt.videre.action.MUSIC_HOME',
+          share: true);
+      final receiver = _DeferredLinkApp();
+      addTearDown(receiver.close);
+      await Future<void>.delayed(Duration.zero);
+      expect(inbox.consumed, 2);
+      expect(appRouter.hasEntries, isFalse);
+
+      receiver.ready.complete();
+      await _waitForRoute(MainRoute.name);
+      final children = appRouter.current.pendingChildren;
+      expect(children.map((route) => route.name),
+          [MainContentRoute.name, MusicShortcutRoute.name]);
+      final args = children.last.args as MusicShortcutRouteArgs;
+      expect(args.destination, destination);
+      expect(args.canStartShuffle?.call(), shuffles ? isTrue : isNull);
+      if (shuffles) {
+        final next = await db.createProfile('Another listener');
+        await db.useProfile(next.id);
+        expect(args.canStartShuffle!(), isFalse);
+      }
+    });
+  }
+
+  test(
+      'warm Android shortcuts preserve the underlying page and replace repeats',
+      () async {
+    appRouter.dispose();
+    app_globals.isTv = false;
+    appRouter = AppRouter(hasServer: true);
+    await appRouter.replaceAll([const MainRoute()]);
+    final parent = appRouter.current;
+    final nested = NestedStackRouter(
+      parent: appRouter,
+      key: parent.key,
+      matchId: parent.matchId,
+      routeData: parent,
+      routeCollection: appRouter.routeCollection.subCollectionOf(parent.name),
+    );
+    appRouter.attachChildController(nested);
+    addTearDown(() {
+      appRouter.removeChildController(nested);
+      nested.dispose();
+    });
+    await nested.replaceAll([const MainContentRoute(), const SettingsRoute()]);
+    final inbox = _AndroidLinkInbox();
+    final receiver = AppCubit(AppState(0, null, HomeLayout()));
+    addTearDown(receiver.close);
+    await receiver.stream.firstWhere((state) => state.server != null);
+
+    inbox.stage('com.github.dvbeckwitt.videre.action.MUSIC_SHUFFLE_LOCAL');
+    await inbox.notify();
+    await _waitForRoute(MusicShortcutRoute.name, router: nested);
+    final shuffle = nested.current.argsAs<MusicShortcutRouteArgs>();
+    expect(shuffle.destination, MusicDestination.library);
+    expect(shuffle.canStartShuffle!(), isTrue);
+
+    inbox.stage('com.github.dvbeckwitt.videre.action.MUSIC_SEARCH');
+    await inbox.notify();
+    expect(nested.current.argsAs<MusicShortcutRouteArgs>().destination,
+        MusicDestination.search);
+    expect(shuffle.canStartShuffle!(), isFalse);
+    expect(nested.stack.map((page) => page.name), [
+      MainContentRoute.name,
+      SettingsRoute.name,
+      MusicShortcutRoute.name,
+    ]);
   });
 
   test('phone warm link pushes inside the existing MainRoute', () async {

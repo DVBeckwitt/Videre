@@ -230,7 +230,9 @@ class VideoCubit extends Cubit<VideoState> {
     }
   }
 
-  void playVideo(bool? audio, {bool selectedByUser = true}) {
+  Future<void> playVideo(bool? audio,
+      {bool selectedByUser = true, Duration? startAt}) async {
+    if (isClosed) return;
     if (state.video != null) {
       List<Video> videos = [state.video!];
       if (!settings.state.distractionFreeMode &&
@@ -239,7 +241,8 @@ class VideoCubit extends Cubit<VideoState> {
             .where((video) => !hideCommunityVideo(video)));
       }
       if (selectedByUser) player.noteWatchSelection(state.video!.videoId);
-      player.playVideo(videos, audio: audio, startAt: startAt);
+      await player.playVideo(videos,
+          audio: audio, startAt: startAt ?? this.startAt);
     }
   }
 }

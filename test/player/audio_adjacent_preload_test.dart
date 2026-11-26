@@ -5,6 +5,8 @@ import 'package:clipious/app/states/app.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
+import 'package:clipious/main.dart' as app_main;
+import 'package:clipious/media_handler.dart';
 import 'package:clipious/music/models/local_music_track.dart';
 import 'package:clipious/music/models/replay_gain.dart';
 import 'package:clipious/music/models/song_transition.dart';
@@ -16,9 +18,11 @@ import 'package:clipious/player/models/media_command.dart';
 import 'package:clipious/player/models/media_event.dart';
 import 'package:clipious/player/models/music_audio_quality.dart';
 import 'package:clipious/player/models/playback_queue.dart';
+import 'package:clipious/player/models/sleep_timer.dart';
 import 'package:clipious/player/states/audio_player.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/settings/models/db/server.dart';
+import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/adaptive_format.dart';
@@ -96,12 +100,14 @@ class _Queue extends TestPlayerCubit {
 
   void select(Video video) => emit(state.copyWith(currentlyPlaying: video));
 
-  void selectLocal(DownloadedVideo song, List<DownloadedVideo> queue) =>
+  void selectLocal(DownloadedVideo song, List<DownloadedVideo> queue,
+          {Duration? startAt}) =>
       emit(state.copyWith(
           videos: [],
           currentlyPlaying: null,
           offlineVideos: queue,
-          offlineCurrentlyPlaying: song));
+          offlineCurrentlyPlaying: song,
+          startAt: startAt));
 
   @override
   void setEvent(MediaEvent event) {
@@ -121,6 +127,7 @@ class _Decoder {
   final playedTracks = <String>[];
   final playVolumes = <double>[];
   final playMusicGains = <double>[];
+  final pauseVolumes = <double>[];
   final playPositions = <Duration>[];
   Duration position = Duration.zero;
   final volumes = <double>[];
@@ -248,6 +255,7 @@ void main() {
           if (method.method == 'pause') {
             decoder.playing = false;
             decoder.pauses++;
+            decoder.pauseVolumes.add(decoder.volume);
           }
           if (method.method == 'setVolume') {
             decoder.volumes.add((method.arguments['volume'] as num).toDouble());
@@ -339,6 +347,94 @@ void main() {
     expect(audio.state.video?.queueEntryId, current.queueEntryId);
     expect(player.state.currentQueueId, current.queueEntryId);
   }
+
+  test('sleep fade cancellation restores gain and a new timer can stop',
+      () async {
+    final decoder = loaded('current').single;
+    final commands =
+        player.stream.map((state) => state.mediaCommand).distinct();
+    final subscription = commands.listen((command) {
+      if (command?.type == MediaCommandType.pause) {
+        audio.handleCommand(command!);
+      }
+    });
+
+    try {
+      player.sleep(
+          const SleepTimer(duration: Duration(seconds: 2), stopVideo: false),
+          fadeOut: true);
+      await _until(
+          () => decoder.volume <= .5, 'The first fade reaches halfway');
+      expect(decoder.volume, closeTo(.5, .11));
+      expect(decoder.playing, isTrue);
+
+      player.cancelSleep();
+      await _until(() => decoder.volume == 1, 'Cancellation restores gain');
+      expect(decoder.playing, isTrue);
+
+      player.sleep(
+          const SleepTimer(duration: Duration(seconds: 4), stopVideo: false),
+          fadeOut: true);
+      await _until(() => decoder.volume <= .5, 'The new fade reaches halfway');
+      expect(decoder.volume, closeTo(.5, .11));
+      expect(decoder.playing, isTrue);
+      expect(player.state.hasTimer, isTrue);
+
+      await _until(() => decoder.pauseVolumes.isNotEmpty && decoder.volume == 1,
+          'The decoder pauses before its volume is restored');
+      expect(decoder.pauseVolumes, [0]);
+      expect(decoder.playing, isFalse);
+      expect(player.state.hasTimer, isFalse);
+    } finally {
+      player.cancelSleep();
+      await subscription.cancel();
+    }
+  });
+
+  test('finish-song sleep fade starts at the end of the song at expiry',
+      () async {
+    final decoder = loaded('current').single;
+    player.sleep(
+        const SleepTimer(duration: Duration(seconds: 1), stopVideo: false),
+        finishSong: true,
+        fadeOut: true);
+    await Future<void>.delayed(const Duration(milliseconds: 600));
+    expect(decoder.volume, 1);
+    expect(player.state.hasTimer, isTrue);
+
+    await _until(() => (player.sleepRemaining?.inSeconds ?? 0) > 60,
+        'The deadline hands off to the current song');
+    expect(decoder.playing, isTrue);
+    await decoder.report(
+        ProcessingStateMessage.ready, const Duration(seconds: 90));
+    await _until(() => (decoder.volume - .5).abs() < .04,
+        'The finish-song fade uses the remaining playback time');
+
+    player.cancelSleep();
+    await _until(() => decoder.volume == 1, 'Cancellation restores gain');
+  });
+
+  test('track-count sleep fades only on the final track', () async {
+    final decoder = loaded('current').single;
+    player.sleepAfterTracks(2, fadeOut: true);
+    await decoder.report(
+        ProcessingStateMessage.ready, const Duration(seconds: 90));
+    await _until(() => audio.state.audioPosition >= const Duration(seconds: 90),
+        'The decoder reached the fade window on a nonfinal track');
+    expect(decoder.volume, 1);
+
+    // The queue test double records decoder events without applying progress.
+    await player.onProgress(audio.state.audioPosition);
+    player.sleepAfterTracks(1, fadeOut: true);
+    await decoder.report(
+        ProcessingStateMessage.ready, const Duration(seconds: 105));
+    await _until(() => (decoder.volume - .5).abs() < .04,
+        'The last track fades from the position where the timer was armed');
+
+    player.cancelSleep();
+    await _until(() => decoder.volume == 1, 'Cancelling restores decoder gain');
+    expect(decoder.playing, isTrue);
+  });
 
   MediaCommand switchCommand(Video song, Duration startAt) =>
       MediaCommand(MediaCommandType.switchVideo,
@@ -674,6 +770,33 @@ void main() {
     return (outgoing, incoming);
   }
 
+  test('sleep fade scales both decoders in an active crossfade', () async {
+    final (outgoing, incoming) =
+        await prepareTransition(SongTransitionMode.crossfade, seconds: 6);
+    await outgoing.report(
+        ProcessingStateMessage.ready, const Duration(seconds: 117));
+    await _until(
+        () => incoming.playing && outgoing.volume < 1 && incoming.volume > 0,
+        'Both decoders have audible transition gain');
+    expect(outgoing.volume + incoming.volume, closeTo(1, .01));
+
+    try {
+      player.sleep(
+          const SleepTimer(duration: Duration(seconds: 2), stopVideo: false),
+          fadeOut: true);
+      await _until(() => outgoing.volume + incoming.volume <= .51,
+          'Both decoders reach halfway through the sleep fade');
+      expect(outgoing.volume, greaterThan(0));
+      expect(incoming.volume, greaterThan(0));
+      expect(outgoing.volume + incoming.volume, closeTo(.5, .11));
+    } finally {
+      player.cancelSleep();
+    }
+
+    await _until(() => (outgoing.volume + incoming.volume - 1).abs() < .01,
+        'Cancellation restores the transition gain');
+  });
+
   for (final seconds in [0, 23]) {
     test(
         'cancelling a manual selection at ${seconds}s preserves the automatic successor crossfade',
@@ -788,32 +911,77 @@ void main() {
     audio.switchVideo(next, startAt: startAt);
   }
 
+  test('an Android Files item plays from its grant without saving a session',
+      () async {
+    final uri = Uri.parse('content://files/document/temporary.mp3');
+    final saved = player.savedSession;
+    await player.playOpenedAudio(
+        (uri: uri, title: 'Temporary', indexedTrack: null),
+        isCurrent: () => true);
+
+    final entry = player.state.offlineCurrentlyPlaying!;
+    expect(entry.storageUri, uri.toString());
+    expect(isOpenedAudioPlaybackId(entry.videoId), isTrue);
+    audio.handleCommand(player.state.mediaCommand!);
+    await _until(
+        () => loaded('temporary.mp3')
+            .any((decoder) => decoder.playedTracks.contains('temporary.mp3')),
+        'The audio decoder plays the temporary content URI');
+    expect(player.savedSession, saved);
+    expect(LocalMusicLibrary.instance.trackById(entry.videoId), isNull);
+  });
+
   Future<List<LocalMusicTrack>> scanDeviceMusic(
-      {bool Function()? canRead, bool tagged = false}) async {
+      {bool Function()? canRead,
+      bool tagged = false,
+      bool Function(String)? canSeekProviderTrack,
+      Map<String, Map<String, Object>?>? tagsByTitle,
+      Map<String, String?>? albumKeys}) async {
     const channel = MethodChannel('com.github.dvbeckwitt.videre/local_music');
     const tree = 'content://provider.example/tree/music';
+    final titles = albumKeys?.keys ?? tagsByTitle?.keys ?? ['Intro', 'Finale'];
     messenger.setMockMethodCallHandler(channel, (call) async {
       switch (call.method) {
         case 'getFolder':
         case 'forgetFolder':
           return null;
         case 'pickFolder':
-          return {'uri': tree, 'name': 'Music', 'selectionId': 'folder-grant'};
+        case 'pickProviderFolder':
+          return {
+            'uri': tree,
+            'name': 'Music',
+            'selectionId': 'folder-grant',
+            if (call.method == 'pickProviderFolder') 'isDocumentProvider': true,
+          };
         case 'checkFolderAccess':
           return canRead?.call() ?? true;
+        case 'canSeekProviderTrack':
+          expect(call.arguments['treeUri'], tree);
+          expect(call.arguments['selectionId'], 'folder-grant');
+          return canSeekProviderTrack!(call.arguments['uri'] as String);
         case 'listTracks':
           expect(call.arguments['treeUri'], tree);
           return [
-            for (final title in ['Intro', 'Finale'])
+            for (final title in titles)
               {
                 'uri': '$tree/document/$title.mp3',
                 'title': title,
                 'artist': 'Device artist',
+                if (albumKeys != null) ...{
+                  'album': 'Same displayed album',
+                  'albumKey': albumKeys[title],
+                },
                 'durationMs': 120000,
-                if (tagged)
+                if (tagsByTitle?[title] case final tags?)
+                  'replayGain': tags
+                else if (tagged)
                   'replayGain': {
                     'trackGainDb': title == 'Intro' ? -6.0 : 6.0,
                     'trackPeak': 0.75,
+                    if (albumKeys != null) ...{
+                      'albumGainDb': -2.0,
+                      'albumPeak': 0.95,
+                    },
                   },
               }
           ];
@@ -826,9 +994,249 @@ void main() {
       await library.disable();
       messenger.setMockMethodCallHandler(channel, null);
     });
-    expect(await library.chooseFolder(), isTrue);
-    expect(library.tracks.map((track) => track.title), ['Intro', 'Finale']);
+    expect(
+        await (canSeekProviderTrack == null
+            ? library.chooseFolder()
+            : library.chooseProviderFolder()),
+        isTrue);
+    expect(library.tracks.map((track) => track.title), titles);
     return library.tracks;
+  }
+
+  test('decoder preamps distinguish valid, missing and malformed gain tags',
+      () async {
+    final tracks = await scanDeviceMusic(tagsByTitle: {
+      'Tagged': {'trackGainDb': -3.0, 'trackPeak': 0.125},
+      'Untagged': null,
+      'Malformed': {'trackGainDb': 'bogus', 'trackPeak': 0.125},
+    });
+    final queue = [
+      for (final track in tracks) localMusicPlaybackEntry(track, db.profileId)
+    ];
+    final sound = player.musicSound;
+    await db.forProfile(db.profileId).saveSetting(
+          SettingsValue(musicPreampSettingName, '-6'),
+        );
+    await sound.setReplayGainMode(ReplayGainMode.track);
+    player.selectLocal(queue.first, queue);
+    audio.switchToOfflineVideo(queue.first);
+    player.publish(queue.skip(1).toList());
+
+    await _until(
+      () => loaded('Tagged.mp3')
+          .any((decoder) => decoder.playedTracks.contains('Tagged.mp3')),
+      'The tagged recording enters playback',
+    );
+    final tagged = loaded('Tagged.mp3').single;
+    expect(tagged.playMusicGains.last, closeTo(0.354813, 0.000001));
+
+    for (final (index, title) in [(1, 'Untagged'), (2, 'Malformed')]) {
+      final song = queue[index];
+      player.selectLocal(song, queue);
+      audio.switchToOfflineVideo(song);
+      await _until(
+        () => loaded('$title.mp3')
+            .any((decoder) => decoder.playedTracks.contains('$title.mp3')),
+        'The $title recording enters playback',
+      );
+      final decoder = loaded('$title.mp3')
+          .lastWhere((decoder) => decoder.playedTracks.contains('$title.mp3'));
+      expect(decoder.playMusicGains.last, closeTo(0.501187, 0.000001));
+      await sound.setMusicUntaggedPreampDb(-4);
+      await _until(
+        () => closeTo(0.630957, 0.000001).matches(decoder.musicGain, {}),
+        'The without-gain preamp applies to $title',
+      );
+      await sound.setMusicUntaggedPreampDb(-6);
+    }
+
+    player.selectLocal(queue.first, queue);
+    audio.switchToOfflineVideo(queue.first);
+    await _until(
+      () => loaded('Tagged.mp3').any(
+        (decoder) => !decoder.disposed && decoder.playing,
+      ),
+      'The tagged recording is active again',
+    );
+    final active = loaded('Tagged.mp3')
+        .lastWhere((decoder) => !decoder.disposed && decoder.playing);
+    await sound.setMusicUntaggedPreampDb(-4);
+    expect(active.musicGain, closeTo(0.354813, 0.000001));
+    await sound.setMusicTaggedPreampDb(-10);
+    await _until(
+      () => closeTo(0.223872, 0.000001).matches(active.musicGain, {}),
+      'The tagged preamp applies to the active decoder',
+    );
+  });
+
+  test('contextual ReplayGain updates current and preloaded device songs',
+      () async {
+    final album = 'a' * 64;
+    final albumKeys = {'Intro': album, 'Finale': album, 'Other': 'b' * 64};
+    final tracks = await scanDeviceMusic(tagged: true, albumKeys: albumKeys);
+    player.audioSession = await AudioSession.instance;
+    app_main.mediaHandler = MediaHandler(player);
+    player.manualMusicPreparer = null;
+    await player.playLocalMusic(tracks);
+    player.manualMusicPreparer = audio;
+    final queue = player.state.offlineVideos;
+    final intro = queue.first;
+    final finale = queue[1];
+    final other = queue.last;
+    await player.musicSound.setReplayGainMode(ReplayGainMode.contextual);
+    await player.musicSound.setMusicTaggedPreampDb(4);
+    audio.switchToOfflineVideo(intro);
+    player.publish([finale]);
+    await _until(
+        () =>
+            loaded('Intro.mp3')
+                .any((d) => d.playedTracks.contains('Intro.mp3')) &&
+            loaded('Finale.mp3').isNotEmpty,
+        'Both decoders are loaded');
+    final currentDecoder = loaded('Intro.mp3').single;
+    final standby = loaded('Finale.mp3').single;
+    final introTrackGain = closeTo(0.794328, 0.000001);
+    expect(currentDecoder.playMusicGains.last, introTrackGain);
+    expect(standby.musicGain, 1 / 0.75);
+    final playsBeforeQueueEdits = currentDecoder.playedTracks.length;
+
+    // No new adjacent window is published when a farther queue item changes.
+    player.removeVideoFromQueue(other.videoId);
+    await _until(
+        () =>
+            currentDecoder.musicGain == 1 / 0.95 &&
+            standby.musicGain == 1 / 0.95,
+        'Both decoders switch to album gain');
+
+    albumKeys['Finale'] = 'b' * 64;
+    await LocalMusicLibrary.instance.refresh();
+    await _until(
+        () =>
+            introTrackGain.matches(currentDecoder.musicGain, {}) &&
+            standby.musicGain == 1 / 0.75,
+        'An album identity change is picked up with the queue held constant');
+
+    albumKeys['Finale'] = album;
+    await LocalMusicLibrary.instance.refresh();
+    await _until(() => currentDecoder.musicGain == 1 / 0.95,
+        'The common album identity is restored');
+
+    final repeatedIntro = localMusicPlaybackEntry(tracks.first, db.profileId,
+        occurrenceId: '${intro.videoId}#2');
+    player.selectLocal(intro, [intro, repeatedIntro]);
+    await _until(() => introTrackGain.matches(currentDecoder.musicGain, {}),
+        'Two occurrences of a single recording use track gain');
+    expect(currentDecoder.playedTracks, hasLength(playsBeforeQueueEdits));
+    expect(standby.playedTracks, isEmpty);
+
+    player.selectLocal(finale, [intro, finale]);
+    audio.switchToOfflineVideo(finale);
+    await _until(() => standby.playMusicGains.isNotEmpty,
+        'The preloaded decoder enters playback');
+    expect(standby.playMusicGains.first, 1 / 0.95);
+  });
+
+  test(
+      'provider tracks probe on selection and only seek with the current grant',
+      () async {
+    final probed = <String>[];
+    var canRead = true;
+    final tracks = await scanDeviceMusic(
+        canRead: () => canRead,
+        canSeekProviderTrack: (uri) {
+          probed.add(uri);
+          return uri.endsWith('/Finale.mp3');
+        });
+    final queue = [
+      for (final track in tracks) localMusicPlaybackEntry(track, db.profileId)
+    ];
+    player.publish(queue);
+    expect(probed, isEmpty);
+    const start = Duration(seconds: 25);
+    final first = queue.first;
+    player.selectLocal(first, queue, startAt: start);
+    audio.switchToOfflineVideo(first);
+    await _until(() => loaded('Intro.mp3').singleOrNull?.playing == true,
+        'Sequential provider outside the saved position can play');
+    final decoder = loaded('Intro.mp3').single;
+    expect(probed, [tracks.first.uri]);
+    expect(loaded('Finale.mp3'), isEmpty);
+    expect(decoder.loadPositions[decoder.loads.indexOf('Intro.mp3')],
+        Duration.zero);
+    expect(player.canSeekCurrentMedia, isFalse);
+    final position = player.state.position;
+    player.seek(start);
+    audio.seek(start);
+    expect(player.state.position, position);
+    expect(decoder.seeks, isEmpty);
+
+    final second = queue.last;
+    expect(
+        await audio.prepareMusicSelection(second, start, () => true), isTrue);
+    final prepared = loaded('Finale.mp3').single;
+    player.selectLocal(second, queue, startAt: start);
+    expect(player.canSeekCurrentMedia, isFalse);
+    player.isCommittingMusicSelection = true;
+    try {
+      audio.switchToOfflineVideo(second);
+    } finally {
+      player.isCommittingMusicSelection = false;
+    }
+    await _until(() => prepared.playing, 'Explicit selection reuses its probe');
+    expect(probed, tracks.map((track) => track.uri));
+    expect(prepared.loadPositions, [start]);
+    expect(player.canSeekCurrentMedia, isTrue);
+    const destination = Duration(seconds: 48);
+    audio.seek(destination);
+    await _until(() => prepared.seeks.contains(destination),
+        'The seekable provider decoder receives the seek');
+
+    canRead = false;
+    await LocalMusicLibrary.instance.revalidate();
+    expect(player.state.currentQueueId, isNull);
+    audio.seek(start);
+    expect(prepared.seeks, [destination]);
+  });
+
+  for (final mode in [SongTransitionMode.fade, SongTransitionMode.crossfade]) {
+    test('device album preservation bypasses ${mode.name} at automatic EOF',
+        () async {
+      final tracks = await scanDeviceMusic(
+          albumKeys: {'Intro': 'a' * 64, 'Finale': 'a' * 64});
+      final queue = [
+        for (final track in tracks) localMusicPlaybackEntry(track, db.profileId)
+      ];
+      player.selectLocal(queue.first, queue);
+      audio.switchToOfflineVideo(queue.first);
+      await _until(() => loaded('Intro.mp3').any((decoder) => decoder.playing),
+          'Outgoing album track is playing');
+      final outgoing = loaded('Intro.mp3').single;
+      await settings.setPreserveAlbumTransitions(true);
+      await settings.setSongTransitionMode(mode);
+      player.automaticMusicSuccessor = queue.last;
+      player.publish([queue.last]);
+      await _until(
+          () => loaded('Finale.mp3').isNotEmpty, 'Successor preloaded');
+      final incoming = loaded('Finale.mp3').single;
+
+      await outgoing.report(
+          ProcessingStateMessage.ready, const Duration(milliseconds: 119450));
+      await Future<void>.delayed(const Duration(milliseconds: 90));
+      expect(outgoing.volume, 1);
+      expect(incoming.playedTracks, isEmpty);
+
+      await outgoing.report(
+          ProcessingStateMessage.completed, const Duration(minutes: 2));
+      await _until(() => player.isAutomaticMusicHandoffTo(queue.last.videoId),
+          'Queue accepts natural EOF');
+      player.selectLocal(queue.last, queue);
+      player.automaticMusicSuccessor = null;
+      audio.switchToOfflineVideo(queue.last);
+      await _until(() => incoming.playing, 'The preloaded successor plays');
+      expect(incoming.playVolumes, [1.0]);
+      expect(incoming.playPositions, [Duration.zero]);
+      expect(loaded('Finale.mp3'), [incoming]);
+    });
   }
 
   test(
@@ -891,7 +1299,7 @@ void main() {
     expect(incoming.seeks.skip(seekCount), isEmpty);
     expect(incoming.volume, 1);
     expect(incoming.musicGain, closeTo(1 / 0.75, 0.000001));
-    await player.musicSound.setMusicPreampDb(-6);
+    await player.musicSound.setMusicTaggedPreampDb(-6);
     await _until(() => incoming.musicGain == 1,
         'Preamp is applied to the promoted decoder');
     expect((incoming.speed, incoming.pitch), (1.25, 2.0));

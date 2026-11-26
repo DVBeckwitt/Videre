@@ -1,7 +1,26 @@
 import 'dart:async';
 
+import 'package:clipious/music/services/music_output_presets.dart';
 import 'package:clipious/music/services/music_sound_controller.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+class _Presets implements MusicOutputPresetStore {
+  final values = <(String, String), MusicOutputPreset>{};
+
+  @override
+  MusicOutputPreset? read(String profileId, String outputId) =>
+      values[(profileId, outputId)];
+
+  @override
+  Future<void> write(
+      String profileId, String outputId, MusicOutputPreset? preset) async {
+    if (preset == null) {
+      values.remove((profileId, outputId));
+    } else {
+      values[(profileId, outputId)] = preset;
+    }
+  }
+}
 
 class _Backend implements MusicEqualizerBackend {
   final changes = StreamController<int?>.broadcast(sync: true);
@@ -11,6 +30,7 @@ class _Backend implements MusicEqualizerBackend {
   bool unavailable = false;
   int? failBandOnce;
   Completer<void>? pendingRead;
+  Completer<void>? pendingGain;
   @override
   int? sessionId = 7;
   @override
@@ -45,6 +65,9 @@ class _Backend implements MusicEqualizerBackend {
   @override
   Future<void> setGain(int band, double gain, int session) async {
     calls.add((operation: 'gain', session: session, band: band, gain: gain));
+    final pending = pendingGain;
+    pendingGain = null;
+    if (pending != null) await pending.future;
     if (session != sessionId) throw StateError('Stale session');
     if (failBandOnce == band) {
       failBandOnce = null;
@@ -71,20 +94,87 @@ Future<void> _settle(MusicSoundController controller) async {
 void main() {
   late MusicSoundController sound;
   late _Backend backend;
+  late _Presets presets;
+  late StreamController<MusicOutput?> outputs;
   late String profile;
+  const speaker = MusicOutput('speaker', 'Speaker');
+  const headphones = MusicOutput('headphones', 'Headphones');
 
   setUp(() {
     profile = 'person-a';
-    sound =
-        MusicSoundController(supported: true, currentProfile: () => profile);
+    presets = _Presets();
+    outputs = StreamController<MusicOutput?>.broadcast(sync: true);
+    sound = MusicSoundController(
+        supported: true, currentProfile: () => profile, outputPresets: presets);
     backend = _Backend();
-    sound.attachBackend(backend, owner: backend, profileId: profile);
+    sound.attachBackend(backend,
+        owner: backend, profileId: profile, outputs: outputs.stream);
   });
 
   tearDown(() async {
     await sound.resetSession();
     sound.dispose();
     await backend.changes.close();
+    await outputs.close();
+  });
+
+  test('saved outputs restore automatically and stay isolated by profile',
+      () async {
+    await presets.write(profile, speaker.id, MusicOutputPreset(true, {60: 4}));
+    await presets.write(
+        profile, headphones.id, MusicOutputPreset(true, {8000: 4}));
+    outputs.add(speaker);
+    await _settle(sound);
+    expect(backend.gains, {0: 4, 1: 0, 2: 0});
+    expect(backend.enabled, isTrue);
+    expect(sound.hasOutputPreset, isTrue);
+
+    outputs.add(headphones);
+    await _settle(sound);
+    expect(backend.gains, {0: 0, 1: 0, 2: 4});
+    outputs.add(null);
+    await _settle(sound);
+    expect(backend.gains.values, everyElement(0));
+    expect(backend.enabled, isFalse);
+    await sound.setEnabled(true);
+    await sound.saveOutputPreset();
+    expect(presets.values.length, 2);
+
+    outputs.add(speaker);
+    await _settle(sound);
+    expect(backend.gains[0], 4);
+    backend.replaceSession(12);
+    await _settle(sound);
+    expect(backend.gains[0], 4);
+    expect(backend.enabled, isTrue);
+
+    await sound.resetSession();
+    profile = 'person-b';
+    sound.attachBackend(backend,
+        owner: backend, profileId: profile, outputs: outputs.stream);
+    outputs.add(speaker);
+    await _settle(sound);
+    expect(sound.hasOutputPreset, isFalse);
+    expect(backend.enabled, isFalse);
+  });
+
+  test('a pending gain cannot overwrite the next output on the same session',
+      () async {
+    outputs.add(speaker);
+    await _settle(sound);
+    await sound.open();
+    await sound.setEnabled(true);
+    final pending = backend.pendingGain = Completer<void>();
+    final old = sound.setGain(0, 6);
+    outputs.add(headphones);
+    expect(sound.parameters, isNull);
+    expect(sound.busy, isTrue);
+
+    pending.complete();
+    await old;
+    await _settle(sound);
+    expect(backend.gains.values, everyElement(0));
+    expect(backend.enabled, isFalse);
   });
 
   test('attaching playback does not allocate or enable an equalizer', () async {

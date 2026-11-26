@@ -22,7 +22,9 @@ import 'package:clipious/player/views/components/remote_control.dart';
 import 'package:clipious/player/views/components/system_setting_slider.dart';
 import 'package:clipious/player/views/components/seek_preview.dart';
 import 'package:clipious/player/views/components/subtitle_size_picker.dart';
+import 'package:clipious/player/views/components/subtitle_timing_picker.dart';
 import 'package:clipious/player/views/components/video_display_mode_picker.dart';
+import 'package:clipious/player/views/components/watch_local_subtitle_actions.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/settings/views/screens/add_server.dart';
 import 'package:flutter/material.dart';
@@ -63,6 +65,7 @@ class PlayerControls extends StatelessWidget {
       required int selected,
       required Function(int index) onSelected,
       String? help,
+      WidgetBuilder? buildExtraContent,
       bool announceSelection = false}) async {
     final widgets = <Widget>[
       if (help != null)
@@ -93,7 +96,10 @@ class PlayerControls extends StatelessWidget {
           child: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
-              children: widgets,
+              children: [
+                ...widgets,
+                if (buildExtraContent != null) buildExtraContent(context),
+              ],
             ),
           ),
         );
@@ -115,6 +121,11 @@ class PlayerControls extends StatelessWidget {
     var videoTracks = pc.getVideoTracks();
     final audioTracks = List<String>.of(pc.getAudioTracks());
     final subtitles = List<String>.of(pc.getSubtitles());
+    final watchPlayer = pc is VideoPlayerCubit ? pc : null;
+    final watchVideo =
+        watchPlayer?.canManageLocalSubtitles == true ? watchPlayer : null;
+    final currentSubtitleScope =
+        watchVideo == null ? null : captureWatchLocalSubtitleScope(watchVideo);
     final queueId = player.state.currentQueueId;
     final generation = player.backendPlaybackGeneration;
     final modeGeneration = player.playbackPositionGeneration;
@@ -186,12 +197,14 @@ class PlayerControls extends StatelessWidget {
                     showPlayerBackendPicker(context, player: player);
                   },
                 ),
-              if (subtitles.isNotEmpty)
+              if (subtitles.isNotEmpty || watchVideo != null)
                 ListTile(
+                  key: const ValueKey('player-subtitles-open'),
                   onTap: () {
-                    Navigator.of(context).pop();
+                    Navigator.of(ctx).pop();
                     if (!current() ||
-                        !listEquals(subtitles, pc.getSubtitles())) {
+                        !listEquals(subtitles, pc.getSubtitles()) ||
+                        currentSubtitleScope?.call() == false) {
                       return;
                     }
                     showPlayerTrackSelection(
@@ -201,10 +214,23 @@ class PlayerControls extends StatelessWidget {
                       selected: pc.selectedSubtitle(),
                       onSelected: (index) {
                         if (current() &&
+                            currentSubtitleScope?.call() != false &&
                             listEquals(subtitles, pc.getSubtitles())) {
                           pc.selectSubtitle(index);
                         }
                       },
+                      buildExtraContent: watchVideo == null
+                          ? null
+                          : (sheetContext) => WatchLocalSubtitleActions(
+                                video: watchVideo,
+                                isCurrent: currentSubtitleScope!,
+                                onChanged: () {
+                                  if (ModalRoute.of(sheetContext)?.isCurrent ==
+                                      true) {
+                                    Navigator.of(sheetContext).pop();
+                                  }
+                                },
+                              ),
                     );
                   },
                   leading: const Icon(Icons.subtitles),
@@ -218,6 +244,19 @@ class PlayerControls extends StatelessWidget {
                   onTap: () {
                     Navigator.of(ctx).pop();
                     showSubtitleSizePicker(context);
+                  },
+                ),
+              if (watchPlayer != null &&
+                  watchPlayer.hasSubtitleTracks &&
+                  watchPlayer.subtitleTimingTarget != null)
+                ListTile(
+                  key: const ValueKey('player-subtitle-timing-open'),
+                  leading: const Icon(Icons.timer_outlined),
+                  title: Text(locals.subtitleTiming),
+                  onTap: () {
+                    Navigator.of(ctx).pop();
+                    if (current())
+                      showSubtitleTimingPicker(context, watchPlayer);
                   },
                 ),
               if (videoTracks.isNotEmpty)

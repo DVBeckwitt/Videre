@@ -1,5 +1,6 @@
 import 'package:auto_route/auto_route.dart';
 import 'package:clipious/videos/models/video.dart';
+import 'package:clipious/videos/views/components/subscriptions.dart';
 import 'package:copy_with_extension/copy_with_extension.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -116,6 +117,8 @@ enum HomeDataSource {
             communityBrowse: true,
             paginatedVideoList: SingleEndpointList(service.getTrending),
           )),
+      (HomeDataSource.subscription) when !small =>
+        Subscriptions(nestedScroll: nestedScroll),
       (HomeDataSource.subscription) => SizedBox(
           height: compactHeight,
           child: VideoList(

@@ -5,6 +5,7 @@
     <string name="music_widget_open">Open Videre</string>
     <string name="music_widget_unknown_title">Unknown song</string>
     <string name="music_widget_track_artist">%1$s, %2$s</string>
+    <string name="music_widget_track_status">%1$s, %2$s</string>
     <string name="music_widget_idle">No music playing</string>
     <string name="music_widget_loading">Loading</string>
     <string name="music_widget_buffering">Buffering</string>
@@ -17,6 +18,10 @@
     <string name="music_widget_play">Play</string>
     <string name="music_widget_pause">Pause</string>
     <string name="music_widget_save">Save to playlist</string>
+    <string name="music_widget_like">Like song</string>
+    <string name="music_widget_unlike">Unlike song</string>
+    <string name="music_widget_shuffle_on">Shuffle on</string>
+    <string name="music_widget_shuffle_off">Shuffle off</string>
 
     <style name="MusicWidgetControl">
         <item name="android:layout_width">48dp</item>

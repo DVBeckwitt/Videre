@@ -11,15 +11,24 @@ import 'package:path_provider/path_provider.dart';
 import '../models/music_artwork_cache.dart';
 
 /// An independent disk cache for the catalog artwork viewed by one profile.
-class MusicCatalogArtworkCache {
-  MusicCatalogArtworkCache(this.profileId, {this.onStored, this.configFactory});
+class MusicCatalogArtworkCache extends ArtworkFileCache {
+  MusicCatalogArtworkCache(
+    this.profileId, {
+    super.onStored,
+    super.configFactory,
+  }) : super('music-catalog-art-${sha256.convert(utf8.encode(profileId))}');
 
   final String profileId;
+}
+
+/// Bounded, temporary artwork files with a generation fence for clearing.
+class ArtworkFileCache {
+  ArtworkFileCache(this._namespace, {this.onStored, this.configFactory});
+
+  final String _namespace;
   final void Function()? onStored;
   final Config Function(String namespace)? configFactory;
 
-  late final String _namespace =
-      'music-catalog-art-${sha256.convert(utf8.encode(profileId))}';
   Config? _config;
   Config get _base => _config ??= configFactory?.call(_namespace) ??
       Config(_namespace, repo: _TemporaryIndex(_namespace));
@@ -238,7 +247,7 @@ class _TemporaryIndex extends JsonCacheInfoRepository {
 
 class _CatalogFiles implements FileSystem {
   _CatalogFiles(this.cache, this.generation, this.files);
-  final MusicCatalogArtworkCache cache;
+  final ArtworkFileCache cache;
   final int generation;
   final FileSystem files;
 
@@ -250,7 +259,7 @@ class _CatalogFiles implements FileSystem {
 class _CatalogFile extends fs.ForwardingFileSystemEntity<fs.File, File>
     with fs.ForwardingFile {
   _CatalogFile(this.cache, this.generation, this.delegate);
-  final MusicCatalogArtworkCache cache;
+  final ArtworkFileCache cache;
   final int generation;
   @override
   final fs.File delegate;
@@ -302,7 +311,7 @@ class _CatalogFileService extends FileService {
     concurrentFetches = delegate.concurrentFetches;
   }
 
-  final MusicCatalogArtworkCache cache;
+  final ArtworkFileCache cache;
   final int generation;
   final FileService delegate;
 
@@ -350,7 +359,7 @@ void _discardBody(Stream<List<int>> body) =>
 class _CatalogWrite implements StreamConsumer<List<int>> {
   _CatalogWrite(this.cache, this.generation, this.file, this.mode);
 
-  final MusicCatalogArtworkCache cache;
+  final ArtworkFileCache cache;
   final int generation;
   final fs.File file;
   final FileMode mode;
@@ -448,7 +457,7 @@ class _CatalogWrite implements StreamConsumer<List<int>> {
 
 class _CatalogManager extends CacheManager {
   _CatalogManager(this.cache, this.generation, super.config);
-  final MusicCatalogArtworkCache cache;
+  final ArtworkFileCache cache;
   final int generation;
 
   @override
@@ -477,7 +486,7 @@ class _CatalogManager extends CacheManager {
 class _CatalogRepository implements CacheInfoRepository {
   _CatalogRepository(this.cache, this.generation);
 
-  final MusicCatalogArtworkCache cache;
+  final ArtworkFileCache cache;
   final int generation;
   final _reads = Expando<bool>();
   bool get current => generation == cache._generation;

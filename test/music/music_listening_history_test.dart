@@ -86,6 +86,66 @@ void main() {
     expect(() => history.events(), throwsStateError);
   });
 
+  test('totals use measured time per occurrence and retain measured zero',
+      () async {
+    await database.recordPlaybackHistory(_music, _entry(_song, 2));
+    await database.beginMusicListening(_device)!.record(_entry(_device, 3));
+    final first = database.beginMusicListening(_song)!;
+    await Future.wait([
+      first.record(_entry(_song, 4), trackElapsed: true),
+      first.recordListeningTime(const Duration(seconds: 4)),
+      first.recordListeningTime(const Duration(seconds: 2)),
+    ]);
+    first.cancel();
+    final second = database.beginMusicListening(_song)!;
+    await second.record(_entry(_song, 5), trackElapsed: true);
+    await second.recordListeningTime(const Duration(milliseconds: 1500));
+    second.cancel();
+    final skipped = database.beginMusicListening(_other)!;
+    await skipped.record(_entry(_other, 6), trackElapsed: true);
+    skipped.cancel();
+
+    expect(history.events(trackId: _song).map((event) => event.elapsed),
+        [const Duration(milliseconds: 1500), const Duration(seconds: 4), null]);
+    expect(history.listenedTimeByTrack(), {
+      _song: const Duration(milliseconds: 5500),
+      _other: Duration.zero,
+    });
+  });
+
+  test('privacy edits fence elapsed writes for an already started event',
+      () async {
+    const observed = Duration(seconds: 3);
+    const stale = Duration(seconds: 30);
+    final first = database.beginMusicListening(_song)!;
+    await first.record(_entry(_song, 4), trackElapsed: true);
+    await first.recordListeningTime(observed);
+    await history.setRecordingPaused(true);
+    await first.recordListeningTime(stale);
+    await history.setRecordingPaused(false);
+    await first.recordListeningTime(stale);
+    expect(history.events().single.elapsed, observed);
+
+    final next = database.beginMusicListening(_other)!;
+    await next.record(_entry(_other, 5), trackElapsed: true);
+    await next.recordListeningTime(observed);
+    final backup = await database.exportBackup();
+    await database.restoreBackup(backup, replace: true);
+    await next.recordListeningTime(stale);
+    expect(history.events(trackId: _other).single.elapsed, observed);
+
+    final cleared = database.beginMusicListening(_song)!;
+    await cleared.record(_entry(_song, 6), trackElapsed: true);
+    final removed = history.events(trackId: _song).first;
+    await history.removeTracks({_song});
+    await cleared.recordListeningTime(stale);
+    expect(history.events(trackId: _song), isEmpty);
+    expect(await history.merge([removed]), 1);
+    await cleared.recordListeningTime(stale);
+    expect(history.events(trackId: _song).single.elapsed, Duration.zero);
+    expect(history.events(trackId: _other).single.elapsed, observed);
+  });
+
   test('portable history round-trips and merges repeated plays by event ID',
       () async {
     await database.recordPlaybackHistory(_music, _entry(_song, 2));
@@ -94,9 +154,11 @@ void main() {
         playlistId: 'PLcollection',
         profileId: database.profileId,
         displayTitle: 'Collection');
-    await database
-        .beginMusicListening(_song)!
-        .record(_entry(_song, 11), playlist: playlist);
+    final measured = database.beginMusicListening(_song)!;
+    await measured.record(_entry(_song, 11),
+        playlist: playlist, trackElapsed: true);
+    await measured.recordListeningTime(const Duration(microseconds: 2345678));
+    measured.cancel();
     await database
         .beginMusicListening(_song)!
         .record(_entry(_song, 12, account: 'private-download-owner'));
@@ -120,6 +182,12 @@ void main() {
     expect(events[1].entry.playedFromDownload, isFalse);
     expect(events[2].playlist?.profileId, restored.id);
     expect(events[2].playlist?.displayTitle, 'Collection');
+    expect(events.map((event) => event.elapsed), [
+      null,
+      null,
+      const Duration(microseconds: 2345678),
+      null,
+    ]);
 
     final old = jsonDecode(text) as Map<String, dynamic>;
     old.remove('musicListeningEvents');

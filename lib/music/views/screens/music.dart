@@ -11,8 +11,10 @@ import 'package:clipious/globals.dart';
 import 'package:clipious/l10n/app_languages.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' show isTv;
+import 'package:clipious/music/models/music_card_origin.dart';
 import 'package:clipious/music/models/local_music_track.dart';
 import 'package:clipious/music/models/music_artist.dart';
+import 'package:clipious/music/models/music_artist_identity.dart';
 import 'package:clipious/music/models/music_artist_page.dart';
 import 'package:clipious/music/models/music_catalog_search.dart';
 import 'package:clipious/music/models/music_collection.dart';
@@ -26,23 +28,32 @@ import 'package:clipious/music/models/song_artwork.dart';
 import 'package:clipious/music/services/local_music_library.dart';
 import 'package:clipious/music/services/music_catalog_service.dart';
 import 'package:clipious/music/services/music_library_search.dart';
+import 'package:clipious/music/services/music_library_service.dart';
+import 'package:clipious/music/services/music_library_search_preferences.dart';
 import 'package:clipious/music/services/music_online_recents.dart';
+import 'package:clipious/music/services/music_visibility.dart';
+import 'package:clipious/music/views/components/music_artist_link_actions.dart';
 import 'package:clipious/music/views/components/community_music_artwork.dart';
 import 'package:clipious/music/views/components/music_catalog_description.dart';
+import 'package:clipious/music/views/components/music_artist_mix_picker.dart';
 import 'package:clipious/music/views/components/music_collection_panes.dart';
 import 'package:clipious/music/views/components/music_collection_sort_menu.dart';
 import 'package:clipious/music/views/components/music_fast_scroll.dart';
 import 'package:clipious/music/views/components/music_library_actions.dart';
 import 'package:clipious/music/views/components/music_song_row_swipe.dart';
+import 'package:clipious/music/views/components/music_artist_alias_dialog.dart';
 import 'package:clipious/music/views/components/music_library_search_results.dart';
+import 'package:clipious/music/views/components/music_offline_recovery.dart';
 import 'package:clipious/music/views/components/music_online_recents_button.dart';
 import 'package:clipious/music/views/components/music_player.dart';
 import 'package:clipious/music/views/components/music_screen_privacy.dart';
 import 'package:clipious/music/views/components/music_selection_feedback.dart';
 import 'package:clipious/music/views/components/music_playlist_recommendation_toggle.dart';
 import 'package:clipious/music/views/components/music_playlist_resume.dart';
+import 'package:clipious/music/views/components/music_playlist_hidden_songs.dart';
 import 'package:clipious/music/views/components/music_sponsor_notice.dart';
 import 'package:clipious/music/views/components/music_sound_sheet.dart';
+import 'package:clipious/music/views/components/music_playlist_overlap_shelf.dart';
 import 'package:clipious/music/views/components/music_status_title.dart';
 import 'package:clipious/music/views/components/music_track_results.dart';
 import 'package:clipious/network/content_link.dart';
@@ -82,11 +93,13 @@ import 'package:clipious/videos/views/components/offline_video_thumbnail.dart';
 import 'package:clipious/videos/views/components/video_watch_progress.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart'
-    show defaultTargetPlatform, kIsWeb, listEquals;
+    show defaultTargetPlatform, kIsWeb, listEquals, setEquals;
 import 'package:flutter/semantics.dart' show CustomSemanticsAction;
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:logging/logging.dart';
+
+import '../components/music_offline_filter.dart';
 
 enum _MusicSearchSource { online, library }
 
@@ -110,7 +123,7 @@ class _OnlineSearchListing {
   int nextPage = 1;
   int _unidentifiedPages = 0;
   bool hasMore = true;
-  bool failed = false;
+  Object? failure;
   Object? pending;
 
   bool get connectionCurrent =>
@@ -132,7 +145,7 @@ class _OnlineSearchListing {
         page.rawCount > 0 &&
         (madeProgress || (page.rawKeys.isEmpty && _unidentifiedPages < 3));
     nextPage++;
-    failed = false;
+    failure = null;
   }
 }
 
@@ -155,6 +168,7 @@ class MusicScreen extends StatefulWidget {
   final List<MusicArtistCredit> artistCredits;
   final List<Video> queue;
   final String? queueTitle;
+  final MusicCardOrigin? cardOrigin;
   final int startIndex;
   final String? playlistId;
   final String? artistId;
@@ -168,6 +182,7 @@ class MusicScreen extends StatefulWidget {
       this.artistCredits = const [],
       this.queue = const [],
       this.queueTitle,
+      this.cardOrigin,
       this.startIndex = 0,
       this.playlistId,
       this.artistId,
@@ -217,7 +232,10 @@ class MusicScreen extends StatefulWidget {
 
   static Future<void> playLocalTracks(
       BuildContext context, List<LocalMusicTrack> tracks,
-      {int startIndex = 0, String? queueTitle, bool songTap = false}) async {
+      {int startIndex = 0,
+      String? queueTitle,
+      bool songTap = false,
+      bool collectionDetail = false}) async {
     if (tracks.isEmpty || startIndex < 0 || startIndex >= tracks.length) return;
     final route = ModalRoute.of(context);
     if (isTv && route is! _PlayingMusicSourceRoute) {
@@ -227,19 +245,27 @@ class MusicScreen extends StatefulWidget {
               localTracks: tracks,
               queueTitle: queueTitle,
               startIndex: startIndex,
-              songTap: songTap)));
+              songTap: songTap,
+              collectionDetail: collectionDetail)));
     } else {
       final player = context.read<PlayerCubit>();
       final failure = route is _PlayingMusicSourceRoute
           ? player.musicSelectionFailureRevision.value
           : null;
+      final generation = songTap && route is _PlayingMusicSourceRoute
+          ? player.playlistGeneration
+          : null;
       await player.playLocalMusic(tracks,
-          startIndex: startIndex, queueTitle: queueTitle, songTap: songTap);
+          startIndex: startIndex,
+          queueTitle: queueTitle,
+          songTap: songTap,
+          collectionDetail: collectionDetail);
       if (route is _PlayingMusicSourceRoute &&
           context.mounted &&
           !player.isClosed &&
           route.isCurrent &&
           player.musicSelectionFailureRevision.value == failure &&
+          (generation == null || player.playlistGeneration != generation) &&
           player.isLocalMusicSession &&
           localMusicTrackId(player.state.currentQueueId ?? '') ==
               tracks[startIndex].playbackId) {
@@ -253,6 +279,7 @@ class MusicScreen extends StatefulWidget {
       {int startIndex = 0,
       String? queueTitle,
       bool songTap = false,
+      bool retainQueueOrder = false,
       bool Function()? isCurrent}) async {
     if (startIndex < 0 ||
         startIndex >= tracks.length ||
@@ -266,6 +293,7 @@ class MusicScreen extends StatefulWidget {
               videos: const [],
               onDeviceTracks: tracks,
               onDeviceMusicIsCurrent: isCurrent,
+              retainOnDeviceQueueOrder: retainQueueOrder,
               queueTitle: queueTitle,
               startIndex: startIndex,
               songTap: songTap)));
@@ -273,9 +301,13 @@ class MusicScreen extends StatefulWidget {
     }
     final player = context.read<PlayerCubit>();
     final failure = player.musicSelectionFailureRevision.value;
+    final generation = songTap && route is _PlayingMusicSourceRoute
+        ? player.playlistGeneration
+        : null;
     await player.playOnDeviceMusic(tracks,
         startIndex: startIndex,
         queueTitle: queueTitle,
+        retainQueueOrder: retainQueueOrder,
         songTap: songTap,
         isCurrent: isCurrent);
     if (route is! _PlayingMusicSourceRoute ||
@@ -284,6 +316,7 @@ class MusicScreen extends StatefulWidget {
         !route.isCurrent ||
         isCurrent?.call() == false ||
         player.musicSelectionFailureRevision.value != failure ||
+        (generation != null && player.playlistGeneration == generation) ||
         player.state.mediaEvent.state == MediaState.error) {
       return;
     }
@@ -304,26 +337,38 @@ class MusicScreen extends StatefulWidget {
           {PlaylistReference? reference,
           PlaylistReference? recommendationSource,
           String? queueTitle,
+          MusicCardOrigin? cardOrigin,
           int? startIndex,
           Duration startAt = Duration.zero,
           bool shuffleOnce = false,
-          bool songTap = false}) =>
+          bool songTap = false,
+          bool collectionDetail = false}) =>
       _playTracks(context, videos.map(_songEntry).toList(),
           reference: reference,
           recommendationSource: recommendationSource,
           queueTitle: queueTitle,
+          cardOrigin: cardOrigin,
           startIndex: startIndex,
           startAt: startAt,
           shuffleOnce: shuffleOnce,
-          songTap: songTap);
+          songTap: songTap,
+          collectionDetail: collectionDetail);
 
   static Future<void> playCollectionTracks(
       BuildContext context, List<Video> videos,
       {required String queueTitle,
+      int? startIndex,
       bool shuffle = false,
       List<PlaylistReference?>? recommendationSources,
-      bool Function()? isCurrent}) async {
+      bool Function()? isCurrent,
+      bool Function()? isTvQueueCurrent}) async {
     if (isCurrent?.call() == false) return;
+    bool isPlayable(Video video) =>
+        !video.filtered && !video.filterHide && video.isUpcoming != true;
+    if (startIndex != null) {
+      RangeError.checkValidIndex(startIndex, videos, 'startIndex');
+      if (!isPlayable(videos[startIndex])) return;
+    }
     if (recommendationSources != null &&
         recommendationSources.length != videos.length) {
       throw ArgumentError(
@@ -331,18 +376,32 @@ class MusicScreen extends StatefulWidget {
     }
     final rows = [
       for (final (index, video) in videos.indexed)
-        if (!video.filtered && !video.filterHide && video.isUpcoming != true)
+        if (isPlayable(video))
           (video: _songEntry(video), source: recommendationSources?[index]),
     ];
     if (rows.isEmpty) return;
+    final playableStart = startIndex == null
+        ? 0
+        : videos.take(startIndex).where(isPlayable).length;
     List<Video> tracks() => [for (final row in rows) row.video];
     List<PlaylistReference?>? sources() => recommendationSources == null
         ? null
         : [for (final row in rows) row.source];
+    if (ModalRoute.of(context) is _PlayingMusicSourceRoute) {
+      if (shuffle && startIndex == null) rows.shuffle();
+      return _playTracks(context, tracks(),
+          queueTitle: queueTitle,
+          startIndex: playableStart,
+          startAt: Duration.zero,
+          isCurrent: isCurrent,
+          recommendationSources: sources(),
+          useCollectionQueue: true);
+    }
     if (!isTv) {
       await context.read<PlayerCubit>().playMusicCollectionQueue(tracks(),
           queueTitle: queueTitle,
-          shuffle: shuffle,
+          startIndex: playableStart,
+          shuffle: shuffle && startIndex == null,
           isCurrent: isCurrent,
           recommendationSources: sources());
       return;
@@ -350,30 +409,54 @@ class MusicScreen extends StatefulWidget {
     final session = MusicLibrarySession(context.read<AppCubit>());
     if (!session.isCurrent) return;
     // A retry starts with the same collection order as the original request.
-    if (shuffle) rows.shuffle();
+    if (shuffle && startIndex == null) rows.shuffle();
     final playable = tracks();
     final alignedSources = sources();
     await Navigator.of(context).push<void>(MaterialPageRoute(
-        builder: (routeContext) =>
-            _MusicTvPlayer(videos: playable, collectionQueue: (
-              title: queueTitle,
-              isCurrent: () => routeContext.mounted && session.isCurrent,
-              recommendationSources: alignedSources,
-            ))));
+        builder: (routeContext) => _MusicTvPlayer(
+                videos: playable,
+                startIndex: playableStart,
+                collectionQueue: (
+                  title: queueTitle,
+                  startIndex: startIndex == null ? null : playableStart,
+                  isCurrent: () =>
+                      routeContext.mounted &&
+                      session.isCurrent &&
+                      (startIndex == null || isCurrent?.call() != false) &&
+                      isTvQueueCurrent?.call() != false,
+                  recommendationSources: alignedSources,
+                ))));
   }
 
   static Future<void> playSeededMix(BuildContext context, Video seed,
       {required bool inPlayer, required bool Function() isCurrent}) async {
     final locals = AppLocalizations.of(context)!;
+    return _startMix(context,
+        inPlayer: inPlayer,
+        isCurrent: isCurrent,
+        loadingLabel: locals.musicStartingMix,
+        unavailableLabel: locals.musicMixUnavailable,
+        tvPreview: [seed],
+        play: (player, current) => player.playMusicMix(seed,
+            queueTitle: locals.musicSeededMixTitle(seed.musicMetadata!.title),
+            loadCandidates: (isCurrent) => musicCatalogService
+                .getRelatedSongs([seed.videoId], isCurrent: isCurrent),
+            isCurrent: current));
+  }
+
+  static Future<void> _startMix(BuildContext context,
+      {required bool inPlayer,
+      required bool Function() isCurrent,
+      required String loadingLabel,
+      required String unavailableLabel,
+      List<Video> tvPreview = const [],
+      required Future<bool?> Function(PlayerCubit, bool Function())
+          play}) async {
     final route = ModalRoute.of(context);
     bool current() => isCurrent() && route?.isActive != false;
     Future<bool?> start(PlayerCubit player) async {
       try {
-        return await player.playMusicMix(seed,
-            queueTitle: locals.musicSeededMixTitle(seed.musicMetadata!.title),
-            loadCandidates: (isCurrent) => musicCatalogService
-                .getRelatedSongs([seed.videoId], isCurrent: isCurrent),
-            isCurrent: current);
+        return await play(player, current);
       } catch (error) {
         _musicLog.fine('Could not start Music mix (${error.runtimeType})');
         return false;
@@ -382,17 +465,15 @@ class MusicScreen extends StatefulWidget {
 
     if (isTv && !inPlayer && route is! _PlayingMusicSourceRoute) {
       await Navigator.of(context).push<void>(MaterialPageRoute(
-          builder: (_) => _MusicTvPlayer(videos: [seed], startMix: start)));
+          builder: (_) => _MusicTvPlayer(videos: tvPreview, startMix: start)));
       return;
     }
     final messenger = ScaffoldMessenger.maybeOf(context);
     messenger?.showSnackBar(SnackBar(
-        duration: const Duration(seconds: 2),
-        content: Text(locals.musicStartingMix)));
+        duration: const Duration(seconds: 2), content: Text(loadingLabel)));
     final started = await start(context.read<PlayerCubit>());
     if (started == false && current() && messenger?.mounted == true) {
-      messenger!
-          .showSnackBar(SnackBar(content: Text(locals.musicMixUnavailable)));
+      messenger!.showSnackBar(SnackBar(content: Text(unavailableLabel)));
     }
   }
 
@@ -406,12 +487,16 @@ class MusicScreen extends StatefulWidget {
       {PlaylistReference? reference,
       PlaylistReference? recommendationSource,
       String? queueTitle,
+      MusicCardOrigin? cardOrigin,
       int? startIndex,
       required Duration startAt,
       bool shuffleOnce = false,
       bool songTap = false,
+      bool collectionDetail = false,
       ModalRoute<dynamic>? songLauncher,
-      bool Function()? isCurrent}) async {
+      bool Function()? isCurrent,
+      List<PlaylistReference?>? recommendationSources,
+      bool useCollectionQueue = false}) async {
     if (videos.isEmpty) return;
     if (reference != null && reference.profileId != db.profileId) return;
     if (recommendationSource != null &&
@@ -423,44 +508,68 @@ class MusicScreen extends StatefulWidget {
       await Navigator.of(context).push<void>(MaterialPageRoute(
           builder: (_) => _MusicTvPlayer(
               videos: videos,
+              cardOrigin: cardOrigin,
               reference: reference,
               recommendationSource: recommendationSource,
               queueTitle: queueTitle,
               startIndex: startIndex ?? 0,
               startAt: startAt,
               shuffleOnce: shuffleOnce,
-              songTap: songTap)));
+              songTap: songTap,
+              collectionDetail: collectionDetail)));
       return;
     }
     final player = context.read<PlayerCubit>();
     final returnRoute = songLauncher ??
         (sourceRoute is _PlayingMusicSourceRoute ? sourceRoute : null);
     final before = player.state;
+    final scope = returnRoute != null && songTap
+        ? player.settings.state
+            .resolveMusicSongTapQueueScope(collectionDetail: collectionDetail)
+        : null;
+    final previousGeneration =
+        returnRoute != null && (shuffleOnce || scope?.usesDeviceLibrary == true)
+            ? player.playlistGeneration
+            : null;
     final failure =
         returnRoute == null ? null : player.musicSelectionFailureRevision.value;
-    final playlistGeneration =
-        shuffleOnce && returnRoute != null ? player.playlistGeneration : null;
-    final playback = reference == null
-        ? player.playVideo(videos,
-            fromMusic: true,
-            recommendationSource: recommendationSource,
-            queueTitle: queueTitle,
-            audio: true,
-            startAt: startAt,
-            startIndex: startIndex,
-            songTap: songTap)
-        : player.playPlaylist(videos,
-            fromMusic: true,
-            reference: reference,
+    final playlistGeneration = shuffleOnce ? previousGeneration : null;
+    final playback = useCollectionQueue
+        ? player.playMusicCollectionQueue(videos,
+            queueTitle: queueTitle!,
             startIndex: startIndex ?? 0,
-            audio: true,
-            startAt: startAt,
-            shuffleOnce: shuffleOnce,
-            songTap: songTap);
+            isCurrent: isCurrent,
+            recommendationSources: recommendationSources)
+        : reference == null && cardOrigin != null
+            ? player.playMusicFromCard(videos,
+                origin: cardOrigin,
+                queueTitle: queueTitle,
+                startAt: startAt,
+                startIndex: startIndex,
+                recommendationSource: recommendationSource,
+                songTap: songTap,
+                collectionDetail: collectionDetail)
+            : reference == null
+                ? player.playVideo(videos,
+                    fromMusic: true,
+                    recommendationSource: recommendationSource,
+                    queueTitle: queueTitle,
+                    audio: true,
+                    startAt: startAt,
+                    startIndex: startIndex,
+                    songTap: songTap,
+                    collectionDetail: collectionDetail)
+                : player.playPlaylist(videos,
+                    fromMusic: true,
+                    reference: reference,
+                    startIndex: startIndex ?? 0,
+                    audio: true,
+                    startAt: startAt,
+                    shuffleOnce: shuffleOnce,
+                    songTap: songTap,
+                    collectionDetail: collectionDetail);
     if (returnRoute == null) return playback;
-    final songOnly = songTap &&
-        player.settings.state.musicSongTapQueueScope ==
-            MusicSongTapQueueScope.songOnly;
+    final songOnly = scope == MusicSongTapQueueScope.songOnly;
     final request = player.musicSelectionRequestRevision;
     bool current() =>
         context.mounted &&
@@ -471,34 +580,55 @@ class MusicScreen extends StatefulWidget {
     bool playable(Video video) =>
         !video.filtered &&
         (!isLocalMusicPlaybackId(video.videoId) ||
-            LocalMusicLibrary.instance.playlistTrackById(video.videoId) !=
+            LocalMusicLibrary.instance
+                    .playlistTrackById(video.videoId, excludeExplicit: true) !=
                 null) &&
         (reference == null || (!video.filterHide && video.isUpcoming != true));
-    final assigned = reference == null
-        ? assignPlaybackQueueIds(videos.where(playable))
-        : assignPlaylistEntryIds(videos).where(playable);
+    final assigned = (reference == null
+            ? assignPlaybackQueueIds(videos.where(playable))
+            : assignPlaylistEntryIds(videos).where(playable))
+        .toList();
     final sourceQueue = assigned.map(playbackQueueId).toList();
     final start = startIndex ?? 0;
     final available = (startIndex == null && reference == null) ||
         (start >= 0 && start < videos.length && playable(videos[start]));
-    final selectedId = available
-        ? sourceQueue.elementAtOrNull(videos.take(start).where(playable).length)
+    final visibleIndex =
+        available ? videos.take(start).where(playable).length : -1;
+    final selected = available ? assigned.elementAtOrNull(visibleIndex) : null;
+    final selectedId = selected == null ? null : playbackQueueId(selected);
+    final scopedTrackId = scope?.usesDeviceLibrary == true && selected != null
+        ? LocalMusicLibrary.instance
+            .visibleCatalogTrack(selected.videoId)
+            ?.playbackId
         : null;
+    final scopedId = scopedTrackId != null && selected != null
+        ? devicePlaylistQueueOccurrenceId(
+            scopedTrackId, selected.videoId, assigned.take(visibleIndex))
+        : null;
+    bool hasScopedSelection(PlayerState state) =>
+        scopedId != null &&
+        state.currentQueueId == scopedId &&
+        state.offlineCurrentlyPlaying != null;
+    bool matchesDeviceScope(PlayerState state) =>
+        hasScopedSelection(state) &&
+        player.playlistGeneration != previousGeneration;
     final queue = songOnly ? [if (selectedId != null) selectedId] : sourceQueue;
     final shuffledIds = shuffleOnce ? queue.toSet() : null;
-    bool matchesQueue(PlayerState state) => shuffledIds == null
-        ? listEquals(state.videos.map(playbackQueueId).toList(), queue)
-        : state.videos.length == queue.length &&
-            state.videos
-                .every((video) => shuffledIds.contains(playbackQueueId(video)));
+    bool matchesQueue(PlayerState state) =>
+        matchesDeviceScope(state) ||
+        (shuffledIds == null
+            ? listEquals(state.videos.map(playbackQueueId).toList(), queue)
+            : state.videos.length == queue.length &&
+                state.videos.every(
+                    (video) => shuffledIds.contains(playbackQueueId(video))));
     // Replaying the active occurrence can have an identical queue throughout
     // preparation. In that case its completed request confirms the handoff.
     String? expectedId(PlayerState snapshot) =>
         shuffleOnce && snapshot.videos.isNotEmpty
             ? playbackQueueId(snapshot.videos.first)
             : selectedId;
-    final wasCurrent =
-        before.currentQueueId == expectedId(before) && matchesQueue(before);
+    final wasCurrent = hasScopedSelection(before) ||
+        (before.currentQueueId == expectedId(before) && matchesQueue(before));
     bool popped = false;
     void returnAfterCommit({bool completed = false}) {
       final state = player.state;
@@ -519,7 +649,9 @@ class MusicScreen extends StatefulWidget {
           !state.isAudio ||
           state.isHidden ||
           state.isMini ||
-          (!firstQueue && state.currentQueueId != nextId) ||
+          (!firstQueue &&
+              state.currentQueueId != nextId &&
+              !matchesDeviceScope(state)) ||
           !matchesQueue(state)) {
         return;
       }
@@ -570,7 +702,7 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
   int _libraryResultRevision = 0;
   VoidCallback? _shortcutBack;
   MusicCatalogSearchType _type = MusicCatalogSearchType.songs;
-  MusicLibrarySearchType _libraryType = MusicLibrarySearchType.all;
+  bool _libraryLyricsMode = false;
   _OnlineSearchListing? _onlineListing;
   Timer? _suggestionTimer;
   int _suggestionRequest = 0;
@@ -603,6 +735,8 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
     Duration startAt,
     String? queueTitle,
     bool songTap,
+    bool collectionDetail,
+    MusicCardOrigin? cardOrigin,
   })? _tvSong;
   int _generation = 0;
   int? _abandonedSongRequest;
@@ -619,6 +753,8 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
 
   bool get _searchingLibrary =>
       _canSwitchSearchSource && _searchSource == _MusicSearchSource.library;
+
+  bool get _searchingLyrics => _searchingLibrary && _libraryLyricsMode;
 
   bool get _canUseOnlineRecents =>
       _canSwitchSearchSource && !_searchingLibrary && !_hasBrowsePage;
@@ -681,12 +817,58 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
     }
   }
 
-  void _selectLibraryType(MusicLibrarySearchType type) {
-    if (!_searchingLibrary || _libraryType == type) return;
+  MusicLibrarySearchPreferences? _libraryPreferences(AppState session) =>
+      _sameSession(session) && db.profileId == session.profileId
+          ? MusicLibrarySearchPreferences.forProfile(db, session.profileId)
+          : null;
+
+  void _toggleLibraryLyrics(AppState session) {
+    if (!_searchingLibrary || !_sameSession(session)) return;
     setState(() {
-      _libraryType = type;
+      _libraryLyricsMode = !_libraryLyricsMode;
       _libraryResultRevision++;
     });
+  }
+
+  Future<void> _selectLibraryCategory(
+      AppState session, MusicLibrarySearchType? type) async {
+    if (!_searchingLibrary) return;
+    final preferences = _libraryPreferences(session);
+    if (preferences == null) return;
+    const all = MusicLibrarySearchType.categories;
+    final current = preferences.categories;
+    final selected = <MusicLibrarySearchType>{
+      if (!_searchingLyrics && current.length < all.length) ...current,
+    };
+    if (type == null) {
+      selected.clear();
+    } else if (!selected.add(type)) {
+      selected.remove(type);
+    }
+    final next = selected.isEmpty ? all : selected;
+    final changed = !setEquals(current, next);
+    if (!_searchingLyrics && !changed) return;
+    final write = changed ? preferences.save(next) : null;
+    final revision = _libraryResultRevision + 1;
+    setState(() {
+      _libraryLyricsMode = false;
+      _libraryResultRevision = revision;
+    });
+    try {
+      await write;
+    } catch (_) {
+      if (!mounted ||
+          !_sameSession(session) ||
+          _libraryResultRevision != revision) {
+        return;
+      }
+      setState(() => _libraryResultRevision++);
+      if (_searchingLibrary) {
+        final locals = AppLocalizations.of(context)!;
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(locals.musicSearchCategoriesSaveFailed)));
+      }
+    }
   }
 
   void _searchInputChanged(String input) {
@@ -809,7 +991,7 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _startVoiceSearch() async {
-    if (_voiceSearchPending) return;
+    if (_voiceSearchPending || _searchingLyrics) return;
     final locals = AppLocalizations.of(context)!;
     final session = context.read<AppCubit>().state;
     final languageTag =
@@ -823,6 +1005,7 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
         _active(generation, session) &&
         intent == _searchIntentRevision &&
         controller.text == draft &&
+        !_searchingLyrics &&
         TickerMode.of(context) &&
         ModalRoute.of(context)?.isCurrent != false;
 
@@ -955,6 +1138,7 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.videoId != widget.videoId ||
         oldWidget.startIndex != widget.startIndex ||
+        oldWidget.cardOrigin != widget.cardOrigin ||
         !listEquals(oldWidget.queue, widget.queue) ||
         oldWidget.playlistId != widget.playlistId ||
         oldWidget.artistId != widget.artistId ||
@@ -1019,7 +1203,7 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
     if (_canSwitchSearchSource) {
       _librarySearch.clear();
       _type = MusicCatalogSearchType.songs;
-      _libraryType = MusicLibrarySearchType.all;
+      _libraryLyricsMode = false;
     }
     _artistReleaseCooldown?.cancel();
     _artistReleaseCooldown = null;
@@ -1240,8 +1424,8 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
           listing.query, listing.type, listing.nextPage,
           isCurrent: current);
       if (current()) setState(() => listing.accept(page));
-    } catch (_) {
-      if (current()) setState(() => listing.failed = true);
+    } catch (error) {
+      if (current()) setState(() => listing.failure = error);
     } finally {
       if (mounted &&
           identical(_onlineListing, listing) &&
@@ -1503,6 +1687,7 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
       await _playVideos(videos,
           startIndex: fromShelf ? index : null,
           queueTitle: fromShelf ? widget.queueTitle : null,
+          cardOrigin: fromShelf ? widget.cardOrigin : null,
           startAt: startAt,
           songTap: fromShelf,
           songLauncher: route);
@@ -1560,13 +1745,15 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
           String? queueTitle,
           int? startIndex,
           Duration startAt = Duration.zero,
-          bool songTap = false}) =>
+          bool songTap = false,
+          bool collectionDetail = false}) =>
       _playVideos(tracks.map((track) => track.toVideo()).toList(),
           reference: reference,
           queueTitle: queueTitle,
           startIndex: startIndex,
           startAt: startAt,
-          songTap: songTap);
+          songTap: songTap,
+          collectionDetail: collectionDetail);
 
   Future<void> _playVideos(List<Video> videos,
       {PlaylistReference? reference,
@@ -1575,7 +1762,9 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
       Duration startAt = Duration.zero,
       bool shuffleOnce = false,
       bool songTap = false,
-      ModalRoute<dynamic>? songLauncher}) async {
+      bool collectionDetail = false,
+      ModalRoute<dynamic>? songLauncher,
+      MusicCardOrigin? cardOrigin}) async {
     final session = context.read<AppCubit>().state;
     if (videos.isEmpty || !_sameSession(session)) return;
     if (songLauncher != null && isTv) {
@@ -1585,7 +1774,9 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
             startIndex: startIndex ?? 0,
             startAt: startAt,
             queueTitle: queueTitle,
-            songTap: songTap
+            songTap: songTap,
+            collectionDetail: collectionDetail,
+            cardOrigin: cardOrigin,
           ));
       return;
     }
@@ -1600,10 +1791,12 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
       await MusicScreen._playTracks(context, videos,
           reference: reference,
           queueTitle: queueTitle,
+          cardOrigin: cardOrigin,
           startIndex: startIndex,
           startAt: startAt,
           shuffleOnce: shuffleOnce,
           songTap: songTap,
+          collectionDetail: collectionDetail,
           songLauncher: songLauncher,
           isCurrent: current);
     } catch (_) {
@@ -1780,7 +1973,14 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
               decoration: BoxDecoration(borderRadius: BorderRadius.circular(8)),
             ));
 
+  MusicLibraryService get _artistAliases =>
+      MusicLibraryService.forProfile(db, db.profileId);
+
+  String _artistName(MusicArtist artist) => _artistAliases.artistDisplayName(
+      MusicArtistIdentity.catalog(artist.id), artist.name);
+
   Widget _artistByline(List<String> names, List<MusicArtistCredit> credits) {
+    final library = _artistAliases;
     if (!credits.any((credit) => credit.id != null)) {
       return Text(names.join(', '),
           maxLines: 1, overflow: TextOverflow.ellipsis);
@@ -1795,7 +1995,8 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
                 style: TextButton.styleFrom(
                     padding: EdgeInsets.zero, alignment: Alignment.centerLeft),
                 onPressed: () => _openArtist(id),
-                child: Text(credit.name))
+                child: Text(library.artistDisplayName(
+                    MusicArtistIdentity.catalog(id), credit.name)))
           else
             Text(credit.name),
       ],
@@ -1806,21 +2007,26 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
       {bool numbered = true,
       String? section,
       PlaylistReference? reference,
+      Future<void> Function({bool songTap})? onPlay,
       String? queueTitle,
-      List<CommunityMatch> matches = const []}) {
+      List<CommunityMatch> matches = const [],
+      bool collectionDetail = false,
+      Video? offlineSong}) {
     final track = queue[index];
-    final video = track.toVideo();
+    final video = offlineSong ?? track.toVideo();
     final sourceIndex = track.playlistIndex;
     final displayPosition =
         (sourceIndex != null && sourceIndex >= 0 ? sourceIndex : index) + 1;
     final row = '${section ?? (numbered ? '' : 'search-')}$index';
     Future<void> play({bool songTap = false}) {
       if (_findingPlaylist) _playlistFindInput.unfocus();
+      if (onPlay != null) return onPlay(songTap: songTap);
       return _play(queue,
           reference: reference,
           queueTitle: queueTitle,
           startIndex: index,
-          songTap: songTap);
+          songTap: songTap,
+          collectionDetail: collectionDetail);
     }
 
     final tile = ListTile(
@@ -1856,9 +2062,14 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
         ],
       ),
       trailing: MusicLibraryActions(
-          videos: [video], onPlay: play, recommendationSource: reference),
+          videos: [video],
+          onPlay: play,
+          recommendationSource: reference,
+          playlistVisibility: reference),
       onLongPress: () => MusicLibraryActions.showSongMenu(context, video,
-          onPlay: play, recommendationSource: reference),
+          onPlay: play,
+          recommendationSource: reference,
+          playlistVisibility: reference),
       onTap: () => play(songTap: true),
     );
     return MusicSongRowSwipe(
@@ -1870,10 +2081,11 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
     );
   }
 
-  Widget _libraryResults() {
+  Widget _libraryResults(Set<MusicLibrarySearchType> categories) {
     final session = context.read<AppCubit>().state;
     final intent = _searchIntentRevision;
-    final type = _libraryType;
+    final types =
+        _libraryLyricsMode ? const {MusicLibrarySearchType.lyrics} : categories;
     final revision = _libraryResultRevision;
     bool current() =>
         _sameSession(session) &&
@@ -1884,7 +2096,7 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
       valueListenable: _librarySearch,
       builder: (context, draft, _) => MusicLibrarySearchResults(
         query: draft.text,
-        type: type,
+        types: types,
         active: _searchingLibrary && TickerMode.of(context),
         controller: _librarySearchScroll,
         searchFocusNode: _queryFocus,
@@ -1903,7 +2115,7 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
     );
   }
 
-  Widget _results(MusicLayout layout) {
+  Widget _results(MusicLayout layout, Set<MusicLibrarySearchType> categories) {
     final online =
         _searchingLibrary ? null : _onlineResultsWithSuggestions(layout);
     if (!_canSwitchSearchSource || !_visitedLibrarySearch) return online!;
@@ -1916,7 +2128,7 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
         offstage: !_searchingLibrary,
         child: KeyedSubtree(
           key: const ValueKey('music-search-library-viewport'),
-          child: _libraryResults(),
+          child: _libraryResults(categories),
         ),
       ),
     ]);
@@ -1935,7 +2147,10 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
             enabled: !showSuggestions,
             child: KeyedSubtree(
               key: const ValueKey('music-search-online-viewport'),
-              child: _onlineResults(layout),
+              child: ListenableBuilder(
+                listenable: _artistAliases.changes,
+                builder: (_, __) => _onlineResults(layout),
+              ),
             ),
           ),
         ),
@@ -1968,17 +2183,29 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
     if (_loading) {
       return const Center(child: CircularProgressIndicator());
     }
-    if (_failure != null) {
+    final failure = _failure;
+    if (failure != null) {
       return Center(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(24),
           child: Column(mainAxisSize: MainAxisSize.min, children: [
             Text(locals.musicCatalogError, textAlign: TextAlign.center),
             const SizedBox(height: 12),
-            FilledButton.icon(
-                onPressed: _retry,
-                icon: const Icon(Icons.refresh),
-                label: Text(locals.retry)),
+            Wrap(
+              alignment: WrapAlignment.center,
+              spacing: 8,
+              children: [
+                FilledButton.icon(
+                  onPressed: _retry,
+                  icon: const Icon(Icons.refresh),
+                  label: Text(locals.retry),
+                ),
+                if (!_browseRequest &&
+                    _onlineListing != null &&
+                    isMusicBrowseConnectionFailure(failure))
+                  const BrowseOfflineMusicButton(),
+              ],
+            ),
           ]),
         ),
       );
@@ -2079,6 +2306,7 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
                 queueTitle: locals.search,
                 matches: songs.visible[songIndex].$2);
           case MusicCatalogChannelHit(:final artist):
+            final name = _artistName(artist);
             return ListTile(
                 key: listing.paginated ? ValueKey(hit.key) : null,
                 leading: ChannelAvatar(
@@ -2090,7 +2318,8 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
                 title: MusicStatusTitle.bookmark(
                     kind: MusicLibraryKind.artist,
                     id: artist.id,
-                    child: Text(artist.name)),
+                    child: Text(name)),
+                subtitle: name == artist.name ? null : Text(artist.name),
                 trailing: const Icon(Icons.chevron_right),
                 onTap: () => _openArtist(artist.id));
           case MusicCatalogPlaylistHit(:final playlist):
@@ -2124,10 +2353,19 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
                     child: CircularProgressIndicator(
                         semanticsLabel: locals.musicSearchLoadingMore),
                   )
-                : TextButton(
-                    onPressed: () => unawaited(_loadMore(listing)),
-                    child:
-                        Text(listing.failed ? locals.retry : locals.loadMore),
+                : Wrap(
+                    alignment: WrapAlignment.center,
+                    spacing: 8,
+                    children: [
+                      TextButton(
+                        onPressed: () => unawaited(_loadMore(listing)),
+                        child: Text(listing.failure == null
+                            ? locals.loadMore
+                            : locals.retry),
+                      ),
+                      if (isMusicBrowseConnectionFailure(listing.failure))
+                        const BrowseOfflineMusicButton(),
+                    ],
                   ),
           ),
         ),
@@ -2135,20 +2373,116 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
 
   Widget _collectionResults(
       BuildContext context, MusicCollection collection, MusicLayout layout) {
-    final locals = AppLocalizations.of(context)!;
+    final visibility = MusicVisibility.forProfile(db, db.profileId);
+    return ListenableBuilder(
+      listenable: visibility,
+      builder: (_, __) =>
+          _playlistResults(context, collection, layout, visibility),
+    );
+  }
+
+  Widget _playlistResults(BuildContext context, MusicCollection collection,
+      MusicLayout layout, MusicVisibility visibility) {
     final session = context.read<AppCubit>().state;
-    final generation = _generation;
-    final videos = collection.tracks.map((track) => track.toVideo()).toList();
-    final query = _playlistFindQuery.text;
-    final terms = _findingPlaylist ? musicSearchTerms(query) : const <String>[];
+    final videos = assignPlaylistEntryIds(
+        collection.tracks.map((track) => track.toVideo()));
     final reference = PlaylistReference(
         kind: PlaylistSourceKind.public,
         playlistId: collection.id,
         displayTitle: collection.title,
-        profileId: db.profileId);
-    final order = MusicCollectionSortMenu.playlistOrder(context, reference);
-    final displayIndices =
-        order.orderIndices(videos, sortValue: musicPlaylistTrackSortValue);
+        profileId: session.profileId);
+    return MusicOfflineFilter(
+      key: ValueKey((
+        'music-catalog-offline-filter',
+        session.profileId,
+        session.sessionRevision,
+        collection.id,
+      )),
+      videos: videos,
+      builder: (context, offline) => MusicPlaylistOrderBuilder(
+          reference: reference,
+          builder: (context, order, sortValue) => _collectionPanes(
+              context,
+              collection,
+              session,
+              videos,
+              offline,
+              layout,
+              visibility,
+              reference,
+              order,
+              sortValue)),
+    );
+  }
+
+  Widget _collectionPanes(
+      BuildContext context,
+      MusicCollection collection,
+      AppState session,
+      List<Video> videos,
+      MusicOfflineView offline,
+      MusicLayout layout,
+      MusicVisibility visibility,
+      PlaylistReference reference,
+      MusicCollectionOrder order,
+      MusicPlaylistSortValue sortValue) {
+    final locals = AppLocalizations.of(context)!;
+    final generation = _generation;
+    final query = _playlistFindQuery.text;
+    final terms = _findingPlaylist ? musicSearchTerms(query) : const <String>[];
+    final allVideos = videos;
+    final hidden = <String, Video>{
+      for (final video in videos)
+        if (visibility.isHiddenInPlaylist(reference, video.videoId))
+          video.videoId: video,
+    };
+    final onlineIndices = [
+      for (final (index, video) in videos.indexed)
+        if (!hidden.containsKey(video.videoId)) index
+    ];
+    final onlineQueue = [for (final index in onlineIndices) videos[index]];
+    final displayIndices = order.orderIndices(videos, sortValue: sortValue);
+    final entries = offline.entries;
+    final visible = offline.enabled
+        ? [
+            if (entries != null)
+              for (final index in displayIndices)
+                if (!hidden.containsKey(videos[index].videoId) &&
+                    entries[index] != null)
+                  index,
+          ]
+        : displayIndices
+            .where((index) => !hidden.containsKey(videos[index].videoId))
+            .toList();
+    final queue = [
+      if (offline.enabled && entries != null)
+        for (final index in visible) entries[index]!,
+    ];
+    Future<void> playOffline(int index,
+        {bool shuffle = false, bool songTap = false}) async {
+      bool isCurrent() => offline.isCurrent() && _sameSession(session);
+      final songOnly = songTap &&
+          context
+                  .read<SettingsCubit?>()
+                  ?.state
+                  .resolveMusicSongTapQueueScope(collectionDetail: true) ==
+              MusicSongTapQueueScope.songOnly;
+      final tracks = songOnly ? [queue[index]] : queue;
+      try {
+        await MusicScreen.playCollectionTracks(context, tracks,
+            queueTitle: collection.title,
+            startIndex: shuffle ? null : (songOnly ? 0 : index),
+            shuffle: shuffle,
+            recommendationSources: List.filled(tracks.length, reference),
+            isCurrent: isCurrent);
+      } catch (_) {
+        if (context.mounted && isCurrent()) {
+          ScaffoldMessenger.of(context)
+              .showSnackBar(SnackBar(content: Text(locals.musicPlaybackError)));
+        }
+      }
+    }
+
     String matchText(int index) {
       final track = collection.tracks[index];
       return normalizeMusicSearchText(
@@ -2157,7 +2491,7 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
 
     // Sort and filter a projection, keeping the playback queue in source order.
     final matching = [
-      for (final index in displayIndices)
+      for (final index in visible)
         if (terms.isEmpty || terms.every(matchText(index).contains)) index,
     ];
     final loadStatus = collection.loadingComplete
@@ -2217,7 +2551,7 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
                 author: collection.artists.join(', '),
                 videoCount: collection.videoCount ?? collection.tracks.length,
                 updated: collection.updated,
-                videos: videos),
+                videos: allVideos),
             reference: reference,
             complete: collection.loadingComplete,
             enabled: !_starting),
@@ -2229,10 +2563,11 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
           children: [
             FilledButton.icon(
                 key: const ValueKey('music-play-all'),
-                onPressed:
-                    !collection.loadingComplete || collection.tracks.isEmpty
-                        ? null
-                        : () => _play(collection.tracks, reference: reference),
+                onPressed: !collection.loadingComplete || visible.isEmpty
+                    ? null
+                    : offline.enabled
+                        ? () => playOffline(0)
+                        : () => _playVideos(onlineQueue, reference: reference),
                 icon: const Icon(Icons.play_arrow),
                 label: Text(locals.musicPlayAll)),
             if (collection.tracks.isNotEmpty)
@@ -2245,33 +2580,52 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
                     _collection?.id == collection.id &&
                     _sameSession(session),
               ),
-            if (collection.loadingComplete && videos.isNotEmpty)
+            if (collection.loadingComplete && visible.isNotEmpty)
               MusicPlaylistSelectionActions.wholePlaylist(
-                videos: videos,
+                videos: offline.enabled ? queue : onlineQueue,
                 recommendationSource: reference,
                 isCurrent: () =>
                     !_starting &&
                     identical(_collection, collection) &&
                     _active(generation, session),
-                onPlay: (shuffle) => _playVideos(videos,
-                    reference: reference, shuffleOnce: shuffle),
+                onPlay: (shuffle) => offline.enabled
+                    ? playOffline(0, shuffle: shuffle)
+                    : _playVideos(onlineQueue,
+                        reference: reference, shuffleOnce: shuffle),
               ),
+            musicOfflineFilterButton(context, offline,
+                key: const ValueKey('music-catalog-offline-toggle')),
           ],
         ),
-        MusicPlaylistResume(
-            reference: reference,
-            videos: videos,
-            enabled: collection.loadingComplete && !_starting,
-            onPlay: (index, position) => _play(collection.tracks,
-                reference: reference, startIndex: index, startAt: position)),
+        if (!offline.enabled)
+          MusicPlaylistResume(
+              reference: reference,
+              videos: onlineQueue,
+              enabled: collection.loadingComplete && !_starting,
+              onPlay: (index, position) => _playVideos(onlineQueue,
+                  reference: reference, startIndex: index, startAt: position)),
         const SizedBox(height: 8),
+        if (collection.tracks.isNotEmpty &&
+            isMusicPlaylistOverlapCandidate(collection.id))
+          MusicPlaylistOverlapShelf(
+            key: ValueKey(collection.id),
+            playlistId: collection.id,
+            onOpen: _openCollection,
+          ),
         MusicBookmarkButton(
             entry: MusicLibraryEntry.collection(collection, album: false)),
         if (collection.loadingComplete)
           MusicLibraryActions(
-              videos: videos, compact: false, recommendationSource: reference),
+              videos: offline.enabled ? queue : onlineQueue,
+              compact: false,
+              recommendationSource: reference),
         MusicPlaylistRecommendationToggle(reference: reference),
         if (!_findingPlaylist && loadStatus != null) loadStatus,
+        if (hidden.isNotEmpty)
+          MusicPlaylistHiddenSongs(
+              playlist: reference,
+              visibility: visibility,
+              songs: hidden.values.toList()),
       ]),
     );
     return MusicCollectionPanes(
@@ -2288,9 +2642,11 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
           if (matching.isEmpty && collection.loadingComplete)
             Padding(
               padding: const EdgeInsets.all(24),
-              child: Text(terms.isEmpty
-                  ? locals.musicEmptyCollection
-                  : locals.musicNoResults),
+              child: offline.enabled && visible.isEmpty
+                  ? musicOfflineCollectionEmpty(context, offline)
+                  : Text(terms.isEmpty
+                      ? locals.musicEmptyCollection
+                      : locals.musicNoResults),
             ),
         ];
         final tracksKey = PageStorageKey((
@@ -2305,11 +2661,22 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
               : tracksKey,
           keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
           itemCount: header.length + matching.length,
-          itemBuilder: (_, position) => position < header.length
-              ? header[position]
-              : _song(
-                  collection.tracks, matching[position - header.length], layout,
-                  reference: reference),
+          itemBuilder: (_, position) {
+            if (position < header.length) return header[position];
+            final index = matching[position - header.length];
+            return _song(collection.tracks, index, layout,
+                reference: reference,
+                collectionDetail: true,
+                offlineSong:
+                    offline.enabled && entries != null ? entries[index] : null,
+                onPlay: ({bool songTap = false}) => offline.enabled
+                    ? playOffline(visible.indexOf(index), songTap: songTap)
+                    : _playVideos(onlineQueue,
+                        reference: reference,
+                        startIndex: onlineIndices.indexOf(index),
+                        songTap: songTap,
+                        collectionDetail: true));
+          },
         );
         final tracks = MusicFastScroll(
           scope: (
@@ -2324,7 +2691,7 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
               sortValue: order.field == MusicCollectionSortField.source
                   ? null
                   : (index) => MusicCollectionOrder.normalizeSortValue(
-                      musicPlaylistTrackSortValue(videos[index], order.field))),
+                      sortValue(videos[index], order.field))),
           child: view,
         );
         if (!_findingPlaylist) return tracks;
@@ -2368,9 +2735,38 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
     );
   }
 
+  Future<void> _buildArtistMix(MusicArtistPage page) async {
+    final session = context.read<AppCubit>().state;
+    final generation = _generation;
+    final route = ModalRoute.of(context);
+    bool current() =>
+        _active(generation, session) &&
+        identical(_artistPage, page) &&
+        route?.isActive != false;
+    final artists = await showMusicArtistMixPicker(context, page.artist,
+        isCurrent: current);
+    if (!mounted || !current() || artists == null || artists.isEmpty) return;
+    final locals = AppLocalizations.of(context)!;
+    await MusicScreen._startMix(context,
+        inPlayer: false,
+        isCurrent: current,
+        loadingLabel: locals.musicArtistMixLoading,
+        unavailableLabel: locals.musicArtistMixUnavailable,
+        play: (player, isCurrent) => player.playArtistMusicMix(artists,
+            queueTitle: locals.musicArtistMixTitle,
+            loadCandidates: (current) => musicCatalogService.getArtistMixSongs(
+                artists.map((artist) => artist.id),
+                isCurrent: current),
+            isCurrent: isCurrent));
+  }
+
   Widget _artistResults(MusicArtistPage artistPage, MusicLayout layout) {
     final locals = AppLocalizations.of(context)!;
     final session = context.read<AppCubit>().state;
+    final database = db;
+    final artist = artistPage.artist;
+    final identity = MusicArtistIdentity.catalog(artist.id);
+    final name = _artistName(artist);
     final details = Padding(
       padding: const EdgeInsets.all(16),
       child: Column(
@@ -2384,12 +2780,30 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
             size: 56,
           ),
           const SizedBox(height: 12),
-          Text(
-            artistPage.artist.name,
-            style: Theme.of(context).textTheme.titleLarge,
-          ),
-          MusicBookmarkButton(
-            entry: MusicLibraryEntry.artist(artistPage.artist),
+          Text(name, style: Theme.of(context).textTheme.titleLarge),
+          if (name != artist.name) Text(artist.name),
+          Wrap(
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              MusicBookmarkButton(entry: MusicLibraryEntry.artist(artist)),
+              if (identity.isValid)
+                IconButton(
+                  key: const ValueKey('music-edit-catalog-artist-alias'),
+                  tooltip: locals.musicEditArtistAlias,
+                  icon: const Icon(Icons.edit_outlined),
+                  onPressed: () => showMusicArtistAliasEditor(
+                    context,
+                    library: _artistAliases,
+                    identity: identity,
+                    originalName: artist.name,
+                    isCurrent: () =>
+                        _sameSession(session) &&
+                        identical(db, database) &&
+                        database.profileId == session.profileId &&
+                        identical(_artistPage, artistPage),
+                  ),
+                ),
+            ],
           ),
           if (normalizeChannelId(artistPage.artist.id) case final channelId?)
             TextButton(
@@ -2427,6 +2841,17 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
         ),
       ),
     );
+    final artistMix = Align(
+      alignment: AlignmentDirectional.centerStart,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        child: OutlinedButton.icon(
+          onPressed: () => _buildArtistMix(artistPage),
+          icon: const Icon(Icons.queue_music),
+          label: Text(locals.musicBuildArtistMix),
+        ),
+      ),
+    );
     return ListenableBuilder(
       listenable: librarySession.library.changes,
       builder: (context, _) {
@@ -2439,7 +2864,12 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
             artistPage.artist.id,
           )),
           details: Column(
-            children: [details, if (uploads.isNotEmpty) playAll, ...releases],
+            children: [
+              details,
+              if (uploads.isNotEmpty) playAll,
+              artistMix,
+              ...releases
+            ],
           ),
           buildTracks: (_, split) => ListView(
             key: PageStorageKey((
@@ -2449,7 +2879,7 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
               artistPage.artist.id,
             )),
             children: [
-              if (!split) ...[details, ...releases],
+              if (!split) ...[details, artistMix, ...releases],
               if (saved.isNotEmpty) ...[
                 _sectionTitle(locals.musicSavedSongs),
                 for (var i = 0; i < saved.length; i++)
@@ -2586,10 +3016,52 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
   String _librarySearchLabel(
           MusicLibrarySearchType search, AppLocalizations locals) =>
       switch (search) {
-        MusicLibrarySearchType.all => locals.musicSearchAll,
         MusicLibrarySearchType.songs => locals.musicSongs,
         MusicLibrarySearchType.playlists => locals.musicPlaylists,
+        MusicLibrarySearchType.albums => locals.localMusicBrowseAlbums,
+        MusicLibrarySearchType.artists => locals.localMusicBrowseArtists,
+        MusicLibrarySearchType.genres => locals.localMusicGenres,
+        MusicLibrarySearchType.lyrics => locals.musicLyrics,
       };
+
+  Widget _librarySearchFilters(Set<MusicLibrarySearchType> categories,
+      AppState session, AppLocalizations locals) {
+    final colors = Theme.of(context).colorScheme;
+    final all = categories.length == MusicLibrarySearchType.categories.length;
+    return _searchFilterRow([
+      ChoiceChip(
+        label: Text(locals.musicSearchAll),
+        selected: !_searchingLyrics && all,
+        backgroundColor: colors.surfaceContainerHigh,
+        selectedColor: colors.secondaryContainer,
+        side: BorderSide.none,
+        shape: const StadiumBorder(),
+        showCheckmark: false,
+        onSelected: (_) => unawaited(_selectLibraryCategory(session, null)),
+      ),
+      for (final type in MusicLibrarySearchType.categories)
+        FilterChip(
+          label: Text(_librarySearchLabel(type, locals)),
+          selected: !_searchingLyrics && !all && categories.contains(type),
+          backgroundColor: colors.surfaceContainerHigh,
+          selectedColor: colors.secondaryContainer,
+          side: BorderSide.none,
+          shape: const StadiumBorder(),
+          showCheckmark: true,
+          onSelected: (_) => unawaited(_selectLibraryCategory(session, type)),
+        ),
+      ChoiceChip(
+        label: Text(locals.musicLyrics),
+        selected: _searchingLyrics,
+        backgroundColor: colors.surfaceContainerHigh,
+        selectedColor: colors.secondaryContainer,
+        side: BorderSide.none,
+        shape: const StadiumBorder(),
+        showCheckmark: false,
+        onSelected: (_) => _toggleLibraryLyrics(session),
+      ),
+    ]);
+  }
 
   Widget _searchFilters<T>(
     List<T> types, {
@@ -2598,24 +3070,31 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
     required ValueChanged<T> select,
   }) {
     final colors = Theme.of(context).colorScheme;
+    return _searchFilterRow([
+      for (final type in types)
+        ChoiceChip(
+          label: Text(label(type)),
+          selected: selected == type,
+          backgroundColor: colors.surfaceContainerHigh,
+          selectedColor: colors.secondaryContainer,
+          side: BorderSide.none,
+          shape: const StadiumBorder(),
+          showCheckmark: false,
+          onSelected: (_) => select(type),
+        ),
+    ]);
+  }
+
+  Widget _searchFilterRow(List<Widget> chips) {
     return SingleChildScrollView(
       key: const ValueKey('music-search-filters'),
       scrollDirection: Axis.horizontal,
       padding: const EdgeInsets.symmetric(horizontal: 12),
       child: Row(children: [
-        for (final type in types)
+        for (final chip in chips)
           Padding(
             padding: const EdgeInsets.only(right: 8),
-            child: ChoiceChip(
-              label: Text(label(type)),
-              selected: selected == type,
-              backgroundColor: colors.surfaceContainerHigh,
-              selectedColor: colors.secondaryContainer,
-              side: BorderSide.none,
-              shape: const StadiumBorder(),
-              showCheckmark: false,
-              onSelected: (_) => select(type),
-            ),
+            child: chip,
           ),
       ]),
     );
@@ -2677,7 +3156,9 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
             queueTitle: song.queueTitle,
             startIndex: song.startIndex,
             startAt: song.startAt,
-            songTap: song.songTap),
+            songTap: song.songTap,
+            collectionDetail: song.collectionDetail,
+            cardOrigin: song.cardOrigin),
         null when widget.videoId != null && widget.playlistId == null =>
           _openingPlayer(context),
         null => _browser(context),
@@ -2702,7 +3183,11 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
       body = Column(mainAxisSize: MainAxisSize.min, children: [
         Text(song.title, textAlign: TextAlign.center),
         if (song.artists.isNotEmpty)
-          Text(song.artists.join(', '), textAlign: TextAlign.center),
+          Text(
+            _artistAliases.catalogArtistByline(
+                song.artists.join(', '), song.artistCredits),
+            textAlign: TextAlign.center,
+          ),
         const SizedBox(height: 16),
         FilledButton.icon(
             autofocus: isTv,
@@ -2781,8 +3266,15 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
   }
 
   Widget _browser(BuildContext context) {
+    final session = context.read<AppCubit>().state;
     final locals = AppLocalizations.of(context)!;
     final colors = Theme.of(context).colorScheme;
+    final librarySession =
+        _searchingLibrary ? context.watch<AppCubit>().state : null;
+    final libraryCategories = (librarySession == null
+            ? null
+            : _libraryPreferences(librarySession)?.categories) ??
+        MusicLibrarySearchType.categories;
     final showingSuggestions = _onlineSuggestions?.isCurrent() == true;
     final searchOutline = OutlineInputBorder(
         borderRadius: BorderRadius.circular(32), borderSide: BorderSide.none);
@@ -2824,6 +3316,14 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
                         onPressed: _openPlaylistFind,
                         icon: const Icon(Icons.search),
                       ),
+                    if (_artistPage case final artistPage?)
+                      MusicArtistLinkActions(
+                        artistId: artistPage.artist.id,
+                        session: session,
+                        isCurrent: () =>
+                            identical(_artistPage, artistPage) &&
+                            _sameSession(session),
+                      ),
                   ],
                 ),
           body: SafeArea(
@@ -2836,7 +3336,8 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
               child: LayoutBuilder(builder: (context, constraints) {
                 final layout = context.select((SettingsCubit? cubit) =>
                     cubit?.state.musicLayout ?? const MusicLayout.defaults());
-                if (_findingPlaylist) return _results(layout);
+                if (_findingPlaylist)
+                  return _results(layout, libraryCategories);
                 Widget controls =
                     Column(mainAxisSize: MainAxisSize.min, children: [
                   Padding(
@@ -2850,9 +3351,11 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
                       onChanged: _searchInputChanged,
                       onSubmitted: (_) => _submitActiveSearch(),
                       decoration: InputDecoration(
-                          hintText: _searchingLibrary
-                              ? locals.musicSearchLibraryHint
-                              : locals.musicInvidiousSearchHint,
+                          hintText: _searchingLyrics
+                              ? locals.musicSearchLyricsHint
+                              : _searchingLibrary
+                                  ? locals.musicSearchLibraryHint
+                                  : locals.musicInvidiousSearchHint,
                           filled: true,
                           fillColor: colors.surfaceContainerHigh,
                           border: searchOutline,
@@ -2860,7 +3363,7 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
                               borderSide: BorderSide(color: colors.primary)),
                           contentPadding: const EdgeInsets.symmetric(
                               horizontal: 20, vertical: 14),
-                          prefixIcon: _voiceSearchAvailable
+                          prefixIcon: _voiceSearchAvailable && !_searchingLyrics
                               ? IconButton(
                                   key: const ValueKey('music-voice-search'),
                                   tooltip: locals.musicVoiceSearch,
@@ -2918,12 +3421,8 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
                     _resumeAction(),
                   if (!_hasBrowsePage)
                     if (_searchingLibrary)
-                      _searchFilters(
-                        MusicLibrarySearchType.values,
-                        selected: _libraryType,
-                        label: (type) => _librarySearchLabel(type, locals),
-                        select: _selectLibraryType,
-                      )
+                      _librarySearchFilters(
+                          libraryCategories, librarySession!, locals)
                     else
                       _searchFilters(
                         [
@@ -2953,8 +3452,10 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
                     child: SingleChildScrollView(child: controls),
                   );
                 }
-                return Column(
-                    children: [controls, Expanded(child: _results(layout))]);
+                return Column(children: [
+                  controls,
+                  Expanded(child: _results(layout, libraryCategories))
+                ]);
               }),
             ),
           ),
@@ -3003,19 +3504,23 @@ class _MusicTvPlayer extends StatelessWidget {
   final String? queueTitle;
   final ({
     String title,
+    int? startIndex,
     bool Function() isCurrent,
     List<PlaylistReference?>? recommendationSources,
   })? collectionQueue;
   final List<LocalMusicTrack>? localTracks;
   final List<OnDeviceMusicEntry>? onDeviceTracks;
   final bool Function()? onDeviceMusicIsCurrent;
+  final bool retainOnDeviceQueueOrder;
   final bool resumeSession;
   final PlaylistReference? reference;
   final PlaylistReference? recommendationSource;
+  final MusicCardOrigin? cardOrigin;
   final int startIndex;
   final Duration startAt;
   final bool shuffleOnce;
   final bool songTap;
+  final bool collectionDetail;
   final Future<bool?> Function(PlayerCubit)? startMix;
 
   const _MusicTvPlayer(
@@ -3025,13 +3530,16 @@ class _MusicTvPlayer extends StatelessWidget {
       this.localTracks,
       this.onDeviceTracks,
       this.onDeviceMusicIsCurrent,
+      this.retainOnDeviceQueueOrder = false,
       this.resumeSession = false,
       this.reference,
+      this.cardOrigin,
       this.recommendationSource,
       this.startIndex = 0,
       this.startAt = Duration.zero,
       this.shuffleOnce = false,
       this.songTap = false,
+      this.collectionDetail = false,
       this.startMix});
 
   @override
@@ -3053,14 +3561,17 @@ class _MusicTvPlayer extends StatelessWidget {
           resume: resumeSession,
           fromMusic: true,
           initialSongTap: songTap,
+          initialCollectionDetail: collectionDetail,
           initialLocalMusic: localTracks,
           initialOnDeviceMusic: onDeviceTracks,
           initialOnDeviceMusicIsCurrent: onDeviceMusicIsCurrent,
+          retainInitialOnDeviceQueueOrder: retainOnDeviceQueueOrder,
           initialQueueTitle: queueTitle,
           initialMusicCollection: collectionQueue,
           initialMusicMix: startMix,
           playlistReference: reference,
           initialRecommendationSource: recommendationSource,
+          initialMusicCardOrigin: cardOrigin,
           startIndex: startIndex,
           playlistShuffleOnce: shuffleOnce,
           playlistAudio: true),
@@ -3076,11 +3587,12 @@ class _MusicTvPlayer extends StatelessWidget {
               builder: (context, state) {
                 final player = context.read<PlayerCubit>();
                 final mix = startMix;
-                if (mix != null &&
-                    state.currentlyPlaying == null &&
-                    state.mediaEvent.state == MediaState.error) {
-                  return _MusicPlaybackFailure(
-                      onRetry: () => player.startInitialMusicMix(mix));
+                if (mix != null && state.currentlyPlaying == null) {
+                  if (state.mediaEvent.state == MediaState.error) {
+                    return _MusicPlaybackFailure(
+                        onRetry: () => player.startInitialMusicMix(mix));
+                  }
+                  return const Center(child: CircularProgressIndicator());
                 }
                 final tracks = localTracks;
                 final onDevice = onDeviceTracks;
@@ -3101,6 +3613,7 @@ class _MusicTvPlayer extends StatelessWidget {
                     return _MusicPlaybackFailure(
                         onRetry: () => player.playMusicCollectionQueue(videos,
                             queueTitle: collection.title,
+                            startIndex: collection.startIndex ?? 0,
                             isCurrent: collection.isCurrent,
                             recommendationSources:
                                 collection.recommendationSources));
@@ -3120,13 +3633,15 @@ class _MusicTvPlayer extends StatelessWidget {
                                 startIndex: startIndex,
                                 queueTitle: queueTitle,
                                 songTap: songTap,
+                                retainQueueOrder: retainOnDeviceQueueOrder,
                                 isCurrent: onDeviceMusicIsCurrent)
                             : tracks == null
                                 ? player.resumeSession
                                 : () => player.playLocalMusic(tracks,
                                     startIndex: startIndex,
                                     queueTitle: queueTitle,
-                                    songTap: songTap));
+                                    songTap: songTap,
+                                    collectionDetail: collectionDetail));
                   }
                   return const Center(child: CircularProgressIndicator());
                 }
@@ -3137,24 +3652,36 @@ class _MusicTvPlayer extends StatelessWidget {
                           ? () => player.startInitialMusicMix(mix)
                           : resumeSession
                               ? player.resumeSession
-                              : () => reference == null
-                                  ? player.playVideo(videos,
+                              : () => reference == null && cardOrigin != null
+                                  ? player.playMusicFromCard(videos,
+                                      origin: cardOrigin!,
                                       queueTitle: queueTitle,
-                                      fromMusic: true,
+                                      startAt: startAt,
+                                      startIndex: startIndex,
                                       recommendationSource:
                                           recommendationSource,
-                                      audio: true,
-                                      startAt: startAt,
-                                      startIndex: startIndex,
-                                      songTap: songTap)
-                                  : player.playPlaylist(videos,
-                                      fromMusic: true,
-                                      reference: reference!,
-                                      startIndex: startIndex,
-                                      shuffleOnce: shuffleOnce,
-                                      audio: true,
-                                      startAt: startAt,
-                                      songTap: songTap));
+                                      songTap: songTap,
+                                      collectionDetail: collectionDetail)
+                                  : reference == null
+                                      ? player.playVideo(videos,
+                                          queueTitle: queueTitle,
+                                          fromMusic: true,
+                                          recommendationSource:
+                                              recommendationSource,
+                                          audio: true,
+                                          startAt: startAt,
+                                          startIndex: startIndex,
+                                          songTap: songTap,
+                                          collectionDetail: collectionDetail)
+                                      : player.playPlaylist(videos,
+                                          fromMusic: true,
+                                          reference: reference!,
+                                          startIndex: startIndex,
+                                          shuffleOnce: shuffleOnce,
+                                          audio: true,
+                                          startAt: startAt,
+                                          songTap: songTap,
+                                          collectionDetail: collectionDetail));
                 }
                 if (state.currentlyPlaying == null &&
                     state.offlineCurrentlyPlaying == null) {
@@ -3204,12 +3731,42 @@ class _MusicPlaybackFailure extends StatelessWidget {
   }
 }
 
+/// A player surface for Android Files opens from TV or the setup screen.
+class OpenedAudioPlaybackPage extends StatelessWidget {
+  final bool television;
+
+  const OpenedAudioPlaybackPage({super.key, required this.television});
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+        appBar: AppBar(title: Text(AppLocalizations.of(context)!.music)),
+        body: SafeArea(
+          child: BlocBuilder<PlayerCubit, PlayerState>(
+            builder: (context, state) {
+              final file = state.offlineCurrentlyPlaying;
+              if (file != null) {
+                return _MusicTvAudio(
+                    offlineVideo: file, television: television);
+              }
+              if (state.mediaEvent.state == MediaState.error) {
+                return Center(
+                    child: Text(
+                        AppLocalizations.of(context)!.musicSourceUnavailable));
+              }
+              return const Center(child: CircularProgressIndicator());
+            },
+          ),
+        ),
+      );
+}
+
 /// Keep the decoder mounted while Music and its queue change presentation.
 class _MusicTvAudio extends StatelessWidget {
   final Video? video;
   final DownloadedVideo? offlineVideo;
+  final bool television;
 
-  const _MusicTvAudio({this.video, this.offlineVideo});
+  const _MusicTvAudio({this.video, this.offlineVideo, this.television = true});
 
   @override
   Widget build(BuildContext context) {
@@ -3244,7 +3801,9 @@ class _MusicTvAudio extends StatelessWidget {
             if ((state.currentlyPlaying?.musicMetadata ??
                     state.offlineCurrentlyPlaying?.musicMetadata) !=
                 null) {
-              return const TvOverscan(child: MusicPlayer(television: true));
+              return television
+                  ? const TvOverscan(child: MusicPlayer(television: true))
+                  : const MusicPlayer();
             }
             // The TV video route also hosts Listen mode for ordinary videos.
             // Its simpler transport works without inventing Music metadata.

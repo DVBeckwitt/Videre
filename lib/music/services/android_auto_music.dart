@@ -17,15 +17,29 @@ typedef AndroidAutoPlayback<T> = Future<void> Function(
     List<T> entries, int index, String? title, bool Function() isCurrent);
 typedef _Songs = ({List<Video> videos, List<OnDeviceMusicEntry> device});
 
+enum AndroidAutoQueueAction {
+  addToQueue,
+  removeFromQueue,
+  moveQueueEarlier,
+  moveQueueLater,
+}
+
 class _BrowseItem {
   final MediaItem item;
   final Future<List<MediaItem>> Function()? children;
   final Future<_Songs> Function()? songs;
   final (String, int)? occurrence;
   final String? queueTitle;
+  final bool? onDeviceSong;
 
-  const _BrowseItem(this.item,
-      {this.children, this.songs, this.occurrence, this.queueTitle});
+  const _BrowseItem(
+    this.item, {
+    this.children,
+    this.songs,
+    this.occurrence,
+    this.queueTitle,
+    this.onDeviceSong,
+  });
 }
 
 /// Adapter for the supported Android media browser and session callbacks.
@@ -103,6 +117,24 @@ class AndroidAutoMusic {
     final songs = await load();
     final index = _indexOf(songs, node.occurrence!);
     return !current() || index < 0 ? null : _item(songs, index, id);
+  }
+
+  /// Null identifies a folder, an unknown ID or a retired profile's song.
+  bool? isOnDeviceSong(String id) =>
+      _request() == null ? null : _items[id]?.onDeviceSong;
+
+  Future<({Video? video, OnDeviceMusicEntry? device})?> resolveQueueSong(
+    String id,
+  ) async {
+    final current = _request();
+    final node = _items[id];
+    if (current == null || node == null || node.songs == null) return null;
+    final songs = await node.songs!();
+    final index = _indexOf(songs, node.occurrence!);
+    if (!current() || index < 0) return null;
+    return songs.videos.isEmpty
+        ? (video: null, device: songs.device[index])
+        : (video: songs.videos[index], device: null);
   }
 
   List<MediaItem> _root() {
@@ -222,7 +254,10 @@ class AndroidAutoMusic {
         final item =
             _item(songs, slot, _id([key, occurrence.$1, occurrence.$2]));
         return _register(_BrowseItem(item,
-            songs: load, occurrence: occurrence, queueTitle: title));
+            songs: load,
+            occurrence: occurrence,
+            queueTitle: title,
+            onDeviceSong: songs.videos.isEmpty));
       });
     }
     return _page(

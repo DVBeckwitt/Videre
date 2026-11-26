@@ -2,6 +2,7 @@ import 'package:clipious/music/models/music_lyrics.dart';
 import 'package:clipious/music/models/music_lyrics_match.dart';
 import 'package:clipious/music/services/lrc_lyrics.dart';
 import 'package:clipious/music/services/music_lyrics_corrections.dart';
+import 'package:clipious/music/services/music_timed_lyrics_draft.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -56,6 +57,53 @@ void main() {
     expect(result.lyrics.cues, cues);
     expect(result.lyrics.source, 'LRCLIB');
     expect(result.edited, isTrue);
+  });
+
+  test('a selected timed match retains signed cue, word and break starts',
+      () async {
+    final parsed = parseEnhancedLrc('[offset:+500]\n'
+        '[00:00.100]  <00:00.100>Hello <00:00.400>again  \n'
+        'Translation\n'
+        '[00:00.450][00:03.250]\n'
+        '[00:08][00:12]Second line\n'
+        '  Shared continuation  ');
+    await store.save(
+        videoId,
+        MusicLyricsCorrection(MusicLyrics.synced(parsed.lines,
+            wordsByCue: parsed.wordsByCue,
+            displayTextByCue: parsed.displayTextByCue,
+            breakStarts: parsed.breakStarts)));
+
+    final reopened = store.read(videoId)!.lyrics;
+    expect(reopened.cues, parsed.lines);
+    expect(reopened.wordsByCue, parsed.wordsByCue);
+    expect(reopened.displayTextByCue, parsed.displayTextByCue);
+    expect(musicTimedLyricsDraftFrom(reopened, includeWordTiming: false),
+        contains('  Hello again  \nTranslation'));
+    expect(reopened.breakStarts, parsed.breakStarts);
+    expect(reopened.breakStarts.first, const Duration(milliseconds: -50));
+    expect(reopened.cues.first.start, const Duration(milliseconds: -400));
+    expect(
+        reopened.wordsByCue[0]!.last.start, const Duration(milliseconds: -100));
+
+    await owner.saveSetting(SettingsValue(settingKey,
+        '{"kind":"synced","lines":["A"],"cues":[[1000,0]],"words":[[0,1000,0,5]]}'));
+    expect(store.read(videoId)!.lyrics.cues.single.text, 'A');
+    expect(store.read(videoId)!.lyrics.wordsByCue, isEmpty);
+
+    await owner.saveSetting(SettingsValue(settingKey,
+        '{"kind":"synced","lines":["A"],"cues":[[1000,0]],"displayText":{"B\\nMismatch":[0]}}'));
+    expect(store.read(videoId)!.lyrics.cues.single.text, 'A');
+    expect(store.read(videoId)!.lyrics.displayTextByCue, isEmpty);
+    expect(store.read(videoId)!.lyrics.breakStarts, isEmpty);
+  });
+
+  test('unusable optional breaks preserve valid stored cues', () async {
+    await owner.saveSetting(SettingsValue(settingKey,
+        '{"kind":"synced","lines":["A"],"cues":[[1000,0]],"breaks":[3000,2000]}'));
+    final lyrics = store.read(videoId)!.lyrics;
+    expect(lyrics.cues.single.text, 'A');
+    expect(lyrics.breakStarts, isEmpty);
   });
 
   test('repeated plain cue text fits storage without re-enabling seeking',

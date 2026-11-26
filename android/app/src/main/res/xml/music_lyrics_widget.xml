@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:description="@string/music_lyrics_widget_description"
+    android:initialLayout="@layout/music_lyrics_widget"
+    android:minWidth="215dp"
+    android:minHeight="196dp"
+    android:minResizeWidth="164dp"
+    android:previewLayout="@layout/music_lyrics_widget"
+    android:resizeMode="horizontal"
+    android:targetCellWidth="4"
+    android:targetCellHeight="4"
+    android:updatePeriodMillis="0"
+    android:widgetCategory="home_screen" />

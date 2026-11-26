@@ -15,6 +15,7 @@ import androidx.media3.datasource.BaseDataSource
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSpec
 import java.io.File
+import java.io.FileDescriptor
 import java.io.FileInputStream
 import java.io.IOException
 import java.math.BigInteger
@@ -167,6 +168,7 @@ private class OpenDownload(
     private val checkLocation: () -> Unit,
 ) {
     private val initial = stamp()
+    val fileDescriptor: FileDescriptor get() = input.fd
 
     fun stamp(): DownloadFileStamp = localStorage { stamp(Os.fstat(input.fd), offset, length) }
 
@@ -293,6 +295,24 @@ object DownloadDocumentIntegrity {
             val identity = handle.identity()
             if (expectedSha256 != null && hashDownload(handle) {} != expectedSha256) throw LocalDownloadUnavailable()
             identity
+        } finally {
+            handle.close()
+        }
+    }
+
+    /** Reads only the verified descriptor and checks its ownership and identity again afterward. */
+    fun <T> readVerifiedFile(
+        context: Context, uri: String, folderUri: String?, profileId: String, contentId: String,
+        expectedIdentity: String?, expectedLength: Long?, read: (FileDescriptor, Long, Long) -> T,
+    ): Pair<LocalStorageFileIdentity, T> {
+        val handle = openDownload(context, uri, folderUri, profileId, contentId)
+        return try {
+            val identity = handle.identity()
+            if ((expectedIdentity != null && identity.identity != expectedIdentity) ||
+                (expectedLength != null && identity.byteLength != expectedLength)) throw LocalDownloadUnavailable()
+            val data = read(handle.fileDescriptor, handle.offset, handle.length)
+            handle.checkCurrent()
+            identity to data
         } finally {
             handle.close()
         }

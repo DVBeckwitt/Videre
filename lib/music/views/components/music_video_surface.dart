@@ -15,14 +15,27 @@ import '../../services/music_video_source.dart';
 
 /// Displays a silent video alongside the song's existing audio decoder.
 class MusicVideoSurface extends StatefulWidget {
-  final Video video;
+  final Video? video;
+  final String? _localUri;
+  final Duration _offset;
   final VoidCallback onUnavailable;
 
   const MusicVideoSurface({
     super.key,
-    required this.video,
+    required Video this.video,
     required this.onUnavailable,
-  });
+  })  : _localUri = null,
+        _offset = Duration.zero;
+
+  /// Positions the video at the current recording position plus [offset].
+  const MusicVideoSurface.local({
+    super.key,
+    required String uri,
+    required Duration offset,
+    required this.onUnavailable,
+  })  : video = null,
+        _localUri = uri,
+        _offset = offset;
 
   @override
   State<MusicVideoSurface> createState() => _MusicVideoSurfaceState();
@@ -45,7 +58,19 @@ class _MusicVideoSurfaceState extends State<MusicVideoSurface>
   }
 
   void _selectSources() {
-    final sources = _sources = musicVideoSources(widget.video);
+    final video = widget.video;
+    final uri = Uri.tryParse(widget._localUri ?? '');
+    final sources = _sources = video != null
+        ? musicVideoSources(video)
+        : [
+            if (uri != null &&
+                uri.scheme == 'content' &&
+                uri.authority.isNotEmpty)
+              river.DataSource(
+                  sourceType: river.DataSourceType.file,
+                  uri: widget._localUri,
+                  formatHint: river.VideoFormat.other),
+          ];
     _index = 0;
     if (sources.isEmpty) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -57,7 +82,11 @@ class _MusicVideoSurfaceState extends State<MusicVideoSurface>
   @override
   void didUpdateWidget(MusicVideoSurface oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.video != oldWidget.video) _selectSources();
+    if (widget.video != oldWidget.video ||
+        widget._localUri != oldWidget._localUri ||
+        widget._offset != oldWidget._offset) {
+      _selectSources();
+    }
   }
 
   @override
@@ -92,11 +121,12 @@ class _MusicVideoSurfaceState extends State<MusicVideoSurface>
       return const SizedBox.shrink();
     }
     final source = _sources[_index];
+    final video = widget.video;
     return _SongVideoTexture(
       key: ValueKey((source, _foregroundVisit)),
-      connection:
-          (widget.video.backendPlayback ?? widget.video.playbackConnection)!,
+      connection: video?.backendPlayback ?? video?.playbackConnection,
       source: source,
+      offset: widget._offset,
       onError: (tryNext) {
         if (!mounted ||
             _index >= _sources.length ||
@@ -111,14 +141,16 @@ class _MusicVideoSurfaceState extends State<MusicVideoSurface>
 }
 
 class _SongVideoTexture extends StatefulWidget {
-  final BackendPlayback connection;
+  final BackendPlayback? connection;
   final river.DataSource source;
+  final Duration offset;
   final ValueChanged<bool> onError;
 
   const _SongVideoTexture({
     super.key,
     required this.connection,
     required this.source,
+    required this.offset,
     required this.onError,
   });
 
@@ -135,6 +167,7 @@ class _SongVideoTextureState extends State<_SongVideoTexture>
   int? _texture;
   StreamSubscription<river.VideoEvent>? _events;
   Timer? _timeout;
+  Timer? _startTimer;
   Duration? _duration;
   Size? _size;
   bool _buffering = true;
@@ -144,6 +177,8 @@ class _SongVideoTextureState extends State<_SongVideoTexture>
   bool _newSample = false;
   MediaCommand? _lastCommand;
   bool _playing = false;
+  bool _beforeStart = false;
+  bool _atEnd = false;
   double _speed = 1;
   final _clock = WidgetsBinding.instance.samplingClock.stopwatch()..start();
   Duration? _reportedPosition;
@@ -165,19 +200,27 @@ class _SongVideoTextureState extends State<_SongVideoTexture>
     _lastCommand = _player.state.mediaCommand;
     _observeSong(_player.state);
     WidgetsBinding.instance.addObserver(this);
-    NetworkProxy.instance.addBeforeApply(_profileChanging);
+    if (widget.connection != null) {
+      NetworkProxy.instance.addBeforeApply(_profileChanging);
+    }
     unawaited(_open());
+  }
+
+  Future<bool> _validateConnection(BackendPlayback connection) async {
+    final selected = await db.getCurrentlySelectedServer();
+    if (!_active) return false;
+    if (!NetworkProxy.instance.isChanging && connection.matches(selected)) {
+      return true;
+    }
+    await _fail(tryNext: false);
+    return false;
   }
 
   Future<void> _open() async {
     try {
-      final selected = await db.getCurrentlySelectedServer();
+      final connection = widget.connection;
+      if (connection != null && !await _validateConnection(connection)) return;
       if (!_active) return;
-      if (NetworkProxy.instance.isChanging ||
-          !widget.connection.matches(selected)) {
-        await _fail(tryNext: false);
-        return;
-      }
       final texture = await (_allocation = _platform.create());
       if (!_active) return;
       if (texture == null) throw StateError('Missing video texture');
@@ -186,13 +229,8 @@ class _SongVideoTextureState extends State<_SongVideoTexture>
       if (!_active) return;
       await _platform.setMixWithOthers(texture, true);
       if (!_active) return;
-      final current = await db.getCurrentlySelectedServer();
+      if (connection != null && !await _validateConnection(connection)) return;
       if (!_active) return;
-      if (NetworkProxy.instance.isChanging ||
-          !widget.connection.matches(current)) {
-        await _fail(tryNext: false);
-        return;
-      }
       _events = _platform
           .videoEventsFor(texture)
           .listen(_event, onError: (Object _) => unawaited(_fail()));
@@ -200,6 +238,8 @@ class _SongVideoTextureState extends State<_SongVideoTexture>
       // Starting at zero and seeking after READY forces a second round of
       // buffering, particularly expensive over a proxied range request.
       final source = widget.source;
+      final position = _videoPosition(_clock.elapsed);
+      _beforeStart = position.isNegative;
       await _platform.setDataSource(
           texture,
           river.DataSource(
@@ -208,7 +248,7 @@ class _SongVideoTextureState extends State<_SongVideoTexture>
             headers: source.headers,
             formatHint: source.formatHint,
             videoOnly: true,
-            initialPosition: _songPosition(_clock.elapsed),
+            initialPosition: _boundedVideoPosition(position),
           ));
     } catch (_) {
       await _fail();
@@ -265,6 +305,26 @@ class _SongVideoTextureState extends State<_SongVideoTexture>
       ? _audioPosition + (now - _sampleTime) * _audioRate
       : _audioPosition;
 
+  Duration _videoPosition(Duration now) => _songPosition(now) + widget.offset;
+
+  Duration _boundedVideoPosition(Duration position) {
+    if (position.isNegative) return Duration.zero;
+    final duration = _duration;
+    return duration != null && duration > Duration.zero && position > duration
+        ? duration
+        : position;
+  }
+
+  void _scheduleStart(Duration position) {
+    _startTimer?.cancel();
+    _startTimer = null;
+    if (position.isNegative && _audioRunning && _audioRate > 0) {
+      final delay = Duration(
+          microseconds: (position.abs().inMicroseconds / _audioRate).ceil());
+      _startTimer = Timer(delay, _scheduleSync);
+    }
+  }
+
   void _observeSong(PlayerState state, {bool seek = false}) {
     final now = _clock.elapsed;
     final moved = state.position != _reportedPosition;
@@ -294,18 +354,25 @@ class _SongVideoTextureState extends State<_SongVideoTexture>
         _newSample = false;
         final requestedSeek = _seek;
         _seek = false;
-        final position = _songPosition(_clock.elapsed);
+        final position = _videoPosition(_clock.elapsed);
+        final beforeStart = position.isNegative;
         final duration = _duration;
         final atEnd = duration != null &&
             duration > Duration.zero &&
             position >= duration;
-        if (requestedSeek) {
+        final local = widget.connection == null;
+        final crossedBoundary =
+            local && (beforeStart != _beforeStart || atEnd != _atEnd);
+        _beforeStart = beforeStart;
+        _atEnd = atEnd;
+        if (local) _scheduleStart(position);
+        if (requestedSeek || crossedBoundary) {
           _resetVideoSamples();
           _nextHardCorrection = _clock.elapsed + const Duration(seconds: 12);
-          await _platform.seekTo(texture, atEnd ? duration : position);
+          await _platform.seekTo(texture, _boundedVideoPosition(position));
           if (!_active) return;
         }
-        final playing = _audioRunning && !atEnd;
+        final playing = _audioRunning && !beforeStart && !atEnd;
         if (playing != _playing) {
           _playing = playing;
           _resetVideoSamples();
@@ -318,7 +385,11 @@ class _SongVideoTextureState extends State<_SongVideoTexture>
         }
         // READY after a seek does not advance either clock. Only compare on a
         // fresh song sample, once the native renderer has had time to move.
-        if (newSample && !requestedSeek && !_buffering && _playing) {
+        if (newSample &&
+            !requestedSeek &&
+            !crossedBoundary &&
+            !_buffering &&
+            _playing) {
           final actual = await _platform.getPosition(texture);
           if (!_active) return;
           if (_dirty || _buffering) continue;
@@ -327,7 +398,7 @@ class _SongVideoTextureState extends State<_SongVideoTexture>
           _movingSamples =
               previous != null && actual > previous ? _movingSamples + 1 : 0;
           final now = _clock.elapsed;
-          final target = _songPosition(now);
+          final target = _boundedVideoPosition(_videoPosition(now));
           final drift = target - actual;
           if (_movingSamples >= 3 &&
               now >= _nextHardCorrection &&
@@ -371,6 +442,7 @@ class _SongVideoTextureState extends State<_SongVideoTexture>
 
   Future<void> _disposeNative() async {
     _timeout?.cancel();
+    _startTimer?.cancel();
     try {
       final cancel = _events?.cancel();
       final texture = await _allocation;
@@ -379,7 +451,9 @@ class _SongVideoTextureState extends State<_SongVideoTexture>
     } catch (_) {
       // An allocation which failed never handed a texture to this view.
     } finally {
-      NetworkProxy.instance.removeBeforeApply(_profileChanging);
+      if (widget.connection != null) {
+        NetworkProxy.instance.removeBeforeApply(_profileChanging);
+      }
     }
   }
 

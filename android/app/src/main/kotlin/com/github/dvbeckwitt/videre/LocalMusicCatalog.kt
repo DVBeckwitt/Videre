@@ -16,13 +16,13 @@ import android.provider.DocumentsContract
 import android.provider.DocumentsContract.Document
 import android.provider.MediaStore
 import android.provider.MediaStore.Audio.Media as Audio
+import android.system.ErrnoException
 import android.system.Os
 import android.system.OsConstants
 import android.util.Base64
 import android.util.Log
 import java.io.ByteArrayOutputStream
 import java.io.File
-import java.io.FileNotFoundException
 import java.io.IOException
 import java.security.MessageDigest
 import java.util.ArrayDeque
@@ -37,8 +37,10 @@ internal data class LocalMusicScanResult(
 
 internal class LocalMusicCatalog(
     private val context: Context, cache: File, indexFile: File, visibilityAliasFile: File,
+    private val loadCovers: Boolean = true,
+    private val tagSeparators: String = "",
 ) {
-    private val artwork = LocalMusicCovers(cache)
+    private val artwork by lazy { LocalMusicCovers(cache) }
     private val index = LocalMusicIndex(indexFile)
     private val visibilityArchive = LocalMusicVisibilityAliasArchive(visibilityAliasFile)
 
@@ -46,6 +48,8 @@ internal class LocalMusicCatalog(
         source: Uri,
         signal: CancellationSignal,
         force: Boolean = false,
+        isDocumentProvider: Boolean = false,
+        report: LocalMusicScanReport? = null,
         publish: (List<Map<String, Any?>>) -> Unit = {},
     ): LocalMusicScanResult {
         val started = SystemClock.elapsedRealtime()
@@ -65,37 +69,55 @@ internal class LocalMusicCatalog(
             row.visibilityAlias?.let { it to row.uri }
         }.toMap()
         val batch = TrackBatch(publish)
-        val coverRepairs = LocalMusicCoverRepairs()
-        val adjacentArtwork = LocalMusicAdjacentCovers(context.contentResolver, signal)
+        val coverRepairs = if (loadCovers) LocalMusicCoverRepairs() else null
+        val adjacentArtwork = if (loadCovers && !isDocumentProvider) LocalMusicAdjacentCovers(context.contentResolver, signal) else null
         val scanTime = System.currentTimeMillis()
         val pendingTargets = snapshot.pending.groupBy { it.name }
         val pendingSources = snapshot.pending.mapTo(mutableSetOf()) { it.previous.uri }
         val held = mutableSetOf<String>()
 
         fun publishDiscovered(row: LocalMusicRow) {
-            if (force) return
+            if (force || isDocumentProvider) return
             val value = channelValue(row, sourceKey)
-            coverRepairs.consider(row, value["artPath"] != null)
+            coverRepairs?.consider(row, value["artPath"] != null)
             batch.add(value)
         }
 
         fun collect(draft: LocalMusicRow) {
             val previous = snapshot.tracks[draft.uri]
+            val editedFileProof = previous?.editedTagFileProof?.takeIf { proof ->
+                !isDocumentProvider && descriptorVisibilityProof(Uri.parse(draft.uri), signal) == proof
+            }
             val row = draft.copy(
                 addedMs = if (draft.firstSeen) previous?.addedMs ?: scanTime else draft.addedMs,
                 firstSeen = draft.firstSeen && (previous?.firstSeen != false),
-                metadata = if (previous != null && draft.matchesRevision(previous)) {
-                    previous.metadata ?: draft.metadata
+                metadata = if (previous?.editedTagFileProof != null) {
+                    previous.metadata?.takeIf { editedFileProof != null } ?: draft.metadata
                 } else {
-                    draft.metadata
+                    previous?.metadata?.takeIf { draft.canReuseMetadata(previous) } ?: draft.metadata
                 },
+                editedTagFileProof = editedFileProof,
+                mediaAlbumId = draft.mediaAlbumId.takeUnless {
+                    editedFileProof != null && previous?.mediaAlbumId == null &&
+                        localAlbumTag(draft.metadata?.album) != previous?.metadata?.album
+                },
+                adjacentCover = if (!loadCovers && previous?.parentKey == draft.parentKey)
+                    previous?.adjacentCover else null,
             )
-            val indexed = when {
+            val inherited = when {
+                previous != null && editedFileProof != null ->
+                    row.inheritsIdentity(previous).retainsEditedFileVisibility(previous)
                 previous != null -> row.inheritsIdentity(previous).inheritsVisibility(previous)
                 draft.uri in reserved && reserved[draft.uri] != draft.uri ->
                     row.copy(identityKey = newIdentityKey())
                 else -> row
-            }.let {
+            }
+            val protected = snapshot.moves.protectIdentity(inherited, previous, ::newIdentityKey)
+            val indexed = if (previous != null && protected.identityKey != inherited.identityKey) {
+                protected.copy(addedMs = if (draft.firstSeen) scanTime else draft.addedMs,
+                    firstSeen = draft.firstSeen, metadata = draft.metadata)
+            } else protected
+            val withVisibility = indexed.let {
                 val aliasOwner = it.visibilityKey?.let(reservedVisibility::get)
                 if (aliasOwner != null && aliasOwner != it.uri) {
                     // Reusing the old URI must not reuse a key still owned by
@@ -103,13 +125,29 @@ internal class LocalMusicCatalog(
                     it.copy(visibilityAlias = newIdentityKey())
                 } else it
             }
-            val identified = visibilityAliases.resolve(indexed) { descriptorVisibilityProof(Uri.parse(indexed.uri), signal) }
+            val verified = if (editedFileProof != null) {
+                // MediaStore can publish its new revision after our descriptor
+                // has closed. Anchor the visibility key to the verified file.
+                if (previous?.visibilityProof != withVisibility.visibilityProof) {
+                    retainTagVisibility(withVisibility, editedFileProof)
+                }
+                withVisibility
+            } else visibilityAliases.resolve(withVisibility) {
+                if (isDocumentProvider) null else descriptorVisibilityProof(Uri.parse(withVisibility.uri), signal)
+            }
+            // A path involved in an unfinished rename may already contain a replacement.
+            val cachedAdvisory = verified.cachedContentAdvisory(previous.takeUnless { force || verified.uri in pendingSources })
+            val identified = verified.copy(
+                contentAdvisory = if (isDocumentProvider) null else
+                    cachedAdvisory ?: readContentAdvisory(Uri.parse(verified.uri), signal),
+            )
             scanned[identified.uri] = identified
             // Wait for the complete listing before choosing a recovery match.
             // A provisional identity would briefly describe the wrong file.
             val waitForRecovery = pendingTargets[identified.fileName]?.any { it.targets(identified) } == true ||
                 identified.uri in pendingSources
-            if (force || identified.needsTagRead(previous) || waitForRecovery) {
+            if (editedFileProof == null && (force || identified.needsTagRead(previous, loadCovers) || waitForRecovery)) {
+                // Verified edits, including clears, must not use stale MediaStore summaries.
                 draft.metadata?.let { mediaSummaries[draft.uri] = it }
             }
             if (waitForRecovery) {
@@ -120,18 +158,24 @@ internal class LocalMusicCatalog(
         }
 
         val system = sourceKey == SYSTEM_URI
-        val cues = if (system) null else LocalMusicCueTracks(context.contentResolver, source, signal)
+        val cues = if (system || isDocumentProvider) null else LocalMusicCueTracks(context.contentResolver, source, signal)
         val notificationUris = linkedSetOf<Uri>()
-        val incompleteListing = if (cues == null) {
-            scanMediaStore(source, signal, ::collect)
+        val incompleteListing = if (system) {
+            scanMediaStore(source, signal, report, ::collect)
             false
         } else {
-            scanFolder(source, signal, notificationUris, adjacentArtwork, cues, ::collect)
+            scanFolder(source, signal, notificationUris, adjacentArtwork, cues, isDocumentProvider, report, ::collect)
         }
         signal.throwIfCanceled()
+        // Provider scans publish a complete listing without opening audio documents.
+        if (isDocumentProvider) {
+            index.write(sourceKey, snapshot.copy(tracks = scanned))
+            return LocalMusicScanResult(orderedTracks(scanned, sourceKey), false, notificationUris)
+        }
         val pending = mutableListOf<PendingLocalMusicRename>()
         val changes = snapshot.unacknowledged.toMutableList()
         val recovered = mutableSetOf<String>()
+        var moves = snapshot.moves
         if (incompleteListing) {
             // A missing subtree can contain a competing rename match. Keep
             // the journal and the last known identities until a full listing.
@@ -161,11 +205,13 @@ internal class LocalMusicCatalog(
             }
             if (match != null) {
                 recovered.add(match.uri)
-                scanned[match.uri] = match.inheritsIdentity(previous).copy(
+                val recoveredRow = match.inheritsIdentity(previous).copy(
                     addedMs = previous.addedMs,
                     firstSeen = previous.firstSeen,
                 ).inheritsVisibility(previous, confirmedRename = match.matchesRevision(previous))
-                val matchedVisibility = scanned[match.uri]?.visibilityKey
+                scanned[match.uri] = recoveredRow
+                moves = moves.verifiedRename(previous, recoveredRow)
+                val matchedVisibility = recoveredRow.visibilityKey
                 if (old != null && old.uri != match.uri && matchedVisibility != null &&
                     scanned[old.uri]?.visibilityKey == matchedVisibility) {
                     scanned[old.uri] = scanned.getValue(old.uri).copy(visibilityAlias = newIdentityKey())
@@ -182,18 +228,20 @@ internal class LocalMusicCatalog(
                 pending.add(rename)
             }
         }
+        if (!incompleteListing) moves = moves.observe(snapshot.tracks.values, scanned.values)
         if (!force && !incompleteListing) {
-            // Keep the incremental checkpoint so first-seen dates and identity
-            // transitions survive interruption during the slower tag pass.
             index.write(sourceKey, LocalMusicSnapshot(
-                scanned.mapValues { (uri, row) ->
-                    // A MediaStore summary doesn't count as retained embedded metadata.
+                tracks = scanned.mapValues { (uri, row) ->
+                    // For uncached rows, keep only file attributes until the tag
+                    // pass succeeds. MediaStore's summary is useful on screen but
+                    // doesn't count as retained embedded metadata.
                     val previous = snapshot.tracks[uri]
-                    if (previous?.metadata != null && previous.matchesRevision(row) &&
+                    if (previous?.metadata != null && row.retainsMetadata(previous) &&
                         row.identityKey == previous.identityKey) row else row.copy(metadata = null)
                 },
-                pending,
-                changes,
+                pending = pending,
+                unacknowledged = changes,
+                moves = moves,
             ))
         }
         held.forEach { uri -> scanned[uri]?.let(::publishDiscovered) }
@@ -205,7 +253,7 @@ internal class LocalMusicCatalog(
             signal.throwIfCanceled()
             val row = entry.value
             val previous = snapshot.tracks[row.uri]
-            if (force || row.needsTagRead(previous)) {
+            if (force || row.needsTagRead(previous, loadCovers)) {
                 ++reads
                 val metadata = readMetadata(Uri.parse(row.uri), mediaSummaries[row.uri], signal)
                 signal.throwIfCanceled()
@@ -216,19 +264,21 @@ internal class LocalMusicCatalog(
             }
         }
         var coverReads = 0
-        for ((cover, uri) in coverRepairs.candidates) {
+        for ((cover, uri) in coverRepairs?.candidates.orEmpty()) {
             signal.throwIfCanceled()
             // A normal tag read may have already regenerated this shared cover.
             if (artwork.path(cover) != null) continue
             ++coverReads
-            repairCover(Uri.parse(uri), cover)
+            repairCover(Uri.parse(uri), cover, signal)
         }
         batch.flush()
-        if (system) adjacentArtwork.discoverMediaStore(scanned.values)
-        val adjacentByParent = adjacentArtwork.cacheByParent(artwork::storeAdjacent)
-        for (entry in scanned.entries) {
-            val cover = adjacentByParent[entry.value.parentKey] ?: continue
-            entry.setValue(entry.value.copy(adjacentCover = cover))
+        if (adjacentArtwork != null) {
+            if (system) adjacentArtwork.discoverMediaStore(scanned.values)
+            val adjacentByParent = adjacentArtwork.cacheByParent(artwork::storeAdjacent)
+            for (entry in scanned.entries) {
+                val cover = adjacentByParent[entry.value.parentKey] ?: continue
+                entry.setValue(entry.value.copy(adjacentCover = cover))
+            }
         }
         // Keep cached membership when discovery could not enumerate the whole
         // tree. A later complete listing can prove which rows were removed.
@@ -238,61 +288,106 @@ internal class LocalMusicCatalog(
         }).map { channelValue(it, sourceKey) }
         val virtualTracks = cues?.tracks(scanned.values) { channelValue(it, sourceKey) }.orEmpty()
         signal.throwIfCanceled()
-        index.write(sourceKey, LocalMusicSnapshot(tracks, pending, changes))
+        index.write(sourceKey, LocalMusicSnapshot(tracks, pending, changes, moves))
         if (!force) virtualTracks.forEach(batch::add)
         batch.flush()
-        artwork.removeUnused()
+        if (loadCovers) artwork.removeUnused()
         Log.d("VidereLocalMusic",
             "tracks=${tracks.size} tagReads=$reads coverReads=$coverReads partial=$partial elapsedMs=${SystemClock.elapsedRealtime() - started}")
         return LocalMusicScanResult(channelTracks + virtualTracks, partial, notificationUris)
     }
 
+    private fun orderedTracks(rows: Map<String, LocalMusicRow>, source: String) =
+        rows.values.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) {
+            it.metadata?.title ?: fallbackTitle(it.fileName)
+        }).map { channelValue(it, source) }
+
     fun indexedTrack(source: Uri, uri: Uri): Map<String, Any?>? =
         index.read(source.toString()).tracks[uri.toString()]?.let { channelValue(it, source.toString()) }
 
-    private fun playbackId(track: LocalMusicRow): String {
-        val identity = track.identityKey ?: MessageDigest.getInstance("SHA-256")
-            .digest((track.identityUri ?: track.uri).toByteArray(Charsets.UTF_8))
-            .joinToString("") { "%02x".format(Locale.ROOT, it) }
-        return "device:$identity"
+    fun movedFileRepairs(source: Uri): Map<String, Any> {
+        val snapshot = index.read(source.toString())
+        return snapshot.moves.channelValue(snapshot.tracks.values)
     }
 
+    fun confirmMovedFileRepair(
+        source: Uri, missingId: String, candidateId: String, signal: CancellationSignal,
+        stillCurrent: () -> Boolean,
+    ): Map<String, Any>? {
+        val snapshot = index.read(source.toString())
+        val original = snapshot.moves.missing[missingId] ?: return null
+        val candidate = snapshot.tracks.values.find { it.playbackId == candidateId } ?: return null
+        val reviewed = snapshot.moves.confirm(missingId, candidate) ?: return null
+        val target = Uri.parse(candidate.uri)
+        // A matching listing alone can outlive the file it describes.
+        if (!canRead(target, signal) || readVisibilityProof(source, target) != candidate.visibilityProof) return null
+        val old = Uri.parse(original.uri)
+        val oldProof = readVisibilityProof(source, old)
+        if ((oldProof == null || original.visibilityProof == null || oldProof == original.visibilityProof) &&
+            canRead(old, signal)) return null
+        signal.throwIfCanceled()
+        if (!stillCurrent()) return null
+        index.write(source.toString(), snapshot.copy(moves = reviewed))
+        return reviewed.channelValue(snapshot.tracks.values)
+    }
+
+    private fun canRead(uri: Uri, signal: CancellationSignal): Boolean = try {
+        context.contentResolver.openFileDescriptor(uri, "r", signal)?.use { true } == true
+    } catch (cancelled: OperationCanceledException) {
+        throw cancelled
+    } catch (_: Exception) {
+        false
+    }
+
+    fun containsCommittedTrack(source: Uri, uri: Uri): Boolean =
+        index.containsCommittedTrack(source.toString(), uri.toString())
+
     private fun sameRecording(source: Uri, uri: Uri, track: LocalMusicRow): Boolean =
-        track.visibilityProof == null || readVisibilityProof(source, uri) == track.visibilityProof
+        track.editedTagFileProof?.let { descriptorVisibilityProof(uri) == it }
+            ?: (track.visibilityProof == null || readVisibilityProof(source, uri) == track.visibilityProof)
 
     fun shareableTrackName(source: Uri, uri: Uri, trackId: String?): String? {
         val track = index.read(source.toString()).tracks[uri.toString()] ?: return null
-        if (trackId != null && trackId != playbackId(track)) return null
+        if (trackId != null && trackId != track.playbackId) return null
         return track.fileName.takeIf { sameRecording(source, uri, track) }
     }
 
-    fun readTrackLyrics(source: Uri, trackUri: String, trackId: String): Map<String, String>? {
+    private fun <T> readVerifiedTrack(
+        source: Uri, trackUri: String, trackId: String, read: (LocalMusicRow, Uri) -> T?,
+    ): T? {
         val track = index.read(source.toString()).tracks[trackUri] ?: return null
-        if (trackId != playbackId(track)) return null
+        if (trackId != track.playbackId) return null
         val uri = Uri.parse(track.uri)
         if (!sameRecording(source, uri, track)) return null
-        val embedded = try {
-            val audio = context.contentResolver.openInputStream(uri) ?: return null
-            audio.use(LocalMusicEmbeddedLyrics::read)
-        } catch (_: IOException) {
-            return null
-        } catch (_: SecurityException) {
-            return null
-        }
-        // Android's system audio permission doesn't grant access to sibling
-        // documents. Only a selected document tree provides that access.
-        val sidecar = if (source.toString() == SYSTEM_URI) null else readSidecar(source, uri, track)
-        if (!sameRecording(source, uri, track)) return null
-        // An empty result still confirms that this audio file was readable.
-        return buildMap {
-            if (sidecar != null) put("sidecar", sidecar)
-            if (embedded != null) put("embedded", embedded)
-        }
+        return read(track, uri)?.takeIf { sameRecording(source, uri, track) }
     }
 
-    private fun readSidecar(tree: Uri, audio: Uri, track: LocalMusicRow): String? = try {
+    fun readTrackAudioFormat(source: Uri, trackUri: String, trackId: String): Map<String, Any?>? =
+        readVerifiedTrack(source, trackUri, trackId) { _, uri -> MusicFileAudioFormat.read(context, uri) }
+
+    fun readTrackLyrics(source: Uri, trackUri: String, trackId: String): Map<String, Any>? =
+        readVerifiedTrack(source, trackUri, trackId) { track, uri ->
+            val embedded = try {
+                val audio = context.contentResolver.openInputStream(uri) ?: return@readVerifiedTrack null
+                audio.use(LocalMusicEmbeddedLyrics::read)
+            } catch (_: IOException) {
+                return@readVerifiedTrack null
+            } catch (_: SecurityException) {
+                return@readVerifiedTrack null
+            }
+            // Android's system audio permission doesn't grant access to sibling
+            // documents. Only a selected document tree provides that access.
+            val sidecars = if (source.toString() == SYSTEM_URI) emptyMap() else readSidecars(source, uri, track)
+            // An empty result still confirms that this audio file was readable.
+            buildMap {
+                putAll(sidecars)
+                if (embedded != null) put("embedded", embedded)
+            }
+        }
+
+    private fun readSidecars(tree: Uri, audio: Uri, track: LocalMusicRow): Map<String, Any> = try {
         val parent = track.parentDocumentId
-        if (parent == null) null else {
+        if (parent == null) emptyMap() else {
             val resolver = context.contentResolver
             val children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, parent)
             val columns = arrayOf(Document.COLUMN_DOCUMENT_ID, Document.COLUMN_DISPLAY_NAME,
@@ -313,19 +408,152 @@ internal class LocalMusicCatalog(
                 }
                 LocalMusicSidecarLyrics.candidates(DocumentsContract.getDocumentId(audio), track.fileName, siblings)
             }.orEmpty()
-            candidates.firstNotNullOfOrNull { id ->
+            LocalMusicSidecarLyrics.readCandidates(candidates) { id ->
                 val sidecar = DocumentsContract.buildDocumentUriUsingTree(tree, id)
-                try {
-                    resolver.openInputStream(sidecar)?.use(LocalMusicSidecarLyrics::read)
-                } catch (_: IOException) {
-                    null
-                } catch (_: SecurityException) {
-                    null
-                }
+                resolver.openInputStream(sidecar)
             }
         }
     } catch (_: RuntimeException) {
-        null
+        emptyMap()
+    }
+
+    fun indexedOpenedAudio(source: Uri, uri: Uri): String? {
+        val tracks = index.read(source.toString()).tracks
+        if (tracks.isEmpty()) return null
+        return LocalMusicDownloadMatcher(context, source, tracks, CancellationSignal()).matchOpenedAudio(uri)
+    }
+
+    fun shareableTrackNames(
+        source: Uri, tracks: List<Triple<Uri, String?, String?>>,
+    ): List<String> {
+        val indexed = index.read(source.toString()).tracks
+        return tracks.map { (uri, trackId, visibilityKey) ->
+            val track = requireNotNull(indexed[uri.toString()])
+            require(trackId == null || trackId == track.playbackId)
+            require(visibilityKey == null || visibilityKey == track.visibilityKey)
+            require(sameRecording(source, uri, track))
+            track.fileName
+        }
+    }
+
+    fun tagEditName(source: Uri, uri: Uri): String {
+        val row = index.read(source.toString()).tracks[uri.toString()]
+            ?: throw LocalMusicTagEdit.Failure("TAGS_CHANGED")
+        if (!row.canEditTags) throw LocalMusicTagEdit.Failure("TAGS_UNSUPPORTED")
+        val current = readVisibilityProof(source, uri) ?: throw LocalMusicTagEdit.Failure("TAGS_CHANGED")
+        val matches = if (row.editedTagFileProof != null) descriptorVisibilityProof(uri) == row.editedTagFileProof
+            else current == row.visibilityProof
+        if (!matches) throw LocalMusicTagEdit.Failure("TAGS_CHANGED")
+        return row.fileName
+    }
+
+    fun editedTags(
+        source: Uri, uri: Uri, changedFields: Set<String>, edit: LocalMusicTagEdit.Step.Done,
+        artworkEdit: LocalMusicId3.ArtworkEdit? = null,
+    ): Map<String, Any?> {
+        val key = source.toString()
+        val snapshot = index.read(key)
+        val previous = snapshot.tracks[uri.toString()] ?: throw IOException()
+        val providerProof = readVisibilityProof(source, uri) ?: throw IOException()
+        if (descriptorVisibilityProof(uri) != edit.fileProof) throw IOException()
+        val prior = previous.metadata ?: LocalMusicMetadata(null, null, null, 0L)
+        fun tag(field: String, value: String?): String? = if (field in changedFields) {
+            edit.values[field]?.trim()?.takeIf(String::isNotEmpty)?.take(1024)
+        } else value
+        val cover = when {
+            artworkEdit == null -> prior.cover
+            !loadCovers -> null
+            artworkEdit.image != null -> artwork.store(artworkEdit.image) ?: throw IOException()
+            else -> {
+                var remaining: String? = null
+                readMedia(uri) { retriever ->
+                    remaining = retriever.embeddedPicture?.let { artwork.store(it) }
+                }
+                remaining
+            }
+        }
+        val genreEdited = "genre" in changedFields
+        val releaseEdited = "releaseDate" in changedFields
+        var genre = if (genreEdited) localCollectionTag(edit.values["genre"]) else prior.genre
+        var releaseDate = if (releaseEdited) edit.values["releaseDate"] else prior.releaseDate
+        if (releaseEdited && releaseDate == null) {
+            // The regular scanner can still derive a date from recording or legacy year tags.
+            releaseDate = readLocalId3Dates { context.contentResolver.openInputStream(uri) }?.release
+        }
+        if (genreEdited || (releaseEdited && releaseDate == null)) {
+            try {
+                readMedia(uri) { retriever ->
+                    if (genreEdited) genre = readGenre(retriever) ?: genre
+                    if (releaseEdited && releaseDate == null) {
+                        releaseDate = localReleaseDate(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_YEAR))
+                    }
+                }
+            } catch (denied: SecurityException) {
+                throw denied
+            } catch (_: RuntimeException) {
+                // A successful write still provides the verified ID3 values.
+            }
+        }
+        val values = prior.tagValues?.let { previousValues ->
+            previousValues.copy(
+                artists = if ("artist" in changedFields) emptyList() else previousValues.artists,
+                albumArtists = if ("albumArtist" in changedFields) emptyList() else previousValues.albumArtists,
+                genres = if (genreEdited) emptyList() else previousValues.genres,
+            )
+        }
+        val metadata = prior.copy(
+            title = tag("title", prior.title),
+            genre = genre,
+            genreRead = prior.genreRead || genreEdited,
+            releaseDate = releaseDate,
+            artist = tag("artist", prior.artist),
+            album = localAlbumTag(tag("album", prior.album)),
+            albumArtist = localAlbumTag(tag("albumArtist", prior.albumArtist)),
+            trackNumber = if ("trackNumber" in changedFields || "trackTotal" in changedFields) {
+                localAlbumPosition(edit.values["trackNumber"])
+            } else prior.trackNumber,
+            discNumber = if ("discNumber" in changedFields || "discTotal" in changedFields) {
+                localAlbumPosition(edit.values["discNumber"])
+            } else prior.discNumber,
+            cover = cover,
+            coverReadDeferred = prior.coverReadDeferred || (!loadCovers && artworkEdit != null),
+            tagValues = values,
+        )
+        val updated = previous.copy(
+            metadata = metadata,
+            visibilityProof = providerProof,
+            editedTagFileProof = edit.fileProof,
+            // Wait for the provider to assign the edited tags to an album.
+            mediaAlbumId = previous.mediaAlbumId.takeIf {
+                prior.album == metadata.album && prior.albumArtist == metadata.albumArtist
+            },
+        ).retainsEditedFileVisibility(previous)
+        index.write(key, snapshot.copy(tracks = snapshot.tracks + (updated.uri to updated)))
+        retainTagVisibility(updated, edit.fileProof)
+        return channelValue(updated, key)
+    }
+
+    private fun retainTagVisibility(row: LocalMusicRow, fileProof: String) {
+        val key = row.visibilityKey ?: return
+        val providerProof = row.visibilityProof ?: return
+        try {
+            visibilityArchive.retain(LocalMusicVisibilityAlias(key, providerProof, fileProof))
+        } catch (_: IOException) {
+            // The current selection still carries the verified key in its index.
+        }
+    }
+
+    fun playlistLocations(source: Uri, signal: CancellationSignal): Map<String, Any> {
+        val storage = M3uStorage(context)
+        val roots = storage.volumeRoots()
+        val system = source.toString() == SYSTEM_URI
+        val locations = buildMap {
+            for ((uri, row) in index.read(source.toString()).tracks) {
+                signal.throwIfCanceled()
+                storage.musicLocation(row, system, roots)?.let { put(uri, it) }
+            }
+        }
+        return mapOf("roots" to roots, "locations" to locations)
     }
 
     fun matchDownloads(
@@ -371,6 +599,7 @@ internal class LocalMusicCatalog(
             uri = newUri.toString(),
             fileName = name,
             visibilityProof = readVisibilityProof(source, newUri),
+            editedTagFileProof = null,
         ).inheritsIdentity(previous).inheritsVisibility(
             recorded?.previous ?: previous, confirmedRename = recorded != null,
         )
@@ -382,7 +611,8 @@ internal class LocalMusicCatalog(
         val rename = recorded
             ?: PendingLocalMusicRename(UUID.randomUUID().toString(), previous, name)
         val changes = snapshot.unacknowledged + uriChanges(rename, updated.uri)
-        index.write(key, LocalMusicSnapshot(tracks, pending, changes))
+        index.write(key, snapshot.copy(tracks = tracks, pending = pending, unacknowledged = changes,
+            moves = if (recorded != null) snapshot.moves.verifiedRename(recorded.previous, updated) else snapshot.moves))
         if (recorded != null && (updated.visibilityProof != recorded.previous.visibilityProof || oldUri != newUri)) {
             val provider = updated.visibilityProof
             val visibility = updated.visibilityKey
@@ -488,7 +718,8 @@ internal class LocalMusicCatalog(
 
     private fun scanFolder(
         tree: Uri, signal: CancellationSignal, notificationUris: MutableSet<Uri>,
-        adjacentArtwork: LocalMusicAdjacentCovers, cues: LocalMusicCueTracks,
+        adjacentArtwork: LocalMusicAdjacentCovers?, cues: LocalMusicCueTracks?,
+        isDocumentProvider: Boolean, report: LocalMusicScanReport?,
         collect: (LocalMusicRow) -> Unit,
     ): Boolean {
         val root = DocumentsContract.getTreeDocumentId(tree)
@@ -508,9 +739,9 @@ internal class LocalMusicCatalog(
                 // A cross-process cursor may omit its notification URI.
                 notificationUris.add(DocumentsContract.buildChildDocumentsUri(authority, id))
             }
-            val covers = LocalMusicAdjacentCoverCandidates<LocalMusicCoverDocument>()
+            val covers = adjacentArtwork?.let { LocalMusicAdjacentCoverCandidates<LocalMusicCoverDocument>() }
             var containsAudio = false
-            val complete = readFolderChildren(children, signal, id == root) {
+            val complete = readFolderChildren(children, signal, id == root || isDocumentProvider) {
                 if (notificationUris.size < LocalMusicScanWatcher.MAX_NOTIFICATION_URIS) {
                     folderNotificationUri(it, tree, authority, id)?.let(notificationUris::add)
                 }
@@ -518,23 +749,51 @@ internal class LocalMusicCatalog(
                     it.extras.containsKey(DocumentsContract.EXTRA_ERROR)) throw IOException()
                 while (it.moveToNext()) {
                     signal.throwIfCanceled()
-                    val child = it.getString(0)?.takeIf(String::isNotBlank) ?: continue
-                    val name = it.getString(1)?.takeIf(String::isNotBlank) ?: continue
+                    val child = it.getString(0)?.takeIf(String::isNotBlank)
+                    if (child == null && report == null) continue
+                    val name = it.getString(1)?.takeIf(String::isNotBlank)
+                    if (name == null && report == null) continue
                     val mime = it.getString(2).orEmpty()
+                    if (child == null || name == null) {
+                        if (mime != Document.MIME_TYPE_DIR && report != null &&
+                            audioKind(mime, name.orEmpty()) != AudioKind.OTHER) {
+                            report.add(name, LocalMusicSkipReason.MISSING_DETAILS)
+                        }
+                        continue
+                    }
+                    if (!seen.add(child)) continue
                     if (mime == Document.MIME_TYPE_DIR) {
-                        if (!seen.add(child)) continue
-                        cues.addDirectory(id, name, child)
+                        cues?.addDirectory(id, name, child)
                         val location = if (folder.locations.size in 1 until MAX_LOCAL_MUSIC_FOLDER_DEPTH &&
                             it.getType(1) == Cursor.FIELD_TYPE_STRING)
                             safMusicFolderLocation(source, child, name, folder.locations.last()) else null
                         directories.addLast(ScannedFolder(child,
                             location?.let { folder.locations + it } ?: emptyList()))
                     } else if (name.endsWith(".cue", ignoreCase = true)) {
-                        if (seen.add(child)) cues.addSheet(id, name, child)
-                    } else if (isAudio(mime, name)) {
-                        if (!seen.add(child)) continue
-                        containsAudio = true
+                        cues?.addSheet(id, name, child)
+                    } else {
+                        val kind = audioKind(mime, name)
+                        if (kind != AudioKind.AUDIO) {
+                            if (kind != AudioKind.OTHER) report?.add(name, kind.rejection)
+                            covers?.add(name, mime) {
+                                LocalMusicCoverDocument(
+                                    DocumentsContract.buildDocumentUriUsingTree(tree, child),
+                                    it.numeric(Document.COLUMN_SIZE),
+                                )
+                            }
+                            continue
+                        }
                         val flags = it.numeric(Document.COLUMN_FLAGS) ?: 0L
+                        if (isDocumentProvider && !providerOffersAudioStream(flags)) {
+                            val reason = if (flags and Document.FLAG_PARTIAL.toLong() != 0L) {
+                                LocalMusicSkipReason.MISSING_DETAILS
+                            } else {
+                                LocalMusicSkipReason.UNSUPPORTED_TYPE
+                            }
+                            report?.add(name, reason)
+                            continue
+                        }
+                        containsAudio = true
                         val uri = DocumentsContract.buildDocumentUriUsingTree(tree, child).toString()
                         val modified = it.numeric(Document.COLUMN_LAST_MODIFIED)?.takeIf { value -> value > 0 }
                         val size = it.numeric(Document.COLUMN_SIZE)
@@ -545,21 +804,18 @@ internal class LocalMusicCatalog(
                             modifiedMs = modified,
                             sizeBytes = size,
                             firstSeen = true,
-                            canRename = flags and Document.FLAG_SUPPORTS_RENAME.toLong() != 0L,
+                            canRename = !isDocumentProvider && flags and Document.FLAG_SUPPORTS_RENAME.toLong() != 0L,
+                            canEditTags = !isDocumentProvider && tree.authority == EXTERNAL_STORAGE_PROVIDER && isMp3Name(name) &&
+                                flags and Document.FLAG_SUPPORTS_WRITE.toLong() != 0L,
                             parentDocumentId = id,
                             parentKey = id,
                             visibilityProof = documentVisibilityProof(uri, modified, size),
                             folderLocations = folder.locations,
                         ))
-                    } else {
-                        covers.add(name, mime) {
-                            LocalMusicCoverDocument(DocumentsContract.buildDocumentUriUsingTree(tree, child),
-                                it.numeric(Document.COLUMN_SIZE))
-                        }
                     }
                 }
             }
-            if (containsAudio) adjacentArtwork.addFolder(id, covers)
+            if (containsAudio && covers != null) adjacentArtwork?.addFolder(id, covers)
             if (!complete) incomplete = true
         }
         return incomplete
@@ -614,7 +870,10 @@ internal class LocalMusicCatalog(
         null
     }
 
-    private fun scanMediaStore(source: Uri, signal: CancellationSignal, collect: (LocalMusicRow) -> Unit) {
+    private fun scanMediaStore(
+        source: Uri, signal: CancellationSignal, report: LocalMusicScanReport?,
+        collect: (LocalMusicRow) -> Unit,
+    ) {
         val columns = mutableListOf(
             Audio._ID, Audio.DISPLAY_NAME, Audio.MIME_TYPE, Audio.SIZE, Audio.DATE_ADDED,
             Audio.DATE_MODIFIED, Audio.TITLE, Audio.ARTIST, Audio.ALBUM, Audio.ALBUM_ID, Audio.DURATION,
@@ -640,21 +899,35 @@ internal class LocalMusicCatalog(
             val pathColumn = it.getColumnIndex(MediaStore.MediaColumns.RELATIVE_PATH)
             while (it.moveToNext()) {
                 signal.throwIfCanceled()
-                val id = it.numeric(Audio._ID) ?: continue
-                val name = it.string(MediaStore.MediaColumns.DISPLAY_NAME) ?: continue
-                if (!isAudio(it.string(MediaStore.MediaColumns.MIME_TYPE).orEmpty(), name)) continue
+                val id = it.numeric(Audio._ID)
+                if (id == null && report == null) continue
+                val name = it.string(MediaStore.MediaColumns.DISPLAY_NAME)
+                if (id == null || name == null) {
+                    report?.add(name, LocalMusicSkipReason.MISSING_DETAILS)
+                    continue
+                }
+                val kind = audioKind(it.string(MediaStore.MediaColumns.MIME_TYPE).orEmpty(), name)
+                if (kind != AudioKind.AUDIO) {
+                    report?.add(name, kind.rejection)
+                    continue
+                }
                 val added = mediaStoreTime(it.numeric(MediaStore.MediaColumns.DATE_ADDED))
                 val collection: Uri
                 val parent: String?
                 val volume: String
                 val locations: List<LocalMusicFolderLocation>
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    volume = it.string(MediaStore.MediaColumns.VOLUME_NAME) ?: continue
+                    val reportedVolume = it.string(MediaStore.MediaColumns.VOLUME_NAME)
+                    if (reportedVolume == null) {
+                        report?.add(name, LocalMusicSkipReason.MISSING_DETAILS)
+                        continue
+                    }
+                    volume = reportedVolume
                     collection = Audio.getContentUri(volume)
-                    parent = "$volume:${it.string(MediaStore.MediaColumns.RELATIVE_PATH).orEmpty()}"
                     val relative = if (pathColumn >= 0 && volumeColumn >= 0 &&
                         it.getType(pathColumn) == Cursor.FIELD_TYPE_STRING &&
                         it.getType(volumeColumn) == Cursor.FIELD_TYPE_STRING) it.getString(pathColumn) else null
+                    parent = relative?.let { "$volume:$it" }
                     locations = if (relative == null) emptyList() else
                         locationsByVolume.getOrPut(volume) { mutableMapOf() }.getOrPut(relative) {
                             mediaMusicFolderLocations(volume, relative)
@@ -680,6 +953,7 @@ internal class LocalMusicCatalog(
                     sizeBytes = size,
                     firstSeen = added == null,
                     canRename = true,
+                    canEditTags = isMp3Name(name),
                     parentDocumentId = null,
                     parentKey = parent,
                     mediaAlbumId = it.numeric(Audio.ALBUM_ID),
@@ -772,6 +1046,34 @@ internal class LocalMusicCatalog(
         null
     }
 
+    private fun readContentAdvisory(uri: Uri, signal: CancellationSignal): LocalMusicAdvisory? = try {
+        context.contentResolver.openAssetFileDescriptor(uri, "r", signal)?.use { asset ->
+            val length = asset.length.takeIf { it >= 0 }
+            asset.createInputStream().use { input ->
+                readLocalMusicContentAdvisory(
+                    input, length,
+                    seekForward = { bytes ->
+                        try {
+                            Os.lseek(asset.fileDescriptor, bytes, OsConstants.SEEK_CUR)
+                            true
+                        } catch (failure: ErrnoException) {
+                            if (failure.errno != OsConstants.ESPIPE) throw IOException(failure)
+                            false
+                        }
+                    },
+                    checkCanceled = signal::throwIfCanceled,
+                )
+            }
+        }
+    } catch (cancelled: OperationCanceledException) {
+        throw cancelled
+    } catch (_: IOException) {
+        null
+    } catch (_: RuntimeException) {
+        // Providers can allow browsing even when an individual file is unreadable.
+        null
+    }
+
     private fun readMetadata(uri: Uri, summary: LocalMusicMetadata?, signal: CancellationSignal): LocalMusicMetadata? {
         var metadata: LocalMusicMetadata? = null
         try {
@@ -801,14 +1103,23 @@ internal class LocalMusicCatalog(
                     originalReleaseDate = id3?.original,
                     durationMs = tag(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
                         ?.coerceAtLeast(0L) ?: summary?.durationMs ?: 0L,
-                    genre = localCollectionTag(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_GENRE)),
+                    genre = readGenre(retriever),
                     genreRead = true,
                     albumTagsRead = true,
+                    coverReadDeferred = !loadCovers,
                 )
-                retriever.embeddedPicture?.let { metadata = metadata?.copy(cover = artwork.store(it)) }
+                if (loadCovers) {
+                    signal.throwIfCanceled()
+                    retriever.embeddedPicture?.let {
+                        signal.throwIfCanceled()
+                        metadata = metadata?.copy(cover = artwork.store(it))
+                    }
+                }
             }
         } catch (cancelled: OperationCanceledException) {
             throw cancelled
+        } catch (denied: SecurityException) {
+            throw denied
         } catch (_: RuntimeException) {
             // A file can disappear, deny access or have unreadable metadata.
         } catch (_: IOException) {
@@ -816,9 +1127,9 @@ internal class LocalMusicCatalog(
         }
         val loaded = metadata ?: return null
         signal.throwIfCanceled()
-        val sortTags = try {
+        val tags = try {
             context.contentResolver.openAssetFileDescriptor(uri, "r", signal)?.use { document ->
-                document.createInputStream().use(::readLocalMusicSortTags)
+                document.createInputStream().use(::readLocalMusicTags)
             }
         } catch (cancelled: OperationCanceledException) {
             throw cancelled
@@ -841,18 +1152,30 @@ internal class LocalMusicCatalog(
         } catch (_: IOException) {
             null
         }
-        return loaded.copy(sortTags = sortTags, replayGain = replayGain, replayGainRead = true)
+        return loaded.copy(
+            sortTags = tags?.sortTags, tagValues = tags?.values,
+            replayGain = replayGain, replayGainRead = true,
+        )
     }
 
-    private fun repairCover(uri: Uri, cover: String) {
+    private fun repairCover(uri: Uri, cover: String, signal: CancellationSignal) {
         try {
             readMedia(uri) { retriever ->
-                retriever.embeddedPicture?.let { artwork.store(it, expectedName = cover) }
+                signal.throwIfCanceled()
+                retriever.embeddedPicture?.let {
+                    signal.throwIfCanceled()
+                    artwork.store(it, expectedName = cover)
+                }
             }
+        } catch (cancelled: OperationCanceledException) {
+            throw cancelled
         } catch (_: RuntimeException) {
             // A missing thumbnail must not make the indexed song unavailable.
         } catch (_: IOException) { }
     }
+
+    private fun readGenre(retriever: MediaMetadataRetriever): String? =
+        localCollectionTag(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_GENRE))
 
     private inline fun readMedia(uri: Uri, read: (MediaMetadataRetriever) -> Unit) {
         val retriever = MediaMetadataRetriever()
@@ -865,8 +1188,12 @@ internal class LocalMusicCatalog(
     }
 
     private fun channelValue(row: LocalMusicRow, source: String): Map<String, Any?> =
-        row.channelValue(row.metadata?.cover?.let(artwork::path), source,
-            row.adjacentCover?.let(artwork::adjacentPath))
+        if (loadCovers) {
+            row.channelValue(row.metadata?.cover?.let(artwork::path), source,
+                row.adjacentCover?.let(artwork::adjacentPath), tagSeparators)
+        } else {
+            row.channelValue(source = source, tagSeparators = tagSeparators)
+        }
 
     private fun Cursor.numeric(name: String): Long? {
         val index = getColumnIndex(name)
@@ -896,8 +1223,13 @@ internal class LocalMusicCatalog(
     }
 
     companion object {
+        internal fun providerOffersAudioStream(flags: Long): Boolean =
+            flags and (Document.FLAG_PARTIAL or Document.FLAG_VIRTUAL_DOCUMENT).toLong() == 0L
+
         const val SYSTEM_URI = "content://media/external/audio/media"
         private const val EXTERNAL_STORAGE_PROVIDER = "com.android.externalstorage.documents"
+
+        private fun isMp3Name(name: String): Boolean = name.endsWith(".mp3", ignoreCase = true)
 
         internal fun containsDocument(treeId: String, documentId: String): Boolean {
             val treeVolume = treeId.substringBefore(':', "")
@@ -944,15 +1276,30 @@ internal class LocalMusicCatalog(
         private val audioExtensions = setOf("mp3", "m4a", "m4b", "aac", "flac", "ogg", "oga", "opus",
             "wav", "aif", "aiff", "amr", "wma", "mka", "mid", "midi", "caf", "alac")
         private val playlistExtensions = setOf("m3u", "m3u8", "mpd", "pls", "xspf", "asx", "ism", "sdp")
-        internal fun isAudio(mime: String, name: String): Boolean {
+        internal fun audioKind(mime: String, name: String): AudioKind {
             val type = mime.substringBefore(';').trim().lowercase(Locale.ROOT)
             val extension = name.substringAfterLast('.', "").lowercase(Locale.ROOT)
-            if (extension in playlistExtensions || type.contains("mpegurl") || type == "audio/x-scpls") return false
-            return type.startsWith("audio/") || ((type.isEmpty() || type == "application/octet-stream" ||
-                type == "application/ogg") && extension in audioExtensions)
+            if (extension in playlistExtensions || type.contains("mpegurl") || type == "audio/x-scpls") {
+                return AudioKind.PLAYLIST
+            }
+            if (type.startsWith("audio/") || ((type.isEmpty() || type == "application/octet-stream" ||
+                type == "application/ogg") && extension in audioExtensions)) return AudioKind.AUDIO
+            return if (extension in audioExtensions) AudioKind.UNRECOGNIZED_AUDIO else AudioKind.OTHER
         }
+        internal fun isAudio(mime: String, name: String): Boolean = audioKind(mime, name) == AudioKind.AUDIO
         internal fun fallbackTitle(name: String): String =
             name.substringBeforeLast('.').takeIf { it.isNotBlank() } ?: name
+    }
+
+    internal enum class AudioKind {
+        AUDIO, PLAYLIST, UNRECOGNIZED_AUDIO, OTHER;
+
+        val rejection: LocalMusicSkipReason
+            get() = when (this) {
+                PLAYLIST -> LocalMusicSkipReason.PLAYLIST
+                UNRECOGNIZED_AUDIO, OTHER -> LocalMusicSkipReason.UNSUPPORTED_TYPE
+                AUDIO -> error("Recognized audio is not a skipped file")
+            }
     }
 }
 
@@ -1036,13 +1383,14 @@ private class LocalMusicCovers(private val folder: File) {
             bitmap.recycle()
         }
         val old = unused.iterator()
-        while (cacheBytes + thumbnail.size() > 24 * 1024 * 1024 && old.hasNext()) {
+        while (cacheBytes + thumbnail.size() > LocalMusicArtworkStorage.LIMIT_BYTES && old.hasNext()) {
             val stale = old.next()
             val size = stale.length()
             if (stale.delete()) cacheBytes -= size
             old.remove()
         }
-        if (cacheBytes + thumbnail.size() > 24 * 1024 * 1024 || (!folder.isDirectory && !folder.mkdirs())) return null
+        if (cacheBytes + thumbnail.size() > LocalMusicArtworkStorage.LIMIT_BYTES ||
+            (!folder.isDirectory && !folder.mkdirs())) return null
         val temporary = File.createTempFile("cover-", ".tmp", folder)
         try {
             temporary.outputStream().use { thumbnail.writeTo(it) }

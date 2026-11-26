@@ -8,6 +8,22 @@ abstract class ShareLinks {
   Uri getYoutubeLink(int? timestamp);
 }
 
+class ChannelShareLinks implements ShareLinks {
+  final String channelId;
+
+  const ChannelShareLinks(this.channelId);
+
+  @override
+  Uri getInvidiousLink(Server server, int? timestamp) =>
+      invidiousShareLink(server, pathSegments: ['channel', channelId]);
+
+  @override
+  Uri getYoutubeLink(int? timestamp) => Uri(
+      scheme: 'https',
+      host: 'www.youtube.com',
+      pathSegments: ['channel', channelId]);
+}
+
 class PublicPlaylistShareLinks implements ShareLinks {
   final String id;
 

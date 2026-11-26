@@ -5,6 +5,7 @@ import 'package:uuid/uuid.dart';
 import '../../settings/models/db/settings.dart';
 import '../../utils/interfaces/db.dart';
 import '../models/local_music_track.dart';
+import '../models/music_content_advisory.dart';
 
 typedef LocalMusicVisibilityOwner = ({IDbClient database, String profileId});
 typedef _ExclusionRules = ({
@@ -135,6 +136,7 @@ class _HiddenChanges {
 class LocalMusicVisibility {
   static const _setting = 'device-music-hidden-files-v1';
   static const _exclusionSetting = 'device-music-exclusions-v1';
+  static const _hideExplicitSetting = 'device-music-hide-explicit';
   static final _byDatabase = Expando<Map<String, _HiddenChanges>>();
   final LocalMusicVisibilityOwner owner;
   final IDbClient _database;
@@ -217,6 +219,23 @@ class LocalMusicVisibility {
 
   bool get excludesRecordings => _readExclusions().recordings;
 
+  bool get hideExplicitTracks =>
+      _database.getSettings(_hideExplicitSetting)?.value == 'true';
+
+  bool isExplicitTrackHidden(LocalMusicTrack track) =>
+      hideExplicitTracks && _hasExplicitAdvisory(track);
+
+  bool _hasExplicitAdvisory(LocalMusicTrack track) => _copies(track)
+      .any((copy) => copy.contentAdvisory == MusicContentAdvisory.explicit);
+
+  Future<bool> setHideExplicitTracks(bool value, bool Function() active) =>
+      _serialize(() async {
+        if (!active() || hideExplicitTracks == value) return false;
+        await _database
+            .saveSetting(SettingsValue(_hideExplicitSetting, value.toString()));
+        return true;
+      });
+
   Iterable<LocalMusicFolderLocation> get savedFolders =>
       _readExclusions().folders.values;
 
@@ -272,18 +291,24 @@ class LocalMusicVisibility {
   List<LocalMusicTrack> visible(List<LocalMusicTrack> tracks) {
     final files = _read();
     final rules = _readExclusions();
+    final hideExplicit = hideExplicitTracks;
     if (files.isEmpty &&
+        !hideExplicit &&
         !rules.recordings &&
         rules.folders.isEmpty &&
         rules.included.isEmpty) {
       return tracks;
     }
-    return List.unmodifiable(tracks.where(
-        (track) => !_isHidden(track, files) && !_isExcluded(track, rules)));
+    return List.unmodifiable(tracks.where((track) =>
+        !(hideExplicit && _hasExplicitAdvisory(track)) &&
+        !_isHidden(track, files) &&
+        !_isExcluded(track, rules)));
   }
 
   bool isVisible(LocalMusicTrack track) =>
-      !isHidden(track) && !_isExcluded(track, _readExclusions());
+      !isExplicitTrackHidden(track) &&
+      !isHidden(track) &&
+      !_isExcluded(track, _readExclusions());
 
   Future<bool> setExcludeRecordings(bool value, bool Function() active) =>
       _serialize(() async {

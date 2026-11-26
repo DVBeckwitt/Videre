@@ -1,8 +1,11 @@
+import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../../app/states/app.dart';
 import '../../../l10n/generated/app_localizations.dart';
+import '../../../player/models/local_music_playback.dart';
 import '../../../player/states/player.dart';
 import '../../../player/views/components/player_modal_back_handler.dart';
 import '../../../utils/interfaces/db.dart';
@@ -14,8 +17,10 @@ import '../../services/music_lyrics_corrections.dart';
 import '../../services/music_lyrics_preferences.dart';
 import '../../services/music_lyrics_reader_preferences.dart';
 import '../../services/music_lyrics_service.dart';
+import '../../services/music_offline_lyrics.dart';
 import 'music_lyrics_keep_awake.dart';
 import 'music_lyrics_match_dialog.dart';
+import 'music_lyric_cue_details.dart';
 import 'music_timed_lyrics.dart';
 
 typedef MusicLyricsCorrectionTarget = ({
@@ -25,22 +30,35 @@ typedef MusicLyricsCorrectionTarget = ({
   MusicLyricsCorrections corrections,
 });
 
+enum _AppearanceToggle { multiline, trim }
+
 class MusicLyricsReader extends StatefulWidget {
   final MusicMetadata track;
-  final Future<MusicLyrics> Function() load;
+  final String recordingId;
+  final Future<MusicLyrics> Function(Future<void> retired) load;
   final bool Function() isCurrent;
   final IDbClient preferencesDatabase;
   final Duration? localDuration;
   final MusicLyricsCorrectionTarget? correctionTarget;
+  final MusicOfflineLyrics? offlineLyrics;
+  final void Function(MusicLyrics? lyrics, Duration delay)? onResolved;
+  final Widget Function(MusicLyrics lyrics, VoidCallback reload)?
+      localEditAction;
+  final Future<List<File>> Function()? loadShareArtwork;
 
   const MusicLyricsReader({
     super.key,
     required this.track,
+    required this.recordingId,
     required this.load,
     required this.isCurrent,
     required this.preferencesDatabase,
     this.localDuration,
     this.correctionTarget,
+    this.offlineLyrics,
+    this.onResolved,
+    this.localEditAction,
+    this.loadShareArtwork,
   });
 
   @override
@@ -48,34 +66,111 @@ class MusicLyricsReader extends StatefulWidget {
 }
 
 class _MusicLyricsReaderState extends State<MusicLyricsReader> {
+  final _retired = Completer<void>();
   MusicLyricsCorrection? _correction;
+  bool _savedOffline = false;
+  bool _updatingOffline = false;
+  bool _offlineUpdateFailed = false;
+  MusicLyrics? _resolvedLyrics;
+  int _loadRevision = 0;
   late Future<MusicLyrics> _request = _load();
   late MusicLyricsReaderPreferences _preferences =
       MusicLyricsReaderPreferences.forDatabase(widget.preferencesDatabase);
   bool _savingAppearance = false;
+  late final _timing = MusicLyricsTimingPreference(
+      widget.preferencesDatabase, widget.recordingId);
+  late int _delayMilliseconds = _timing.read();
+  bool _showTimingControls = false;
+  bool _savingTiming = false;
 
   Future<MusicLyrics> _load() async {
     if (!widget.isCurrent()) return const MusicLyrics.unavailable();
+    final revision = ++_loadRevision;
     final target = widget.correctionTarget;
     _correction = target?.corrections.read(target.videoId);
-    final lyrics = _correction?.lyrics ?? await widget.load();
-    return mounted && widget.isCurrent()
-        ? lyrics
-        : const MusicLyrics.unavailable();
+    final saved = _correction == null && target != null
+        ? widget.offlineLyrics?.read(target.videoId,
+            track: target.track, durationSeconds: target.durationSeconds)
+        : null;
+    _savedOffline = saved != null;
+    final stored = _correction?.lyrics ?? saved;
+    final lyrics = await (stored == null
+        ? widget.load(_retired.future)
+        : Future.value(stored));
+    if (!mounted || !widget.isCurrent() || revision != _loadRevision) {
+      return const MusicLyrics.unavailable();
+    }
+    _resolvedLyrics = lyrics;
+    _publishResolved();
+    return lyrics;
+  }
+
+  void _publishResolved() {
+    widget.onResolved
+        ?.call(_resolvedLyrics, Duration(milliseconds: _delayMilliseconds));
   }
 
   void _reload() {
     if (!widget.isCurrent()) return;
+    _resolvedLyrics = null;
+    _publishResolved();
     final request = _load();
     setState(() {
       _request = request;
     });
   }
 
+  Future<void> _updateOffline(MusicLyrics lyrics) async {
+    final target = widget.correctionTarget;
+    final store = widget.offlineLyrics;
+    if (!widget.isCurrent() ||
+        _updatingOffline ||
+        _correction != null ||
+        target == null ||
+        store == null) {
+      return;
+    }
+    setState(() {
+      _updatingOffline = true;
+      _offlineUpdateFailed = false;
+    });
+    final wasSaved = _savedOffline;
+    try {
+      if (wasSaved) {
+        await store.remove(target.videoId);
+      } else {
+        await store.save(target.videoId, lyrics,
+            track: target.track, durationSeconds: target.durationSeconds);
+      }
+      if (!mounted || !widget.isCurrent()) return;
+      if (wasSaved) {
+        _reload();
+      } else {
+        setState(() => _savedOffline = true);
+      }
+    } catch (_) {
+      if (mounted && widget.isCurrent()) {
+        setState(() => _offlineUpdateFailed = true);
+      }
+    } finally {
+      if (mounted && widget.isCurrent()) {
+        setState(() => _updatingOffline = false);
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _retired.complete();
+    super.dispose();
+  }
+
   Duration? _seekLimit(PlayerCubit player) {
     final state = player.state;
     if (player.openingMusicEntry != null ||
-        state.currentlyPlaying?.liveNow == true) {
+        state.currentlyPlaying?.liveNow == true ||
+        (isLocalMusicPlaybackId(state.currentQueueId) &&
+            !player.canSeekCurrentMedia)) {
       return null;
     }
     if (widget.localDuration case final duration?) return duration;
@@ -164,9 +259,15 @@ class _MusicLyricsReaderState extends State<MusicLyricsReader> {
       final MusicLyricsTextSize size => previous.copyWith(size: size),
       final MusicLyricsTextAlignment alignment =>
         previous.copyWith(alignment: alignment),
+      _AppearanceToggle.multiline =>
+        previous.copyWith(multiline: !previous.multiline),
+      _AppearanceToggle.trim => previous.copyWith(trim: !previous.trim),
       _ => previous,
     };
-    if (next.size == previous.size && next.alignment == previous.alignment) {
+    if (next.size == previous.size &&
+        next.alignment == previous.alignment &&
+        next.multiline == previous.multiline &&
+        next.trim == previous.trim) {
       return;
     }
     setState(() {
@@ -188,7 +289,7 @@ class _MusicLyricsReaderState extends State<MusicLyricsReader> {
     }
   }
 
-  Widget _appearanceMenu(AppLocalizations locals) {
+  Widget _appearanceMenu(AppLocalizations locals, {required bool synced}) {
     return PopupMenuButton<Object>(
       key: const ValueKey('music-lyrics-appearance'),
       tooltip: locals.musicLyricsAppearance,
@@ -224,6 +325,76 @@ class _MusicLyricsReaderState extends State<MusicLyricsReader> {
             checked: _preferences.alignment == alignment,
             child: Text(label),
           ),
+        if (synced) ...[
+          const PopupMenuDivider(),
+          CheckedPopupMenuItem<Object>(
+            value: _AppearanceToggle.multiline,
+            checked: _preferences.multiline,
+            child: Text(locals.musicLyricsMultiline),
+          ),
+          CheckedPopupMenuItem<Object>(
+            value: _AppearanceToggle.trim,
+            checked: _preferences.trim,
+            child: Text(locals.musicLyricsTrim),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Future<void> _changeTiming(int milliseconds) async {
+    if (_savingTiming ||
+        !widget.isCurrent() ||
+        ModalRoute.isCurrentOf(context) != true) {
+      return;
+    }
+    setState(() => _savingTiming = true);
+    try {
+      await _timing.save(milliseconds);
+      if (mounted && widget.isCurrent()) {
+        setState(() => _delayMilliseconds = milliseconds);
+        _publishResolved();
+      }
+    } catch (_) {
+      if (mounted && widget.isCurrent()) {
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(SnackBar(
+          content:
+              Text(AppLocalizations.of(context)!.musicLyricsTimingSaveFailed),
+        ));
+      }
+    } finally {
+      if (mounted) setState(() => _savingTiming = false);
+    }
+  }
+
+  Widget _timingControls(AppLocalizations locals) {
+    final delay = _delayMilliseconds;
+    const step = MusicLyricsTimingPreference.stepMilliseconds;
+    const limit = MusicLyricsTimingPreference.limitMilliseconds;
+    final signedDelay = delay > 0 ? '+$delay' : '$delay';
+    return Wrap(
+      alignment: WrapAlignment.center,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      spacing: 8,
+      children: [
+        TextButton(
+          onPressed: _savingTiming || delay <= -limit
+              ? null
+              : () => _changeTiming((delay - step).clamp(-limit, limit)),
+          child: Text(locals.musicLyricsTimingEarlier),
+        ),
+        Text(locals.musicLyricsTimingValue(signedDelay)),
+        TextButton(
+          onPressed: _savingTiming || delay >= limit
+              ? null
+              : () => _changeTiming((delay + step).clamp(-limit, limit)),
+          child: Text(locals.musicLyricsTimingLater),
+        ),
+        TextButton(
+          onPressed:
+              _savingTiming || delay == 0 ? null : () => _changeTiming(0),
+          child: Text(locals.musicLyricsTimingReset),
+        ),
       ],
     );
   }
@@ -239,11 +410,24 @@ class _MusicLyricsReaderState extends State<MusicLyricsReader> {
     return ListView.builder(
       padding: const EdgeInsets.fromLTRB(24, 16, 24, 32),
       itemCount: lyrics.text != null ? 1 : lyrics.cues.length,
-      itemBuilder: (context, index) => SelectableText(
-        lyrics.text ?? lyrics.cues[index].text,
-        style: style,
-        textAlign: alignment,
-      ),
+      itemBuilder: (context, index) {
+        final child = SelectableText(
+          lyrics.text ??
+              (lyrics.kind == MusicLyricsKind.synced
+                  ? _preferences.syncedCueText(lyrics, index)
+                  : lyrics.cues[index].text),
+          style: style,
+          textAlign: alignment,
+        );
+        final metadata = lyrics.metadataByCue[index];
+        return metadata != null && metadata.hasDetails
+            ? Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: MusicLyricCueDetails(
+                    metadata: metadata, alignment: alignment, child: child),
+              )
+            : child;
+      },
     );
   }
 
@@ -251,7 +435,8 @@ class _MusicLyricsReaderState extends State<MusicLyricsReader> {
       {required Widget body,
       MusicLyrics? lyrics,
       bool hasText = false,
-      bool ready = false}) {
+      bool ready = false,
+      bool hasTiming = false}) {
     final theme = Theme.of(context);
     return Scaffold(
       key: const ValueKey('music-lyrics-reader'),
@@ -260,13 +445,27 @@ class _MusicLyricsReaderState extends State<MusicLyricsReader> {
         title: Text(locals.musicLyrics),
         backgroundColor: theme.colorScheme.surface,
         actions: [
+          if (widget.localEditAction case final edit? when ready)
+            edit(lyrics ?? const MusicLyrics.unavailable(), _reload),
           if (ready && widget.correctionTarget != null)
             IconButton(
               tooltip: locals.musicLyricsCorrectMatch,
               icon: const Icon(Icons.edit_outlined),
-              onPressed: () => _correct(lyrics),
+              onPressed: _updatingOffline ? null : () => _correct(lyrics),
             ),
-          if (hasText) _appearanceMenu(locals),
+          if (hasTiming)
+            IconButton(
+              key: const ValueKey('music-lyrics-timing'),
+              tooltip: locals.musicLyricsTiming,
+              isSelected: _showTimingControls,
+              icon: const Icon(Icons.timer_outlined),
+              selectedIcon: const Icon(Icons.timer),
+              onPressed: () =>
+                  setState(() => _showTimingControls = !_showTimingControls),
+            ),
+          if (hasText)
+            _appearanceMenu(locals,
+                synced: lyrics?.kind == MusicLyricsKind.synced),
         ],
       ),
       body: SafeArea(
@@ -294,10 +493,39 @@ class _MusicLyricsReaderState extends State<MusicLyricsReader> {
                     ],
                   ),
                 ),
+                if (hasTiming && _showTimingControls) _timingControls(locals),
                 const Divider(height: 1),
                 Expanded(
                   child: hasText ? MusicLyricsKeepAwake(child: body) : body,
                 ),
+                if (_offlineUpdateFailed)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 24),
+                    child: Text(locals.musicLyricsOfflineSaveFailed,
+                        style: TextStyle(color: theme.colorScheme.error)),
+                  ),
+                if (ready &&
+                    widget.offlineLyrics != null &&
+                    _correction == null &&
+                    lyrics != null &&
+                    lyrics.kind != MusicLyricsKind.unavailable)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Align(
+                      alignment: AlignmentDirectional.centerEnd,
+                      child: TextButton.icon(
+                        onPressed: _updatingOffline
+                            ? null
+                            : () => _updateOffline(lyrics),
+                        icon: Icon(_savedOffline
+                            ? Icons.download_done_outlined
+                            : Icons.download_outlined),
+                        label: Text(_savedOffline
+                            ? locals.musicLyricsRemoveOffline
+                            : locals.musicLyricsSaveOffline),
+                      ),
+                    ),
+                  ),
               ],
             ),
           ),
@@ -362,7 +590,9 @@ class _MusicLyricsReaderState extends State<MusicLyricsReader> {
                       track: widget.track,
                       edited: _correction?.edited == true,
                       preferences: _preferences,
+                      loadShareArtwork: widget.loadShareArtwork,
                       seekLimit: seekLimit,
+                      delay: Duration(milliseconds: _delayMilliseconds),
                       isCurrent: widget.isCurrent,
                       onSeek: _seek,
                     ),
@@ -376,7 +606,11 @@ class _MusicLyricsReaderState extends State<MusicLyricsReader> {
                       : Center(child: Text(locals.musicLyricsMatchDiscarded)),
                 };
                 return _page(locals,
-                    body: body, lyrics: lyrics, hasText: hasText, ready: true);
+                    body: body,
+                    lyrics: lyrics,
+                    hasText: hasText,
+                    ready: true,
+                    hasTiming: body is MusicTimedLyrics);
               },
             ),
     );

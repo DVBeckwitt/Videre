@@ -24,24 +24,32 @@ import 'package:clipious/music/models/music_artist_page.dart';
 import 'package:clipious/music/models/music_content_advisory.dart';
 import 'package:clipious/music/models/music_collection.dart';
 import 'package:clipious/music/models/music_cover_corners.dart';
+import 'package:clipious/music/models/music_library_entry.dart';
 import 'package:clipious/music/models/music_lyrics.dart';
 import 'package:clipious/music/models/music_lyrics_match.dart';
+import 'package:clipious/music/services/lrc_lyrics.dart';
 import 'package:clipious/music/services/music_lyrics_corrections.dart';
 import 'package:clipious/music/models/music_player_appearance.dart';
 import 'package:clipious/music/models/music_track.dart';
 import 'package:clipious/music/views/components/music_selection_feedback.dart';
 import 'package:clipious/music/services/music_catalog_service.dart';
 import 'package:clipious/music/services/local_music_library.dart';
+import 'package:clipious/music/services/local_music_lyrics_authoring.dart';
 import 'package:clipious/music/services/music_community_cover_preferences.dart';
+import 'package:clipious/music/services/music_library_service.dart';
 import 'package:clipious/music/services/music_lyrics_preferences.dart';
 import 'package:clipious/music/services/music_passage_bookmarks.dart';
+import 'package:clipious/music/services/music_offline_lyrics.dart';
 import 'package:clipious/music/services/music_lyrics_reader_preferences.dart';
+import 'package:clipious/music/services/music_waveform.dart';
 import 'package:clipious/music/views/components/community_music_artwork.dart';
 import 'package:clipious/music/views/components/music_mini_player.dart';
 import 'package:clipious/music/views/components/music_playback_artwork.dart';
 import 'package:clipious/music/views/components/music_player.dart';
 import 'package:clipious/music/views/components/music_player_artwork.dart';
+import 'package:clipious/music/views/components/music_player_scrubber.dart';
 import 'package:clipious/music/views/components/music_sponsor_notice.dart';
+import 'package:clipious/music/views/components/music_word_timed_lyric_line.dart';
 import 'package:clipious/music/views/screens/music.dart';
 import 'package:clipious/music/views/screens/music_library.dart';
 import 'package:clipious/player/models/backend_playback.dart';
@@ -67,6 +75,7 @@ import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/db/video_filter.dart';
 import 'package:clipious/utils/models/image_object.dart';
 import 'package:clipious/utils/motion.dart';
+import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/utils/views/components/selected_server.dart';
 import 'package:clipious/utils/views/components/thumbnail.dart';
 import 'package:clipious/videos/models/adaptive_format.dart';
@@ -173,6 +182,7 @@ class _Player extends TestPlayerCubit {
   Duration? sought;
   ValueNotifier<PlayingMusicContentAdvisory?>? reportedMusicAdvisory;
   IdedVideo? previewMusicEntry;
+  (String, bool)? lastSleepRequest;
 
   _Player(super.initialState, super.settings);
 
@@ -190,6 +200,25 @@ class _Player extends TestPlayerCubit {
   Future<void> seed(PlayerState next) async {
     // Start session persistence outside the widget test's fake frame clock.
     await TestWidgetsFlutterBinding.instance.runAsync(() async => emit(next));
+  }
+
+  @override
+  void sleep(SleepTimer sleepTimer,
+      {bool finishSong = false, bool fadeOut = false}) {
+    lastSleepRequest = ('timed', fadeOut);
+    super.sleep(sleepTimer, finishSong: finishSong, fadeOut: fadeOut);
+  }
+
+  @override
+  void sleepAtEndOfTrack({bool fadeOut = false}) {
+    lastSleepRequest = ('endOfSong', fadeOut);
+    super.sleepAtEndOfTrack(fadeOut: fadeOut);
+  }
+
+  @override
+  void sleepAfterTracks(int tracks, {bool fadeOut = false}) {
+    lastSleepRequest = ('trackCount', fadeOut);
+    super.sleepAfterTracks(tracks, fadeOut: fadeOut);
   }
 
   @override
@@ -217,7 +246,8 @@ class _Player extends TestPlayerCubit {
       String? queueTitle,
       PlaylistReference? recommendationSource,
       bool fromMusic = false,
-      bool songTap = false}) async {
+      bool songTap = false,
+      bool collectionDetail = false}) async {
     musicPlayRequests.add(videos);
     await seed(state.copyWith(
         videos: videos,
@@ -229,7 +259,10 @@ class _Player extends TestPlayerCubit {
 
   @override
   Future<void> playLocalMusic(List<LocalMusicTrack> tracks,
-      {int startIndex = 0, String? queueTitle, bool songTap = false}) async {
+      {int startIndex = 0,
+      String? queueTitle,
+      bool songTap = false,
+      bool collectionDetail = false}) async {
     localQueueRequests.add(List.of(tracks));
   }
 
@@ -293,6 +326,17 @@ class _PendingAudioFocus extends Fake implements AudioSession {
           AudioSessionConfiguration fallbackConfiguration =
               const AudioSessionConfiguration.music()}) =>
       active ? activation.future : Future.value(true);
+}
+
+class _MountedWaveformAudio extends Fake implements AudioPlayerCubit {
+  @override
+  MountedMusicWaveform? mountedMusicWaveform;
+
+  @override
+  final stream = const Stream<AudioPlayerState>.empty();
+
+  @override
+  void cancelMusicSelection() {}
 }
 
 class _Settings extends TestSettingsCubit {
@@ -405,6 +449,88 @@ void main() {
         )));
     await tester.pump();
   }
+
+  testWidgets('Wave follows the mounted song and retires old seeks and peaks',
+      (tester) async {
+    const channel =
+        MethodChannel('com.github.dvbeckwitt.videre/music_waveform');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    final extracts = <String, Completer<List<double>>>{};
+    final cancelled = <int>{};
+    final requests = <String, int>{};
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      final args = call.arguments as Map;
+      final id = args['requestId'] as int;
+      if (call.method == 'cancel') {
+        cancelled.add(id);
+        return null;
+      }
+      final uri = args['uri'] as String;
+      if (call.method == 'revision') return 'fixture';
+      expect(call.method, 'extract');
+      requests[uri] = id;
+      return (extracts[uri] = Completer<List<double>>()).future;
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+
+    MountedMusicWaveform fixture(String name, int revision) => (
+          source: (
+            uri: Uri.parse('file:///downloads/waveform-test-$name.wav'),
+            startUs: null,
+            endUs: null
+          ),
+          revision: revision,
+          duration: const Duration(milliseconds: 180750),
+        );
+
+    final first = fixture('first', 1);
+    final second = fixture('second', 2);
+    final third = fixture('third', 3);
+    final audio = _MountedWaveformAudio()..mountedMusicWaveform = first;
+    player.manualMusicPreparer = audio;
+    await tester.runAsync(() => MusicScrubberStyle.wave.save(db));
+    await pump(tester);
+    final scrubber = find.byType(MusicPlayerScrubber);
+    List<double>? displayedPeaks() =>
+        tester.widget<MusicPlayerScrubber>(scrubber).waveformPeaks;
+    expect(displayedPeaks(), isNull);
+    final firstUri = first.source.uri.toString();
+    expect(extracts, contains(firstUri));
+
+    final drag = await tester.startGesture(tester.getCenter(scrubber));
+    await drag.moveBy(const Offset(50, 0));
+    audio.mountedMusicWaveform = second;
+    await player.seed(player.state.copyWith(currentlyPlaying: next));
+    await drag.up();
+    await tester.pumpAndSettle();
+    expect(player.sought, isNull);
+    expect(cancelled, contains(requests[firstUri]));
+
+    final secondPeaks = List.generate(256, (i) => i < 128 ? 0.8 : 0.1);
+    extracts[second.source.uri.toString()]!.complete(secondPeaks);
+    await tester.pumpAndSettle();
+    expect(displayedPeaks(), secondPeaks);
+
+    player.seek(second.duration!);
+    expect(player.state.position, second.duration);
+    extracts[firstUri]!.complete(List.filled(256, 0.5));
+    await tester.pumpAndSettle();
+    expect(displayedPeaks(), secondPeaks);
+
+    audio.mountedMusicWaveform = third;
+    await player.seed(player.state.copyWith(currentlyPlaying: song));
+    await tester.pumpAndSettle();
+    expect(displayedPeaks(), isNull);
+    final thirdUri = third.source.uri.toString();
+    await tester.runAsync(() => MusicScrubberStyle.continuous.save(db));
+    await tester.pumpAndSettle();
+    expect(cancelled, contains(requests[thirdUri]));
+    extracts[thirdUri]!.complete(List.filled(256, 0.5));
+    await tester.pumpAndSettle();
+    expect(displayedPeaks(), isNull);
+    expect(extracts, hasLength(3));
+  });
 
   testWidgets('Classic purple colors the open Music player and mini player',
       (tester) async {
@@ -913,6 +1039,93 @@ void main() {
       find.byKey(const ValueKey('music-player-song-actions'));
   final namedRemoval = find.text('Remove from Action source');
 
+  testWidgets('device video pairing reloads and a missing file keeps audio',
+      (tester) async {
+    final tracks = await seedDeviceQueue(tester);
+    const channel =
+        MethodChannel('com.github.dvbeckwitt.videre/local_music_video');
+    const uri = 'content://fixture.documents/document/local-video';
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    Map<String, Object>? pairing;
+    var picks = 0;
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      expect(call.arguments['profileId'], db.profileId);
+      expect(call.arguments['recordingId'], tracks.first.playbackId);
+      if (const {'open', 'setOffset', 'remove'}.contains(call.method)) {
+        expect(call.arguments['expectedUri'], uri);
+      }
+      switch (call.method) {
+        case 'get':
+          return pairing;
+        case 'pick':
+          if (++picks == 1) return null;
+          return pairing = {'uri': uri, 'name': 'Concert.mp4', 'offsetMs': 0};
+        case 'open':
+          return false;
+        case 'setOffset':
+          pairing!['offsetMs'] = call.arguments['offsetMs'] as int;
+          return true;
+        case 'remove':
+          pairing = null;
+          return true;
+        default:
+          throw UnsupportedError(call.method);
+      }
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+
+    Future<void> openPairingMenu() async {
+      await tap(tester, 'music-player-song-actions');
+      await tester.pumpAndSettle();
+      await tap(tester, 'music-player-local-video-menu');
+      await tester.pumpAndSettle();
+    }
+
+    await pump(tester);
+    final original = player.state;
+    await openPairingMenu();
+    expect(videoToggle, findsNothing);
+    await openPairingMenu();
+    expect(videoToggle, findsOneWidget);
+
+    await tap(tester, videoToggleKey);
+    await tester.pumpAndSettle();
+    expect(find.textContaining('This video is unavailable'), findsOneWidget);
+    expect(videoSurface, findsNothing);
+    expect(player.state.currentQueueId, original.currentQueueId);
+    expect(player.state.position, original.position);
+    expect(player.state.isPlaying, original.isPlaying);
+
+    await openPairingMenu();
+    expect(find.text('Concert.mp4'), findsOneWidget);
+    await tester.tap(find.text('Video sync offset'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), '-2,125');
+    await tester.tap(find.text('Save'));
+    await tester.pumpAndSettle();
+    expect(pairing!['offsetMs'], -2125);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await pump(tester);
+    await tester.pumpAndSettle();
+    expect(videoToggle, findsOneWidget);
+    await openPairingMenu();
+    await tester.tap(find.text('Video sync offset'));
+    await tester.pumpAndSettle();
+    expect(tester.widget<TextField>(find.byType(TextField)).controller?.text,
+        '-2.125');
+    await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+    await tester.pumpAndSettle();
+
+    await openPairingMenu();
+    await tester.tap(find.text('Remove video pairing'));
+    await tester.pumpAndSettle();
+    expect(pairing, isNull);
+    expect(videoToggle, findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
   Future<void> storeActionPlaylists(Playlist source, Playlist other) =>
       db.saveSetting(SettingsValue(localPlaylistsSetting,
           jsonEncode([source.toJson(), other.toJson()])));
@@ -960,8 +1173,15 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  Future<void> tapSongAction(WidgetTester tester, Finder action) async {
+  Future<void> revealSongAction(WidgetTester tester, Finder action) async {
+    expect(action, findsOneWidget);
+    await tester.ensureVisible(action);
+    await tester.pumpAndSettle();
     expect(action.hitTestable(), findsOneWidget);
+  }
+
+  Future<void> tapSongAction(WidgetTester tester, Finder action) async {
+    await revealSongAction(tester, action);
     await tester.runAsync(() async {
       await tester.tap(action);
       await Future<void>.delayed(Duration.zero);
@@ -1032,7 +1252,7 @@ void main() {
       expect(find.text(label), findsOneWidget);
     }
     expect(find.text('Open artist'), findsNothing);
-    expect(namedRemoval.hitTestable(), findsOneWidget);
+    await revealSongAction(tester, namedRemoval);
     expect(find.text('Remove from Other list'), findsNothing);
 
     await tapSongAction(tester, find.text('Add to playlist'));
@@ -1042,6 +1262,7 @@ void main() {
         tester, dest, () => actionPlaylistEntries(songActionsOther).isNotEmpty);
 
     await openSongActions(tester);
+    await revealSongAction(tester, namedRemoval);
     await chooseAndWait(tester, namedRemoval,
         () => actionPlaylistEntries(songActionsPlaylist).length == 1);
     expect(
@@ -1056,6 +1277,33 @@ void main() {
     expect(namedRemoval, findsNothing);
   });
 
+  testWidgets('the membership editor keeps its song after playback advances',
+      (tester) async {
+    await seedSongActions(tester);
+    await openSongActions(tester);
+    await tapSongAction(tester, find.text('Manage song playlists'));
+    expect(find.widgetWithText(CheckboxListTile, 'Other list'), findsOneWidget);
+
+    await tester.runAsync(() async {
+      await player.selectQueueOccurrence(player.state.playQueue.first);
+      player.setEvent(const MediaEvent(state: MediaState.ready));
+    });
+    await tester.pumpAndSettle();
+    expect(player.state.currentlyPlaying?.videoId, songActionsNext.videoId);
+
+    final destination = find.widgetWithText(CheckboxListTile, 'Other list');
+    await tester.ensureVisible(destination);
+    await tester.pumpAndSettle();
+    expect(destination.hitTestable(), findsOneWidget);
+    await tester.tap(destination);
+    await tester.pumpAndSettle();
+    await chooseAndWait(tester, find.text('Apply changes'),
+        () => actionPlaylistEntries(songActionsOther).isNotEmpty);
+    expect(actionPlaylistEntries(songActionsOther), [songActionsTrack.videoId]);
+    expect(find.text('Updated 1 playlist.'), findsOneWidget);
+    expect(player.state.currentlyPlaying?.videoId, songActionsNext.videoId);
+  });
+
   testWidgets('Song actions remove only the playing source copy of a song',
       (tester) async {
     final duplicate = songActionsTrack.copyWith(
@@ -1068,7 +1316,7 @@ void main() {
         ]));
     final before = player.state;
     await openSongActions(tester);
-    expect(namedRemoval.hitTestable(), findsOneWidget);
+    await revealSongAction(tester, namedRemoval);
     await chooseAndWait(tester, namedRemoval,
         () => actionPlaylistEntries(songActionsPlaylist).length == 2);
     final remaining = service.getLocalPlaylists().singleWhere(
@@ -1186,7 +1434,7 @@ void main() {
       final origin = db.profileId;
       final current = player.state.currentQueueId;
       await openSongActions(tester);
-      expect(namedRemoval.hitTestable(), findsOneWidget);
+      await revealSongAction(tester, namedRemoval);
       await tester.runAsync(() async {
         switch (change) {
           case 'current song':
@@ -1218,12 +1466,8 @@ void main() {
         }
       });
       await tester.pumpAndSettle();
-      if (namedRemoval.hitTestable().evaluate().isNotEmpty) {
-        await tester.runAsync(() async {
-          await tester.tap(namedRemoval);
-          await tester.pumpAndSettle();
-        });
-        await tester.pumpAndSettle();
+      if (namedRemoval.evaluate().isNotEmpty) {
+        await tapSongAction(tester, namedRemoval);
       }
       expect(actionPlaylistEntries(songActionsPlaylist, profile: origin), [
         if (change != 'playlist membership') songActionsTrack.videoId,
@@ -1814,13 +2058,137 @@ void main() {
     }
   });
 
-  testWidgets('device lyrics use the exact file and seek with the LRC offset',
+  Future<void> changeLyricsTiming(WidgetTester tester, String label) async {
+    await tester.runAsync(() async {
+      await tester.tap(find.widgetWithText(TextButton, label));
+      // Wait for the settings write started by the tap.
+      await (db as SembastSqfDb).db.transaction((_) async {});
+    });
+    await tester.pumpAndSettle();
+  }
+
+  testWidgets('collapsed player reuses the resolved lyric for one occurrence',
+      (tester) async {
+    const beforeOffset = 'Before the offset';
+    const afterOffset = 'After the offset';
+    const afterBreak = 'After the break';
+    final queue = assignPlaybackQueueIds([song, song]);
+    final (first, second) = (queue.first, queue.last);
+    await player.seed(player.state.copyWith(
+        videos: queue,
+        currentlyPlaying: first,
+        playQueue: ListQueue.of([playbackQueueId(second)]),
+        position: const Duration(milliseconds: 10050)));
+    await tester.runAsync(() => setLrclibEnabled(true));
+    var requests = 0;
+    final expanded = MusicPlayer(lyricsLoader: (_, __, ___) async {
+      requests++;
+      return const MusicLyrics.synced([
+        (start: Duration(seconds: 2), text: beforeOffset),
+        (start: Duration(seconds: 10), text: afterOffset),
+        (start: Duration(seconds: 17), text: afterBreak),
+      ], breakStarts: [
+        Duration(seconds: 12)
+      ], source: 'LRCLIB');
+    });
+    await pump(tester,
+        child: BlocBuilder<PlayerCubit, PlayerState>(
+            builder: (context, state) => state.isMini
+                ? const Align(
+                    alignment: Alignment.bottomCenter, child: MusicMiniPlayer())
+                : expanded));
+
+    expect(settings.state.musicMiniPlayerLyrics, isFalse);
+    player.showMiniPlayer();
+    await tester.pumpAndSettle();
+    expect(find.text('Singer'), findsOneWidget);
+    expect(requests, 0);
+    await tester.runAsync(() => settings.setMusicMiniPlayerLyrics(true));
+    await tester.pumpAndSettle();
+    expect(find.text('Singer'), findsOneWidget);
+    expect(requests, 0);
+
+    await tap(tester, 'music-mini-expand');
+    await tap(tester, 'music-player-lyrics');
+    await tester.pumpAndSettle();
+    expect(
+        tester
+            .widget<ListTile>(find.widgetWithText(ListTile, afterOffset))
+            .selected,
+        isTrue);
+    await tap(tester, 'music-lyrics-timing');
+    await changeLyricsTiming(tester, 'Later');
+    await pressAndroidBack(tester);
+    player.showMiniPlayer();
+    await tester.pumpAndSettle();
+    expect(find.byType(MusicMiniPlayer), findsOneWidget);
+    expect(find.text(beforeOffset), findsOneWidget);
+    expect(find.text(afterOffset), findsNothing);
+    expect(requests, 1);
+
+    await player.seed(
+        player.state.copyWith(position: const Duration(milliseconds: 10100)));
+    await tester.pumpAndSettle();
+    expect(find.text(afterOffset), findsOneWidget);
+    await player.seed(player.state.copyWith(
+        position: const Duration(milliseconds: 12100), isPlaying: true));
+    await tester.pumpAndSettle();
+    await tap(tester, 'music-mini-play');
+    expect(player.state.mediaCommand?.type, MediaCommandType.pause);
+    await tester.runAsync(() async => player.setEvent(
+        const MediaEvent(type: MediaEventType.pause, state: MediaState.pause)));
+    await tester.pumpAndSettle();
+    expect(player.state.isPlaying, isFalse);
+    expect(find.text('Singer'), findsOneWidget);
+    expect(find.text(afterOffset), findsNothing);
+
+    await player
+        .seed(player.state.copyWith(position: const Duration(seconds: 18)));
+    await tester.pumpAndSettle();
+    expect(find.text(afterBreak), findsOneWidget);
+    player.setEvent(const MediaEvent(
+        state: MediaState.error,
+        value: PlaybackFailureReason.separateMediaHost));
+    await tester.pumpAndSettle();
+    final locals =
+        AppLocalizations.of(tester.element(find.byType(MusicMiniPlayer)))!;
+    expect(find.text(locals.playbackSeparateMediaHost), findsOneWidget);
+    expect(find.text(afterBreak), findsNothing);
+    player.setEvent(const MediaEvent(state: MediaState.ready));
+    await tester.pumpAndSettle();
+    expect(find.text(afterBreak), findsOneWidget);
+
+    final audio = _PendingAudioFocus();
+    player.audioSession = audio;
+    player.transportZone = await tester.runAsync(() async => Zone.current);
+    try {
+      await tester.fling(find.byKey(const ValueKey('music-mini-expand')),
+          const Offset(-50, 0), 1200);
+      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+      await tester.pump();
+      expect(player.nextCalls, 1);
+      expect(
+          playbackQueueId(player.openingMusicEntry!), playbackQueueId(second));
+      expect(find.text(afterBreak), findsNothing);
+      expect(find.text('Singer'), findsOneWidget);
+      expect(requests, 1);
+    } finally {
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.runAsync(() async {
+        audio.activation.completeError(StateError('Audio focus interrupted'));
+        await player.switching;
+      });
+    }
+  });
+
+  testWidgets('device lyrics nudge their original line and word spacing',
       (tester) async {
     final calls = <MethodCall>[];
     final tracks = await seedDeviceQueue(tester, readLyrics: (call) async {
       calls.add(call);
       return {
-        'sidecar': '[offset:+250]\n[00:01.500]Sidecar line',
+        'sidecar':
+            '[offset:+500]\n[00:00.450]<00:00.450>Sidecar <00:00.530>line',
         'embedded': 'Embedded fallback',
       };
     });
@@ -1852,7 +2220,145 @@ void main() {
     });
     expect(find.text('Lyrics file'), findsOneWidget);
     expect(find.text('Embedded fallback'), findsNothing);
-    await tester.tap(find.widgetWithText(ListTile, 'Sidecar line'));
+    final row = find.widgetWithText(ListTile, 'Sidecar line');
+    await tester.tap(row);
+    expect(player.sought, Duration.zero);
+    await player.seed(
+        player.state.copyWith(position: const Duration(milliseconds: 20)));
+    await tester.pumpAndSettle();
+    expect(tester.widget<ListTile>(row).selected, isTrue);
+
+    await tap(tester, 'music-lyrics-timing');
+    await changeLyricsTiming(tester, 'Later');
+    expect(find.text('+100 ms'), findsOneWidget);
+    expect(tester.widget<ListTile>(row).selected, isFalse);
+    await tester.tap(row);
+    expect(player.sought, const Duration(milliseconds: 50));
+
+    String highlightedWord() {
+      final text = tester.widget<Text>(find.text('Sidecar line'));
+      final span = text.textSpan! as TextSpan;
+      return span.children!
+          .cast<TextSpan>()
+          .singleWhere(
+              (child) => child.style?.decoration == TextDecoration.underline)
+          .text!;
+    }
+
+    await player.seed(
+        player.state.copyWith(position: const Duration(milliseconds: 129)));
+    await tester.pumpAndSettle();
+    expect(tester.widget<ListTile>(row).selected, isTrue);
+    expect(highlightedWord(), 'Sidecar');
+    await player.seed(
+        player.state.copyWith(position: const Duration(milliseconds: 130)));
+    await tester.pumpAndSettle();
+    final line = tester
+        .widget<MusicWordTimedLyricLine>(find.byType(MusicWordTimedLyricLine));
+    expect(line.words.map((word) => word.start.inMilliseconds), [-50, 30]);
+    expect(highlightedWord(), 'line');
+    final position = tester
+        .widget<Slider>(find.byKey(const ValueKey('music-lyrics-position')));
+    expect(position.value, 130);
+    await pressAndroidBack(tester);
+
+    await player.seed(player.state.copyWith(
+        offlineCurrentlyPlaying: localMusicPlaybackEntry(track, db.profileId)));
+    await tap(tester, 'music-player-lyrics');
+    await tester.pumpAndSettle();
+    await tap(tester, 'music-lyrics-timing');
+    expect(find.text('+100 ms'), findsOneWidget);
+    await pressAndroidBack(tester);
+  });
+
+  testWidgets(
+      'device lyrics render supplied translations and overlapping voices',
+      (tester) async {
+    await seedDeviceQueue(tester,
+        readLyrics: (_) async => {
+              'timedSidecar': [
+                {
+                  'startMs': 1000,
+                  'endMs': 3500,
+                  'text': 'Good morning',
+                  'language': 'en',
+                  'voice': 'Alto',
+                  'role': 'lyrics',
+                  'translations': [
+                    {'language': 'es', 'text': 'Buenos días'},
+                  ],
+                },
+                {
+                  'startMs': 2000,
+                  'endMs': 4000,
+                  'text': 'Rise with me',
+                  'language': 'en',
+                  'voice': 'Tenor',
+                  'role': 'x-bg',
+                },
+              ],
+              'sidecar': 'LRC fallback',
+              'embedded': 'Embedded fallback',
+            });
+    await tester.runAsync(() => setLrclibEnabled(false));
+    player.seekZone = await tester.runAsync(() async => Zone.current);
+    var providerCalls = 0;
+    await pump(tester, child: MusicPlayer(lyricsLoader: (_, __, ___) async {
+      providerCalls++;
+      return const MusicLyrics.unavailable();
+    }));
+    await tap(tester, 'music-player-lyrics');
+    await tester.pumpAndSettle();
+    expect(find.text('Lyrics file'), findsOneWidget);
+    expect(find.text('LRC fallback'), findsNothing);
+    expect(find.text('Embedded fallback'), findsNothing);
+    expect(providerCalls, 0);
+
+    final alto = find.widgetWithText(ListTile, 'Good morning');
+    final tenor = find.widgetWithText(ListTile, 'Rise with me');
+    expect(find.descendant(of: alto, matching: find.text('Alto')), findsOne);
+    expect(
+        find.descendant(
+            of: tenor, matching: find.text('Tenor · Background vocals')),
+        findsOne);
+    expect(find.descendant(of: alto, matching: find.text('Buenos días')),
+        findsOne);
+    expect(find.text('Buenos días'), findsOne);
+    await tester.tap(tenor);
+    expect(player.sought, const Duration(seconds: 2));
+
+    await player.seed(
+        player.state.copyWith(position: const Duration(milliseconds: 2500)));
+    await tester.pumpAndSettle();
+    expect(tester.widget<ListTile>(alto).selected, isTrue);
+    expect(tester.widget<ListTile>(tenor).selected, isTrue);
+    await player.seed(
+        player.state.copyWith(position: const Duration(milliseconds: 3500)));
+    await tester.pumpAndSettle();
+    expect(tester.widget<ListTile>(alto).selected, isFalse);
+    expect(tester.widget<ListTile>(tenor).selected, isTrue);
+    await pressAndroidBack(tester);
+  });
+
+  testWidgets('device lyrics keep both supplied lines of a SubRip cue',
+      (tester) async {
+    await seedDeviceQueue(tester,
+        readLyrics: (_) async => {
+              'timedSidecar': [
+                {
+                  'startMs': 1250,
+                  'endMs': 3000,
+                  'text': '- Good night\n- Bonne nuit',
+                },
+              ],
+            });
+    player.seekZone = await tester.runAsync(() async => Zone.current);
+    await pump(tester);
+    await tap(tester, 'music-player-lyrics');
+    await tester.pumpAndSettle();
+    final row = find.widgetWithText(ListTile, '- Good night\n- Bonne nuit');
+    expect(row, findsOneWidget);
+    await tester.tap(row);
     expect(player.sought, const Duration(milliseconds: 1250));
     await pressAndroidBack(tester);
   });
@@ -1884,10 +2390,57 @@ void main() {
     await pressAndroidBack(tester);
   });
 
+  testWidgets(
+      'device lyrics open the editor for a readable song without lyrics',
+      (tester) async {
+    var reads = 0;
+    final tracks = await seedDeviceQueue(tester, readLyrics: (_) async {
+      reads++;
+      return <String, String>{};
+    });
+    await pump(tester);
+    await tap(tester, 'music-player-lyrics');
+    await tester.pumpAndSettle();
+    expect(find.text('No lyrics available for this track'), findsOneWidget);
+    await tap(tester, 'music-lyrics-edit-timed');
+    await tester.pumpAndSettle();
+    expect(reads, 2);
+    expect(find.text('Edit timed lyrics'), findsOneWidget);
+    expect(find.byType(TextField), findsOneWidget);
+    await pressAndroidBack(tester);
+    expect(find.byKey(const ValueKey('music-lyrics-reader')), findsOneWidget);
+
+    await tap(tester, 'music-lyrics-edit-plain');
+    await tester.pumpAndSettle();
+    expect(find.text('Edit plain lyrics'), findsOneWidget);
+    expect(find.text('Set line time'), findsNothing);
+    const plain = 'My authored line';
+    final authoring = LocalMusicLyricsAuthoring.forTrack(
+      database: db,
+      track: tracks.first,
+      isCurrent: () => true,
+    )!;
+    await tester.enterText(find.byType(TextField), plain);
+    await chooseAndWait(
+      tester,
+      find.text('Save'),
+      () => authoring.readPlainDraft() == plain,
+    );
+    expect(find.text('My plain lyrics'), findsOneWidget);
+    expect(find.text(plain), findsOneWidget);
+    await pressAndroidBack(tester);
+  });
+
   testWidgets('device lyrics discard a pending file read after skipping',
       (tester) async {
     final pending = Completer<Object?>();
-    await seedDeviceQueue(tester, readLyrics: (_) => pending.future);
+    String? openingUri;
+    await seedDeviceQueue(tester, readLyrics: (call) async {
+      final uri = call.arguments['trackUri'] as String;
+      openingUri ??= uri;
+      if (uri == openingUri) return pending.future;
+      return {'embedded': 'Next file lyrics'};
+    });
     await pump(tester);
     await tap(tester, 'music-player-lyrics');
     await tester.pump(const Duration(milliseconds: 500));
@@ -1896,7 +2449,7 @@ void main() {
     pending.complete({'sidecar': 'Previous track lyrics'});
     await tester.pumpAndSettle();
     expect(find.text('Previous track lyrics'), findsNothing);
-    expect(find.text('No lyrics available for this track'), findsOneWidget);
+    expect(find.text('Next file lyrics'), findsOneWidget);
     await pressAndroidBack(tester);
   });
 
@@ -1950,12 +2503,14 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('Lyrics asks before contacting LRCLIB and looks up the song once',
+  testWidgets(
+      'Lyrics asks before contacting LRCLIB and follows the active song',
       (tester) async {
     final calls = <(String, String, int?, String)>[];
     await pump(tester,
         child: MusicPlayer(lyricsLoader: (track, duration, id) async {
       calls.add((track.title, track.artist, duration, id));
+      if (id == next.videoId) return const MusicLyrics.plain('Next refrain');
       return const MusicLyrics.synced([
         (start: Duration(seconds: 30), text: 'Fixture refrain'),
         (start: Duration(seconds: 33), text: 'Fixture refrain'),
@@ -1996,10 +2551,16 @@ void main() {
     expect(tester.widget<ListTile>(lines.last).selected, isFalse);
     await tester.tap(lines.last);
     expect(player.sought, const Duration(seconds: 33));
+    final previousLineTap = tester.widget<ListTile>(lines.first).onTap!;
+    player.previewMusicEntry = next;
+    previousLineTap();
+    expect(player.sought, const Duration(seconds: 33));
+    player.previewMusicEntry = null;
     await player.seed(player.state.copyWith(currentlyPlaying: next));
     await tester.pumpAndSettle();
     expect(lines, findsNothing);
-    expect(find.text('No lyrics available for this track'), findsOneWidget);
+    expect(find.text('Next refrain'), findsOneWidget);
+    expect(calls.map((request) => request.$4), [song.videoId, next.videoId]);
     await pressAndroidBack(tester);
     expect(player.state.currentlyPlaying?.videoId, next.videoId);
   });
@@ -2094,7 +2655,104 @@ void main() {
     await tester.tap(shareText);
     await tester.pumpAndSettle();
     expect(shares, hasLength(1));
+    expect(find.text('Edited on this device'), findsOneWidget);
+    expect(tester.widget<ListTile>(first).selected, isFalse);
+    expect(tester.widget<ListTile>(second).selected, isFalse);
+  });
+
+  testWidgets('Approved lyrics reopen from the same download with LRCLIB off',
+      (tester) async {
+    Future<void> tapAndWaitForLyricsWrite(Finder button) async {
+      await tester.runAsync(() async {
+        final updates = StreamIterator<void>(MusicOfflineLyrics(db).changes);
+        try {
+          expect(await updates.moveNext(), isTrue);
+          await tester.tap(button);
+          expect(await updates.moveNext().timeout(const Duration(seconds: 2)),
+              isTrue);
+        } finally {
+          await updates.cancel();
+        }
+      });
+      await tester.pump();
+      await tester.runAsync(pumpEventQueue);
+      await tester.pumpAndSettle();
+    }
+
+    await tester.runAsync(() => setLrclibEnabled(true));
+    var lookups = 0;
+    await pump(tester, child: MusicPlayer(lyricsLoader: (_, __, ___) async {
+      lookups++;
+      return const MusicLyrics.plain('Saved verse', source: 'LRCLIB');
+    }));
+    await tap(tester, 'music-player-lyrics');
+    await tester.pumpAndSettle();
+    final save = find.text('Save lyrics offline');
+    await tapAndWaitForLyricsWrite(save);
+    final remove = find.text('Remove offline lyrics');
+    expect(remove, findsOneWidget);
+    await pressAndroidBack(tester);
+    await tester.runAsync(() => setLrclibEnabled(false));
+    await player.seed(player.state.copyWith(
+        currentlyPlaying: null,
+        offlineCurrentlyPlaying: DownloadedVideo(
+            videoId: song.videoId,
+            title: song.title ?? 'Song',
+            author: song.author,
+            lengthSeconds: song.lengthSeconds ?? 180,
+            quality: 'Audio',
+            musicMetadata: song.musicMetadata)));
+    await tester.pumpAndSettle();
+    await tap(tester, 'music-player-lyrics');
+    await tester.pumpAndSettle();
+    expect(find.byType(AlertDialog), findsNothing);
+    expect(find.text('Saved verse'), findsOneWidget);
+    expect(find.text('LRCLIB'), findsOneWidget);
+    expect(lookups, 1);
+    await tapAndWaitForLyricsWrite(remove);
+    expect(find.text('Saved verse'), findsNothing);
     expect(find.text('No lyrics available for this track'), findsOneWidget);
+    expect(lookups, 1);
+    await pressAndroidBack(tester);
+  });
+
+  testWidgets('Lyrics skips a missing song and ignores a retired response',
+      (tester) async {
+    await tester.runAsync(() => setLrclibEnabled(true));
+    final oldResult = Completer<MusicLyrics>();
+    final calls = <String>[];
+    final third = next.copyWith(
+        videoId: 'third',
+        title: 'Third',
+        musicMetadata: const MusicMetadata(title: 'Third', artist: 'Singer'));
+    await pump(tester, child: MusicPlayer(lyricsLoader: (_, __, id) async {
+      calls.add(id);
+      if (id == song.videoId) return oldResult.future;
+      if (id == next.videoId) return const MusicLyrics.unavailable();
+      return const MusicLyrics.plain('Third verse');
+    }));
+    await tap(tester, 'music-player-lyrics');
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(calls, [song.videoId]);
+    await player.seed(player.state.copyWith(currentlyPlaying: next));
+    await tester.pumpAndSettle();
+    expect(find.text('No lyrics available for this track'), findsOneWidget);
+    await player.seed(player.state.copyWith(currentlyPlaying: third));
+    await tester.pumpAndSettle();
+    expect(find.text('Third verse'), findsOneWidget);
+    oldResult.complete(const MusicLyrics.plain('Retired verse'));
+    await tester.pumpAndSettle();
+    expect(find.text('Retired verse'), findsNothing);
+    expect(find.text('Third verse'), findsOneWidget);
+    expect(calls, [song.videoId, next.videoId, third.videoId]);
+    final other = await tester.runAsync(() => db.createProfile('Other'));
+    await tester.runAsync(() => db.useProfile(other!.id));
+    app.profileChanged(other!.id);
+    await tester.pumpAndSettle();
+    expect(find.text('Third verse'), findsNothing);
+    expect(find.text('No lyrics available for this track'), findsOneWidget);
+    expect(calls, hasLength(3));
+    await pressAndroidBack(tester);
   });
 
   for (final disableAnimations in [false, true]) {
@@ -2185,15 +2843,20 @@ void main() {
     });
   }
 
-  testWidgets('Lyrics previews a scrub without seeking until release',
+  testWidgets('Lyrics retires a scrub when the next song starts',
       (tester) async {
     await tester.runAsync(() => setLrclibEnabled(true));
-    await pump(tester,
-        child: MusicPlayer(
-            lyricsLoader: (_, __, ___) async => const MusicLyrics.synced([
-                  (start: Duration(seconds: 30), text: 'At playback'),
-                  (start: Duration(seconds: 60), text: 'At scrub'),
-                ])));
+    await pump(tester, child: MusicPlayer(lyricsLoader: (_, __, id) async {
+      if (id == next.videoId) {
+        return const MusicLyrics.synced([
+          (start: Duration.zero, text: 'Next timed line'),
+        ]);
+      }
+      return const MusicLyrics.synced([
+        (start: Duration(seconds: 30), text: 'At playback'),
+        (start: Duration(seconds: 60), text: 'At scrub'),
+      ]);
+    }));
     await tap(tester, 'music-player-lyrics');
     await tester.pumpAndSettle();
     final progress = find.byKey(const ValueKey('music-lyrics-position'));
@@ -2232,11 +2895,15 @@ void main() {
 
     final oldSlider = tester.widget<Slider>(progress);
     oldSlider.onChanged!(69000);
-    await player.seed(player.state.copyWith(currentlyPlaying: next));
+    await player.seed(
+        player.state.copyWith(currentlyPlaying: next, position: Duration.zero));
     await tester.pumpAndSettle();
     oldSlider.onChangeEnd!(69000);
     expect(player.sought, const Duration(seconds: 62));
-    expect(progress, findsNothing);
+    expect(tester.widget<Slider>(progress).value, 0);
+    expect(preview, findsNothing);
+    expect(target, findsNothing);
+    expect(find.text('Next timed line'), findsOneWidget);
   });
 
   testWidgets('Lyrics applies the current profile text preferences',
@@ -2268,9 +2935,180 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Text size'), findsOneWidget);
     expect(find.text('Alignment'), findsOneWidget);
+    expect(find.text('Show continuation lines'), findsNothing);
+    expect(find.text('Trim surrounding whitespace'), findsNothing);
     expect(tester.takeException(), isNull);
     await pressAndroidBack(tester);
     expect(find.byKey(const ValueKey('music-lyrics-reader')), findsOneWidget);
+  });
+
+  testWidgets('Synced lyrics appearance preserves words and seeks on reopen',
+      (tester) async {
+    final otherProfile = await tester.runAsync(() async {
+      await setLrclibEnabled(true);
+      const preferences = MusicLyricsReaderPreferences(
+          size: MusicLyricsTextSize.large,
+          alignment: MusicLyricsTextAlignment.center);
+      await preferences.save(db);
+      return (await db.createProfile('Another lyrics listener')).id;
+    });
+    player.seekZone = await tester.runAsync(() async => Zone.current);
+    await player
+        .seed(player.state.copyWith(position: const Duration(seconds: 11)));
+    final parsed = parseEnhancedLrc('[00:10]  <00:10>👋 <00:11>again  \n'
+        '  Translation  \n'
+        '[00:20]Next');
+    final lyrics = MusicLyrics.synced(parsed.lines,
+        wordsByCue: parsed.wordsByCue,
+        displayTextByCue: parsed.displayTextByCue);
+    await pump(tester,
+        size: const Size(400, 640),
+        scale: 1.5,
+        child: MusicPlayer(lyricsLoader: (_, __, ___) async => lyrics));
+    await tap(tester, 'music-player-lyrics');
+    await tester.pumpAndSettle();
+
+    Finder display(String text) => find.byWidgetPredicate((w) =>
+        w is Text && (w.data == text || w.textSpan?.toPlainText() == text));
+    void expectHighlighted(String displayText) {
+      final text = tester.widget<Text>(display(displayText));
+      final spans = (text.textSpan! as TextSpan).children!.cast<TextSpan>();
+      expect(
+          spans
+              .singleWhere(
+                  (s) => s.style?.decoration == TextDecoration.underline)
+              .text,
+          'again');
+      expect(text.textAlign, TextAlign.center);
+    }
+
+    Future<void> toggle(String label, bool checked,
+        bool Function(MusicLyricsReaderPreferences) saved) async {
+      final appearance = find.byKey(const ValueKey('music-lyrics-appearance'));
+      await tester.runAsync(() => tester.tap(appearance));
+      await tester.pumpAndSettle();
+      final item = find.ancestor(
+          of: find.text(label),
+          matching:
+              find.byWidgetPredicate((w) => w is CheckedPopupMenuItem<Object>));
+      expect(
+          tester.widget<CheckedPopupMenuItem<Object>>(item).checked, checked);
+      await tester.ensureVisible(item);
+      await tester.pumpAndSettle();
+      await chooseAndWait(tester, item,
+          () => saved(MusicLyricsReaderPreferences.forDatabase(db)));
+    }
+
+    expectHighlighted('  👋 again  \n  Translation  ');
+    await toggle('Trim surrounding whitespace', false, (p) => p.trim);
+    expectHighlighted('👋 again  \n  Translation');
+    await toggle('Show continuation lines', true, (p) => !p.multiline);
+    expectHighlighted('👋 again');
+    await toggle('Trim surrounding whitespace', true, (p) => !p.trim);
+    expectHighlighted('  👋 again  ');
+
+    await pressAndroidBack(tester);
+    await tap(tester, 'music-player-lyrics');
+    await tester.pumpAndSettle();
+    expectHighlighted('  👋 again  ');
+    final row = find.ancestor(
+        of: display('  👋 again  '), matching: find.byType(ListTile));
+    expect(tester.widget<ListTile>(row).titleTextStyle?.fontSize,
+        MusicLyricsTextSize.large.fontSize);
+    await tester.tap(row);
+    expect(player.sought, const Duration(seconds: 10));
+    expect(lyrics.cues.first.text, '👋 again');
+    expect(lyrics.wordsByCue[0]!.last.start, const Duration(seconds: 11));
+
+    final other =
+        MusicLyricsReaderPreferences.forDatabase(db.forProfile(otherProfile!));
+    expect(other.multiline, isTrue);
+    expect(other.trim, isFalse);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+      'Lyrics timing survives reopening and isolates tracks and profiles',
+      (tester) async {
+    final profile = db.profileId;
+    final other = await tester.runAsync(() async {
+      await setLrclibEnabled(true);
+      return db.createProfile('Another lyrics listener');
+    });
+    player.seekZone = await tester.runAsync(() async => Zone.current);
+    await pump(tester, child: MusicPlayer(lyricsLoader: (_, __, id) async {
+      if (id == next.videoId) {
+        return const MusicLyrics.synced([
+          (start: Duration(seconds: 1), text: 'Next song line'),
+        ]);
+      }
+      return const MusicLyrics.synced([
+        (start: Duration(milliseconds: 50), text: 'Opening line'),
+        (start: Duration(milliseconds: 179950), text: 'Last line'),
+      ]);
+    }));
+
+    Future<void> openTiming() async {
+      await tap(tester, 'music-player-lyrics');
+      await tester.pumpAndSettle();
+      await tap(tester, 'music-lyrics-timing');
+    }
+
+    Future<void> useProfile(String id) async {
+      await tester.runAsync(() async {
+        await db.useProfile(id);
+        await setLrclibEnabled(true);
+        app.profileChanged(id);
+      });
+      await tester.pumpAndSettle();
+    }
+
+    final opening = find.widgetWithText(ListTile, 'Opening line');
+    final last = find.widgetWithText(ListTile, 'Last line');
+    await openTiming();
+    await changeLyricsTiming(tester, 'Later');
+    expect(tester.widget<ListTile>(last).onTap, isNull);
+    await changeLyricsTiming(tester, 'Earlier');
+    await changeLyricsTiming(tester, 'Earlier');
+    expect(find.text('-100 ms'), findsOneWidget);
+    await tester.tap(opening);
+    expect(player.sought, Duration.zero);
+
+    final staleSeek = tester.widget<ListTile>(opening).onTap!;
+    player.sought = null;
+    await player.seed(player.state.copyWith(currentlyPlaying: next));
+    staleSeek();
+    expect(player.sought, isNull);
+    await tester.pumpAndSettle();
+    expect(opening, findsNothing);
+    expect(find.widgetWithText(ListTile, 'Next song line'), findsOneWidget);
+    await tap(tester, 'music-lyrics-timing');
+    expect(find.text('0 ms'), findsOneWidget);
+    await pressAndroidBack(tester);
+
+    await player.seed(player.state.copyWith(currentlyPlaying: song));
+    await openTiming();
+    expect(find.text('-100 ms'), findsOneWidget);
+    await useProfile(other!.id);
+    expect(find.byKey(const ValueKey('music-lyrics-timing')), findsNothing);
+    await pressAndroidBack(tester);
+    await openTiming();
+    expect(find.text('0 ms'), findsOneWidget);
+    await changeLyricsTiming(tester, 'Later');
+    expect(find.text('+100 ms'), findsOneWidget);
+    await pressAndroidBack(tester);
+
+    await useProfile(profile);
+    await openTiming();
+    expect(find.text('-100 ms'), findsOneWidget);
+    await changeLyricsTiming(tester, 'Reset timing');
+    expect(find.text('0 ms'), findsOneWidget);
+    await pressAndroidBack(tester);
+    await openTiming();
+    expect(find.text('0 ms'), findsOneWidget);
+    await tester.tap(opening);
+    expect(player.sought, const Duration(milliseconds: 50));
+    await pressAndroidBack(tester);
   });
 
   testWidgets(
@@ -2354,6 +3192,12 @@ void main() {
     await player.seed(player.state.copyWith(currentlyPlaying: recording));
     await tester.runAsync(() async {
       await setLrclibEnabled(true);
+      await MusicOfflineLyrics(db).save(
+        videoId,
+        const MusicLyrics.plain('Offline automatic line'),
+        track: recording.musicMetadata!,
+        durationSeconds: recording.lengthSeconds,
+      );
       await MusicLyricsCorrections(db.forProfile(db.profileId)).save(
         videoId,
         const MusicLyricsCorrection(
@@ -2371,6 +3215,7 @@ void main() {
     await tap(tester, 'music-player-lyrics');
     await tester.pumpAndSettle();
     expect(find.text('Saved line'), findsOneWidget);
+    expect(find.text('Offline automatic line'), findsNothing);
     expect(find.text('LRCLIB'), findsOneWidget);
     expect(find.text('Edited on this device'), findsOneWidget);
     expect(automaticLookups, 0);
@@ -2384,6 +3229,21 @@ void main() {
     expect(find.text('Saved line'), findsNothing);
     await pressAndroidBack(tester);
     expect(find.text('No lyrics available for this track'), findsOneWidget);
+    await pressAndroidBack(tester);
+
+    await tester.runAsync(() async {
+      await setLrclibEnabled(false);
+      await MusicLyricsCorrections(db.forProfile(db.profileId)).save(
+        videoId,
+        const MusicLyricsCorrection(MusicLyrics.unavailable()),
+      );
+    });
+    await player.seed(player.state.copyWith(currentlyPlaying: recording));
+    await tap(tester, 'music-player-lyrics');
+    await tester.pumpAndSettle();
+    expect(find.byType(AlertDialog), findsNothing);
+    expect(find.text('Offline automatic line'), findsNothing);
+    expect(find.text('Lyrics match discarded'), findsOneWidget);
     await pressAndroidBack(tester);
   });
 
@@ -3489,7 +4349,7 @@ void main() {
 
   testWidgets('queue lock and selection keep duplicate occurrences independent',
       (tester) async {
-    final songs = assignPlaybackQueueIds([song, song, next]);
+    final songs = assignPlaybackQueueIds([song, song, next, song]);
     await player.seed(player.state.copyWith(
       videos: songs,
       currentlyPlaying: songs.first,
@@ -3498,6 +4358,7 @@ void main() {
     await pump(tester);
     await tap(tester, 'music-player-queue');
     final duplicateId = playbackQueueId(songs[1]);
+    final otherDuplicateId = playbackQueueId(songs.last);
     final activeId = playbackQueueId(songs.first);
     final drag = find.byKey(ValueKey('music-queue-drag-$duplicateId'));
     expect(drag, findsOneWidget);
@@ -3525,12 +4386,35 @@ void main() {
         .value!;
     expect(checked(duplicateId), isTrue);
     expect(checked(activeId), isFalse);
+    final otherCheckbox =
+        find.byKey(ValueKey('music-queue-select-$otherDuplicateId'));
+    await tester.ensureVisible(otherCheckbox);
+    await tester.tap(otherCheckbox);
+    await tester.pumpAndSettle();
+    expect(checked(otherDuplicateId), isTrue);
     await tap(tester, 'music-queue-selection-menu');
     await tester.pumpAndSettle();
     await tester.tap(find.text('Remove selected from queue'));
     await tester.pumpAndSettle();
     expect(player.state.videos.map(playbackQueueId), [activeId, next.videoId]);
     expect(player.state.currentQueueId, activeId);
+    expect(find.text('Removed 2 songs from queue'), findsOneWidget);
+    await tester.tap(find.widgetWithText(TextButton, 'Undo'));
+    await tester.pumpAndSettle();
+    expect(
+        player.state.videos.map(playbackQueueId), songs.map(playbackQueueId));
+    expect(player.state.playQueue, songs.skip(1).map(playbackQueueId));
+    expect(player.state.currentQueueId, activeId);
+
+    await tap(tester, 'music-queue-menu-$duplicateId');
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Remove from queue'));
+    await tester.pumpAndSettle();
+    expect(find.text('Removed 1 song from queue'), findsOneWidget);
+    await tester.pump(MusicQueueRemovalUndo.duration);
+    expect(find.widgetWithText(TextButton, 'Undo'), findsNothing);
+    expect(player.state.videos.map(playbackQueueId),
+        [activeId, next.videoId, otherDuplicateId]);
   });
 
   testWidgets('long-pressing next seeks without changing tracks',
@@ -3605,6 +4489,7 @@ void main() {
       final committed =
           settings.stream.firstWhere((state) => state.playerShuffleMode);
       await tester.tap(shuffleButton);
+      expect(player.musicQueueShuffled, isTrue);
       await committed.timeout(const Duration(seconds: 5));
     });
     await tester.pump();
@@ -4051,10 +4936,10 @@ void main() {
       final songs =
           assignPlaybackQueueIds([next, song, zulu, repeated, alpha, repeated]);
       final ids = songs.map(playbackQueueId).toList();
-      await tester.runAsync(() => settings.setShuffle(true));
       await player.seed(player.state.copyWith(
           videos: songs,
           currentlyPlaying: songs[1],
+          musicQueueShuffled: true,
           playedVideos: [ids.first],
           playQueue: ListQueue.of([ids[5], ids[2], ids[3], ids[4]])));
       final before = player.state;
@@ -4073,7 +4958,8 @@ void main() {
       expect(player.state.currentlyPlaying, same(before.currentlyPlaying));
       expect(player.state.position, before.position);
       expect(player.state.mediaCommand, same(before.mediaCommand));
-      expect(settings.state.playerShuffleMode, isTrue);
+      expect(player.musicQueueShuffled, isTrue);
+      expect(settings.state.playerShuffleMode, isFalse);
       double rowY(String id) =>
           tester.getTopLeft(find.byKey(ValueKey('music-queue-$id'))).dy;
       final rowPositions = expected.map(rowY).toList();
@@ -4081,6 +4967,72 @@ void main() {
       expect(rowPositions.toSet(), hasLength(expected.length));
     });
   }
+
+  testWidgets('Steer mix offers separate artist and familiarity choices',
+      (tester) async {
+    const tracks = [
+      MusicTrack(
+          videoId: 'MixTrack001', title: 'Unfamiliar', artists: ['Singer']),
+      MusicTrack(videoId: 'MixTrack002', title: 'Saved', artists: ['Singer']),
+    ];
+    await tester.runAsync(() async {
+      const server = Server(url: 'https://instance.example');
+      await db.upsertServer(server);
+      await db.useServer(server);
+      await db.saveSetting(
+          SettingsValue(SponsorSegmentType.sponsor.settingsName(), 'false'));
+      player.audioSession = await AudioSession.instance;
+      await MusicLibraryService.forProfile(db, db.profileId)
+          .save(MusicLibraryEntry.song(tracks.last.toVideo()));
+      final seed = song.copyWith(
+          videoId: 'MixSeed0001', formatStreams: [], adaptiveFormats: []);
+      expect(
+          await player.playMusicMix(seed,
+              queueTitle: 'Mix from Song',
+              loadCandidates: (_) async => tracks,
+              isCurrent: () => true),
+          isTrue);
+    });
+    await pump(tester, child: const MusicQueue());
+
+    Future<void> openSteering() async {
+      final control = find.byKey(const ValueKey('music-queue-steer-mix'));
+      expect(control.hitTestable(), findsOneWidget);
+      await tester.tap(control);
+      await tester.pumpAndSettle();
+    }
+
+    Finder choice(String label) => find.ancestor(
+          of: find.text(label),
+          matching: find.byWidgetPredicate(
+              (widget) => widget is CheckedPopupMenuItem<Object?>),
+        );
+    bool isChecked(String label) =>
+        tester.widget<CheckedPopupMenuItem<Object?>>(choice(label)).checked;
+    Future<void> choose(String label) async {
+      final item = choice(label);
+      await revealSongAction(tester, item);
+      // The choice can persist queue mutations to the real database.
+      await tester.runAsync(() => tester.tap(item));
+      await tester.pumpAndSettle();
+    }
+
+    await openSteering();
+    expect(isChecked('Balanced'), isTrue);
+    expect(isChecked('No preference'), isTrue);
+    await choose('More from mix artists');
+    await openSteering();
+    expect(isChecked('More from mix artists'), isTrue);
+    await choose('More familiar songs');
+    expect(
+        player.state.playQueue, tracks.reversed.map((track) => track.videoId));
+
+    await openSteering();
+    expect(isChecked('More from mix artists'), isTrue);
+    expect(isChecked('More familiar songs'), isTrue);
+    await choose('More discovery');
+    expect(player.state.playQueue, tracks.map((track) => track.videoId));
+  });
 
   testWidgets('Sort upcoming is reachable with large text on a narrow phone',
       (tester) async {
@@ -4197,6 +5149,71 @@ void main() {
             .videoId,
         next.videoId);
     expect(player.state.currentQueueId, playbackQueueId(song));
+  });
+
+  testWidgets('suggested occurrence can be saved and removed independently',
+      (tester) async {
+    final id = (await tester.runAsync(() {
+      player.enqueueZone = Zone.current;
+      return service.createPlayList('Trip songs', 'local');
+    }))!;
+    List<Video> membership() => service
+        .getLocalPlaylists()
+        .singleWhere((playlist) => playlist.playlistId == id)
+        .videos;
+
+    final suggested = markMusicQueueSuggestion(next);
+    final suggestedId = playbackQueueId(suggested);
+    await player.seed(player.state.copyWith(
+        videos: [song, suggested, next],
+        playQueue: ListQueue.of([suggestedId, playbackQueueId(next)])));
+    final position = player.state.position;
+    final command = player.state.mediaCommand;
+    await pump(tester, child: const MusicQueue());
+
+    final suggestedRow = find.byKey(ValueKey('music-queue-$suggestedId'));
+    expect(
+        find.descendant(
+            of: suggestedRow, matching: find.text('Suggested • Singer')),
+        findsOneWidget);
+    expect(find.text('Suggested • Singer'), findsOneWidget);
+    expect(membership(), isEmpty);
+
+    await tap(tester, 'music-queue-menu-$suggestedId');
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Save to playlist'));
+    await tester.pumpAndSettle();
+    await tester.runAsync(() async {
+      await tester.tap(find.text('Trip songs'));
+      for (var i = 0; i < 100 && membership().isEmpty; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+    });
+    await tester.pumpAndSettle();
+    expect(membership().single.videoId, next.videoId);
+    expect(isMusicQueueSuggestion(membership().single), isFalse);
+
+    await tap(tester, 'music-queue-menu-$suggestedId');
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Play next'));
+    await tester.pumpAndSettle();
+    final copy = player.state.playQueue.first;
+    expect(copy, isNot(suggestedId));
+    expect(copy, isNot(playbackQueueId(next)));
+    expect(player.state.videos.where(isMusicQueueSuggestion), [suggested]);
+    await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+    await tester.pumpAndSettle();
+
+    await tap(tester, 'music-queue-menu-$suggestedId');
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Remove from queue'));
+    await tester.pumpAndSettle();
+    expect(player.state.playQueue, [copy, playbackQueueId(next)]);
+    expect(suggestedRow, findsNothing);
+    expect(player.state.currentQueueId, playbackQueueId(song));
+    expect(player.state.position, position);
+    expect(player.state.mediaCommand, command);
+    expect(membership().single.videoId, next.videoId);
   });
 
   testWidgets('saved queue menus copy each selected occurrence in place',
@@ -4633,6 +5650,158 @@ void main() {
   }
 
   testWidgets(
+      'phone queue Find reveals the exact duplicate in a locked live queue',
+      (tester) async {
+    final fillers = List.generate(
+        36, (index) => next.copyWith(videoId: 'queue-filler-$index'));
+    final songs = assignPlaybackQueueIds([song, song, ...fillers]);
+    final duplicateId = playbackQueueId(songs[1]);
+    await player.seed(player.state.copyWith(
+      videos: songs,
+      currentlyPlaying: songs.first,
+      playQueue: ListQueue.of([
+        ...fillers.reversed.map(playbackQueueId),
+        duplicateId,
+      ]),
+    ));
+    await pump(tester);
+    await tap(tester, 'music-player-queue');
+    await tap(tester, 'music-queue-lock');
+    final before = player.state;
+    final duplicate = find.byKey(ValueKey('music-queue-$duplicateId'));
+    expect(duplicate.hitTestable(), findsNothing);
+
+    await tap(tester, 'music-queue-find');
+    await tester.pumpAndSettle();
+    tester.view.viewInsets = const FakeViewPadding(bottom: 290);
+    addTearDown(tester.view.resetViewInsets);
+    await tester.enterText(
+        find.byKey(const ValueKey('music-queue-find-query')), 'SoNg');
+    await tester.pumpAndSettle();
+
+    final first = find.byKey(const ValueKey('music-queue-find-result-song'));
+    final second = find.byKey(ValueKey('music-queue-find-result-$duplicateId'));
+    expect(tester.getTopLeft(first).dy, lessThan(tester.getTopLeft(second).dy));
+    expect((tester.widget<ListTile>(first).leading! as Text).semanticsLabel,
+        'Queue position 1');
+    expect((tester.widget<ListTile>(second).leading! as Text).data,
+        '${songs.length}');
+    expect(tester.getBottomRight(second).dy, lessThan(844 - 290));
+    await tester.tap(second);
+    await tester.pumpAndSettle();
+    tester.view.resetViewInsets();
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('music-queue-find-query')), findsNothing);
+    expect(duplicate.hitTestable(), findsOneWidget);
+    final tile = tester.widget<ListTile>(duplicate);
+    expect(tile.selected, isFalse);
+    expect((tile.shape! as RoundedRectangleBorder).side.width, 2);
+    expect(find.byKey(ValueKey('music-queue-drag-$duplicateId')), findsNothing);
+    expect(settings.state.musicQueueLocked, isTrue);
+    expect(player.state, same(before));
+    expect(player.state.position, const Duration(seconds: 30));
+  });
+
+  testWidgets(
+      'tablet queue Find clears the query and refreshes results in live order',
+      (tester) async {
+    Video songByArtist(String id, String title) => next.copyWith(
+        videoId: id,
+        musicMetadata: MusicMetadata(title: title, artist: 'Café Ensemble'));
+    final first = songByArtist('first-match', 'First match');
+    final second = songByArtist('second-match', 'Second match');
+    final added = songByArtist('added-match', 'New match');
+    ListQueue<String> order(List<Video> songs) =>
+        ListQueue.of(songs.map(playbackQueueId));
+    Finder result(String id) =>
+        find.byKey(ValueKey('music-queue-find-result-$id'));
+    final query = find.byKey(const ValueKey('music-queue-find-query'));
+    await player.seed(player.state.copyWith(
+      videos: [song, second, next, first],
+      playQueue: order([first, next, second]),
+    ));
+    await pump(tester, size: const Size(1024, 720));
+    expect(find.byType(MusicQueue), findsOneWidget);
+    await tap(tester, 'music-queue-find');
+    await tester.pumpAndSettle();
+    await tester.enterText(query, 'missing');
+    await tester.pumpAndSettle();
+    expect(find.text('No results found.'), findsOneWidget);
+    final material = MaterialLocalizations.of(tester.element(query));
+    await tester.tap(find.byTooltip(material.clearButtonTooltip));
+    await tester.pumpAndSettle();
+    expect(tester.widget<TextField>(query).controller!.text, isEmpty);
+    expect(result('next').hitTestable(), findsOneWidget);
+    await pressAndroidBack(tester);
+    expect(query, findsNothing);
+    expect(find.byType(MusicQueue), findsOneWidget);
+
+    await tap(tester, 'music-queue-find');
+    await tester.pumpAndSettle();
+    await tester.enterText(query, 'CAFE ensemble');
+    await tester.pumpAndSettle();
+    expect(result('next'), findsNothing);
+    expect(tester.getTopLeft(result('first-match')).dy,
+        lessThan(tester.getTopLeft(result('second-match')).dy));
+
+    await player.seed(player.state.copyWith(
+      videos: [song, second, next, added],
+      playQueue: order([second, added, next]),
+    ));
+    final beforeReveal = player.state;
+    await tester.pumpAndSettle();
+    expect(tester.widget<TextField>(query).controller!.text, 'CAFE ensemble');
+    expect(result('first-match'), findsNothing);
+    expect(
+        (tester.widget<ListTile>(result('second-match')).leading! as Text)
+            .semanticsLabel,
+        'Queue position 2');
+    expect(tester.getTopLeft(result('second-match')).dy,
+        lessThan(tester.getTopLeft(result('added-match')).dy));
+    await tester.tap(result('added-match'));
+    await tester.pumpAndSettle();
+
+    expect(query, findsNothing);
+    expect(find.byKey(const ValueKey('music-queue-added-match')).hitTestable(),
+        findsOneWidget);
+    expect(find.byKey(const ValueKey('music-queue-next')).hitTestable(),
+        findsOneWidget);
+    expect(player.state, same(beforeReveal));
+  });
+
+  testWidgets('queue Find follows saved title changes while the query is open',
+      (tester) async {
+    final library = MusicLibraryService.forProfile(db, app.state.profileId);
+    await tester.runAsync(() => library.save(MusicLibraryEntry.song(next)));
+    await pump(tester, child: const MusicQueue());
+    await tap(tester, 'music-queue-find');
+    await tester.pumpAndSettle();
+    final query = find.byKey(const ValueKey('music-queue-find-query'));
+    const savedTitle = 'My live version';
+    await tester.enterText(query, savedTitle);
+    await tester.pumpAndSettle();
+    expect(find.text('No results found.'), findsOneWidget);
+
+    expect(
+        await tester.runAsync(() => library.setSavedSongTitle(
+            next.videoId, savedTitle,
+            isCurrent: () => true)),
+        isTrue);
+    await tester.pumpAndSettle();
+
+    final result = find.byKey(const ValueKey('music-queue-find-result-next'));
+    expect(find.descendant(of: result, matching: find.text(savedTitle)),
+        findsOneWidget);
+    await tester.tap(result);
+    await tester.pumpAndSettle();
+    final row = find.byKey(const ValueKey('music-queue-next'));
+    expect(find.descendant(of: row, matching: find.text(savedTitle)),
+        findsOneWidget);
+    expect(player.state.currentQueueId, song.videoId);
+  });
+
+  testWidgets(
       'queue advancement keeps a visible row still and reveals a clipped or offscreen occurrence',
       (tester) async {
     final songs = assignPlaybackQueueIds(List.generate(
@@ -4994,6 +6163,39 @@ void main() {
     expect(find.text('Cancel sleep timer'), findsNothing);
   });
 
+  testWidgets('Music sleep fade is optional for each new timer',
+      (tester) async {
+    await pump(tester);
+    final checkbox = find.byKey(const ValueKey('music-sleep-fade-out'));
+    for (final mode in ['timed', 'endOfSong', 'trackCount']) {
+      await tap(tester, 'music-player-sleep');
+      await tester.pumpAndSettle();
+      expect(tester.widget<CheckboxListTile>(checkbox).value, isFalse);
+      await tap(tester, 'music-sleep-fade-out');
+      if (mode == 'trackCount') {
+        await tap(tester, 'music-sleep-stop-after-tracks');
+        expect(tester.widget<CheckboxListTile>(checkbox).value, isTrue);
+      }
+      if (mode == 'endOfSong') {
+        await tap(tester, 'music-sleep-end-of-song');
+      } else {
+        await tester.tap(find.text('Set timer'));
+      }
+      await tester.pumpAndSettle();
+      expect(player.lastSleepRequest, (mode, true));
+      expect(player.state.hasTimer, isTrue);
+      await tap(tester, 'music-player-sleep');
+      expect(player.state.hasTimer, isFalse);
+    }
+
+    await tap(tester, 'music-player-sleep');
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Set timer'));
+    await tester.pumpAndSettle();
+    expect(player.lastSleepRequest, ('timed', false));
+    await tap(tester, 'music-player-sleep');
+  });
+
   testWidgets('Music can set and cancel a track count sleep timer',
       (tester) async {
     await pump(tester);
@@ -5001,6 +6203,7 @@ void main() {
     await tester.pumpAndSettle();
     await tap(tester, 'music-sleep-stop-after-tracks');
     await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('music-sleep-finish-song')), findsNothing);
     expect(
         find.text(
             'Each finished play counts, including repeats. Skips carry the count forward.'),
@@ -5029,6 +6232,32 @@ void main() {
     await tester.runAsync(() => Future<void>.delayed(Duration.zero));
     await tester.pumpAndSettle();
     expect(find.text('1 track left'), findsNothing);
+  });
+
+  testWidgets('Music sets finish-song sleep from the timed dialog',
+      (tester) async {
+    await pump(tester);
+    player.setEvent(
+        const MediaEvent(state: MediaState.playing, type: MediaEventType.play));
+    await tap(tester, 'music-player-sleep');
+    await tester.pumpAndSettle();
+    final option = find.byKey(const ValueKey('music-sleep-finish-song'));
+    expect(tester.widget<CheckboxListTile>(option).value, isFalse);
+    await tester.ensureVisible(option);
+    await tester.tap(option);
+    await tester.pump();
+    expect(tester.widget<CheckboxListTile>(option).value, isTrue);
+    await tester.tap(find.text('Set timer'));
+    await tester.pumpAndSettle();
+
+    await tester.pump(const Duration(minutes: 30));
+    expect(player.state.hasTimer, isTrue);
+    expect(player.state.isPlaying, isTrue);
+    player.setEvent(const MediaEvent(state: MediaState.completed));
+    await tester.pump();
+    expect(player.state.hasTimer, isFalse);
+    expect(player.state.mediaCommand?.type, MediaCommandType.pause);
+    expect(player.nextCalls, 0);
   });
 
   testWidgets(

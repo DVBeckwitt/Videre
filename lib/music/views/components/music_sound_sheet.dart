@@ -2,8 +2,8 @@ import 'dart:async';
 
 import 'package:clipious/globals.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
-import 'package:clipious/music/models/replay_gain.dart';
 import 'package:clipious/music/services/music_sound_controller.dart';
+import 'package:clipious/music/views/components/music_replay_gain_controls.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/player/views/components/playback_speed_controls.dart';
 import 'package:clipious/player/views/components/player_modal_back_handler.dart';
@@ -11,7 +11,7 @@ import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:intl/intl.dart';
 
 Future<void> showMusicSoundSheet(BuildContext context, PlayerCubit player) =>
@@ -23,7 +23,7 @@ Future<void> showMusicSoundSheet(BuildContext context, PlayerCubit player) =>
           PlayerModalBackHandler(child: MusicSoundSheet(player: player)),
     );
 
-/// Shares Videre's speed/pitch controls and adds optional session-bound EQ.
+/// Provides playback speed, pitch, silence skipping, and session-bound EQ.
 class MusicSoundSheet extends StatefulWidget {
   final PlayerCubit player;
   const MusicSoundSheet({super.key, required this.player});
@@ -36,6 +36,9 @@ class _MusicSoundSheetState extends State<MusicSoundSheet> {
   late final _profile = db.profileId;
   late final _generation = widget.player.backendPlaybackGeneration;
 
+  bool get _supportsAndroidAudio =>
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+
   bool get _current =>
       !widget.player.isClosed &&
       db.profileId == _profile &&
@@ -46,7 +49,7 @@ class _MusicSoundSheetState extends State<MusicSoundSheet> {
   @override
   void initState() {
     super.initState();
-    // Opening the sheet is the first operation that may allocate an EQ effect.
+    // Load controls for the current Music decoder.
     unawaited(widget.player.musicSound.open());
   }
 
@@ -57,6 +60,7 @@ class _MusicSoundSheetState extends State<MusicSoundSheet> {
       builder: (context, _) {
         final locals = AppLocalizations.of(context)!;
         final state = widget.player.state;
+        final settings = widget.player.settings;
         return SafeArea(
           top: false,
           child: SingleChildScrollView(
@@ -120,8 +124,7 @@ class _MusicSoundSheetState extends State<MusicSoundSheet> {
                       if (_current) widget.player.setSpeed(value);
                     },
                     initialPitchSemitones: state.pitchSemitones,
-                    onPitchChanged: !kIsWeb &&
-                            defaultTargetPlatform == TargetPlatform.android
+                    onPitchChanged: _supportsAndroidAudio
                         ? (value) {
                             if (_current) {
                               widget.player.setPitchSemitones(value);
@@ -129,8 +132,26 @@ class _MusicSoundSheetState extends State<MusicSoundSheet> {
                           }
                         : null,
                   ),
+                  if (_supportsAndroidAudio)
+                    BlocSelector<SettingsCubit, SettingsState, bool>(
+                      bloc: settings,
+                      selector: (state) => state.musicSkipSilence,
+                      builder: (context, enabled) => SwitchListTile.adaptive(
+                        key: const ValueKey('music-skip-silence'),
+                        contentPadding:
+                            const EdgeInsets.symmetric(horizontal: 24),
+                        title: Text(locals.musicSkipSilence),
+                        subtitle: Text(locals.musicSkipSilenceHint),
+                        value: enabled,
+                        onChanged: (value) {
+                          if (_current) {
+                            unawaited(settings.setMusicSkipSilence(value));
+                          }
+                        },
+                      ),
+                    ),
                   const Divider(),
-                  _MusicReplayGainControls(
+                  MusicReplayGainControls(
                       controller: widget.player.musicSound,
                       isCurrent: () => _current),
                   const Divider(),
@@ -143,149 +164,6 @@ class _MusicSoundSheetState extends State<MusicSoundSheet> {
           ),
         );
       });
-}
-
-class _MusicReplayGainControls extends StatefulWidget {
-  final MusicSoundController controller;
-  final bool Function() isCurrent;
-
-  const _MusicReplayGainControls({
-    required this.controller,
-    required this.isCurrent,
-  });
-
-  @override
-  State<_MusicReplayGainControls> createState() =>
-      _MusicReplayGainControlsState();
-}
-
-class _MusicReplayGainControlsState extends State<_MusicReplayGainControls> {
-  bool _saving = false;
-  bool _failed = false;
-
-  Future<void> _save(Future<void> Function() write) async {
-    if (!widget.isCurrent() || _saving) return;
-    _saving = true;
-    if (_failed) setState(() => _failed = false);
-    try {
-      await write();
-    } catch (_) {
-      if (mounted && widget.isCurrent()) setState(() => _failed = true);
-    } finally {
-      _saving = false;
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) => ListenableBuilder(
-        listenable: widget.controller,
-        builder: (context, _) {
-          final locals = AppLocalizations.of(context)!;
-          final controller = widget.controller;
-          final preampDb = controller.musicPreampDb;
-          final number = NumberFormat(
-            '0.#',
-            Localizations.localeOf(context).toString(),
-          ).format(preampDb);
-          final gain =
-              locals.musicPreampValue(preampDb > 0 ? '+$number' : number);
-          final modeLabels = {
-            ReplayGainMode.off: locals.musicReplayGainOff,
-            ReplayGainMode.track: locals.musicReplayGainTrack,
-            ReplayGainMode.album: locals.musicReplayGainAlbum,
-          };
-          return Shortcuts(
-            shortcuts: const {
-              SingleActivator(LogicalKeyboardKey.select): ActivateIntent(),
-            },
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(24, 8, 24, 16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Text(
-                    locals.musicReplayGain,
-                    style: Theme.of(context).textTheme.titleLarge,
-                  ),
-                  const SizedBox(height: 8),
-                  if (!controller.replayGainSupported)
-                    Text(locals.musicReplayGainUnavailable)
-                  else ...[
-                    Text(locals.musicReplayGainHelp),
-                    const SizedBox(height: 8),
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 4,
-                      children: [
-                        for (final MapEntry(key: mode, value: label)
-                            in modeLabels.entries)
-                          ChoiceChip(
-                            key: ValueKey('music-replaygain-${mode.name}'),
-                            label: Text(label),
-                            selected: controller.replayGainMode == mode,
-                            onSelected: (selected) {
-                              if (selected) {
-                                unawaited(
-                                  _save(
-                                      () => controller.setReplayGainMode(mode)),
-                                );
-                              }
-                            },
-                          ),
-                      ],
-                    ),
-                    const SizedBox(height: 12),
-                    Text(
-                      locals.musicPreamp,
-                      style: Theme.of(context).textTheme.titleMedium,
-                    ),
-                    Row(
-                      children: [
-                        IconButton.filledTonal(
-                          key: const ValueKey('music-preamp-decrease'),
-                          tooltip: locals.musicPreampDecrease,
-                          onPressed: preampDb > minimumMusicPreampDb
-                              ? () => _save(
-                                    () => controller
-                                        .setMusicPreampDb(preampDb - 1),
-                                  )
-                              : null,
-                          icon: const Icon(Icons.remove),
-                        ),
-                        Expanded(
-                          child: Semantics(
-                            label: locals.musicPreamp,
-                            value: gain,
-                            liveRegion: true,
-                            excludeSemantics: true,
-                            child: Text(gain, textAlign: TextAlign.center),
-                          ),
-                        ),
-                        IconButton.filledTonal(
-                          key: const ValueKey('music-preamp-increase'),
-                          tooltip: locals.musicPreampIncrease,
-                          onPressed: preampDb < maximumMusicPreampDb
-                              ? () => _save(
-                                    () => controller
-                                        .setMusicPreampDb(preampDb + 1),
-                                  )
-                              : null,
-                          icon: const Icon(Icons.add),
-                        ),
-                      ],
-                    ),
-                    if (_failed)
-                      Semantics(
-                        liveRegion: true,
-                        child: Text(locals.musicReplayGainSaveFailed),
-                      ),
-                  ],
-                ],
-              ),
-            ),
-          );
-        },
-      );
 }
 
 class MusicEqualizerControls extends StatelessWidget {
@@ -303,7 +181,16 @@ class MusicEqualizerControls extends StatelessWidget {
         final revision = controller.revision;
         bool current() => isCurrent() && controller.revision == revision;
         final parameters = controller.parameters;
+        final output = controller.output;
         final canEdit = controller.available && !controller.busy && current();
+        final canSave = controller.supported &&
+            !controller.busy &&
+            !controller.savingOutputPreset &&
+            current();
+        final canForget = controller.hasOutputPreset &&
+            !controller.busy &&
+            !controller.savingOutputPreset &&
+            current();
         final canDisable = controller.enabled &&
             !controller.busy &&
             !controller.waiting &&
@@ -334,9 +221,52 @@ class MusicEqualizerControls extends StatelessWidget {
                       }
                     : null,
               ),
-              Text(locals.musicEqualizerSessionHint),
+              if (output == null)
+                Text(locals.musicEqualizerSessionHint)
+              else ...[
+                Text(locals.musicEqualizerOutput(output.label)),
+                Semantics(
+                  liveRegion: true,
+                  child: Text(
+                    controller.outputPresetFailed
+                        ? locals.musicOutputPresetFailed
+                        : controller.hasOutputPreset
+                            ? locals.musicOutputPresetSaved
+                            : locals.musicOutputPresetHint,
+                  ),
+                ),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    FilledButton.tonal(
+                      key: const ValueKey('music-output-preset-save'),
+                      onPressed: canSave
+                          ? () {
+                              if (current()) {
+                                unawaited(controller.saveOutputPreset());
+                              }
+                            }
+                          : null,
+                      child: Text(locals.musicOutputPresetSave),
+                    ),
+                    if (controller.hasOutputPreset)
+                      TextButton(
+                        key: const ValueKey('music-output-preset-forget'),
+                        onPressed: canForget
+                            ? () {
+                                if (current()) {
+                                  unawaited(controller.forgetOutputPreset());
+                                }
+                              }
+                            : null,
+                        child: Text(locals.musicOutputPresetForget),
+                      ),
+                  ],
+                ),
+              ],
               const SizedBox(height: 12),
-              if (controller.busy)
+              if (controller.busy || controller.savingOutputPreset)
                 const LinearProgressIndicator(
                     key: ValueKey('music-equalizer-loading')),
               if (!controller.supported)

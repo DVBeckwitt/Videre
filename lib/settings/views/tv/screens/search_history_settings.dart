@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/globals.dart';
+import 'package:clipious/settings/models/search_history_control.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/settings/views/tv/screens/settings.dart';
 import 'package:clipious/utils/views/tv/components/tv_overscan.dart';
@@ -12,7 +13,19 @@ import '../../../../utils/views/tv/components/tv_button.dart';
 
 @RoutePage()
 class TvSearchHistorySettingsScreen extends StatelessWidget {
-  const TvSearchHistorySettingsScreen({super.key});
+  final SearchHistoryControl? _target;
+  final FocusNode? _targetFocus;
+
+  const TvSearchHistorySettingsScreen({super.key})
+      : _target = null,
+        _targetFocus = null;
+
+  const TvSearchHistorySettingsScreen.focused(
+    SearchHistoryControl target,
+    FocusNode focusNode, {
+    super.key,
+  })  : _target = target,
+        _targetFocus = focusNode;
 
   void showClearHistoryDialog(BuildContext context) {
     var locals = AppLocalizations.of(context)!;
@@ -71,6 +84,10 @@ class TvSearchHistorySettingsScreen extends StatelessWidget {
               children: [
                 SettingsTitle(title: locals.searchHistoryDescription),
                 SettingsTile(
+                  key: ValueKey(SearchHistoryControl.enable.id),
+                  focusNode: _target == SearchHistoryControl.enable
+                      ? _targetFocus
+                      : null,
                   title: locals.enableSearchHistory,
                   trailing: Switch(
                       onChanged: (value) {}, value: state.useSearchHistory),
@@ -84,6 +101,10 @@ class TvSearchHistorySettingsScreen extends StatelessWidget {
                   onNewValue: cubit.setHistoryLimit,
                 ),
                 SettingsTile(
+                  key: ValueKey(SearchHistoryControl.clear.id),
+                  focusNode: _target == SearchHistoryControl.clear
+                      ? _targetFocus
+                      : null,
                   title: locals.clearSearchHistory,
                   onSelected: (context) => showClearHistoryDialog(context),
                 )

@@ -2,9 +2,12 @@ import 'package:clipious/app/states/app.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/music/models/music_library_entry.dart';
+import 'package:clipious/music/models/music_recording_rating.dart';
 import 'package:clipious/music/models/music_rule_playlist.dart';
+import 'package:clipious/music/services/music_recording_rating_store.dart';
 import 'package:clipious/music/services/music_rule_playlist_store.dart';
 import 'package:clipious/music/views/components/music_library_actions.dart';
+import 'package:clipious/music/views/components/music_offline_filter.dart';
 import 'package:clipious/music/views/screens/music.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -23,9 +26,11 @@ class MusicRulePlaylistsButton extends StatelessWidget {
           if (!session.isCurrent) return;
           final store =
               MusicRulePlaylistStore.forProfile(db, session.library.profileId);
+          final ratingStore = MusicRecordingRatingStore.forProfile(
+              db, session.library.profileId);
           Navigator.of(context).push<void>(MaterialPageRoute(
-              builder: (_) =>
-                  _RulePlaylistsPage(session: session, store: store)));
+              builder: (_) => _RulePlaylistsPage(
+                  session: session, store: store, ratingStore: ratingStore)));
         },
       );
 }
@@ -33,11 +38,13 @@ class MusicRulePlaylistsButton extends StatelessWidget {
 class _RulePlaylistsPage extends StatelessWidget {
   final MusicLibrarySession session;
   final MusicRulePlaylistStore store;
+  final MusicRecordingRatingStore ratingStore;
   final String? playlistId;
 
   const _RulePlaylistsPage({
     required this.session,
     required this.store,
+    required this.ratingStore,
     this.playlistId,
   });
 
@@ -117,14 +124,17 @@ class _RulePlaylistsPage extends StatelessWidget {
     if (!session.isCurrent) return;
     final playlist = _playlist;
     if (playlist == null) return;
-    final songs = playlist.resolve(session.library.entries);
+    final songs = _resolve(playlist);
     final start =
         songId == null ? 0 : songs.indexWhere((song) => song.id == songId);
     if (songs.isEmpty || start < 0) return;
     try {
       await MusicScreen.playTracks(
           context, [for (final song in songs) song.toVideo()],
-          queueTitle: playlist.name, startIndex: start);
+          queueTitle: playlist.name,
+          startIndex: start,
+          songTap: songId != null,
+          collectionDetail: true);
     } catch (_) {
       if (context.mounted && session.isCurrent) {
         _showError(context, playback: true);
@@ -140,12 +150,15 @@ class _RulePlaylistsPage extends StatelessWidget {
             : locals.musicLibraryActionError)));
   }
 
+  List<MusicLibraryEntry> _resolve(MusicRulePlaylist playlist) =>
+      playlist.resolve(session.library.entries, ratings: ratingStore.ratings);
+
   @override
   Widget build(BuildContext context) => BlocBuilder<AppCubit, AppState>(
         bloc: session.app,
         builder: (context, _) => ListenableBuilder(
-          listenable:
-              Listenable.merge([store.changes, session.library.changes]),
+          listenable: Listenable.merge(
+              [store.changes, session.library.changes, ratingStore.changes]),
           builder: (context, _) {
             final locals = AppLocalizations.of(context)!;
             final playlist = session.isCurrent ? _playlist : null;
@@ -183,7 +196,7 @@ class _RulePlaylistsPage extends StatelessWidget {
                 child: available
                     ? playlist == null
                         ? _catalog(context, locals)
-                        : _detail(context, locals, playlist)
+                        : _detail(locals, playlist)
                     : Center(child: Text(locals.musicSourceUnavailable)),
               ),
             );
@@ -215,44 +228,87 @@ class _RulePlaylistsPage extends StatelessWidget {
             if (!session.isCurrent) return;
             Navigator.of(context).push<void>(MaterialPageRoute(
                 builder: (_) => _RulePlaylistsPage(
-                    session: session, store: store, playlistId: playlist.id)));
+                    session: session,
+                    store: store,
+                    ratingStore: ratingStore,
+                    playlistId: playlist.id)));
           },
         );
       },
     );
   }
 
-  Widget _detail(BuildContext context, AppLocalizations locals,
-      MusicRulePlaylist playlist) {
-    final songs = playlist.resolve(session.library.entries);
-    return Column(children: [
-      Padding(
-        padding: const EdgeInsets.all(12),
-        child: FilledButton.icon(
-          key: const ValueKey('music-rule-playlist-play'),
-          onPressed: songs.isEmpty ? null : () => _play(context),
-          icon: const Icon(Icons.play_arrow),
-          label: Text(locals.musicPlayAll),
-        ),
-      ),
-      Expanded(
-        child: songs.isEmpty
-            ? Center(child: Text(locals.musicRulePlaylistEmpty))
-            : ListView.builder(
-                itemCount: songs.length,
-                itemBuilder: (context, index) {
-                  final song = songs[index];
-                  return ListTile(
-                    key: ValueKey('music-rule-playlist-track-${song.id}'),
-                    title: Text(song.title),
-                    subtitle:
-                        song.subtitle.isEmpty ? null : Text(song.subtitle),
-                    onTap: () => _play(context, songId: song.id),
-                  );
-                },
-              ),
-      ),
-    ]);
+  Widget _detail(AppLocalizations locals, MusicRulePlaylist playlist) {
+    final songs = _resolve(playlist);
+    return MusicOfflineFilter(
+      key: ValueKey(playlist.id),
+      videos: [for (final song in songs) song.toVideo()],
+      builder: (context, offline) {
+        final visible = [
+          for (final (index, song) in songs.indexed)
+            if (!offline.enabled || offline.entries?[index] != null) song,
+        ];
+
+        Future<void> play([int? index]) async {
+          if (!offline.enabled) {
+            await _play(context,
+                songId: index == null ? null : visible[index].id);
+            return;
+          }
+          bool isCurrent() => session.isCurrent && offline.isCurrent();
+          final tracks = offline.entries?.nonNulls.toList();
+          if (tracks == null || tracks.isEmpty || !isCurrent()) return;
+          try {
+            await MusicScreen.playCollectionTracks(context, tracks,
+                queueTitle: playlist.name,
+                startIndex: index ?? 0,
+                isCurrent: isCurrent);
+          } catch (_) {
+            if (context.mounted && isCurrent()) {
+              _showError(context, playback: true);
+            }
+          }
+        }
+
+        return Column(children: [
+          Padding(
+            padding: const EdgeInsets.all(12),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                FilledButton.icon(
+                  key: const ValueKey('music-rule-playlist-play'),
+                  onPressed: visible.isEmpty ? null : () => play(),
+                  icon: const Icon(Icons.play_arrow),
+                  label: Text(locals.musicPlayAll),
+                ),
+                musicOfflineFilterButton(context, offline,
+                    key: const ValueKey('music-rule-playlist-offline')),
+              ],
+            ),
+          ),
+          Expanded(
+            child: visible.isEmpty
+                ? offline.enabled
+                    ? musicOfflineCollectionEmpty(context, offline)
+                    : Center(child: Text(locals.musicRulePlaylistEmpty))
+                : ListView.builder(
+                    itemCount: visible.length,
+                    itemBuilder: (context, index) {
+                      final song = visible[index];
+                      return ListTile(
+                        key: ValueKey('music-rule-playlist-track-${song.id}'),
+                        title: Text(song.title),
+                        subtitle:
+                            song.subtitle.isEmpty ? null : Text(song.subtitle),
+                        onTap: () => play(index),
+                      );
+                    },
+                  ),
+          ),
+        ]);
+      },
+    );
   }
 }
 
@@ -281,6 +337,7 @@ class _RulePlaylistEditorState extends State<_RulePlaylistEditor> {
       text: widget.previous?.maximumDurationSeconds?.toString());
   late final _limit =
       TextEditingController(text: widget.previous?.limit?.toString());
+  late int? _minimumRating = widget.previous?.minimumRating;
   late var _sort = widget.previous?.sort ?? MusicRulePlaylistSort.saved;
   late var _descending = widget.previous?.descending ?? false;
 
@@ -315,6 +372,7 @@ class _RulePlaylistEditorState extends State<_RulePlaylistEditor> {
           albumContains: _album.text.trim(),
           minimumDurationSeconds: _number(_minimum),
           maximumDurationSeconds: _number(_maximum),
+          minimumRating: _minimumRating,
           sort: _sort,
           descending: _descending,
           limit: _number(_limit),
@@ -399,6 +457,25 @@ class _RulePlaylistEditorState extends State<_RulePlaylistEditor> {
                 validateValue: (value) => value < (_number(_minimum) ?? 0)
                     ? locals.musicRulePlaylistDurationRange
                     : null),
+            DropdownButtonFormField<int>(
+              key: const ValueKey('music-rule-playlist-minimum-rating'),
+              initialValue: _minimumRating,
+              isExpanded: true,
+              decoration: InputDecoration(
+                  labelText: locals.musicRulePlaylistMinimumRating),
+              hint: Text(locals.musicRulePlaylistAnyRating),
+              items: [
+                DropdownMenuItem(
+                    child: Text(locals.musicRulePlaylistAnyRating)),
+                for (var rating = musicMinimumRecordingRating;
+                    rating <= musicMaximumRecordingRating;
+                    rating++)
+                  DropdownMenuItem(
+                      value: rating,
+                      child: Text(locals.musicRecordingRatingStars(rating))),
+              ],
+              onChanged: (rating) => _minimumRating = rating,
+            ),
             DropdownButtonFormField<MusicRulePlaylistSort>(
               key: const ValueKey('music-rule-playlist-sort'),
               initialValue: _sort,

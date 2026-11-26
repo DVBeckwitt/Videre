@@ -190,7 +190,10 @@ class VideoTranscript {
         '${fraction.toString().padLeft(3, '0')}';
   }
 
-  String get plainText {
+  String get plainText => toText();
+
+  /// Exports the loaded lines in source order, optionally with cue start times.
+  String toText({bool withTimestamps = false}) {
     final blocks = <String>[];
     final regularLines = <String>[];
     String? previousText;
@@ -207,14 +210,16 @@ class VideoTranscript {
       // remove literal angle-bracket examples or decode escaped entities twice
       // when the transcript is copied.
       final text = line.text.replaceAll(_collapsibleWhitespace, ' ').trim();
-      if (text.isEmpty || text == previousText) continue;
+      if (text.isEmpty || (!withTimestamps && text == previousText)) continue;
       previousText = text;
 
+      final formatted =
+          withTimestamps ? '[${_vttTimestamp(line.startMs)}] $text' : text;
       if (line.type == VideoTranscriptLineType.heading) {
         flushRegularLines();
-        blocks.add(text);
+        blocks.add(formatted);
       } else {
-        regularLines.add(text);
+        regularLines.add(formatted);
       }
     }
     flushRegularLines();

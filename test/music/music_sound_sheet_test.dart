@@ -6,6 +6,7 @@ import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/music/models/replay_gain.dart';
 import 'package:clipious/music/services/music_replay_gain_preferences.dart';
+import 'package:clipious/music/services/music_output_presets.dart';
 import 'package:clipious/music/services/music_sound_controller.dart';
 import 'package:clipious/music/views/components/music_sound_sheet.dart';
 import 'package:clipious/player/states/player.dart';
@@ -93,6 +94,7 @@ void main() {
   late TestSettingsCubit settings;
   late _Player player;
   late _Equalizer backend;
+  late StreamController<MusicOutput?> outputs;
   late MusicSoundController controller;
   const song = Video(
       videoId: 'sound-song',
@@ -115,12 +117,15 @@ void main() {
             isMini: false),
         settings);
     backend = _Equalizer();
+    outputs = StreamController<MusicOutput?>.broadcast(sync: true);
     controller = player.musicSound;
-    controller.attachBackend(backend, owner: backend, profileId: db.profileId);
+    controller.attachBackend(backend,
+        owner: backend, profileId: db.profileId, outputs: outputs.stream);
   });
 
   tearDown(() async {
     await player.close();
+    await outputs.close();
     await backend.changes.close();
     await settings.close();
     await app.close();
@@ -173,6 +178,77 @@ void main() {
     expect(controller.failed, isFalse);
   });
 
+  testWidgets('output presets restore EQ, ReplayGain and preamp together',
+      (tester) async {
+    const headphones = MusicOutput('headphones', 'Headphones');
+    const saveKey = 'music-output-preset-save';
+    const forgetKey = 'music-output-preset-forget';
+    final defaults = MusicReplayGainPreferences(db.forProfile(db.profileId));
+    await tester.runAsync(() => defaults.setMode(ReplayGainMode.track));
+    await show(tester, fullSheet: true);
+    expect(find.byKey(const ValueKey(saveKey)), findsNothing);
+
+    Future<void> selectOutput(MusicOutput? output) async {
+      await tester.runAsync(() async {
+        outputs.add(output);
+        await Future<void>.delayed(Duration.zero);
+      });
+      await tester.pumpAndSettle();
+    }
+
+    Future<void> tapStorage(String key) async {
+      final target = find.byKey(ValueKey(key));
+      await tester.ensureVisible(target);
+      await tester.pumpAndSettle();
+      await tester.runAsync(() async {
+        await tester.tap(target);
+        final timeout = Stopwatch()..start();
+        while (controller.savingOutputPreset &&
+            timeout.elapsed < const Duration(seconds: 2)) {
+          await Future<void>.delayed(const Duration(milliseconds: 5));
+        }
+      });
+      await tester.pumpAndSettle();
+    }
+
+    await selectOutput(headphones);
+    expect(find.text('Audio output: Headphones'), findsOneWidget);
+    await tap(tester, 'music-replaygain-album');
+    await tap(tester, 'music-tagged-preamp-increase');
+    await tap(tester, 'music-untagged-preamp-decrease');
+    await tap(tester, 'music-equalizer-bass');
+    await tapStorage(saveKey);
+    expect(find.text('A preset is saved for this output.'), findsOneWidget);
+    expect(defaults.mode, ReplayGainMode.track);
+    expect(defaults.taggedPreampDb, 0);
+    expect(defaults.untaggedPreampDb, 0);
+
+    await selectOutput(null);
+    expect(find.byKey(const ValueKey(saveKey)), findsNothing);
+    expect(controller.replayGainMode, ReplayGainMode.track);
+    expect(controller.musicTaggedPreampDb, 0);
+    expect(controller.musicUntaggedPreampDb, 0);
+    expect(backend.enabled, isFalse);
+
+    await selectOutput(headphones);
+    expect(controller.replayGainMode, ReplayGainMode.album);
+    expect(controller.musicTaggedPreampDb, 1);
+    expect(controller.musicUntaggedPreampDb, -1);
+    expect(backend.levels, {0: 4, 1: 0, 2: 0});
+    expect(backend.enabled, isTrue);
+    await tapStorage(forgetKey);
+    expect(find.byKey(const ValueKey(forgetKey)), findsNothing);
+    expect(controller.replayGainMode, ReplayGainMode.album);
+    expect(backend.enabled, isTrue);
+
+    await selectOutput(null);
+    await selectOutput(headphones);
+    expect(controller.replayGainMode, ReplayGainMode.track);
+    expect(controller.musicTaggedPreampDb, 0);
+    expect(controller.musicUntaggedPreampDb, 0);
+    expect(backend.enabled, isFalse);
+  });
+
   testWidgets('native EQ failure keeps shared speed and pitch controls working',
       (tester) async {
     backend.failRead = true;
@@ -191,6 +267,29 @@ void main() {
         find.byKey(const ValueKey('music-equalizer-failure')), findsOneWidget);
   });
 
+  testWidgets('Skip silence defaults off and saves changes in Music Sound',
+      (tester) async {
+    await show(tester, fullSheet: true);
+    final toggle = find.byKey(const ValueKey('music-skip-silence'));
+    expect(tester.widget<SwitchListTile>(toggle).value, isFalse);
+    expect(db.getSettings(musicSkipSilenceSettingName), isNull);
+    await tester.ensureVisible(toggle);
+    await tester.pumpAndSettle();
+
+    for (final enabled in [true, false]) {
+      await tester.runAsync(() async {
+        final saved = settings.stream
+            .firstWhere((state) => state.musicSkipSilence == enabled);
+        await tester.tap(toggle);
+        await saved.timeout(const Duration(seconds: 5));
+      });
+      await tester.pumpAndSettle();
+      expect(tester.widget<SwitchListTile>(toggle).value, enabled);
+      expect(db.getSettings(musicSkipSilenceSettingName)?.value,
+          enabled.toString());
+    }
+  });
+
   testWidgets('waiting for an audio session does not hide speed and pitch',
       (tester) async {
     backend.currentSession = 0;
@@ -201,9 +300,8 @@ void main() {
     await tap(tester, 'playback-pitch-increase');
     expect(player.requestedSpeed, 1.05);
     expect(player.requestedPitch, 1);
-    expect(find.byType(SwitchListTile), findsOneWidget);
-    expect(tester.widget<SwitchListTile>(find.byType(SwitchListTile)).onChanged,
-        isNull);
+    final equalizer = find.byKey(const ValueKey('music-equalizer-enabled'));
+    expect(tester.widget<SwitchListTile>(equalizer).onChanged, isNull);
   });
 
   test(
@@ -217,7 +315,8 @@ void main() {
       await db.useProfile(second.id);
       try {
         await first.setMode(ReplayGainMode.album);
-        await first.setPreampDb(-80);
+        await first.setTaggedPreampDb(-80);
+        await first.setUntaggedPreampDb(80);
         await secondDb.saveSetting(
           SettingsValue(musicReplayGainModeSettingName, 'unknown'),
         );
@@ -225,9 +324,11 @@ void main() {
           SettingsValue(musicPreampSettingName, 'NaN'),
         );
         expect(first.mode, ReplayGainMode.album);
-        expect(first.preampDb, minimumMusicPreampDb);
+        expect(first.taggedPreampDb, minimumMusicPreampDb);
+        expect(first.untaggedPreampDb, maximumMusicPreampDb);
         expect(secondPreferences.mode, ReplayGainMode.off);
-        expect(secondPreferences.preampDb, 0);
+        expect(secondPreferences.taggedPreampDb, 0);
+        expect(secondPreferences.untaggedPreampDb, 0);
       } finally {
         await db.useProfile(firstId);
       }
@@ -235,17 +336,21 @@ void main() {
   );
 
   testWidgets(
-    'ReplayGain and preamp save from the sound sheet when EQ is unavailable',
+    'Both preamps inherit the old level and can be edited from Sound',
     (tester) async {
       backend.failRead = true;
-      final preferences = MusicReplayGainPreferences(
-        db.forProfile(db.profileId),
-      );
+      final profile = db.forProfile(db.profileId);
+      final preferences = MusicReplayGainPreferences(profile);
+      await tester.runAsync(() => profile.saveSetting(
+            SettingsValue(musicPreampSettingName, '-4'),
+          ));
       await show(tester, fullSheet: true, width: 320, scale: 2.5);
       final off = find.byKey(const ValueKey('music-replaygain-off'));
       final album = find.byKey(const ValueKey('music-replaygain-album'));
       expect(tester.widget<ChoiceChip>(off).selected, isTrue);
-      expect(preferences.preampDb, 0);
+      expect(preferences.taggedPreampDb, -4);
+      expect(preferences.untaggedPreampDb, -4);
+      expect(find.text('-4 dB'), findsNWidgets(2));
 
       Future<void> save(String key, bool Function() saved) async {
         final control = find.byKey(ValueKey(key));
@@ -266,8 +371,27 @@ void main() {
           () => preferences.mode == ReplayGainMode.album);
       expect(tester.widget<ChoiceChip>(album).selected, isTrue);
 
-      await save('music-preamp-increase', () => preferences.preampDb == 1);
-      expect(find.text('+1 dB'), findsOneWidget);
+      await save('music-replaygain-contextual',
+          () => preferences.mode == ReplayGainMode.contextual);
+      expect(
+          tester
+              .widget<ChoiceChip>(
+                  find.byKey(const ValueKey('music-replaygain-contextual')))
+              .selected,
+          isTrue);
+      await save('music-tagged-preamp-increase',
+          () => preferences.taggedPreampDb == -3);
+      expect(preferences.untaggedPreampDb, -4);
+      expect(find.text('-3 dB'), findsOneWidget);
+      expect(find.text('-4 dB'), findsOneWidget);
+
+      await save('music-untagged-preamp-decrease',
+          () => preferences.untaggedPreampDb == -5);
+      final reloaded = MusicReplayGainPreferences(db.forProfile(db.profileId));
+      expect(reloaded.taggedPreampDb, -3);
+      expect(reloaded.untaggedPreampDb, -5);
+      expect(profile.getSettings(musicPreampSettingName)?.value, '-4');
+      expect(find.text('-5 dB'), findsOneWidget);
       expect(tester.takeException(), isNull);
     },
   );

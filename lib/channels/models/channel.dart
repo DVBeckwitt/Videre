@@ -45,13 +45,10 @@ class Channel implements ShareLinks {
   Map<String, dynamic> toJson() => _$ChannelToJson(this);
 
   @override
-  Uri getInvidiousLink(Server server, int? timestamp) {
-    return invidiousShareLink(server, pathSegments: ['channel', authorId]);
-  }
+  Uri getInvidiousLink(Server server, int? timestamp) =>
+      ChannelShareLinks(authorId).getInvidiousLink(server, timestamp);
 
   @override
-  Uri getYoutubeLink(int? timestamp) => Uri(
-      scheme: 'https',
-      host: 'www.youtube.com',
-      pathSegments: ['channel', authorId]);
+  Uri getYoutubeLink(int? timestamp) =>
+      ChannelShareLinks(authorId).getYoutubeLink(timestamp);
 }

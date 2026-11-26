@@ -177,7 +177,8 @@ class _Player extends Cubit<PlayerState> implements PlayerCubit {
       String? queueTitle,
       PlaylistReference? recommendationSource,
       bool fromMusic = false,
-      bool songTap = false}) async {
+      bool songTap = false,
+      bool collectionDetail = false}) async {
     playRequests.add(videos);
     startPositions.add(startAt);
     emit(state.copyWith(videos: videos, currentlyPlaying: videos.first));

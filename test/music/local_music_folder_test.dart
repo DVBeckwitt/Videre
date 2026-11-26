@@ -8,9 +8,14 @@ import 'package:clipious/downloads/states/download_manager.dart';
 import 'package:clipious/globals.dart' as globals;
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
+import 'package:clipious/music/models/device_playlist_track.dart';
+import 'package:clipious/l10n/generated/app_localizations_en.dart';
 import 'package:clipious/music/models/local_music_track.dart';
+import 'package:clipious/music/models/music_artist_identity.dart';
 import 'package:clipious/music/models/on_device_music_entry.dart';
 import 'package:clipious/music/services/local_music_library.dart';
+import 'package:clipious/music/services/music_library_service.dart';
+import 'package:clipious/music/services/local_music_lyrics_authoring.dart';
 import 'package:clipious/music/services/on_device_music_downloads.dart';
 import 'package:clipious/music/views/components/device_music_artwork.dart';
 import 'package:clipious/music/views/components/local_music_folder.dart';
@@ -27,6 +32,8 @@ import 'package:flutter_test/flutter_test.dart';
 class _App extends Cubit<AppState> implements AppCubit {
   _App()
       : super(AppState(0, null, HomeLayout(), profileId: globals.db.profileId));
+
+  void startProfileSwitch() => emit(state.copyWith(globalLoading: true));
 
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
@@ -62,7 +69,10 @@ class _Player extends Cubit<PlayerState> implements PlayerCubit {
 
   @override
   Future<void> playLocalMusic(List<LocalMusicTrack> tracks,
-      {int startIndex = 0, String? queueTitle, bool songTap = false}) async {
+      {int startIndex = 0,
+      String? queueTitle,
+      bool songTap = false,
+      bool collectionDetail = false}) async {
     queue = tracks;
     index = startIndex;
     source = queueTitle;
@@ -72,6 +82,8 @@ class _Player extends Cubit<PlayerState> implements PlayerCubit {
   Future<void> playOnDeviceMusic(List<OnDeviceMusicEntry> tracks,
       {int startIndex = 0,
       String? queueTitle,
+      bool collectionDetail = false,
+      bool retainQueueOrder = false,
       bool Function()? isCurrent,
       bool songTap = false}) async {
     expect(isCurrent?.call(), isNot(false));
@@ -137,6 +149,8 @@ void main() {
     'uri': '$tree/document/First',
     'fileName': 'original.mp3',
     'canRename': true,
+    'canEditTags': true,
+    'durationMs': 4000,
     'addedMs': 5000,
     'modifiedMs': 1000,
   };
@@ -156,7 +170,12 @@ void main() {
   late _Settings preferences;
   late List<String> calls;
   late List<Object?> sharedFiles;
+  late List<Object?> ringtoneFiles;
+  bool canSetRingtone = false;
+  String ringtoneResult = 'cancelled';
   bool canLaunchShare = true;
+  Completer<bool>? pendingShare;
+  late List<String> tagSeparatorWrites;
   Map<String, String>? consent;
   bool cancelled = false;
   bool revoked = false;
@@ -164,11 +183,20 @@ void main() {
   bool denied = false;
   bool automaticScan = false;
   Completer<List<Object?>>? pendingScan;
+  Object? scanResult;
   Completer<bool>? pendingAccess;
   int? scanId;
   bool? forceScan;
   String? renamedTo;
+  final originalTagRevision = List.filled(64, 'a').join();
+  final writtenLyricsRevision = List.filled(64, 'b').join();
+  late String tagRevision;
+  late List<Object?> tagWrites;
   FutureOr<Map<String, Object?>?> Function(MethodCall)? matchDownloadTracks;
+
+  Map<String, Object?>? movedFileRepairs;
+  List<Object?>? indexedFiles;
+  Object? Function(MethodCall)? confirmRepair;
 
   setUp(() async {
     database = await SembastSqfDb.createInMemory();
@@ -178,7 +206,12 @@ void main() {
     preferences = _Settings(database);
     calls = [];
     sharedFiles = [];
+    ringtoneFiles = [];
+    canSetRingtone = false;
+    ringtoneResult = 'cancelled';
     canLaunchShare = true;
+    pendingShare = null;
+    tagSeparatorWrites = [];
     consent = null;
     cancelled = false;
     revoked = false;
@@ -186,11 +219,17 @@ void main() {
     denied = false;
     automaticScan = false;
     pendingScan = null;
+    scanResult = null;
     pendingAccess = null;
     scanId = null;
     forceScan = null;
     renamedTo = null;
+    tagRevision = originalTagRevision;
+    tagWrites = [];
     matchDownloadTracks = null;
+    movedFileRepairs = null;
+    indexedFiles = null;
+    confirmRepair = null;
     messenger.setMockMethodCallHandler(channel, (call) async {
       calls.add(call.method);
       switch (call.method) {
@@ -201,6 +240,9 @@ void main() {
         case 'setAutomaticScan':
           automaticScan = call.arguments['enabled'] as bool;
           return null;
+        case 'setTagSeparators':
+          tagSeparatorWrites.add(call.arguments['separators'] as String);
+          return true;
         case 'pickFolder':
           if (pickerUnavailable) {
             throw PlatformException(code: 'PICKER_UNAVAILABLE');
@@ -211,12 +253,18 @@ void main() {
         case 'pickSystem':
           if (denied) throw PlatformException(code: 'AUDIO_PERMISSION_DENIED');
           return consent = systemSelection;
+        case 'listMovedFileRepairs':
+          return movedFileRepairs ?? {};
+        case 'confirmMovedFileRepair':
+          return confirmRepair?.call(call);
         case 'listTracks':
           expect(call.arguments['treeUri'], consent?['uri']);
           if (revoked) throw PlatformException(code: 'FOLDER_UNAVAILABLE');
           scanId = call.arguments['scanId'] as int?;
           forceScan = call.arguments['force'] as bool?;
           if (pendingScan != null) return pendingScan!.future;
+          if (indexedFiles != null) return indexedFiles;
+          if (scanResult != null) return scanResult;
           if (consent == systemSelection) {
             return [
               {'title': 'Indexed track', 'uri': '$system/1'}
@@ -232,6 +280,24 @@ void main() {
           expect(call.arguments['treeUri'], consent?['uri']);
           if (pendingAccess != null) return pendingAccess!.future;
           return !revoked;
+        case 'readTrackTags':
+          return {
+            'revision': tagRevision,
+            'values': {
+              'title': first['title'],
+              'artist': first['artist'],
+              'album': first['album'],
+              'albumArtist': null,
+            },
+          };
+        case 'editTrackTags':
+          final arguments = call.arguments as Map;
+          tagWrites.add(arguments);
+          if (arguments.containsKey('lyrics')) {
+            tagRevision = writtenLyricsRevision;
+            return first;
+          }
+          return {...first, 'title': (arguments['changes'] as Map)['title']};
         case 'renameTrack':
           expect(call.arguments['uri'], first['uri']);
           renamedTo = call.arguments['name'] as String;
@@ -244,6 +310,19 @@ void main() {
         case 'shareTrack':
           sharedFiles.add(call.arguments);
           return canLaunchShare;
+        case 'shareTracks':
+          sharedFiles.add(call.arguments);
+          final share = pendingShare;
+          return share == null ? canLaunchShare : await share.future;
+        case 'cancelShareTracks':
+          pendingShare?.complete(false);
+          pendingShare = null;
+          return null;
+        case 'canSetTrackRingtone':
+          return canSetRingtone;
+        case 'setTrackRingtone':
+          ringtoneFiles.add(call.arguments);
+          return ringtoneResult;
         case 'forgetFolder':
           consent = null;
           return null;
@@ -288,6 +367,35 @@ void main() {
                         downloads: downloads)))));
     if (settle) await tester.pumpAndSettle();
   }
+
+  test('launcher shuffle loads a cold catalog and drops revoked access',
+      () async {
+    consent = picked;
+    await library.loadForShuffle();
+    expect(
+        library.visibleTracks.map((track) => track.title), ['First', 'Second']);
+    expect(calls,
+        containsAllInOrder(['getFolder', 'checkFolderAccess', 'listTracks']));
+    calls.clear();
+
+    await library.loadForShuffle();
+    expect(calls, ['checkFolderAccess']);
+
+    revoked = true;
+    await library.loadForShuffle();
+    expect(library.unavailable, isTrue);
+    expect(library.visibleTracks, isEmpty);
+  });
+
+  test('launcher shuffle can settle with an authorized empty catalog',
+      () async {
+    consent = picked;
+    pendingScan = Completer<List<Object?>>()..complete([]);
+    await library.loadForShuffle();
+    expect(library.loaded, isTrue);
+    expect(library.unavailable, isFalse);
+    expect(library.visibleTracks, isEmpty);
+  });
 
   testWidgets('settings asks before reading music and cancel keeps it off',
       (tester) async {
@@ -614,6 +722,45 @@ void main() {
     expect(find.text('First'), findsNothing);
   });
 
+  testWidgets('Music locations saves opt-in tag separators', (tester) async {
+    consent = picked;
+    await show(tester, settings: true);
+    await tester.tap(find.widgetWithText(TextButton, 'Manage music locations'));
+    await tester.pumpAndSettle();
+
+    final separatorSetting = find.widgetWithText(ListTile, 'Tag separators');
+    Future<void> openSeparators() async {
+      await tester.tap(separatorSetting);
+      await tester.pumpAndSettle();
+    }
+
+    await openSeparators();
+    expect(find.textContaining(r'AC\/DC'), findsOneWidget);
+    final options = tester.widgetList<CheckboxListTile>(find.descendant(
+        of: find.byType(AlertDialog), matching: find.byType(CheckboxListTile)));
+    expect(options, hasLength(5));
+    expect(options.every((option) => option.value == false), isTrue);
+
+    final semicolon = find.widgetWithText(CheckboxListTile, 'Semicolon (;)');
+    final slash = find.widgetWithText(CheckboxListTile, 'Slash (/)');
+    await tester.tap(semicolon);
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    expect(tagSeparatorWrites, isEmpty);
+
+    await openSeparators();
+    expect(tester.widget<CheckboxListTile>(semicolon).value, isFalse);
+    await tester.tap(semicolon);
+    await tester.tap(slash);
+    await tester.tap(find.text('Save'));
+    await tester.pumpAndSettle();
+    expect(tagSeparatorWrites, [';/']);
+
+    await openSeparators();
+    expect(tester.widget<CheckboxListTile>(semicolon).value, isTrue);
+    expect(tester.widget<CheckboxListTile>(slash).value, isTrue);
+  });
+
   testWidgets('browsing and managing roots handles one lost grant',
       (tester) async {
     const demosTree = 'content://provider/tree/demos';
@@ -716,6 +863,151 @@ void main() {
     expect(find.text('My albums'), findsOneWidget);
     expect(find.text('First'), findsOneWidget);
     expect(find.text('Demo track'), findsNothing);
+  });
+
+  testWidgets(
+      'location management adds a provider folder from an empty library',
+      (tester) async {
+    const providerTree = 'content://provider/tree/music';
+    const provider = {
+      'uri': providerTree,
+      'name': 'Provider music',
+      'isDocumentProvider': true,
+    };
+    var selected = false;
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      switch (call.method) {
+        case 'getFolder':
+          return selected ? provider : null;
+        case 'pickProviderFolder':
+          expect(call.arguments['initialUri'], isNull);
+          selected = true;
+          return provider;
+        case 'checkFolderAccess':
+          return true;
+        case 'listTracks':
+          expect(call.arguments['treeUri'], providerTree);
+          return [
+            {'title': 'Provider song', 'uri': '$providerTree/document/one'},
+          ];
+        default:
+          throw MissingPluginException(call.method);
+      }
+    });
+
+    await show(tester, settings: false);
+    await tester.tap(find.text('Manage music locations'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Add folder from document provider'));
+    await tester.pumpAndSettle();
+    expect(selected, isTrue);
+    expect(find.text('Document provider'), findsOneWidget);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(find.text('Provider song'), findsOneWidget);
+    expect(find.byIcon(Icons.offline_pin_outlined), findsNothing);
+  });
+
+  testWidgets('scan report explains skipped files and rescans the same grant',
+      (tester) async {
+    consent = picked;
+    scanResult = {
+      'tracks': [],
+      'partial': true,
+      'skippedCount': 3,
+      'skippedFiles': [
+        {'name': 'Mixtape.m3u', 'reason': 'playlist'},
+        {'name': 'Incomplete.mp3', 'reason': 'missingDetails'},
+      ],
+    };
+    await show(tester, settings: false);
+    await tester.tap(find.text('Scan report'));
+    await tester.pumpAndSettle();
+
+    final report = find.byType(BottomSheet);
+    Finder inReport(String text) =>
+        find.descendant(of: report, matching: find.text(text));
+    expect(inReport('My albums'), findsOneWidget);
+    expect(inReport('3 skipped files'), findsOneWidget);
+    expect(inReport('Mixtape.m3u'), findsOneWidget);
+    expect(inReport('Playlist file'), findsOneWidget);
+    expect(inReport('Incomplete.mp3'), findsOneWidget);
+    expect(
+        inReport(
+            'Android returned incomplete file details. Rescan to try again.'),
+        findsOneWidget);
+    expect(
+        inReport('The scan covered only part of the library.'), findsOneWidget);
+    await tester.scrollUntilVisible(
+        inReport('1 more skipped file beyond the report limit'), 80,
+        scrollable:
+            find.descendant(of: report, matching: find.byType(Scrollable)));
+    final rescan = inReport('Rescan music locations');
+    await tester.ensureVisible(rescan);
+
+    calls.clear();
+    scanResult = {'tracks': [], 'skippedCount': 0, 'skippedFiles': []};
+    await tester.tap(rescan);
+    await tester.pumpAndSettle();
+    expect(calls, ['listTracks', 'listMovedFileRepairs']);
+    expect(inReport('No skipped files were reported.'), findsOneWidget);
+    expect(inReport('Mixtape.m3u'), findsNothing);
+    expect(
+        inReport('The scan covered only part of the library.'), findsNothing);
+  });
+
+  testWidgets('scan report offers existing reconnect action after access loss',
+      (tester) async {
+    consent = picked;
+    scanResult = {'tracks': [], 'skippedCount': 0, 'skippedFiles': []};
+    await show(tester, settings: false);
+    await tester.tap(find.text('Scan report'));
+    await tester.pumpAndSettle();
+
+    revoked = true;
+    await library.revalidate();
+    await tester.pumpAndSettle();
+    final manage = find.descendant(
+        of: find.byType(BottomSheet),
+        matching: find.text('Manage music locations'));
+    expect(find.text('Rescan music locations'), findsNothing);
+
+    await tester.tap(manage);
+    await tester.pumpAndSettle();
+    final reconnect = find
+        .descendant(
+            of: find.byType(BottomSheet),
+            matching: find.text('Reconnect to restore access'))
+        .hitTestable();
+    calls.clear();
+    await tester.tap(reconnect);
+    await tester.pumpAndSettle();
+    expect(calls, ['pickFolder', 'listTracks', 'listMovedFileRepairs']);
+    expect(library.unavailable, isFalse);
+  });
+
+  testWidgets('an open scan report clears during a profile transition',
+      (tester) async {
+    consent = picked;
+    scanResult = {
+      'tracks': [],
+      'skippedCount': 1,
+      'skippedFiles': [
+        {'name': 'Private file.mp3', 'reason': 'missingDetails'},
+      ],
+    };
+    final app = _App();
+    addTearDown(app.close);
+    await show(tester, settings: false, app: app);
+    await tester.tap(find.text('Scan report'));
+    await tester.pumpAndSettle();
+    expect(find.text('Private file.mp3'), findsOneWidget);
+
+    app.startProfileSwitch();
+    await tester.pumpAndSettle();
+    expect(find.text('Private file.mp3'), findsNothing);
+    expect(find.text('Rescan music locations'), findsNothing);
+    expect(find.text('No scan report is available.'), findsOneWidget);
   });
 
   testWidgets('early rows play the visible snapshot while indexing continues',
@@ -935,6 +1227,86 @@ void main() {
     expect(calls.where((call) => call == 'listTracks'), hasLength(1));
   });
 
+  testWidgets('device search updates when a credit alias is saved or reset',
+      (tester) async {
+    consent = picked;
+    await show(tester, settings: false);
+    final search = find.byType(TextField);
+    await tester.enterText(search, 'artist original.mp3');
+    await tester.pumpAndSettle();
+    expect(find.text('First'), findsOneWidget);
+
+    final aliases =
+        MusicLibraryService.forProfile(database, database.profileId);
+    const artist = MusicArtistIdentity.device('artist');
+    await tester.runAsync(() =>
+        aliases.setArtistAlias(artist, 'Stage Name', isCurrent: () => true));
+    await tester.pumpAndSettle();
+    expect(find.text('Stage Name • Album'), findsOneWidget);
+    await tester.enterText(search, 'stage name original.mp3');
+    await tester.pumpAndSettle();
+    expect(find.text('First'), findsOneWidget);
+
+    await tester.runAsync(
+        () => aliases.setArtistAlias(artist, null, isCurrent: () => true));
+    await tester.pumpAndSettle();
+    expect(find.text('No results found.'), findsOneWidget);
+    expect(library.tracks.first.artist, 'Artist');
+  });
+
+  testWidgets(
+      'device song actions edit memberships by the persisted file identity',
+      (tester) async {
+    consent = {...picked, 'selectionId': 'folder-memberships-test'};
+    final firstFile = {...first, 'title': 'Reprise', 'visibilityKey': 'a' * 64};
+    final otherFile = {
+      ...second,
+      'title': 'Reprise',
+      'visibilityKey': 'b' * 64
+    };
+    pendingScan = Completer<List<Object?>>()..complete([firstFile, otherFile]);
+    final source = Uri.parse(tree);
+    final track = LocalMusicTrack.fromDocument(firstFile, source)!;
+    final other = LocalMusicTrack.fromDocument(otherFile, source)!;
+    final song = devicePlaylistVideo(track)!;
+    final otherSong = devicePlaylistVideo(other)!;
+    final id = (await tester.runAsync(() => globals.service
+        .createLocalPlaylistWithEntries('Road trip', [otherSong])))!;
+    final app = _App();
+    addTearDown(app.close);
+    await show(tester, settings: false, app: app);
+
+    final row = find.byKey(ValueKey(track.playbackId));
+    await tester.tap(find.descendant(
+        of: row, matching: find.byTooltip('Actions for Reprise')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Manage song playlists'));
+    await tester.pumpAndSettle();
+    final destination = find.byKey(ValueKey(('music-playlist-membership', id)));
+    expect(tester.widget<CheckboxListTile>(destination).value, isFalse);
+    expect(find.text('1 song · No copies of this song'), findsOneWidget);
+
+    await tester.tap(destination);
+    await tester.pumpAndSettle();
+    await tester.runAsync(() async {
+      await tester.tap(find.text('Apply changes'));
+      await Future.doWhile(() async {
+        await Future<void>.delayed(const Duration(milliseconds: 1));
+        await tester.pump();
+        return find.text('Updated 1 playlist.').evaluate().isEmpty;
+      }).timeout(const Duration(seconds: 5));
+    });
+    await tester.pumpAndSettle();
+    final saved = globals.service
+        .getLocalPlaylists()
+        .singleWhere((playlist) => playlist.playlistId == id);
+    expect(saved.videos.map((video) => video.videoId), [
+      otherSong.videoId,
+      song.videoId,
+    ]);
+    expect(saved.videos.last.toJson().toString(), isNot(contains(tree)));
+  });
+
   testWidgets(
       'hiding one same-title device file updates Find, filters and new playback',
       (tester) async {
@@ -1070,6 +1442,8 @@ void main() {
     final downloads = OnDeviceMusicDownloads();
     final manager = _Downloads(
         DownloadManagerState(videos: [shared, private, pending, foreign]));
+    final app = _App();
+    addTearDown(app.close);
     final documents = await tester.runAsync(
       () => Directory.systemTemp.createTemp('videre-local-music-widget-'),
     );
@@ -1128,7 +1502,7 @@ void main() {
       }
 
       await show(tester,
-          settings: false, manager: manager, downloads: downloads);
+          settings: false, app: app, manager: manager, downloads: downloads);
       final privateRow = downloadRow(private);
       await waitFor(privateRow, findsOneWidget);
       expect(find.text('Choose music folder'), findsOneWidget);
@@ -1144,6 +1518,19 @@ void main() {
           isTrue);
       expect(calls, isNot(contains('pickFolder')));
       expect(calls, isNot(contains('pickSystem')));
+
+      await tester.tap(find.descendant(
+          of: privateRow,
+          matching: find.byTooltip('Actions for Private song')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Manage song playlists'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(CheckboxListTile, 'Watch Later'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Apply changes'));
+      await waitFor(find.text('Updated 1 playlist.'), findsOneWidget);
+      expect(globals.service.getLocalPlaylists().single.videos.single.videoId,
+          private.videoId);
 
       final alias = {
         'uri': aliasUri,
@@ -1179,6 +1566,41 @@ void main() {
       expect(player.mixedQueue[player.index!].downloadFileProof, privateProof);
       expect(player.mixedQueue.map((entry) => entry.deviceTrack?.playbackId),
           unorderedEquals([null, aliasId, copyId]));
+
+      final select = find.text('Select songs');
+      await tester.ensureVisible(select);
+      await tester.tap(select);
+      await tester.pumpAndSettle();
+      for (final row in [privateRow, aliasRow]) {
+        await tester.ensureVisible(row);
+        await tester.tap(row);
+        await tester.pumpAndSettle();
+      }
+      await tester.tap(find.byTooltip('Share selected audio'));
+      await waitFor(
+          find.byWidgetPredicate((widget) =>
+              widget is IconButton &&
+              widget.tooltip == 'Share selected audio' &&
+              widget.onPressed != null),
+          findsOneWidget);
+      expect(find.text('2 selected'), findsOneWidget);
+      expect((sharedFiles.single as Map)['tracks'], [
+        containsPair(
+          'download',
+          allOf(
+            containsPair('videoId', private.videoId),
+            containsPair('profileId', database.profileId),
+            containsPair('expectedIdentity', privateProof),
+          ),
+        ),
+        allOf(
+          containsPair('uri', aliasUri),
+          containsPair('treeUri', system),
+          containsPair('selectionId', systemSelection['selectionId']),
+        ),
+      ]);
+      await tester.tap(find.byTooltip('Close'));
+      await tester.pumpAndSettle();
 
       final action = find.descendant(
           of: aliasRow, matching: find.byTooltip('Actions for Reprise'));
@@ -1458,6 +1880,76 @@ void main() {
     expect(find.text('Second'), findsNothing);
   });
 
+  testWidgets('explicit filter keeps search, album counts and Play all aligned',
+      (tester) async {
+    consent = picked;
+    final albumKey = 'a' * 64;
+    final app = _App();
+    addTearDown(app.close);
+    Map<String, Object> song(int number, String edition, {int? advisory}) => {
+          'uri': '$tree/document/edit-$number.m4a',
+          'fileName': 'edit-$number.m4a',
+          'title': 'Same chorus ($edition)',
+          'artist': 'Artist',
+          'album': 'Album',
+          'albumKey': albumKey,
+          'trackNumber': number,
+          if (advisory != null) 'contentAdvisory': advisory,
+        };
+    pendingScan = Completer<List<Object?>>()
+      ..complete([
+        song(1, 'Edit A', advisory: 1),
+        song(2, 'Edit B', advisory: 2),
+        song(3, 'Explicit Mix'),
+      ]);
+    await show(tester, settings: false, app: app);
+    final search = find.byType(TextField);
+    await tester.enterText(search, 'same chorus');
+    await tester.pumpAndSettle();
+    final explicit = find.text('Same chorus (Edit A)');
+    final clean = find.text('Same chorus (Edit B)');
+    final untagged = find.text('Same chorus (Explicit Mix)');
+    expect(explicit, findsOneWidget);
+    expect(clean, findsOneWidget);
+    expect(untagged, findsOneWidget);
+
+    final exclusions = find.text('Library exclusions');
+    await tester.ensureVisible(exclusions);
+    await tester.tap(exclusions);
+    await tester.pumpAndSettle();
+    final toggle =
+        find.widgetWithText(SwitchListTile, 'Hide tracks marked explicit');
+    await tester.ensureVisible(toggle);
+    expect(tester.widget<SwitchListTile>(toggle).value, isFalse);
+    await tester.tap(toggle);
+    await tester.pumpAndSettle();
+    expect(tester.widget<SwitchListTile>(toggle).value, isTrue);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+
+    expect(tester.widget<TextField>(search).controller!.text, 'same chorus');
+    expect(explicit, findsNothing);
+    expect(clean, findsOneWidget);
+    expect(untagged, findsOneWidget);
+    final albums = find.text('Albums');
+    await tester.ensureVisible(albums);
+    await tester.tap(albums);
+    await tester.pumpAndSettle();
+    final album = find.byKey(ValueKey(albumKey));
+    expect(find.descendant(of: album, matching: find.text('2 songs')),
+        findsOneWidget);
+    await tester.tap(album);
+    await tester.pumpAndSettle();
+    expect(explicit, findsNothing);
+    expect(clean, findsOneWidget);
+    expect(untagged, findsOneWidget);
+    await tester.tap(find.text('Play all'));
+    await tester.pumpAndSettle();
+    expect(player.queue.map((track) => track.uri),
+        ['$tree/document/edit-2.m4a', '$tree/document/edit-3.m4a']);
+    expect(player.index, 0);
+  });
+
   testWidgets('catalog refresh drops vanished tags and retains the search',
       (tester) async {
     consent = picked;
@@ -1538,20 +2030,238 @@ void main() {
       },
     ]);
     // Bringing the chooser forward also revalidates the authorized root.
-    expect(calls, ['shareTrack', 'checkFolderAccess']);
+    expect(calls.where((call) => call != 'canSetTrackRingtone'),
+        ['shareTrack', 'checkFolderAccess']);
     expect(library.enabled, isTrue);
     expect(library.tracks.length, 2);
 
     canLaunchShare = false;
     await shareFirst();
     expect(find.text('Could not share this audio file.'), findsOneWidget);
-    expect(calls, [
+    expect(calls.where((call) => call != 'canSetTrackRingtone'), [
       'shareTrack',
       'checkFolderAccess',
       'shareTrack',
       'checkFolderAccess',
     ]);
   }, variant: TargetPlatformVariant.only(TargetPlatform.android));
+
+  testWidgets(
+      'device row offers ringtone only for readable audio and reports the result',
+      (tester) async {
+    consent = {...picked, 'selectionId': 'ringtone-selection'};
+    await show(tester, settings: false);
+
+    Future<void> openSongMenu() async {
+      await tester.tap(find.byTooltip('Actions for First'));
+      await tester.pumpAndSettle();
+    }
+
+    await openSongMenu();
+    expect(find.text('Set as ringtone'), findsNothing);
+    expect(ringtoneFiles, isEmpty);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+
+    canSetRingtone = true;
+    for (final (outcome, message) in [
+      ('set', 'Phone ringtone updated.'),
+      ('cancelled', 'Ringtone change cancelled.'),
+      (
+        'unavailable',
+        'Android ringtone settings are unavailable on this device.'
+      ),
+    ]) {
+      ringtoneResult = outcome;
+      await openSongMenu();
+      await tester.tap(find.text('Set as ringtone'));
+      await tester.pumpAndSettle();
+      expect(find.text(message), findsOneWidget);
+    }
+    final firstTrack =
+        library.tracks.singleWhere((track) => track.title == 'First');
+    expect(
+        ringtoneFiles,
+        List.filled(3, {
+          'treeUri': tree,
+          'selectionId': 'ringtone-selection',
+          'uri': first['uri'],
+          'trackId': firstTrack.playbackId,
+          'title': 'First',
+        }));
+  }, variant: TargetPlatformVariant.only(TargetPlatform.android));
+
+  testWidgets(
+    'device selection shares only checked files and can be closed',
+    (tester) async {
+      consent = {...picked, 'selectionId': 'music-share-selection'};
+      pendingScan = Completer<List<Object?>>()
+        ..complete([
+          first,
+          second,
+          {'title': 'Third', 'uri': '$tree/document/Third'},
+        ]);
+      await show(tester, settings: false);
+      calls.clear();
+
+      final start = find.text('Select songs');
+      Finder action(String label) => find.byWidgetPredicate(
+          (widget) => widget is IconButton && widget.tooltip == label);
+      final share = action('Share selected audio');
+      await tester.ensureVisible(start);
+      await tester.tap(start);
+      await tester.pumpAndSettle();
+      expect(
+        tester.widget<IconButton>(action('Close')).focusNode!.hasFocus,
+        isTrue,
+      );
+
+      await tester.ensureVisible(find.text('First'));
+      await tester.tap(find.text('First'));
+      await tester.pumpAndSettle();
+      expect(tester.widget<IconButton>(share).onPressed, isNull);
+
+      await tester.ensureVisible(find.text('Second'));
+      await tester.tap(find.text('Second'));
+      await tester.pumpAndSettle();
+      expect(find.text('2 selected'), findsOneWidget);
+      await tester.tap(share);
+      await tester.pumpAndSettle();
+
+      expect(calls, ['shareTracks']);
+      final request = sharedFiles.single as Map;
+      expect(request['requestId'], isNotNull);
+      expect(request['tracks'], [
+        for (final item in [first, second]) containsPair('uri', item['uri']),
+      ]);
+      for (final track in request['tracks'] as List) {
+        expect(track, containsPair('treeUri', tree));
+        expect(track, containsPair('selectionId', 'music-share-selection'));
+      }
+      expect(find.text('2 selected'), findsOneWidget);
+      expect(player.queue, isEmpty);
+
+      canLaunchShare = false;
+      await tester.tap(share);
+      await tester.pumpAndSettle();
+      expect(
+        find.text(
+          'Could not share the selected audio files. Make sure each file is available.',
+        ),
+        findsOneWidget,
+      );
+      expect(find.text('2 selected'), findsOneWidget);
+
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(find.byType(CheckboxListTile), findsNothing);
+      expect(calls, ['shareTracks', 'shareTracks']);
+    },
+    variant: TargetPlatformVariant.only(TargetPlatform.android),
+  );
+
+  testWidgets(
+    'closing device selection cancels the pending share request',
+    (tester) async {
+      consent = {...picked, 'selectionId': 'music-share-selection'};
+      pendingShare = Completer<bool>();
+      await show(tester, settings: false);
+      calls.clear();
+
+      await tester.tap(find.text('Select songs'));
+      await tester.pumpAndSettle();
+      for (final title in ['First', 'Second']) {
+        final row = find.text(title);
+        await tester.ensureVisible(row);
+        await tester.tap(row);
+        await tester.pumpAndSettle();
+      }
+      await tester.tap(find.byTooltip('Share selected audio'));
+      await tester.pumpAndSettle();
+      expect(calls, ['shareTracks']);
+
+      await tester.tap(find.byTooltip('Close'));
+      await tester.pumpAndSettle();
+      expect(calls, ['shareTracks', 'cancelShareTracks']);
+      expect(find.byType(CheckboxListTile), findsNothing);
+      expect(find.byType(SnackBar), findsNothing);
+      expect(player.queue, isEmpty);
+    },
+    variant: TargetPlatformVariant.only(TargetPlatform.android),
+  );
+
+  testWidgets('embeds previewed lyrics while retaining pending tag edits',
+      (tester) async {
+    final locals = AppLocalizationsEn();
+    const plain = 'First line\nSecond line';
+    consent = {...picked, 'selectionId': 'music-source'};
+    await show(tester, settings: false);
+    final draft = LocalMusicLyricsAuthoring.forTrack(
+      database: database,
+      track: library.tracks.firstWhere((track) => track.uri == first['uri']),
+      isCurrent: () => true,
+    )!;
+    expect(
+        await tester
+            .runAsync(() => draft.savePlain(plain, previousDraft: null)),
+        isTrue);
+
+    await tester.tap(find.byTooltip('Actions for First'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text(locals.localMusicEditTags));
+    await tester.pumpAndSettle();
+    final title = find.widgetWithText(TextField, locals.musicLibraryTitleOrder);
+    await tester.enterText(title, 'Pending title');
+
+    final action = find.text(locals.localMusicEmbedPlainLyrics);
+    await tester.ensureVisible(action);
+    await tester.tap(action);
+    await tester.pumpAndSettle();
+
+    final language =
+        find.widgetWithText(TextField, locals.localMusicEmbedLyricsLanguage);
+    final descriptor =
+        find.widgetWithText(TextField, locals.localMusicEmbedLyricsDescription);
+    expect(tester.widget<TextField>(language).controller!.text, 'und');
+    expect(tester.widget<TextField>(descriptor).controller!.text, isEmpty);
+    expect(find.text(plain, findRichText: true), findsOneWidget);
+    expect(tagWrites, isEmpty);
+
+    await tester.enterText(language, 'fra');
+    await tester.enterText(descriptor, 'Translation');
+    await tester.tap(find.text(locals.localMusicEmbedLyricsConfirm));
+    await tester.pumpAndSettle();
+
+    expect(tagWrites, [
+      {
+        'treeUri': tree,
+        'selectionId': 'music-source',
+        'uri': first['uri'],
+        'revision': originalTagRevision,
+        'changes': <String, String?>{},
+        'lyrics': {
+          'language': 'fra',
+          'descriptor': 'Translation',
+          'text': plain
+        },
+      },
+    ]);
+    expect(find.text(locals.localMusicEmbedLyricsSaved), findsOneWidget);
+    expect(draft.readPlainDraft(), plain);
+    expect(tester.widget<TextField>(title).controller!.text, 'Pending title');
+
+    await tester.tap(find.widgetWithText(FilledButton, locals.save));
+    await tester.pumpAndSettle();
+
+    expect(tagWrites, hasLength(2));
+    expect(tagWrites.last, {
+      'treeUri': tree,
+      'selectionId': 'music-source',
+      'uri': first['uri'],
+      'revision': writtenLyricsRevision,
+      'changes': {'title': 'Pending title'},
+    });
+  });
 
   testWidgets('rename uses the actual filename and retains its suffix',
       (tester) async {
@@ -1668,4 +2378,109 @@ void main() {
     expect(player.enqueued, [('First', true)]);
     expect(find.text('Play next'), findsNothing);
   });
+  testWidgets(
+    'moved file review distinguishes names and requires confirmation',
+    (tester) async {
+      const oldKey =
+          'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+      const unmatchedKey =
+          'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+      const firstKey =
+          'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc';
+      const secondKey =
+          'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd';
+      const unmatched = {
+        'id': 'device:$unmatchedKey',
+        'title': 'Unmatched track',
+        'candidates': [],
+      };
+      consent = picked;
+      indexedFiles = [
+        {
+          ...first,
+          'identityKey': firstKey,
+          'title': 'Candidate',
+          'fileName': 'same.mp3',
+          'folderLocations': [
+            {'key': firstKey, 'label': 'Copy A'},
+          ],
+        },
+        {
+          ...second,
+          'identityKey': secondKey,
+          'title': 'Candidate',
+          'fileName': 'same.mp3',
+          'folderLocations': [
+            {'key': secondKey, 'label': 'Copy B'},
+          ],
+        },
+      ];
+      movedFileRepairs = {
+        'missing': [
+          {
+            'id': 'device:$oldKey',
+            'title': 'Previously indexed track',
+            'fileName': 'same.mp3',
+            'folder': 'Former folder',
+            'candidates': [
+              {'id': 'device:$firstKey', 'reason': 'revision'},
+              {'id': 'device:$secondKey', 'reason': 'revision'},
+            ],
+          },
+          unmatched,
+        ],
+      };
+      confirmRepair = (call) {
+        expect(call.arguments, {
+          'treeUri': tree,
+          'selectionId': null,
+          'missingId': 'device:$oldKey',
+          'candidateId': 'device:$secondKey',
+        });
+        return {
+          'missing': [unmatched],
+          'aliases': {'device:$oldKey': 'device:$secondKey'},
+        };
+      };
+      await show(tester, settings: false);
+      await tester.tap(find.text('Repair moved files'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Unmatched track'));
+      await tester.pumpAndSettle();
+      expect(
+        find.text('No matching files were found in this library.'),
+        findsOneWidget,
+      );
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Previously indexed track'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('Former folder'), findsOneWidget);
+      expect(find.textContaining('Copy A'), findsOneWidget);
+      final copyB = find.textContaining('Copy B');
+      expect(copyB, findsOneWidget);
+      await tester.tap(copyB);
+      await tester.pumpAndSettle();
+      expect(calls, isNot(contains('confirmMovedFileRepair')));
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+      expect(library.trackById('device:$oldKey'), isNull);
+
+      await tester.tap(copyB);
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, 'Relink file'));
+      await tester.pumpAndSettle();
+      expect(
+        calls.where((call) => call == 'confirmMovedFileRepair'),
+        hasLength(1),
+      );
+      expect(
+        library.trackById('device:$oldKey')?.playbackId,
+        'device:$secondKey',
+      );
+      expect(find.text('Unmatched track'), findsOneWidget);
+    },
+  );
 }

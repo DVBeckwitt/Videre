@@ -18,14 +18,13 @@ import 'package:clipious/player/views/components/player_modal_back_handler.dart'
 import 'package:clipious/settings/models/theme_palette.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils.dart' show DeviceType, getDeviceType;
-import 'package:clipious/videos/models/ided_video.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/semantics.dart' show CustomSemanticsAction;
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import 'music_library_actions.dart';
-import 'music_player.dart' show MusicPlaybackTitles;
+import 'music_player.dart' show MusicPlaybackLabels, MusicPlaybackTitles;
 import 'music_playback_artwork.dart';
 import 'music_playback_toggles.dart';
 import 'music_playing_source.dart';
@@ -36,11 +35,24 @@ class MusicMiniPlayer extends StatelessWidget {
   const MusicMiniPlayer({super.key});
 
   @override
-  Widget build(BuildContext context) =>
-      MusicPlaybackTitles(builder: _buildMiniPlayer);
+  Widget build(BuildContext context) {
+    final showLyrics = !isTv &&
+        context
+            .select((SettingsCubit cubit) => cubit.state.musicMiniPlayerLyrics);
+    Widget content(String? lyric) => MusicPlaybackTitles(
+          builder: (context, labels) =>
+              _buildMiniPlayer(context, labels, lyric),
+        );
+    if (!showLyrics) return content(null);
+    return ValueListenableBuilder<String?>(
+      valueListenable:
+          context.select((PlayerCubit player) => player.currentMusicLyric),
+      builder: (context, lyric, _) => content(lyric),
+    );
+  }
 
   Widget _buildMiniPlayer(
-      BuildContext context, String? Function(IdedVideo?) savedTitle) {
+      BuildContext context, MusicPlaybackLabels labels, String? lyric) {
     final player = context.read<PlayerCubit>();
     final state = context.watch<PlayerCubit>().state;
     final pending = player.openingMusicEntry;
@@ -50,7 +62,7 @@ class MusicMiniPlayer extends StatelessWidget {
     final offline = entry is DownloadedVideo ? entry : null;
     final music = video?.musicMetadata ?? offline?.musicMetadata;
     if (music == null) return const SizedBox.shrink();
-    final displayTitle = savedTitle(entry) ?? music.title;
+    final displayTitle = labels.savedTitle(entry) ?? music.title;
     final locals = AppLocalizations.of(context)!;
     final palette =
         context.select((SettingsCubit cubit) => cubit.state.themePalette);
@@ -84,8 +96,8 @@ class MusicMiniPlayer extends StatelessWidget {
     final bookmark = video != null && !onDevice && (compact || customControls)
         ? MusicLibraryEntry.song(video)
         : null;
-    final artist =
-        onDevice && music.artist.isEmpty ? locals.onDevice : music.artist;
+    final byline = labels.artistByline(entry, music.artist);
+    final artist = onDevice && byline.isEmpty ? locals.onDevice : byline;
     final recovery = onDevice || pending != null ? null : state.backendRecovery;
     final failed = pending == null &&
         (player.playbackStatus == MediaState.error ||
@@ -120,6 +132,8 @@ class MusicMiniPlayer extends StatelessWidget {
         duration > 0 &&
         player.playbackStatus == MediaState.completed;
     final largeText = MediaQuery.textScalerOf(context).scale(14) > 22;
+    final visibleLyric = pending == null && !largeText ? lyric : null;
+    final subtitle = statusLabel ?? visibleLyric ?? artist;
     const errorIcon = Icon(Icons.error_outline,
         key: ValueKey('music-mini-error'), size: 20, color: error);
     final title = Text(displayTitle,
@@ -180,8 +194,13 @@ class MusicMiniPlayer extends StatelessWidget {
                     Expanded(
                       child: Semantics(
                         button: true,
-                        label:
-                            '${locals.musicNowPlaying}, $displayTitle, $artist${statusLabel == null ? '' : ', $statusLabel'}',
+                        label: [
+                          locals.musicNowPlaying,
+                          displayTitle,
+                          if (artist.isNotEmpty) artist,
+                          if ((statusLabel ?? visibleLyric) case final line?)
+                            line,
+                        ].join(', '),
                         onTap: player.showBigPlayer,
                         onLongPress: openAlbum,
                         customSemanticsActions: openAlbum == null
@@ -250,9 +269,8 @@ class MusicMiniPlayer extends StatelessWidget {
                                             else
                                               title,
                                             if (!largeText &&
-                                                (statusLabel != null ||
-                                                    artist.isNotEmpty))
-                                              Text(statusLabel ?? artist,
+                                                subtitle.isNotEmpty)
+                                              Text(subtitle,
                                                   maxLines: 1,
                                                   overflow:
                                                       TextOverflow.ellipsis,
@@ -517,7 +535,7 @@ class _CompactQueueMenuState extends State<_CompactQueueMenu> {
                           }
                         },
                   leadingIcon:
-                      Icon(saved ? Icons.favorite : Icons.favorite_border),
+                      Icon(saved ? Icons.bookmark : Icons.bookmark_border),
                   child: Text(
                       saved ? locals.musicRemoveSong : locals.musicSaveSong),
                 );

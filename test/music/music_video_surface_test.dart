@@ -22,6 +22,7 @@ import 'package:flutter_test/flutter_test.dart';
 const _server = Server(url: 'https://instance.example');
 const _song = Video(videoId: 'song', lengthSeconds: 90);
 const _nextSong = Video(videoId: 'next');
+const _localUri = 'content://documents/document/clip.mp4';
 
 class _Database extends Fake implements IDbClient {
   Server selected = _server;
@@ -132,12 +133,20 @@ void main() {
     messenger.setMockMethodCallHandler(events, null);
   });
 
-  Future<void> mount(WidgetTester tester, {Video? video}) async {
+  Future<void> mount(WidgetTester tester,
+      {Video? video, Duration? offset, String uri = _localUri}) async {
+    void unavailable() {
+      failures++;
+    }
+
     await tester.pumpWidget(BlocProvider<PlayerCubit>.value(
         value: player,
         child: MaterialApp(
-            home: MusicVideoSurface(
-                video: video ?? _video(), onUnavailable: () => failures++))));
+            home: offset == null
+                ? MusicVideoSurface(
+                    video: video ?? _video(), onUnavailable: unavailable)
+                : MusicVideoSurface.local(
+                    uri: uri, offset: offset, onUnavailable: unavailable))));
     await tester.pump();
   }
 
@@ -277,6 +286,105 @@ void main() {
     expect(player.state.currentQueueId, _song.videoId);
     expect(player.state.playQueue, [_nextSong.videoId]);
     expect(failures, 0);
+  });
+
+  testWidgets('local video opens muted at the adjusted song time',
+      (tester) async {
+    (db as _Database).selected = const Server(url: 'https://other.example');
+    await mount(tester, offset: const Duration(milliseconds: 3500));
+    final source = calls
+        .singleWhere((call) => call.method == 'setDataSource')
+        .arguments['dataSource'] as Map;
+    expect(source['uri'], _localUri);
+    expect(source['formatHint'], 'other');
+    expect(source['videoOnly'], isTrue);
+    expect(source['showNotification'], isNot(true));
+    expect(position, 15500);
+    await initialize(tester);
+    expect(calls.map((call) => call.method), contains('play'));
+
+    calls.clear();
+    for (var second = 13; second <= 16; second++) {
+      await tester.pump(const Duration(seconds: 1));
+      position = second * 1000 + 3500;
+      player.update(player.state.copyWith(position: Duration(seconds: second)));
+      await tester.pump();
+    }
+    expect(calls.map((call) => call.method), isNot(contains('seekTo')));
+    expect(calls.map((call) => call.method), isNot(contains('setSpeed')));
+
+    calls.clear();
+    const nearEnd = Duration(seconds: 88);
+    player.update(player.state.copyWith(
+        position: nearEnd,
+        mediaCommand:
+            const MediaCommand(MediaCommandType.seek, value: nearEnd)));
+    await tester.pump();
+    expect(position, 90000);
+    expect(calls.map((call) => call.method), contains('pause'));
+
+    calls.clear();
+    const earlier = Duration(seconds: 20);
+    player.update(player.state.copyWith(
+        position: earlier,
+        mediaCommand:
+            const MediaCommand(MediaCommandType.seek, value: earlier)));
+    await tester.pump();
+    expect(position, 23500);
+    expect(calls.map((call) => call.method), contains('play'));
+    expect(failures, 0);
+    await tester.pumpWidget(const SizedBox());
+    await flushNativeShutdown(tester);
+  });
+
+  testWidgets('negative local offset holds the first frame until its start',
+      (tester) async {
+    await mount(tester, offset: const Duration(seconds: -14));
+    expect(position, 0);
+    await initialize(tester);
+    expect(calls.map((call) => call.method), isNot(contains('play')));
+
+    await tester.pump(const Duration(seconds: 2));
+    expect(calls.map((call) => call.method), contains('play'));
+    expect(player.state.position, const Duration(seconds: 12));
+
+    calls.clear();
+    const earlier = Duration(seconds: 5);
+    player.update(player.state.copyWith(
+        position: earlier,
+        mediaCommand:
+            const MediaCommand(MediaCommandType.seek, value: earlier)));
+    await tester.pump();
+    expect(position, 0);
+    expect(calls.map((call) => call.method), contains('pause'));
+    expect(player.state.isPlaying, isTrue);
+    expect(failures, 0);
+    await tester.pumpWidget(const SizedBox());
+    await flushNativeShutdown(tester);
+  });
+
+  testWidgets('local video rejects a non-content URI', (tester) async {
+    await mount(tester,
+        offset: Duration.zero, uri: 'https://example.com/clip.mp4');
+    expect(calls.map((call) => call.method), isNot(contains('create')));
+    expect(failures, 1);
+    expect(player.state.isPlaying, isTrue);
+  });
+
+  testWidgets('an unreadable local video releases only its own decoder',
+      (tester) async {
+    await mount(tester, offset: Duration.zero);
+    await messenger.handlePlatformMessage(
+        events.name,
+        const StandardMethodCodec().encodeErrorEnvelope(
+            code: 'VideoError', message: 'Document unavailable'),
+        (_) {});
+    await tester.pump();
+    await flushNativeShutdown(tester);
+    expect(calls.where((call) => call.method == 'dispose'), hasLength(1));
+    expect(calls.map((call) => call.method), isNot(contains('play')));
+    expect(failures, 1);
+    expect(player.state.isPlaying, isTrue);
   });
 
   testWidgets('removing a pending video releases it and ignores late readiness',

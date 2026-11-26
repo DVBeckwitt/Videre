@@ -52,6 +52,9 @@ _Video _$VideoFromJson(Map<String, dynamic> json) => _Video(
       storyboards: json['storyboards'] == null
           ? const []
           : Storyboard.parseList(json['storyboards']),
+      chapters: json['chapters'] == null
+          ? const []
+          : VideoChapter.parseList(json['chapters']),
       recommendedVideos: (json['recommendedVideos'] as List<dynamic>?)
               ?.map((e) => Video.fromJson(e as Map<String, dynamic>))
               .toList() ??
@@ -104,6 +107,7 @@ Map<String, dynamic> _$VideoToJson(_Video instance) => <String, dynamic>{
       'formatStreams': instance.formatStreams,
       'captions': instance.captions,
       'storyboards': instance.storyboards,
+      'chapters': VideoChapter.writeList(instance.chapters),
       'recommendedVideos': instance.recommendedVideos,
       'title': instance.title,
       'lengthSeconds': instance.lengthSeconds,

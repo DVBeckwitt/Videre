@@ -1,10 +1,14 @@
+import '../../content_filter/community_models.dart' show normalizeChannelId;
 import '../../playlists/models/playlist_reference.dart';
 import '../../videos/models/music_metadata.dart';
+import 'local_date_interval.dart';
 import 'music_listening_event.dart';
 
 enum MusicListeningPeriod {
   last7Days(Duration(days: 7)),
   last30Days(Duration(days: 30)),
+  last90Days(Duration(days: 90)),
+  last180Days(Duration(days: 180)),
   last365Days(Duration(days: 365)),
   allTime(null);
 
@@ -15,7 +19,40 @@ enum MusicListeningPeriod {
 
 enum MusicListeningRankBy { song, artist, album, playlist }
 
-typedef MusicListeningRank = ({String? title, String? subtitle, int plays});
+typedef MusicListeningRank = ({
+  String? title,
+  String? subtitle,
+  int plays,
+  MusicListeningTarget? target,
+});
+
+sealed class MusicListeningTarget {
+  const MusicListeningTarget();
+}
+
+class ListeningRecording extends MusicListeningTarget {
+  const ListeningRecording(this.event);
+
+  final MusicListeningEvent event;
+}
+
+class ListeningArtist extends MusicListeningTarget {
+  const ListeningArtist(this.channelId);
+
+  final String channelId;
+}
+
+class ListeningAlbum extends MusicListeningTarget {
+  const ListeningAlbum(this.playlistId);
+
+  final String playlistId;
+}
+
+class ListeningPlaylist extends MusicListeningTarget {
+  const ListeningPlaylist(this.reference);
+
+  final PlaylistReference reference;
+}
 
 class MusicListeningRankings {
   MusicListeningRankings._(this.plays, this._ranks);
@@ -31,6 +68,18 @@ class MusicListeningRankings {
       {required DateTime now}) {
     final start =
         period.duration == null ? null : now.subtract(period.duration!);
+    return MusicListeningRankings._tally(
+        events, now, (at) => start == null || !at.isBefore(start));
+  }
+
+  factory MusicListeningRankings.fromDateInterval(
+      Iterable<MusicListeningEvent> events, LocalDateInterval interval,
+      {required DateTime now}) {
+    return MusicListeningRankings._tally(events, now, interval.contains);
+  }
+
+  factory MusicListeningRankings._tally(Iterable<MusicListeningEvent> events,
+      DateTime now, bool Function(DateTime) includes) {
     final songs = <Object, _ListeningTally>{};
     final artists = <Object, _ListeningTally>{};
     final albums = <Object, _ListeningTally>{};
@@ -39,7 +88,7 @@ class MusicListeningRankings {
     for (final event in events) {
       if (event.isLegacy ||
           event.playedAt.isAfter(now) ||
-          (start != null && event.playedAt.isBefore(start))) {
+          !includes(event.playedAt)) {
         continue;
       }
       final entry = event.entry;
@@ -55,7 +104,11 @@ class MusicListeningRankings {
       plays++;
 
       (songs[event.trackId] ??= _ListeningTally()).add(
-          event.playedAt, _label(music?.title) ?? _label(entry.title), artist);
+        event.playedAt,
+        _label(music?.title) ?? _label(entry.title),
+        artist,
+        ListeningRecording(event),
+      );
 
       final credited = <Object>{};
       for (final credit in music?.artistCredits ?? const []) {
@@ -63,27 +116,32 @@ class MusicListeningRankings {
         if (name == null) continue;
         final key = credit.id == null ? (name.toLowerCase(),) : credit.id!;
         if (credited.add(key)) {
-          (artists[key] ??= _ListeningTally()).add(event.playedAt, name);
+          final id = normalizeChannelId(credit.id);
+          (artists[key] ??= _ListeningTally()).add(event.playedAt, name, null,
+              id == null ? null : ListeningArtist(id));
         }
       }
       if (credited.isEmpty && artist != null) {
         final key = artist == _label(entry.author) && entry.authorId != null
             ? entry.authorId!
             : (artist.toLowerCase(),);
-        (artists[key] ??= _ListeningTally()).add(event.playedAt, artist);
+        final id = key is String ? normalizeChannelId(key) : null;
+        (artists[key] ??= _ListeningTally()).add(event.playedAt, artist, null,
+            id == null ? null : ListeningArtist(id));
       }
 
       if (album != null || albumId != null) {
         // Title-only releases are scoped by the credited artist so unrelated
         // records with the same title do not share a total.
         final key = albumId ?? (album!.toLowerCase(), artist?.toLowerCase());
-        (albums[key] ??= _ListeningTally()).add(event.playedAt, album, artist);
+        (albums[key] ??= _ListeningTally()).add(event.playedAt, album, artist,
+            albumId == null ? null : ListeningAlbum(albumId));
       }
 
       // Catalog releases use a public playlist for playback, too.
       if (playlist != null && releaseId == null) {
-        (playlists[playlist.key] ??= _ListeningTally())
-            .add(event.playedAt, playlist.displayTitle);
+        (playlists[playlist.key] ??= _ListeningTally()).add(event.playedAt,
+            playlist.displayTitle, null, ListeningPlaylist(playlist));
       }
     }
     return MusicListeningRankings._(plays, {
@@ -111,6 +169,7 @@ class MusicListeningRankings {
           title: entry.value.title,
           subtitle: entry.value.subtitle,
           plays: entry.value.plays,
+          target: entry.value.target,
         )));
   }
 }
@@ -126,9 +185,16 @@ class _ListeningTally {
   String? subtitle;
   DateTime? _titleAt;
   DateTime? _subtitleAt;
+  MusicListeningTarget? target;
+  DateTime? _targetAt;
 
-  void add(DateTime playedAt, String? title, [String? subtitle]) {
+  void add(DateTime playedAt, String? title,
+      [String? subtitle, MusicListeningTarget? target]) {
     plays++;
+    if (target != null && (_targetAt?.isBefore(playedAt) ?? true)) {
+      this.target = target;
+      _targetAt = playedAt;
+    }
     if (title != null && (_titleAt?.isBefore(playedAt) ?? true)) {
       this.title = title;
       _titleAt = playedAt;

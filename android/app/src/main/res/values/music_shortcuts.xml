@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="shortcut_music_home">Music Home</string>
+    <string name="shortcut_music_search">Search Music</string>
+    <string name="shortcut_music_library">Music Library</string>
+    <string name="shortcut_music_shuffle_local">Shuffle local music</string>
+</resources>

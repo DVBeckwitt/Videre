@@ -3,6 +3,7 @@ import 'package:json_annotation/json_annotation.dart';
 part 'settings.g.dart';
 
 const sponsorBlockPrefix = 'sponsor-block-';
+const watchNotesSettingPrefix = 'watch-notes-v1:';
 const browsingCountry = 'browsing-country';
 const dynamicTheme = 'dynamic-theme';
 const themePaletteSettingName = 'theme-palette';
@@ -35,7 +36,11 @@ const musicSpeedSettingName = 'music-playback-speed';
 const videoPitchSettingName = 'video-playback-pitch';
 const musicPitchSettingName = 'music-playback-pitch';
 const musicReplayGainModeSettingName = 'music-replaygain-mode';
+// Legacy default for profiles that used one preamp.
 const musicPreampSettingName = 'music-preamp-db';
+const musicSkipSilenceSettingName = 'music-skip-silence';
+const musicTaggedPreampSettingName = 'music-preamp-tagged-db';
+const musicUntaggedPreampSettingName = 'music-preamp-untagged-db';
 const rememberVideoQualitySettingName = 'remember-video-quality';
 const lastVideoQualitySettingName = 'last-video-quality';
 const lockOrientationFullScreen = 'lock-orientation-fullscreen';
@@ -51,11 +56,14 @@ const musicLayoutSettingName = 'music-layout';
 const musicMiniPlayerLayoutSettingName = 'music-mini-player-layout';
 const musicMiniPlayerShortcutSettingName = 'music-mini-player-shortcut';
 const musicSongTapQueueScopeSettingName = 'music-song-tap-queue-scope';
+const musicCollectionDetailSongTapQueueScopeSettingName =
+    'music-collection-detail-song-tap-queue-scope';
 const musicRetainShuffleOnSongTapSettingName =
     'music-retain-shuffle-on-song-tap';
 const musicNowPlayingStyleSettingName = 'music-now-playing-style';
 const musicPlayerBackgroundSettingName = 'music-player-background';
 const musicScrubberStyleSettingName = 'music-scrubber-style';
+const musicMiniPlayerLyricsSettingName = 'music-mini-player-lyrics';
 const musicArtworkSwipeSettingName = 'music-artwork-swipe';
 const musicArtworkDoubleTapSeekSettingName = 'music-artwork-double-tap-seek';
 const musicSongSwipeTowardEndSettingName = 'music-song-swipe-toward-end';
@@ -68,18 +76,24 @@ const musicScreenPrivacySettingName = 'music-screen-privacy';
 const musicQueueLockedSettingName = 'music-queue-locked';
 const songTransitionModeSettingName = 'music-song-transition';
 const songTransitionSecondsSettingName = 'music-song-transition-seconds';
+const preserveAlbumTransitionsSettingName = 'music-preserve-album-transitions';
 const musicStreamingQualitySettingName = 'music-streaming-quality';
 const musicResumeAfterAudioFocusLossSettingName =
     'music-resume-after-audio-focus-loss';
 const musicPauseAtZeroVolumeSettingName = 'music-pause-at-zero-volume';
+const musicResumeOnVolumeRiseSettingName = 'music-resume-on-volume-rise';
 const musicAutoReconnectSettingName = 'music-auto-reconnect';
+const musicResumeOnBluetoothReconnectSettingName =
+    'music-resume-on-bluetooth-reconnect';
 const musicSkipAfterRetryExhaustionSettingName =
     'music-skip-after-retry-exhaustion';
 const musicTaskRemovalSettingName = 'music-task-removal';
 const musicAudioOffloadSettingName = 'music-audio-offload';
+const musicWiredHeadsetAutoplaySettingName = 'music-wired-headset-autoplay';
 const homeContentModeSettingName = 'home-content-mode';
 const homeExperienceSettingName = 'home-experience';
 const musicCoverCornersSettingName = 'music-cover-corners';
+const deviceMusicArtworkLoadingSettingName = 'device-music-artwork-loading';
 const deviceMusicArtworkSourceSettingName = 'device-music-artwork-source';
 const deviceMusicArtworkQualitySettingName = 'device-music-artwork-quality';
 const deviceMusicArtworkCropSettingName = 'device-music-artwork-crop';

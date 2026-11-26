@@ -5,16 +5,16 @@ import '../../utils/interfaces/db.dart';
 import '../models/music_lyrics.dart';
 import '../models/music_lyrics_match.dart';
 import 'lrc_lyrics.dart';
+import 'music_lyric_word_codec.dart';
 
 final _videoId = RegExp(r'^[a-zA-Z0-9_-]{11}$');
 const _lrclib = 'LRCLIB';
-// Matches the LRC parser's cue limit. The framing budget includes JSON escapes
-// and the timestamp and line-table index for each cue.
-const _maxCues = 3000;
-const _maxRecordLength = maxLyricsCharacters * 6 + _maxCues * 32 + 256;
+const _maxRecordLength = maxLyricsCharacters * 12 + maxLrcCues * 48 + 256;
 
 /// Device-local overrides keyed by recording in an already scoped profile.
 class MusicLyricsCorrections {
+  static const settingPrefix = 'music-lyrics-correction-';
+
   final IDbClient _owner;
 
   MusicLyricsCorrections(this._owner);
@@ -47,7 +47,13 @@ class MusicLyricsCorrections {
           final cues = _readCues(record);
           if (cues == null) return null;
           final lyrics = kind == 'synced'
-              ? MusicLyrics.synced(cues, source: source)
+              ? MusicLyrics.synced(cues,
+                  source: source,
+                  wordsByCue: decodeStoredLyricWords(record['words'], cues),
+                  displayTextByCue:
+                      decodeStoredLyricDisplayText(record['displayText'], cues),
+                  breakStarts:
+                      decodeStoredLyricBreaks(record['breaks'], cues.length))
               : MusicLyrics.plainCues(cues, source: source);
           return MusicLyricsCorrection(lyrics, edited: edited);
       }
@@ -62,7 +68,7 @@ class MusicLyricsCorrections {
     final lyrics = correction.lyrics;
     final text = lyrics.text;
     if ((text != null && text.length > maxLyricsCharacters) ||
-        lyrics.cues.length > _maxCues) {
+        lyrics.cues.length + lyrics.breakStarts.length > maxLrcCues) {
       throw const FormatException('Lyric correction is too large');
     }
     final lineIndexes = <String, int>{};
@@ -79,6 +85,8 @@ class MusicLyricsCorrections {
       });
       cues.add([cue.start.inMicroseconds, index]);
     }
+    final words = encodeStoredLyricWords(lyrics.wordsByCue);
+    final displayText = encodeStoredLyricDisplayText(lyrics.displayTextByCue);
     await _owner.saveSetting(SettingsValue(
         key,
         jsonEncode({
@@ -88,6 +96,12 @@ class MusicLyricsCorrections {
           if (text != null) 'text': text,
           if (cues.isNotEmpty) 'lines': lineIndexes.keys.toList(),
           if (cues.isNotEmpty) 'cues': cues,
+          if (words.isNotEmpty) 'words': words,
+          if (displayText.isNotEmpty) 'displayText': displayText,
+          if (lyrics.breakStarts.isNotEmpty)
+            'breaks': [
+              for (final start in lyrics.breakStarts) start.inMicroseconds
+            ],
         })));
   }
 
@@ -102,7 +116,7 @@ class MusicLyricsCorrections {
     if (!_validVideoId(videoId)) {
       throw ArgumentError('A YouTube video ID is required');
     }
-    return 'music-lyrics-correction-$videoId';
+    return '$settingPrefix$videoId';
   }
 
   static List<MusicLyricCue>? _readCues(Map<String, dynamic> record) {
@@ -112,7 +126,7 @@ class MusicLyricsCorrections {
         entries is! List ||
         lines.isEmpty ||
         lines.length > entries.length ||
-        entries.length > _maxCues) {
+        entries.length > maxLrcCues) {
       return null;
     }
     final texts = <String>[];
@@ -126,10 +140,12 @@ class MusicLyricsCorrections {
       texts.add(clean);
     }
     final cues = <MusicLyricCue>[];
-    var previous = 0;
+    int? previous;
     for (final entry in entries) {
       if (entry case [final int start, final int index]
-          when start >= previous && index >= 0 && index < texts.length) {
+          when (previous == null || start >= previous) &&
+              index >= 0 &&
+              index < texts.length) {
         cues.add((start: Duration(microseconds: start), text: texts[index]));
         previous = start;
       } else {

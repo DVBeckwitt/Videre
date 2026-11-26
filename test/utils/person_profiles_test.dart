@@ -340,6 +340,7 @@ void main() {
         'historyVideoCache',
         'progress',
         'offline_subscriptions',
+        'subscriptionGroups',
         'settings',
       ];
       String storeName(String id, String name) =>

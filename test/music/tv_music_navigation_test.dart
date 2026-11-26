@@ -6,6 +6,7 @@ import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/home/views/screens/home_tabs_editor.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' as app;
+import 'package:clipious/music/models/music_card_origin.dart';
 import 'package:clipious/music/models/music_artist.dart';
 import 'package:clipious/music/models/music_artist_page.dart';
 import 'package:clipious/music/models/music_layout.dart';
@@ -120,6 +121,9 @@ class _Service extends Service {
 }
 
 class _Player extends Cubit<PlayerState> implements PlayerCubit {
+  @override
+  bool? musicCardPlaying(MusicCardOrigin origin) => null;
+
   _Player() : super(PlayerState.init(null));
 
   @override

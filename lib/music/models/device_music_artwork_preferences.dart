@@ -28,17 +28,22 @@ enum DeviceMusicArtworkCrop {
 }
 
 class DeviceMusicArtworkPreferences {
+  final bool loadCovers;
   final DeviceMusicArtworkSource source;
   final DeviceMusicArtworkQuality quality;
   final DeviceMusicArtworkCrop crop;
 
-  const DeviceMusicArtworkPreferences._(this.source, this.quality, this.crop);
+  const DeviceMusicArtworkPreferences._(
+      this.loadCovers, this.source, this.quality, this.crop);
 
   static final _revision = ValueNotifier(0);
   static ValueListenable<int> get revision => _revision;
 
+  static void notifySettingsReloaded() => _revision.value++;
+
   static DeviceMusicArtworkPreferences forDatabase(IDbClient database) =>
       DeviceMusicArtworkPreferences._(
+        loadsCovers(database),
         DeviceMusicArtworkSource.fromStorage(database
                 .getSettings(deviceMusicArtworkSourceSettingName)
                 ?.value) ??
@@ -53,23 +58,36 @@ class DeviceMusicArtworkPreferences {
             DeviceMusicArtworkCrop.crop,
       );
 
+  static bool loadsCovers(IDbClient database) =>
+      database.getSettings(deviceMusicArtworkLoadingSettingName)?.value !=
+      'false';
+
+  static Future<void> setLoadCovers(IDbClient database, bool value,
+      {String? expectedProfileId}) async {
+    if (expectedProfileId != null && database.profileId != expectedProfileId) {
+      return;
+    }
+    await _save(
+        database, deviceMusicArtworkLoadingSettingName, value.toString());
+  }
+
   static Future<void> setSource(
           IDbClient database, DeviceMusicArtworkSource value) =>
-      _save(database, deviceMusicArtworkSourceSettingName, value);
+      _save(database, deviceMusicArtworkSourceSettingName, value.name);
 
   static Future<void> setQuality(
           IDbClient database, DeviceMusicArtworkQuality value) =>
-      _save(database, deviceMusicArtworkQualitySettingName, value);
+      _save(database, deviceMusicArtworkQualitySettingName, value.name);
 
   static Future<void> setCrop(
           IDbClient database, DeviceMusicArtworkCrop value) =>
-      _save(database, deviceMusicArtworkCropSettingName, value);
+      _save(database, deviceMusicArtworkCropSettingName, value.name);
 
   static Future<void> _save(
-      IDbClient database, String settingName, Enum value) async {
+      IDbClient database, String settingName, String value) async {
     await database
         .forProfile(database.profileId)
-        .saveSetting(SettingsValue(settingName, value.name));
-    _revision.value++;
+        .saveSetting(SettingsValue(settingName, value));
+    notifySettingsReloaded();
   }
 }

@@ -3,6 +3,8 @@ import 'package:clipious/app/views/components/session_focus_guard.dart';
 import 'package:clipious/utils/motion_binding.dart';
 import 'dart:async';
 import 'dart:io';
+import 'music/services/local_music_library.dart';
+import 'music/views/screens/music.dart';
 import 'content_filter/community_filter.dart';
 import 'network/network_proxy.dart';
 import 'package:videre_recommendations/videre_recommendations.dart';
@@ -20,7 +22,6 @@ import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/downloads/states/download_manager.dart';
 import 'package:clipious/globals.dart';
-import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/http_overrides.dart';
 import 'package:clipious/media_handler.dart';
 import 'package:clipious/music/views/components/music_library_actions.dart';
@@ -36,6 +37,7 @@ import 'package:logging/logging.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
 import 'settings/models/db/app_logs.dart';
+import 'settings/models/db/server.dart';
 import 'settings/models/theme_palette.dart';
 import 'feedback/views/feedback_screenshot.dart';
 import 'music/views/components/music_screen_privacy.dart';
@@ -78,61 +80,101 @@ Future<void> main() async {
   await NetworkProxy.instance.initialize();
   unawaited(communityFilters.reloadForProfile());
 
-  late final bool hasServer;
+  Server? selectedServer;
   try {
-    await db.getCurrentlySelectedServer();
-    hasServer = true;
-  } catch (err) {
-    hasServer = false;
+    selectedServer = await db.getCurrentlySelectedServer();
+  } catch (_) {
+    // The ordinary welcome flow also handles profiles with no server.
   }
-  if (hasServer) {
+  final hasServer = selectedServer != null;
+  final hasActivity = await MediaHandler.hasMediaActivity();
+  if (hasServer && hasActivity) {
     await service.validateCurrentSessionSafely();
+    selectedServer = await db.getCurrentlySelectedServer();
   }
   // Resolve the interface before constructing its route table.
   isTv = await isDeviceTv();
   appRouter = AppRouter(hasServer: hasServer);
-
   initializeNotifications();
 
-  try {
-    log.fine("Forcing refresh rate");
-    await FlutterDisplayMode.setHighRefreshRate();
-  } catch (err) {
-    log.severe("failed to set high refresh mode", err);
-  }
+  // Start the shared controller with the engine. Android can ask the media
+  // session to play while there is no Activity to build the provider tree.
+  final app = AppCubit(
+      AppState(0, selectedServer, db.getHomeLayout(), profileId: db.profileId),
+      onResume: () => unawaited(communityFilters.refreshIfStale()));
+  final settings = SettingsCubit(SettingsState.init(), app);
+  final player = PlayerCubit(PlayerState.init(null), settings,
+      ownAudioDecoder:
+          !kIsWeb && defaultTargetPlatform == TargetPlatform.android && !isTv);
+  final downloads = DownloadManagerCubit(const DownloadManagerState(), player);
 
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    unawaited(configureBackgroundService(settings));
+    if (!hasActivity && hasServer) {
+      unawaited(service.validateCurrentSessionSafely());
+    }
+    unawaited(_setHighRefreshRate());
+  });
   runApp(VidereFeedbackHost(
     child: MultiBlocProvider(providers: [
-      BlocProvider(
-        create: (context) {
-          return AppCubit(AppState(0, null, HomeLayout()),
-              onResume: () => unawaited(communityFilters.refreshIfStale()));
-        },
-      ),
-      BlocProvider(
-        create: (context) {
-          var settingsCubit =
-              SettingsCubit(SettingsState.init(), context.read<AppCubit>());
-          configureBackgroundService(settingsCubit);
-          return settingsCubit;
-        },
-      ),
-      BlocProvider(
-        create: (context) =>
-            PlayerCubit(PlayerState.init(null), context.read<SettingsCubit>()),
-      ),
-      BlocProvider(
-        create: (context) => DownloadManagerCubit(
-            const DownloadManagerState(), context.read<PlayerCubit>()),
-      )
+      BlocProvider.value(value: app),
+      BlocProvider.value(value: settings),
+      BlocProvider.value(value: player),
+      BlocProvider.value(value: downloads),
     ], child: const MyApp()),
   ));
 }
 
+Future<void> _setHighRefreshRate() async {
+  try {
+    await FlutterDisplayMode.setHighRefreshRate();
+  } catch (error) {
+    log.severe('Failed to set high refresh mode', error);
+  }
+}
+
 late ColorScheme darkColorScheme;
 
-class MyApp extends StatelessWidget {
+class MyApp extends StatefulWidget {
   const MyApp({super.key});
+
+  @override
+  State<MyApp> createState() => _MyAppState();
+}
+
+class _MyAppState extends State<MyApp> {
+  Route<void>? _openedAudioPage;
+
+  Future<void> _openAudio(
+      PlayerCubit player, Uri uri, bool Function() isCurrent) async {
+    final file = await LocalMusicLibrary.instance
+        .resolveOpenedAudio(uri, isCurrent: isCurrent);
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted || !isCurrent() || player.isClosed) return;
+    final navigator = appRouter.navigatorKey.currentState;
+    if (navigator == null) return;
+    if (file == null) {
+      final context = navigator.context;
+      if (!context.mounted) return;
+      scaffoldKey.currentState?.showSnackBar(SnackBar(
+          content: Text(AppLocalizations.of(context)!.musicSourceUnavailable)));
+      return;
+    }
+    final hasPlayerSurface = !isTv &&
+        appRouter.hasEntries &&
+        appRouter.current.name == MainRoute.name;
+    if (!hasPlayerSurface && _openedAudioPage?.isActive != true) {
+      final page = MaterialPageRoute<void>(
+          builder: (_) => OpenedAudioPlaybackPage(television: isTv));
+      _openedAudioPage = page;
+      unawaited(navigator.push(page).then((_) {
+        if (!identical(_openedAudioPage, page)) return;
+        _openedAudioPage = null;
+        player.hide();
+      }));
+    }
+    await player.playOpenedAudio(file, isCurrent: isCurrent);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -153,6 +195,7 @@ class MyApp extends StatelessWidget {
     };
     MusicPlaylistSaveNotification.onOpen = player.musicMediaSave.open;
     MusicPlaylistSaveNotification.onDismiss = player.musicMediaSave.dismiss;
+    app.bindOpenedAudio((uri, current) => _openAudio(player, uri, current));
     NotificationController.canHandleActions = () =>
         !app.isClosed &&
         !app.state.globalLoading &&

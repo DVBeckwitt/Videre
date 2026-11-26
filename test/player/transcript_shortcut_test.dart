@@ -34,6 +34,7 @@ import '../test_settings_cubit.dart';
 
 class _TranscriptService extends Service {
   final transcriptServers = <Server?>[];
+  final transcriptsByLanguage = <String, FutureOr<VideoTranscript>>{};
   Completer<VideoTranscript>? pendingTranscript;
 
   @override
@@ -45,6 +46,9 @@ class _TranscriptService extends Service {
       {Server? serverOverride}) async {
     transcriptServers.add(serverOverride);
     if (pendingTranscript case final pending?) return pending.future;
+    if (transcriptsByLanguage[caption.label] case final transcript?) {
+      return transcript;
+    }
     return const VideoTranscript(label: 'English', languageCode: 'en', lines: [
       VideoTranscriptLine(
         type: VideoTranscriptLineType.regular,
@@ -56,13 +60,85 @@ class _TranscriptService extends Service {
   }
 }
 
+class _TranscriptPlayer extends TestPlayerCubit {
+  _TranscriptPlayer(super.initialState, super.settings);
+
+  void replaceVideo(Video video, Duration position) {
+    emit(state.copyWith(currentlyPlaying: video, position: position));
+  }
+}
+
+VideoTranscript _timedTranscript(String language) => VideoTranscript(
+      label: language,
+      languageCode: null,
+      lines: [
+        for (var index = 0; index < 120; index++)
+          VideoTranscriptLine(
+            type: VideoTranscriptLineType.regular,
+            startMs: index * 1000,
+            endMs: index * 1000 + 600,
+            text: '$language cue $index'
+                '${index.isEven ? '\nSecond caption line.\nThird line.' : ''}',
+          ),
+      ],
+    );
+
 void main() {
   late TestAppCubit app;
   late TestSettingsCubit settings;
-  late TestPlayerCubit player;
+  late _TranscriptPlayer player;
   late Service originalService;
   final shortcut = find.byKey(const ValueKey('video-transcript-open'));
   final transcript = find.byKey(const ValueKey('video-transcript-list'));
+  final activeLine = find.descendant(
+    of: transcript,
+    matching: find.byWidgetPredicate(
+      (widget) => widget is Semantics && widget.properties.selected == true,
+    ),
+  );
+  final returnToCurrent = find.text('Return to current');
+  final search = find.byKey(const ValueKey('video-transcript-search'));
+  final languageMenu = find.byKey(const ValueKey('video-transcript-language'));
+
+  Finder timestamp(int seconds) =>
+      find.byKey(ValueKey('video-transcript-seek-${seconds * 1000}'));
+
+  void expectActiveCue(String language, int seconds) {
+    expect(
+      find.descendant(
+        of: activeLine,
+        matching: find.textContaining('$language cue $seconds'),
+      ),
+      findsOneWidget,
+    );
+    expect(timestamp(seconds).hitTestable(), findsOneWidget);
+  }
+
+  Future<void> reportProgress(WidgetTester tester, int milliseconds) async {
+    await tester.runAsync(
+        () => player.onProgress(Duration(milliseconds: milliseconds)));
+  }
+
+  Future<void> chooseLanguage(WidgetTester tester, String language) async {
+    await tester.tap(languageMenu);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+    await tester.tap(find.text(language).last);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+  }
+
+  final export = find.byKey(const ValueKey('video-transcript-export'));
+  final timedCopy = find.byKey(const ValueKey('video-transcript-copy-timed'));
+  final save = find.byKey(const ValueKey('video-transcript-save'));
+  const files = MethodChannel('videre/files');
+
+  Future<void> exportWith(WidgetTester tester, Finder action) async {
+    await tester.tap(export);
+    await tester.pumpAndSettle();
+    await tester.tap(action);
+    await tester.pumpAndSettle();
+  }
 
   setUp(() async {
     db = await createPlayerTestDatabase();
@@ -98,7 +174,7 @@ void main() {
             ))
           : null,
     );
-    player = TestPlayerCubit(
+    player = _TranscriptPlayer(
         PlayerState.init(null).copyWith(
           isMini: false,
           isAudio: isAudio,
@@ -151,6 +227,8 @@ void main() {
       bool withQueueAndBackend = false,
       bool expandedAudio = false,
       bool tablet = false,
+      List<Caption> additionalCaptions = const [],
+      Duration position = const Duration(seconds: 42),
       String? authorId,
       Server? playbackServer,
       Server? backendServer}) async {
@@ -179,10 +257,13 @@ void main() {
                 ))
               : null,
       captions: captions
-          ? [Caption('English', 'en', '/api/v1/captions/watch-video')]
+          ? [
+              Caption('English', 'en', '/api/v1/captions/watch-video'),
+              ...additionalCaptions,
+            ]
           : [],
     );
-    player = TestPlayerCubit(
+    player = _TranscriptPlayer(
         PlayerState.init([
           video,
           if (withQueueAndBackend) const Video(videoId: 'second-video')
@@ -191,7 +272,7 @@ void main() {
           isMini: false,
           isAudio: expandedAudio,
           isClosing: closing,
-          position: const Duration(seconds: 42),
+          position: position,
           currentlyPlaying:
               matchingVideo ? video : const Video(videoId: 'another-video'),
         ),
@@ -237,7 +318,7 @@ void main() {
         title: 'Saved video',
         lengthSeconds: 120,
         quality: '720p');
-    player = TestPlayerCubit(
+    player = _TranscriptPlayer(
         PlayerState.init(null).copyWith(
             currentlyPlaying: offline ? null : video,
             offlineCurrentlyPlaying: offline ? saved : null,
@@ -391,6 +472,282 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('watch follows the player and yields to reading and search',
+      (tester) async {
+    await pumpWatch(tester, position: const Duration(seconds: 1));
+    final transcripts = (service as _TranscriptService).transcriptsByLanguage;
+    transcripts['English'] = _timedTranscript('English');
+    await tester.tap(shortcut);
+    await tester.pumpAndSettle();
+    expectActiveCue('English', 1);
+
+    for (final seconds in [2, 3]) {
+      await reportProgress(tester, seconds * 1000 + 800);
+      await tester.pumpAndSettle();
+      expectActiveCue('English', seconds);
+      expect(returnToCurrent, findsNothing);
+    }
+
+    expect(timestamp(60), findsNothing);
+    await reportProgress(tester, 60000);
+    await tester.pumpAndSettle();
+    expectActiveCue('English', 60);
+
+    final viewport = tester.getRect(transcript);
+    await tester.dragFrom(
+      Offset(viewport.left + 8, viewport.center.dy),
+      const Offset(0, 100),
+    );
+    await tester.pumpAndSettle();
+    expect(returnToCurrent.hitTestable(), findsOneWidget);
+    final readingPosition = tester.getTopLeft(timestamp(60));
+    await reportProgress(tester, 61000);
+    await tester.pumpAndSettle();
+    expectActiveCue('English', 61);
+    expect(tester.getTopLeft(timestamp(60)), readingPosition);
+
+    await reportProgress(tester, 110000);
+    await tester.pumpAndSettle();
+    expect(tester.getTopLeft(timestamp(60)), readingPosition);
+    expect(timestamp(110).hitTestable(), findsNothing);
+    await tester.tap(returnToCurrent);
+    await tester.pumpAndSettle();
+    expectActiveCue('English', 110);
+    expect(returnToCurrent, findsNothing);
+
+    await tester.enterText(search, 'English cue 80');
+    await tester.pumpAndSettle();
+    await reportProgress(tester, 44000);
+    await tester.pumpAndSettle();
+    expect(timestamp(80).hitTestable(), findsOneWidget);
+    expect(activeLine, findsNothing);
+    expect(timestamp(44), findsNothing);
+
+    await tester.enterText(search, '');
+    await tester.pumpAndSettle();
+    expect(returnToCurrent.hitTestable(), findsOneWidget);
+    await tester.enterText(search, 'English cue 80');
+    await tester.pumpAndSettle();
+    await tester.tap(returnToCurrent);
+    await tester.pumpAndSettle();
+    expect(tester.widget<TextField>(search).controller!.text, isEmpty);
+    expectActiveCue('English', 44);
+
+    await reportProgress(tester, 45000);
+    await tester.pumpAndSettle();
+    expectActiveCue('English', 45);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('late language and replaced video cannot move the transcript',
+      (tester) async {
+    await pumpWatch(tester, additionalCaptions: [
+      Caption('Spanish', 'es', '/captions/spanish'),
+      Caption('French', 'fr', '/captions/french'),
+    ]);
+    final spanish = Completer<VideoTranscript>();
+    final transcripts = (service as _TranscriptService).transcriptsByLanguage;
+    transcripts
+      ..['English'] = _timedTranscript('English')
+      ..['Spanish'] = spanish.future
+      ..['French'] = _timedTranscript('French');
+    await tester.tap(shortcut);
+    await tester.pumpAndSettle();
+    expectActiveCue('English', 42);
+
+    await chooseLanguage(tester, 'Spanish');
+    expect(transcript, findsNothing);
+    await reportProgress(tester, 90000);
+    await tester.pump();
+    await chooseLanguage(tester, 'French');
+    await tester.pumpAndSettle();
+    expectActiveCue('French', 90);
+    final frenchPosition = tester.getTopLeft(timestamp(90));
+
+    spanish.complete(_timedTranscript('Spanish'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Spanish cue'), findsNothing);
+    expectActiveCue('French', 90);
+    expect(tester.getTopLeft(timestamp(90)), frenchPosition);
+
+    final seekFromOldSheet = tester.widget<TextButton>(timestamp(90)).onPressed;
+    final copy = find.byKey(const ValueKey('video-transcript-copy'));
+    expect(seekFromOldSheet, isNotNull);
+    expect(tester.widget<IconButton>(copy).onPressed, isNotNull);
+    expect(tester.widget<IconButton>(export).onPressed, isNotNull);
+    await reportProgress(tester, 15000);
+    player.replaceVideo(
+      const Video(videoId: 'different-video', lengthSeconds: 180),
+      const Duration(seconds: 20),
+    );
+    await tester.pumpAndSettle();
+    expect(tester.getTopLeft(timestamp(90)), frenchPosition);
+    expect(timestamp(15).hitTestable(), findsNothing);
+    expect(timestamp(20).hitTestable(), findsNothing);
+    expect(tester.widget<IconButton>(copy).onPressed, isNull);
+    expect(tester.widget<IconButton>(export).onPressed, isNull);
+
+    seekFromOldSheet!();
+    await tester.pumpAndSettle();
+    expect(player.state.position, const Duration(seconds: 20));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+      'watch exports the selected language and can retry a canceled save',
+      (tester) async {
+    final transcriptService = service as _TranscriptService;
+    transcriptService.transcriptsByLanguage['Espa\u00f1ol'] =
+        const VideoTranscript(
+      label: 'Espa\u00f1ol',
+      languageCode: 'es',
+      lines: [
+        VideoTranscriptLine(
+          type: VideoTranscriptLineType.regular,
+          startMs: 1250,
+          endMs: 2000,
+          text: 'Buenos d\u00edas',
+        ),
+        VideoTranscriptLine(
+          type: VideoTranscriptLineType.regular,
+          startMs: 3000,
+          endMs: 4000,
+          text: 'Adi\u00f3s',
+        ),
+      ],
+    );
+    final clipboardWrites = <String>[];
+    final saves = <MethodCall>[];
+    final messenger = tester.binding.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+      if (call.method == 'Clipboard.setData') {
+        clipboardWrites.add(call.arguments['text'] as String);
+      }
+      return null;
+    });
+    messenger.setMockMethodCallHandler(files, (call) async {
+      saves.add(call);
+      return saves.length == 1 ? null : true;
+    });
+    addTearDown(() {
+      messenger.setMockMethodCallHandler(SystemChannels.platform, null);
+      messenger.setMockMethodCallHandler(files, null);
+    });
+
+    await pumpWatch(tester, additionalCaptions: [
+      Caption('Espa\u00f1ol', 'es', '/api/v1/captions/watch-video?lang=es'),
+    ]);
+    await tester.tap(shortcut);
+    await tester.pumpAndSettle();
+    await tester.tap(export);
+    await tester.pumpAndSettle();
+    expect(timedCopy, findsOneWidget);
+    await pressAndroidBack(tester);
+    expect(timedCopy, findsNothing);
+    expect(transcript, findsOneWidget);
+    expect(player.state.isMini, isFalse);
+
+    await exportWith(tester, timedCopy);
+    expect(clipboardWrites.single, '[00:00:00.000] Test transcript');
+
+    await tester.tap(find.byKey(const ValueKey('video-transcript-language')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Espa\u00f1ol').last);
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('video-transcript-search')),
+      'Buenos',
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Adi\u00f3s'), findsNothing);
+
+    const expected =
+        '[00:00:01.250] Buenos d\u00edas\n[00:00:03.000] Adi\u00f3s';
+    await exportWith(tester, timedCopy);
+    expect(clipboardWrites.last, expected);
+
+    await exportWith(tester, save);
+    expect(saves, hasLength(1));
+    expect(find.text('Transcript saved'), findsNothing);
+    expect(find.text('Could not save transcript.'), findsNothing);
+    expect(transcript, findsOneWidget);
+
+    await exportWith(tester, save);
+    expect(saves, hasLength(2));
+    for (final call in saves) {
+      expect(call.method, 'save');
+      expect(call.arguments, {
+        'name': 'A video with direct playback actions - Espa\u00f1ol.txt',
+        'text': expected,
+        'mimeType': 'text/plain',
+      });
+    }
+    expect(find.text('Transcript saved'), findsOneWidget);
+    expect(transcriptService.transcriptServers, hasLength(2));
+    expect(player.state.position, const Duration(seconds: 42));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+      'watch saves a complete transcript that exceeds the clipboard cap',
+      (tester) async {
+    final transcriptService = service as _TranscriptService;
+    final spokenText = '\u00e9' * 260;
+    final lines = List.generate(
+      1000,
+      (index) => VideoTranscriptLine(
+        type: VideoTranscriptLineType.regular,
+        startMs: index * 1000,
+        endMs: (index + 1) * 1000,
+        text: '$index $spokenText',
+      ),
+    );
+    transcriptService.transcriptsByLanguage['English'] = VideoTranscript(
+      label: 'English',
+      languageCode: 'en',
+      lines: lines,
+    );
+    var clipboardWrites = 0;
+    final saves = <MethodCall>[];
+    final messenger = tester.binding.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+      if (call.method == 'Clipboard.setData') clipboardWrites++;
+      return null;
+    });
+    messenger.setMockMethodCallHandler(files, (call) async {
+      saves.add(call);
+      return true;
+    });
+    addTearDown(() {
+      messenger.setMockMethodCallHandler(SystemChannels.platform, null);
+      messenger.setMockMethodCallHandler(files, null);
+    });
+
+    await pumpWatch(tester);
+    await tester.tap(shortcut);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('video-transcript-copy')));
+    await tester.pumpAndSettle();
+    expect(
+        find.text(
+          'This transcript is too long to copy. You can save it as a text file.',
+        ),
+        findsOneWidget);
+    await exportWith(tester, timedCopy);
+    expect(clipboardWrites, 0);
+
+    await exportWith(tester, save);
+    expect(saves.single.method, 'save');
+    final output = saves.single.arguments['text'] as String;
+    expect(output.length, greaterThan(250000));
+    expect(output.split('\n'), hasLength(lines.length));
+    expect(output, startsWith('[00:00:00.000] 0 $spokenText\n'));
+    expect(output, endsWith('\n[00:16:39.000] 999 $spokenText'));
+    expect(transcriptService.transcriptServers, hasLength(1));
+    expect(find.text('Transcript saved'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   for (final hasConnection in [true, false]) {
     testWidgets(
         'watch transcript keeps the playback server (connection: $hasConnection)',
@@ -431,6 +788,14 @@ void main() {
       await tester.pump(const Duration(milliseconds: 500));
       expect(transcripts.transcriptServers, hasLength(1));
       player.switchAudio(true);
+      await tester.pump();
+      expect(
+        find.descendant(
+          of: find.byType(BottomSheet),
+          matching: find.byType(CircularProgressIndicator),
+        ),
+        findsNothing,
+      );
       if (fails) {
         pending.completeError(StateError('old transcript request failed'));
       } else {

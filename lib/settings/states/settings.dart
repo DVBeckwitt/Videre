@@ -23,6 +23,8 @@ import '../../home/models/db/home_layout.dart';
 import '../../home/models/phone_navigation.dart';
 import '../../home/models/content_mode.dart';
 import '../../home/models/home_tabs_layout.dart';
+import '../../music/models/device_music_artwork_preferences.dart';
+import '../../music/models/local_music_browse.dart';
 import '../../music/models/music_collection_order.dart';
 import '../../music/models/music_background_playback.dart';
 import '../../music/models/music_download_order.dart';
@@ -339,8 +341,10 @@ class SettingsCubit extends Cubit<SettingsState> {
       if (backup.subscriptionsOnly) {
         await database.restoreBackup(backup, replace: replace);
       } else {
-        await RecommendationService.forCurrentProfile().restoreBackup(
-            () => database.restoreBackup(backup, replace: replace));
+        await RecommendationService.forCurrentProfile().restoreBackup(() async {
+          await database.restoreBackup(backup, replace: replace);
+          DeviceMusicArtworkPreferences.notifySettingsReloaded();
+        });
       }
       if (!backup.subscriptionsOnly) {
         unawaited(communityFilters.reloadForProfile());
@@ -425,6 +429,9 @@ class SettingsCubit extends Cubit<SettingsState> {
       _savePlaybackPreference(
           music ? musicPitchSettingName : videoPitchSettingName,
           clampPitchSemitones(semitones));
+
+  Future<void> setMusicSkipSilence(bool enabled) =>
+      _saveSettingInOrder(musicSkipSilenceSettingName, enabled.toString);
 
   Future<void> _savePlaybackPreference(String name, num value) {
     if (isClosed) return Future.value();
@@ -558,6 +565,9 @@ class SettingsCubit extends Cubit<SettingsState> {
   Future<void> setSongTransitionMode(SongTransitionMode mode) =>
       _saveSettingInOrder(songTransitionModeSettingName, () => mode.name);
 
+  Future<void> setPreserveAlbumTransitions(bool enabled) => _saveSettingInOrder(
+      preserveAlbumTransitionsSettingName, enabled.toString);
+
   Future<void> setMusicStreamingQuality(MusicStreamingQuality quality) =>
       _saveSettingInOrder(musicStreamingQualitySettingName, () => quality.name);
 
@@ -568,8 +578,15 @@ class SettingsCubit extends Cubit<SettingsState> {
   Future<void> setMusicPauseAtZeroVolume(bool enabled) =>
       _saveSettingInOrder(musicPauseAtZeroVolumeSettingName, enabled.toString);
 
+  Future<void> setMusicResumeOnVolumeRise(bool enabled) =>
+      _saveSettingInOrder(musicResumeOnVolumeRiseSettingName, enabled.toString);
+
   Future<void> setMusicAutoReconnect(bool enabled) =>
       _saveSettingInOrder(musicAutoReconnectSettingName, enabled.toString);
+
+  Future<void> setMusicResumeOnBluetoothReconnect(bool enabled) =>
+      _saveSettingInOrder(
+          musicResumeOnBluetoothReconnectSettingName, enabled.toString);
 
   Future<void> setMusicSkipAfterRetryExhaustion(bool enabled) =>
       _saveSettingInOrder(
@@ -580,6 +597,10 @@ class SettingsCubit extends Cubit<SettingsState> {
 
   Future<void> setMusicAudioOffload(MusicAudioOffload mode) =>
       _saveSettingInOrder(musicAudioOffloadSettingName, () => mode.name);
+
+  Future<void> setMusicWiredHeadsetAutoplay(bool enabled) =>
+      _saveSettingInOrder(
+          musicWiredHeadsetAutoplaySettingName, enabled.toString);
 
   Future<void> setSongTransitionSeconds(int seconds) {
     RangeError.checkValueInInterval(
@@ -597,6 +618,16 @@ class SettingsCubit extends Cubit<SettingsState> {
 
   Future<void> setMusicCollectionPreference(String name, String value) =>
       _saveSettingInOrder(name, () => value);
+
+  Future<void> updateLocalMusicCategoryOrder(String name,
+          {LocalMusicCategorySort? field, bool? descending}) =>
+      _saveSettingInOrder(name, () {
+        final current =
+            LocalMusicCategoryOrder.fromValue(state.settings[name]?.value);
+        return LocalMusicCategoryOrder(
+                field ?? current.field, descending ?? current.descending)
+            .value;
+      });
 
   Future<void> updateMusicCollectionOrder(String name,
           {MusicCollectionSortField? field, bool? descending}) =>
@@ -664,9 +695,17 @@ class SettingsCubit extends Cubit<SettingsState> {
   Future<void> setMusicSongTapQueueScope(MusicSongTapQueueScope scope) =>
       _saveSettingInOrder(musicSongTapQueueScopeSettingName, () => scope.name);
 
+  Future<void> setMusicCollectionDetailSongTapQueueScope(
+          MusicSongTapQueueScope? scope) =>
+      _saveSettingInOrder(musicCollectionDetailSongTapQueueScopeSettingName,
+          () => scope?.name ?? 'inherit');
+
   Future<void> setMusicRetainShuffleOnSongTap(bool enabled) =>
       _saveSettingInOrder(
           musicRetainShuffleOnSongTapSettingName, enabled.toString);
+
+  Future<void> setMusicMiniPlayerLyrics(bool enabled) =>
+      _saveSettingInOrder(musicMiniPlayerLyricsSettingName, enabled.toString);
 
   Future<void> setHomeTabsLayout(HomeTabsLayout layout) async {
     final owner = db.forProfile(db.profileId);
@@ -831,6 +870,9 @@ sealed class SettingsState with _$SettingsState {
     return clampPitchSemitones(int.tryParse(setting?.value ?? '') ?? 0);
   }
 
+  bool get musicSkipSilence =>
+      _get(musicSkipSilenceSettingName)?.value == 'true';
+
   bool get playerShuffleMode => _get(playerShuffle)?.value == "true";
 
   bool get musicQueueLocked =>
@@ -944,6 +986,9 @@ sealed class SettingsState with _$SettingsState {
           _get(songTransitionModeSettingName)?.value) ??
       SongTransitionMode.seamless;
 
+  bool get preserveAlbumTransitions =>
+      _get(preserveAlbumTransitionsSettingName)?.value == 'true';
+
   MusicStreamingQuality get musicStreamingQuality =>
       MusicStreamingQuality.fromStorage(
           _get(musicStreamingQualitySettingName)?.value) ??
@@ -955,8 +1000,14 @@ sealed class SettingsState with _$SettingsState {
   bool get musicPauseAtZeroVolume =>
       _get(musicPauseAtZeroVolumeSettingName)?.value == 'true';
 
+  bool get musicResumeOnVolumeRise =>
+      _get(musicResumeOnVolumeRiseSettingName)?.value == 'true';
+
   bool get musicAutoReconnect =>
       _get(musicAutoReconnectSettingName)?.value != 'false';
+
+  bool get musicResumeOnBluetoothReconnect =>
+      _get(musicResumeOnBluetoothReconnectSettingName)?.value == 'true';
 
   bool get musicSkipAfterRetryExhaustion =>
       _get(musicSkipAfterRetryExhaustionSettingName)?.value == 'true';
@@ -969,6 +1020,9 @@ sealed class SettingsState with _$SettingsState {
       MusicAudioOffload.fromStorage(
           _get(musicAudioOffloadSettingName)?.value) ??
       MusicAudioOffload.disabled;
+
+  bool get musicWiredHeadsetAutoplay =>
+      _get(musicWiredHeadsetAutoplaySettingName)?.value == 'true';
 
   int get songTransitionSeconds {
     final saved =
@@ -1039,8 +1093,20 @@ sealed class SettingsState with _$SettingsState {
       MusicSongTapQueueScope.fromStorage(
           _get(musicSongTapQueueScopeSettingName)?.value);
 
+  MusicSongTapQueueScope? get musicCollectionDetailSongTapQueueScope =>
+      MusicSongTapQueueScope.values.asNameMap()[
+          _get(musicCollectionDetailSongTapQueueScopeSettingName)?.value];
+
+  MusicSongTapQueueScope resolveMusicSongTapQueueScope(
+          {required bool collectionDetail}) =>
+      (collectionDetail ? musicCollectionDetailSongTapQueueScope : null) ??
+      musicSongTapQueueScope;
+
   bool get musicRetainShuffleOnSongTap =>
       _get(musicRetainShuffleOnSongTapSettingName)?.value != 'false';
+
+  bool get musicMiniPlayerLyrics =>
+      _get(musicMiniPlayerLyricsSettingName)?.value == 'true';
 
   HomeContentMode get homeContentMode =>
       _get(homeContentModeSettingName)?.value == HomeContentMode.music.name

@@ -67,17 +67,16 @@ class MusicShuffleButton extends StatelessWidget {
   final Color? selectedBackgroundColor;
   final bool showQueueOptions;
 
-  // The compact player and queue can both target the same pending write.
-  static final _writing = Expando<bool>();
-
   @override
   Widget build(BuildContext context) {
     final player = context.watch<PlayerCubit>();
     final generation = player.playlistGeneration;
+    final occurrence = player.playbackOccurrenceRevision;
+    final selectionRequest = player.musicSelectionRequestRevision;
     final app = context.read<AppCubit>();
     final session = app.state;
     final settings = context.watch<SettingsCubit>();
-    final shuffled = settings.state.playerShuffleMode;
+    final shuffled = player.musicQueueShuffled;
     final locals = AppLocalizations.of(context)!;
     bool current() =>
         !player.isClosed &&
@@ -93,16 +92,15 @@ class MusicShuffleButton extends StatelessWidget {
         player.state.hasQueue;
 
     Future<void> toggleShuffle() async {
-      if (!current() || _writing[settings] == true) return;
-      _writing[settings] = true;
-      try {
-        await settings.setShuffle(!settings.state.playerShuffleMode);
-        if (current()) player.generatePlayQueue();
-      } finally {
-        _writing[settings] = null;
+      if (!current() ||
+          player.playbackOccurrenceRevision != occurrence ||
+          player.musicSelectionRequestRevision != selectionRequest) {
+        return;
       }
+      await player.toggleMusicQueueShuffle(expectedShuffled: shuffled);
     }
 
+    final canToggle = enabled && player.canToggleMusicQueueShuffle;
     final canOpen = enabled && player.state.hasQueue;
     final buttonStyle =
         _toggleStyle(context, shuffled, style, selectedBackgroundColor);
@@ -117,13 +115,12 @@ class MusicShuffleButton extends StatelessWidget {
         itemBuilder: (_) {
           final occurrence = player.playbackOccurrenceRevision;
           final selectionRequest = player.musicSelectionRequestRevision;
-          final canShuffle = current() &&
-              _writing[settings] != true &&
-              player.canShuffleMusicQueueUpcoming;
+          final canShuffle = current() && player.canShuffleMusicQueueUpcoming;
           return [
             PopupMenuItem(
+              enabled: canToggle,
               value: toggleShuffle,
-              child: Text(settings.state.playerShuffleMode
+              child: Text(shuffled
                   ? locals.musicQueueSongShuffleOff
                   : locals.musicQueueSongShuffleOn),
             ),
@@ -141,7 +138,6 @@ class MusicShuffleButton extends StatelessWidget {
                 value: () async {
                   if (context.mounted &&
                       current() &&
-                      _writing[settings] != true &&
                       player.playbackOccurrenceRevision == occurrence &&
                       player.musicSelectionRequestRevision ==
                           selectionRequest) {
@@ -160,7 +156,7 @@ class MusicShuffleButton extends StatelessWidget {
       tooltip: locals.musicShuffle,
       isSelected: shuffled,
       style: buttonStyle,
-      onPressed: canOpen ? toggleShuffle : null,
+      onPressed: canToggle ? toggleShuffle : null,
       icon: const Icon(Icons.shuffle),
     );
   }

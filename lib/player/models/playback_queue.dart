@@ -58,6 +58,16 @@ String playbackQueueId(IdedVideo video) {
   return video.videoId;
 }
 
+// Use a reserved occurrence key so the marker travels with this queue row
+// through reordering, playback resolution, and session restore.
+String _musicSuggestionId(Video song) => 'music-suggestion:${song.videoId}';
+
+Video markMusicQueueSuggestion(Video song) =>
+    song.copyWith(queueEntryId: _musicSuggestionId(song));
+
+bool isMusicQueueSuggestion(IdedVideo entry) =>
+    entry is Video && entry.queueEntryId == _musicSuggestionId(entry);
+
 final _savedOccurrenceOrdinal = RegExp(r'^[1-9][0-9]*$');
 
 /// A saved download has a filesystem-safe source ID. Its queue copies may

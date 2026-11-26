@@ -4,6 +4,7 @@ import 'package:clipious/music/services/music_history_transfer.dart';
 import 'package:clipious/music/services/music_listening_history.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/db/history_video_cache.dart';
+import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 const _song = 'abcdefghijk';
@@ -60,6 +61,53 @@ void main() {
     expect(decoded.last.entry.playedFromDownload, isFalse);
     expect(decoded.last.entry.downloadAccountId, isNull);
     expect(MusicHistoryTransfer.encode(decoded), file);
+  });
+
+  test('exports CSV with the canonical counts and escaped track labels', () {
+    const otherTrack = 'lmnopqrstuv';
+    const noArtistTrack = 'wxyzabcdefg';
+    const title = 'Café, "en vivo"\n第二幕';
+    const artist = 'Artist\r合唱団';
+    final events = [
+      MusicListeningEvent.legacy(_songAt(_firstDate)),
+      _play(_secondId, _secondDate)
+        ..entry.musicMetadata = const MusicMetadata(
+          title: ' $title ',
+          artist: ' $artist ',
+        ),
+      MusicListeningEvent.legacy(
+        HistoryVideoCache(otherTrack, title, artist, '')..created = _firstDate,
+      ),
+      MusicListeningEvent.legacy(
+        HistoryVideoCache(noArtistTrack, 'Solo', null, '')
+          ..created = _firstDate.subtract(const Duration(days: 1)),
+      ),
+    ];
+
+    expect(
+      MusicHistoryTransfer.encodePlayCountsCsv(events),
+      'trackId,title,artist,playCount\r\n'
+      '$_song,"Café, ""en vivo""\n第二幕","Artist\r合唱団",2\r\n'
+      '$otherTrack,"Café, ""en vivo""\n第二幕","Artist\r合唱団",1\r\n'
+      '$noArtistTrack,Solo,,1\r\n',
+    );
+    expect(
+      (jsonDecode(MusicHistoryTransfer.encode(events)) as Map)['playCounts'],
+      [
+        {'trackId': _song, 'title': title, 'artist': artist, 'playCount': 2},
+        {
+          'trackId': otherTrack,
+          'title': title,
+          'artist': artist,
+          'playCount': 1,
+        },
+        {'trackId': noArtistTrack, 'title': 'Solo', 'playCount': 1},
+      ],
+    );
+    expect(
+      MusicHistoryTransfer.encodePlayCountsCsv([]),
+      'trackId,title,artist,playCount\r\n',
+    );
   });
 
   test('v1 backups import both Music sections and ignore other sections', () {

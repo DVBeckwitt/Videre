@@ -21,6 +21,7 @@ import '../../network/nerdvpn_access.dart';
 import '../../network/network_proxy.dart';
 import '../../network/tor_browser.dart';
 import '../../settings/models/db/server.dart';
+import '../../settings/models/db/settings.dart';
 import '../../settings/models/errors/invidious_service_error.dart';
 import '../../utils/pretty_bytes.dart';
 import '../../videos/models/video.dart';
@@ -32,6 +33,7 @@ import '../models/playback_pitch.dart';
 import '../models/playback_cache_identity.dart';
 import '../models/video_quality.dart';
 import '../models/watch_audio_track.dart';
+import '../services/watch_local_subtitles.dart';
 import '../views/components/player_controls.dart';
 import '../views/components/subtitle_failure_notice.dart';
 import '../views/tv/components/player_controls.dart';
@@ -41,6 +43,15 @@ part 'video_player.freezed.dart';
 
 final log = Logger('VideoPlayer');
 const _maxPlaybackSources = 10;
+
+typedef WatchSubtitleTimingTarget = ({
+  String videoId,
+  int generation,
+  String profileId,
+  int sessionRevision,
+});
+
+String _subtitleTimingKey(String videoId) => 'watch-subtitle-timing-$videoId';
 
 Map<String, String>? _compatibleResolutions(
   Server server,
@@ -264,6 +275,24 @@ List<BetterPlayerDataSource> _buildPlaybackDataSources(
   return sources;
 }
 
+typedef _WatchSubtitlePlayback = ({
+  WatchLocalSubtitleOwner owner,
+  int occurrence,
+});
+
+class _WatchLocalSubtitleSource extends BetterPlayerSubtitlesSource {
+  _WatchLocalSubtitleSource(
+    String name,
+    Future<String> Function() load, {
+    required bool selectedByDefault,
+  }) : super(
+          type: BetterPlayerSubtitlesSourceType.memory,
+          name: name,
+          contentLoader: load,
+          selectedByDefault: selectedByDefault,
+        );
+}
+
 class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
   BetterPlayerController? videoController;
   final SettingsCubit settings;
@@ -308,7 +337,19 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
   VoidCallback? _qualityFailureFeedback;
   bool _qualityRollbackRefusedNetwork = false;
   BetterPlayerSubtitlesSource? _failedSubtitle;
+  final _localSubtitles = const WatchLocalSubtitles();
+  _WatchSubtitlePlayback? _localSubtitlePlayback;
+  _WatchSubtitlePlayback? _mountedLocalSubtitlePlayback;
+  _WatchLocalSubtitleSource? _localSubtitleSource;
+  bool _localSubtitleSelected = false;
+  bool _changingLocalSubtitle = false;
+  bool _clearingLocalSubtitle = false;
   late final StreamSubscription<double> _subtitleSizeSubscription;
+  WatchSubtitleTimingTarget? _subtitleTimingTarget;
+  Future<void> _subtitleTimingUpdate = Future<void>.value();
+
+  static const subtitleTimingStep = Duration(milliseconds: 100);
+  static const subtitleTimingLimit = Duration(seconds: 10);
 
   bool get _shouldPlay => _requestedPlaying && player.shouldStartPlayback;
 
@@ -349,8 +390,12 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
 
   @override
   Future<void> stopForProxyChange() async {
+    _localSubtitlePlayback = null;
+    _localSubtitleSource = null;
+    _localSubtitleSelected = false;
     dismissSubtitleFailure();
     _playbackGeneration++;
+    _subtitleTimingTarget = null;
     _clearQualityPreparation();
     _playbackSources = const [];
     _playbackOwner = null;
@@ -373,6 +418,7 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
 
   @override
   void disposeControllers() {
+    _mountedLocalSubtitlePlayback = null;
     unawaited(_nativePositionSubscription?.cancel());
     _nativePositionSubscription = null;
     _endSpeedBoost?.call();
@@ -386,6 +432,7 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
     }
     videoController?.dispose();
     videoController = null;
+    _subtitleTimingTarget = null;
     if (!isClosed) {
       emit(newState);
     }
@@ -499,8 +546,13 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
     if (isClosed || _backendRecoveryPending || _terminalErrorSent) return;
     if (event.betterPlayerEventType ==
         BetterPlayerEventType.subtitleLoadFailed) {
-      _failedSubtitle =
+      final source =
           event.parameters?['source'] as BetterPlayerSubtitlesSource?;
+      if (source is _WatchLocalSubtitleSource &&
+          !identical(source, _localSubtitleSource)) {
+        return;
+      }
+      _failedSubtitle = source;
       emit(state.copyWith(subtitleFailed: _failedSubtitle != null));
       return;
     }
@@ -645,8 +697,11 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
 
       case BetterPlayerEventType.changedSubtitles:
         dismissSubtitleFailure();
-        settings.setLastSubtitle(
-            videoController?.betterPlayerSubtitlesSource?.name ?? '');
+        final source = videoController?.betterPlayerSubtitlesSource;
+        _localSubtitleSelected = source is _WatchLocalSubtitleSource;
+        if (!_localSubtitleSelected && !_clearingLocalSubtitle) {
+          settings.setLastSubtitle(source?.name ?? '');
+        }
         break;
       case BetterPlayerEventType.setupDataSource:
         dismissSubtitleFailure();
@@ -1088,12 +1143,32 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
             nextHeight != null &&
             nextHeight > 0 &&
             (_videoQuality == null || nextHeight == _videoQuality);
+    final local = _localSubtitleSource;
+    final localPlayback = _localSubtitlePlayback;
+    if (local != null &&
+        localPlayback != null &&
+        _isLocalSubtitlePlaybackCurrent(localPlayback)) {
+      final track = _newLocalSubtitleSource(
+        localPlayback,
+        local.name!,
+        selectedByDefault: _localSubtitleSelected,
+      );
+      _localSubtitleSource = track;
+      source = source.copyWith(
+        subtitles: [track, ...?source.subtitles],
+        notificationConfiguration: source.notificationConfiguration,
+        bufferingConfiguration: source.bufferingConfiguration,
+      );
+    }
+    _mountedLocalSubtitlePlayback = localPlayback;
     try {
       setup = videoController?.setupDataSource(source,
               initialPosition: nativeStart,
               initialDashHeight: initialDashHeight,
               fastDashStartupFallback: fastDashStartupFallback) ??
           Future<void>.value();
+      // The source has cleared the previous video's cues synchronously.
+      _restoreSubtitleTiming(generation);
       _controllerSetup = setup;
       _controllerSetupAttempt =
           (generation: generation, sourceIndex: sourceIndex);
@@ -1286,6 +1361,7 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
     _cancelSetup();
     _setupCancellation = Completer<void>();
     final generation = ++_playbackGeneration;
+    _subtitleTimingTarget = null;
     _clearQualityPreparation();
     _parentPlaybackGeneration = player.backendPlaybackGeneration;
     if (_controllerSetup != null) {
@@ -1305,6 +1381,28 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
     _playbackVideoId = null;
     if (newState.video != null || newState.offlineVideo != null) {
       final idedVideo = offline ? newState.offlineVideo! : newState.video!;
+      final isWatch = offline
+          ? newState.offlineVideo!.musicMetadata == null
+          : newState.video!.musicMetadata == null;
+      final localPlayback = WatchLocalSubtitles.supported && isWatch
+          ? (
+              owner: (profileId: db.profileId, videoId: idedVideo.videoId),
+              occurrence: player.playbackPositionGeneration,
+            )
+          : null;
+      if (_localSubtitlePlayback != localPlayback) {
+        _localSubtitlePlayback = localPlayback;
+        _mountedLocalSubtitlePlayback = null;
+        _localSubtitleSource = null;
+        _localSubtitleSelected = false;
+      }
+      if (localPlayback != null && _localSubtitleSource == null) {
+        final name = await _readLocalSubtitleName(localPlayback.owner);
+        if (!_isCurrentAttempt(generation, 0)) return;
+        if (name != null && _isLocalSubtitlePlaybackCurrent(localPlayback)) {
+          _localSubtitleSource = _newLocalSubtitleSource(localPlayback, name);
+        }
+      }
       if (_qualityVideoId != idedVideo.videoId) {
         _qualityVideoId = idedVideo.videoId;
         _videoQuality = settings.state.rememberVideoQuality
@@ -1912,6 +2010,133 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
     return -1;
   }
 
+  bool _isLocalSubtitlePlaybackCurrent(_WatchSubtitlePlayback playback) =>
+      !isClosed &&
+      !player.isClosed &&
+      !player.state.isAudio &&
+      !player.state.isClosing &&
+      _localSubtitlePlayback == playback &&
+      player.playbackPositionGeneration == playback.occurrence &&
+      db.profileId == playback.owner.profileId;
+
+  bool get canManageLocalSubtitles {
+    final playback = _localSubtitlePlayback;
+    return playback != null &&
+        _mountedLocalSubtitlePlayback == playback &&
+        videoController?.betterPlayerDataSource != null &&
+        _isLocalSubtitlePlaybackCurrent(playback);
+  }
+
+  String? get localSubtitleName =>
+      canManageLocalSubtitles ? _localSubtitleSource?.name : null;
+
+  _WatchLocalSubtitleSource _newLocalSubtitleSource(
+    _WatchSubtitlePlayback playback,
+    String name, {
+    bool selectedByDefault = false,
+  }) {
+    late final _WatchLocalSubtitleSource source;
+    source = _WatchLocalSubtitleSource(
+      name,
+      () async {
+        final text = await _localSubtitles.read(playback.owner);
+        if (!identical(source, _localSubtitleSource) ||
+            !_isLocalSubtitlePlaybackCurrent(playback)) {
+          throw const FormatException('The local subtitle was changed');
+        }
+        return text;
+      },
+      selectedByDefault: selectedByDefault,
+    );
+    return source;
+  }
+
+  Future<String?> _readLocalSubtitleName(WatchLocalSubtitleOwner owner) async {
+    try {
+      return await _localSubtitles.attachment(owner);
+    } on PlatformException {
+      return null;
+    } on MissingPluginException {
+      return null;
+    }
+  }
+
+  Future<WatchLocalSubtitleResult> pickLocalSubtitle() =>
+      _changeLocalSubtitle(picking: true);
+
+  Future<WatchLocalSubtitleResult> removeLocalSubtitle() =>
+      _changeLocalSubtitle(picking: false);
+
+  Future<WatchLocalSubtitleResult> _changeLocalSubtitle(
+      {required bool picking}) async {
+    final playback = _localSubtitlePlayback;
+    if (playback == null ||
+        !canManageLocalSubtitles ||
+        _changingLocalSubtitle) {
+      return WatchLocalSubtitleResult.cancelled;
+    }
+    _changingLocalSubtitle = true;
+    WatchLocalSubtitlePick? pick;
+    try {
+      if (picking) {
+        pick = await _localSubtitles.pick(playback.owner);
+        if (pick == null || !_isLocalSubtitlePlaybackCurrent(playback)) {
+          return WatchLocalSubtitleResult.cancelled;
+        }
+        await _localSubtitles.save(pick.token);
+      } else {
+        await _localSubtitles.remove(playback.owner);
+      }
+      if (!_isLocalSubtitlePlaybackCurrent(playback)) {
+        return WatchLocalSubtitleResult.cancelled;
+      }
+
+      final previous = _localSubtitleSource;
+      final replacement =
+          pick == null ? null : _newLocalSubtitleSource(playback, pick.name);
+      _localSubtitleSource = replacement;
+      final controller = videoController;
+      if (controller == null) return WatchLocalSubtitleResult.done;
+      final tracks = controller.betterPlayerSubtitlesSourceList;
+      tracks.remove(previous);
+      if (identical(_failedSubtitle, previous) && previous != null) {
+        dismissSubtitleFailure();
+      }
+      if (replacement != null) {
+        tracks.insert(0, replacement);
+        await controller.setupSubtitleSource(replacement);
+      } else if (previous != null &&
+          identical(controller.betterPlayerSubtitlesSource, previous)) {
+        final off = tracks
+            .where(
+                (track) => track.type == BetterPlayerSubtitlesSourceType.none)
+            .firstOrNull;
+        if (off == null) return WatchLocalSubtitleResult.done;
+        _clearingLocalSubtitle = true;
+        try {
+          await controller.setupSubtitleSource(off);
+        } finally {
+          _clearingLocalSubtitle = false;
+        }
+      }
+      return WatchLocalSubtitleResult.done;
+    } on FormatException {
+      return WatchLocalSubtitleResult.invalidFile;
+    } on PlatformException catch (error) {
+      return switch (error.code) {
+        'UNSUPPORTED_SUBTITLE' ||
+        'SUBTITLE_TOO_LARGE' =>
+          WatchLocalSubtitleResult.invalidFile,
+        _ => WatchLocalSubtitleResult.unavailable,
+      };
+    } on MissingPluginException {
+      return WatchLocalSubtitleResult.unavailable;
+    } finally {
+      if (pick != null) await _localSubtitles.discardPick(pick.token);
+      _changingLocalSubtitle = false;
+    }
+  }
+
   @override
   List<String> getSubtitles() {
     return videoController?.betterPlayerSubtitlesSourceList
@@ -1926,12 +2151,89 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
       ) ??
       false;
 
+  void _restoreSubtitleTiming(int generation) {
+    final videoId = state.offlineVideo?.videoId ?? state.video?.videoId;
+    final controller = videoController;
+    if (_subtitleTimingTarget != null ||
+        videoId == null ||
+        controller == null) {
+      return;
+    }
+    final profileId = db.profileId;
+    final saved = db
+        .forProfile(profileId)
+        .getSettings(_subtitleTimingKey(videoId))
+        ?.value;
+    _subtitleTimingTarget = (
+      videoId: videoId,
+      generation: generation,
+      profileId: profileId,
+      sessionRevision: settings.appCubit.state.sessionRevision,
+    );
+    controller.setSubtitleOffset(
+      _boundedSubtitleOffset(int.tryParse(saved ?? '') ?? 0),
+    );
+  }
+
+  WatchSubtitleTimingTarget? get subtitleTimingTarget {
+    final target = _subtitleTimingTarget;
+    if (target == null ||
+        isClosed ||
+        player.isClosed ||
+        player.state.isAudio ||
+        player.state.isClosing ||
+        _parentPlaybackGeneration != player.backendPlaybackGeneration ||
+        videoController == null ||
+        target.videoId !=
+            (state.offlineVideo?.videoId ?? state.video?.videoId) ||
+        target.profileId != db.profileId ||
+        target.sessionRevision != settings.appCubit.state.sessionRevision) {
+      return null;
+    }
+    return target;
+  }
+
+  static Duration _boundedSubtitleOffset(int milliseconds) => Duration(
+      milliseconds: milliseconds.clamp(-subtitleTimingLimit.inMilliseconds,
+          subtitleTimingLimit.inMilliseconds));
+
+  /// Shift captions by [shift], or reset to their authored timing.
+  Future<void> adjustSubtitleTiming(WatchSubtitleTimingTarget target,
+      {Duration? shift}) {
+    // Keep rapid nudges in order, including across dialog reopenings.
+    final update = _subtitleTimingUpdate.then((_) async {
+      if (subtitleTimingTarget != target) return;
+      final database = db.forProfile(target.profileId);
+      final key = _subtitleTimingKey(target.videoId);
+      final offset = shift == null
+          ? Duration.zero
+          : _boundedSubtitleOffset(
+              (videoController!.subtitleOffset.value + shift).inMilliseconds);
+      if (offset == Duration.zero) {
+        await database.deleteSetting(key);
+      } else {
+        await database
+            .saveSetting(SettingsValue(key, offset.inMilliseconds.toString()));
+      }
+
+      final active = subtitleTimingTarget;
+      if (active != null &&
+          active.videoId == target.videoId &&
+          active.profileId == target.profileId &&
+          active.sessionRevision == target.sessionRevision) {
+        videoController!.setSubtitleOffset(offset);
+      }
+    });
+    _subtitleTimingUpdate = update.then<void>((_) {}, onError: (Object _) {});
+    return update;
+  }
+
   @override
   int selectedSubtitle() {
-    var tracks = getSubtitles();
-    var track = _subtitleToString(videoController?.betterPlayerSubtitlesSource);
-    log.fine("Current subtitle track: $track");
-    return tracks.indexOf(track);
+    final controller = videoController;
+    final selected = controller?.betterPlayerSubtitlesSource;
+    if (controller == null || selected == null) return -1;
+    return controller.betterPlayerSubtitlesSourceList.indexOf(selected);
   }
 
   @override

@@ -25,6 +25,7 @@ import '../../../models/theme_palette.dart';
 import '../../screens/community_filter_settings.dart';
 import '../../screens/network_proxy.dart';
 import '../../screens/release_notes.dart';
+import '../../screens/settings_search.dart';
 import '../../../../utils/motion.dart';
 import '../../../../recommendations/views/recommendation_settings.dart';
 import '../../components/playback_cache_settings.dart';
@@ -209,6 +210,14 @@ class TVSettingsScreen extends StatelessWidget {
             style: textTheme.bodyLarge!,
             child: ListView(
               children: [
+                SettingsTile(
+                  key: const ValueKey('open-settings-search'),
+                  autofocus: true,
+                  leading: const Icon(Icons.search),
+                  title: locals.settingsSearch,
+                  onSelected: (context) =>
+                      openSettingsSearch(context, television: true),
+                ),
                 SettingsTitle(title: locals.browsing),
                 SettingsTile(
                   title: locals.localRecommendations,
@@ -221,7 +230,6 @@ class TVSettingsScreen extends StatelessWidget {
                   onSelected: showPlaybackCacheSettings,
                 ),
                 SettingsTile(
-                  autofocus: true,
                   title: locals.customizeAppLayout,
                   description:
                       state.appLayout.map((e) => e.getLabel(locals)).join(", "),
@@ -606,6 +614,7 @@ class AdjustmentSettingTile extends StatelessWidget {
 
 class SettingsTile extends StatelessWidget {
   final bool? autofocus;
+  final FocusNode? focusNode;
   final String title;
   final bool? enabled;
   final String? description;
@@ -621,6 +630,7 @@ class SettingsTile extends StatelessWidget {
       this.onSelected,
       this.trailing,
       this.autofocus,
+      this.focusNode,
       this.leading,
       this.enabled,
       this.onKeyEvent});
@@ -630,6 +640,7 @@ class SettingsTile extends StatelessWidget {
     ColorScheme colors = Theme.of(context).colorScheme;
     TextTheme textTheme = Theme.of(context).textTheme;
     return Focus(
+        focusNode: focusNode,
         canRequestFocus: enabled,
         autofocus: autofocus ?? false,
         onKeyEvent: (node, event) => onKeyEvent != null

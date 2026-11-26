@@ -27,6 +27,7 @@ import 'package:clipious/videos/views/components/add_to_playlist_button.dart';
 import '../../../utils.dart';
 import '../../../videos/models/video.dart';
 import '../../../videos/views/components/video_share_button.dart';
+import '../../../videos/views/components/watch_notes_button.dart';
 
 const double tabletMiniPlayerFraction = 0.25;
 
@@ -172,6 +173,10 @@ class _PlayerState extends State<Player> {
             context.select((PlayerCubit value) => value.state.orientation);
         final flowWatch = !isTv && !isAudio && currentlyPlaying != null;
         final offlineVideo = showPlayer && !isAudio && currentlyPlaying == null;
+        final offlineWatchId = offlineVideo
+            ? context.select((PlayerCubit value) =>
+                value.state.offlineCurrentlyPlaying?.videoId)
+            : null;
         final expandedAudio = !isTv &&
             showPlayer &&
             isAudio &&
@@ -560,20 +565,22 @@ class _PlayerState extends State<Player> {
                                                                   ),
                                                                   actions: isHidden ||
                                                                           openingSong !=
-                                                                              null ||
-                                                                          currentlyPlaying ==
                                                                               null
                                                                       ? []
                                                                       : [
-                                                                          VideoShareButton(
-                                                                            video:
-                                                                                currentlyPlaying,
-                                                                            showTimestampOption:
-                                                                                true,
-                                                                            inPlayer:
-                                                                                true,
-                                                                          ),
-                                                                          if (!isMusic)
+                                                                          if (offlineWatchId !=
+                                                                              null)
+                                                                            WatchNotesButton(videoId: offlineWatchId),
+                                                                          if (currentlyPlaying !=
+                                                                              null)
+                                                                            VideoShareButton(
+                                                                              video: currentlyPlaying,
+                                                                              showTimestampOption: true,
+                                                                              inPlayer: true,
+                                                                            ),
+                                                                          if (!isMusic &&
+                                                                              currentlyPlaying !=
+                                                                                  null)
                                                                             AddToPlayListButton(
                                                                                 key: ValueKey(currentlyPlaying),
                                                                                 video: currentlyPlaying,

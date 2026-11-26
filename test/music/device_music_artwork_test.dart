@@ -64,6 +64,76 @@ void main() {
     expect(loaded, findsOneWidget);
   }
 
+  testWidgets('mosaic keeps four distinct covers in stable album order',
+      (tester) async {
+    final digest = 'a' * 43;
+    File cover(String name) => File.fromUri(files.uri.resolve(name))
+      ..writeAsBytesSync(base64Decode(png));
+    final first = cover('$digest.jpg');
+    final duplicate = cover('adjacent-$digest.jpg');
+    final second = cover('second.png');
+    final third = cover('third.png');
+    final fourth = cover('fourth.png');
+    final fifth = cover('fifth.png');
+
+    LocalMusicTrack track(String album, {File? art, File? adjacent}) =>
+        LocalMusicTrack(
+          uri: 'content://documents/$album',
+          title: album,
+          album: album,
+          albumKey: album,
+          artPath: art?.path,
+          adjacentArtPath: adjacent?.path,
+        );
+
+    final tracks = [
+      track('06', art: fifth),
+      track('05', art: fourth),
+      track('04', art: first, adjacent: third),
+      track('03', art: second),
+      track('02', adjacent: duplicate),
+      track('01', art: second),
+      track('01', art: first),
+    ];
+    Future<void> showCovers(Iterable<LocalMusicTrack> tracks) => show(tester,
+        artwork: DeviceMusicCoverMosaic(
+            tracks: tracks, fallbackIcon: Icons.person_outline));
+    List<File> covers() => tester
+        .widgetList<Image>(find.byType(Image))
+        .map((image) => (image.image as ResizeImage).imageProvider as FileImage)
+        .map((image) => image.file)
+        .toList();
+
+    await showCovers(tracks);
+    expect(covers().map((file) => file.path),
+        [first.path, second.path, third.path, fourth.path]);
+    await showCovers(tracks.reversed);
+    expect(covers().map((file) => file.path),
+        [first.path, second.path, third.path, fourth.path]);
+  });
+
+  testWidgets('mosaic decodes a 512px album cover at thumbnail size',
+      (tester) async {
+    await show(
+      tester,
+      artwork: DeviceMusicCoverMosaic(
+        tracks: [
+          LocalMusicTrack(
+            uri: 'content://documents/track',
+            title: 'Track',
+            album: 'Album',
+            albumKey: 'album',
+            artPath: File('assets/icon.png').absolute.path,
+          ),
+        ],
+        fallbackIcon: Icons.person_outline,
+      ),
+    );
+    await waitForDecodedImage(tester);
+    final decoded = tester.widget<RawImage>(find.byType(RawImage)).image!;
+    expect((decoded.width, decoded.height), (144, 144));
+  });
+
   testWidgets('adjacent source, decode budget and crop react to preferences',
       (tester) async {
     adjacent.writeAsBytesSync(base64Decode(png));
@@ -98,6 +168,38 @@ void main() {
     expect(image(tester).image, FileImage(embedded));
     expect(image(tester).fit, BoxFit.contain);
     await waitForDecodedImage(tester);
+  });
+
+  testWidgets('disabled covers skip image loading and restore the saved style',
+      (tester) async {
+    adjacent.writeAsBytesSync(base64Decode(png));
+    await tester.runAsync(() async {
+      await DeviceMusicArtworkPreferences.setLoadCovers(db, false);
+      await DeviceMusicArtworkPreferences.setQuality(
+          db, DeviceMusicArtworkQuality.high);
+      await DeviceMusicArtworkPreferences.setCrop(
+          db, DeviceMusicArtworkCrop.fit);
+    });
+    await show(tester);
+    expect(find.byWidget(placeholder), findsOneWidget);
+    expect(find.byType(Image), findsNothing);
+
+    await tester
+        .runAsync(() => DeviceMusicArtworkPreferences.setLoadCovers(db, true));
+    await tester.pump();
+    final provider = image(tester).image as ResizeImage;
+    expect(provider.imageProvider, FileImage(adjacent));
+    expect((provider.width, provider.height), (1024, 1024));
+    expect(image(tester).fit, BoxFit.contain);
+    await waitForDecodedImage(tester);
+
+    await tester
+        .runAsync(() => DeviceMusicArtworkPreferences.setLoadCovers(db, false));
+    await tester.pump();
+    expect(find.byWidget(placeholder), findsOneWidget);
+    expect(find.byType(Image), findsNothing);
+    expect(adjacent.existsSync(), isTrue);
+    expect(embedded.existsSync(), isTrue);
   });
 
   for (final corrupt in [false, true]) {

@@ -118,6 +118,11 @@ class MethodChannelVideoPlayer extends VideoPlayerPlatform {
         dataSourceDescription = <String, dynamic>{
           'key': dataSource.key,
           'uri': dataSource.uri,
+          if (dataSource.formatHint != null)
+            'formatHint': dataSource.rawFormalHint,
+          if (dataSource.initialPosition != null)
+            'initialPositionMs': dataSource.initialPosition!.inMilliseconds,
+          if (dataSource.videoOnly) 'videoOnly': true,
           'useCache': false,
           'maxCacheSize': 0,
           'maxCacheFileSize': 0,

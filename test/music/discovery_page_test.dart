@@ -1,21 +1,29 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:auto_route/auto_route.dart';
 import 'package:clipious/playlists/models/playlist_reference.dart';
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/content_filter/community_filter.dart';
+import 'package:clipious/downloads/models/download_formats.dart';
+import 'package:clipious/downloads/models/downloaded_video.dart';
+import 'package:clipious/downloads/services/download_storage.dart';
+import 'package:clipious/downloads/states/download_manager.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' show isTv;
+import 'package:clipious/music/models/music_card_origin.dart';
 import 'package:clipious/music/models/music_artist_page.dart';
 import 'package:clipious/music/models/music_charts.dart';
 import 'package:clipious/music/models/music_collection.dart';
 import 'package:clipious/music/models/music_library_entry.dart';
 import 'package:clipious/music/models/music_track.dart';
+import 'package:clipious/music/models/on_device_music_entry.dart';
 import 'package:clipious/music/services/music_catalog_service.dart';
 import 'package:clipious/music/services/music_library_service.dart';
 import 'package:clipious/music/services/music_starter_artists.dart';
+import 'package:clipious/music/services/music_visibility.dart';
 import 'package:clipious/music/views/components/music_catalog_cards.dart';
 import 'package:clipious/music/views/screens/music_discovery.dart';
 import 'package:clipious/network/network_proxy.dart';
@@ -178,8 +186,63 @@ class _Player extends Cubit<PlayerState> implements PlayerCubit {
   final plays =
       <({List<String> ids, int? startIndex, bool? audio, bool fromMusic})>[];
 
+  final offlinePlays = <List<OnDeviceMusicEntry>>[];
+
+  @override
+  final musicSelectionFailureRevision = ValueNotifier(0);
+
+  MusicCardOrigin? cardOrigin;
+  int cardToggles = 0;
+
+  void setCardPlaying(MusicCardOrigin origin) {
+    cardOrigin = origin;
+    emit(state.copyWith(isPlaying: true));
+  }
+
+  @override
+  bool? musicCardPlaying(MusicCardOrigin origin) =>
+      cardOrigin == origin ? state.isPlaying : null;
+
+  @override
+  bool toggleMusicCard(MusicCardOrigin origin) {
+    if (cardOrigin != origin) return false;
+    cardToggles++;
+    emit(state.copyWith(isPlaying: !state.isPlaying));
+    return true;
+  }
+
+  @override
+  Future<void> playMusicFromCard(List<Video> videos,
+          {required MusicCardOrigin origin,
+          Duration? startAt,
+          int? startIndex,
+          String? queueTitle,
+          PlaylistReference? recommendationSource,
+          bool songTap = false,
+          bool collectionDetail = false}) =>
+      playVideo(videos,
+          audio: true,
+          startAt: startAt,
+          startIndex: startIndex,
+          queueTitle: queueTitle,
+          recommendationSource: recommendationSource,
+          songTap: songTap,
+          collectionDetail: collectionDetail,
+          fromMusic: true);
+
   void setAudioPlayer({required bool minimized}) =>
       emit(state.copyWith(isAudio: true, isHidden: false, isMini: minimized));
+
+  @override
+  Future<void> playOnDeviceMusic(List<OnDeviceMusicEntry> tracks,
+      {int startIndex = 0,
+      String? queueTitle,
+      bool songTap = false,
+      bool collectionDetail = false,
+      bool retainQueueOrder = false,
+      bool Function()? isCurrent}) async {
+    if (isCurrent?.call() != false) offlinePlays.add(tracks);
+  }
 
   @override
   Future<void> playVideo(List<Video> videos,
@@ -190,13 +253,68 @@ class _Player extends Cubit<PlayerState> implements PlayerCubit {
       String? queueTitle,
       PlaylistReference? recommendationSource,
       bool fromMusic = false,
-      bool songTap = false}) async {
+      bool songTap = false,
+      bool collectionDetail = false}) async {
     plays.add((
       ids: videos.map((video) => video.videoId).toList(),
       startIndex: startIndex,
       audio: audio,
       fromMusic: fromMusic,
     ));
+  }
+
+  @override
+  Future<void> close() async {
+    musicSelectionFailureRevision.dispose();
+    await super.close();
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => throw UnimplementedError();
+}
+
+class _Downloads extends Cubit<DownloadManagerState>
+    implements DownloadManagerCubit {
+  _Downloads() : super(const DownloadManagerState());
+
+  final _changes = ValueNotifier(0);
+
+  @override
+  Listenable get discoveryOfflineChanges => _changes;
+
+  final selections = <String, List<String>>{};
+  final requests = <({String profileId, List<String> ids})>[];
+  List<MusicFileProbe> readable = [];
+
+  @override
+  List<String> offlineDiscoveryIds(String profileId) =>
+      selections[profileId] ?? const [];
+
+  @override
+  Future<bool> setOfflineDiscovery(
+      String profileId, Iterable<Video> songs) async {
+    final ids = songs.map((song) => song.videoId).toList();
+    requests.add((profileId: profileId, ids: ids));
+    selections[profileId] = ids;
+    _changes.value++;
+    return true;
+  }
+
+  @override
+  Future<List<MusicFileProbe>> probeOfflineDiscovery(String profileId) async =>
+      readable.where((file) => file.download.profileId == profileId).toList();
+
+  void report(List<DownloadedVideo> rows, {required bool waitingForWifi}) {
+    emit(state.copyWith(
+        videos: rows,
+        wifiOnly: waitingForWifi,
+        waitingForWifi: waitingForWifi));
+  }
+
+  @override
+  Future<void> close() async {
+    _changes.dispose();
+    await super.close();
   }
 
   @override
@@ -263,13 +381,16 @@ void main() {
       {double textScale = 1,
       bool active = true,
       bool settle = true,
-      SettingsCubit? settings}) async {
+      SettingsCubit? settings,
+      DownloadManagerCubit? downloads}) async {
     await tester.pumpWidget(MultiBlocProvider(
       providers: [
         BlocProvider<AppCubit>.value(value: app),
         BlocProvider<PlayerCubit>.value(value: player),
         if (settings != null)
           BlocProvider<SettingsCubit>.value(value: settings),
+        if (downloads != null)
+          BlocProvider<DownloadManagerCubit>.value(value: downloads),
       ],
       child: MaterialApp(
         localizationsDelegates: AppLocalizations.localizationsDelegates,
@@ -574,6 +695,8 @@ void main() {
     await show(tester);
     final retry = find.byKey(const ValueKey('music-home-fresh-retry'));
     expect(tester.widget<TextButton>(retry).onPressed, isNull);
+    expect(find.byKey(const ValueKey('music-home-fresh-browse-offline')),
+        findsNothing);
     expect(catalog.chartRequests, hasLength(1));
     await tester.pump(const Duration(minutes: 1));
     expect(tester.widget<TextButton>(retry).onPressed, isNotNull);
@@ -587,6 +710,17 @@ void main() {
     expect(retry, findsNothing);
     expect(find.byKey(const ValueKey('music-home-chart')), findsOneWidget);
     expect(catalog.chartRequests, hasLength(2));
+  });
+
+  testWidgets('a chart connection failure offers offline browsing by Retry',
+      (tester) async {
+    catalog.chartFailure = TimeoutException('Connection timed out');
+    await show(tester);
+
+    expect(
+        find.byKey(const ValueKey('music-home-fresh-retry')), findsOneWidget);
+    expect(find.byKey(const ValueKey('music-home-fresh-browse-offline')),
+        findsOneWidget);
   });
 
   testWidgets('changing chart region respects the active instance cooldown',
@@ -652,6 +786,31 @@ void main() {
         find.descendant(of: row, matching: find.byTooltip('Music actions')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('music-song-play')));
+    await tester.pumpAndSettle();
+  }
+
+  Future<void> tapAndWaitForEligibility(WidgetTester tester, Finder button,
+      MusicTrack track, bool eligible) async {
+    await tester.runAsync(() async {
+      final recommendations =
+          RecommendationService.forProfile(db, db.profileId);
+      final completed = Completer<void>();
+      void changed() {
+        if (!completed.isCompleted &&
+            recommendations.eligibleMusic([track]).isNotEmpty == eligible) {
+          completed.complete();
+        }
+      }
+
+      recommendations.changes.addListener(changed);
+      try {
+        await tester.tap(button);
+        await tester.pumpAndSettle();
+        await completed.future.timeout(const Duration(seconds: 5));
+      } finally {
+        recommendations.changes.removeListener(changed);
+      }
+    });
     await tester.pumpAndSettle();
   }
 
@@ -727,6 +886,27 @@ void main() {
     await tester.tap(enqueue);
     await tester.pumpAndSettle();
     expect(player.plays.single.ids, ['quickpick01']);
+    final originalSlot = tester.getTopLeft(second);
+    await tester.tap(
+        find.descendant(of: second, matching: find.byTooltip('Music actions')));
+    await tester.pumpAndSettle();
+    const secondTrack =
+        MusicTrack(videoId: 'quickpick02', title: 'Second pick');
+    await tapAndWaitForEligibility(
+        tester, find.text('Not interested'), secondTrack, false);
+    expect(second, findsNothing);
+    final undo = find.widgetWithText(SnackBarAction, 'Undo');
+    expect(undo, findsOneWidget);
+    await tester.runAsync(() =>
+        RecommendationService.forProfile(db, db.profileId).feedback(
+            const MusicTrack(videoId: 'quickpick01', title: 'First pick')
+                .toVideo(),
+            RecommendationDomain.music,
+            RecommendationFeedback.like));
+    await tester.pumpAndSettle();
+    expect(second, findsNothing);
+    await tapAndWaitForEligibility(tester, undo, secondTrack, true);
+    expect(tester.getTopLeft(second), originalSlot);
     tester.view.devicePixelRatio = 1;
     tester.view.physicalSize = const Size(360, 560);
     addTearDown(tester.view.resetDevicePixelRatio);
@@ -1306,6 +1486,104 @@ void main() {
     expect(catalog.discoveryCalls, 1);
   });
 
+  testWidgets('slow initial sections use their shelf layouts and one status', (
+    tester,
+  ) async {
+    const artistId = 'UCaaaaaaaaaaaaaaaaaaaaaa';
+    const release = MusicCollection(id: 'OLAK5uy_loading', title: 'New album');
+    await tester.runAsync(
+      () => library.save(
+        const MusicLibraryEntry(
+          kind: MusicLibraryKind.artist,
+          id: artistId,
+          title: 'Saved artist',
+        ),
+      ),
+    );
+    catalog.artistReleases[artistId] = const MusicArtistReleases(
+      releases: [release],
+    );
+    final chart = catalog.chartResponse = Completer<List<MusicTrack>>();
+    catalog.holdGenres = catalog.holdDiscovery = true;
+    await show(tester, settle: false);
+
+    final discovery = find.byKey(const ValueKey('music-discovery-loading'));
+    final releases = find.byKey(const ValueKey('music-home-releases-loading'));
+    final charts = find.byKey(const ValueKey('music-home-chart-loading'));
+    final explore = find.byKey(const ValueKey('music-explore-loading'));
+    final grid = find.descendant(of: explore, matching: find.byType(Wrap));
+    final shelf = find.descendant(
+      of: charts,
+      matching: find.byType(MusicCatalogShelf),
+    );
+    final status = find.bySemanticsLabel('Finding music…');
+    expect(discovery, findsOneWidget);
+    expect(releases, findsOneWidget);
+    expect(shelf, findsOneWidget);
+    expect(tester.widget<Wrap>(grid).children, hasLength(4));
+    expect(find.bySemanticsLabel('Explore music'), findsNothing);
+    expect(find.bySemanticsLabel('Releases from saved artists'), findsNothing);
+    expect(status, findsOneWidget);
+    final liveStatus = tester.getSemantics(status);
+    expect(liveStatus, containsSemantics(isLiveRegion: true));
+    final statusId = liveStatus.id;
+    final shelfSize = tester.getSize(shelf);
+
+    chart.complete([
+      const MusicTrack(videoId: 'chartTrack1', title: 'Regional recording'),
+    ]);
+    await tester.pumpAndSettle();
+    expect(releases, findsNothing);
+    expect(charts, findsNothing);
+    expect(find.text(release.title), findsOneWidget);
+    expect(
+      tester.getSize(find.byKey(const ValueKey('music-home-chart'))),
+      shelfSize,
+    );
+    expect(discovery, findsOneWidget);
+    expect(tester.getSemantics(status).id, statusId);
+
+    catalog.discoveries.first.complete([_discovered]);
+    await tester.pumpAndSettle();
+    catalog.discoveries.last.complete([]);
+    await tester.pumpAndSettle();
+    expect(discovery, findsNothing);
+    expect(find.text(_discovered.title), findsOneWidget);
+    expect(explore, findsOneWidget);
+    expect(tester.getSemantics(status).id, statusId);
+
+    for (final _ in _genres) {
+      catalog.genreResponses.last.complete([]);
+      await tester.pumpAndSettle();
+    }
+    expect(explore, findsNothing);
+    expect(status, findsNothing);
+  });
+
+  testWidgets('initial placeholders stay static while reduced motion is set', (
+    tester,
+  ) async {
+    catalog.holdDiscovery = true;
+    tester.platformDispatcher.accessibilityFeaturesTestValue =
+        const FakeAccessibilityFeatures(disableAnimations: true);
+    addTearDown(tester.platformDispatcher.clearAccessibilityFeaturesTestValue);
+    await show(tester);
+    final placeholder = find.byKey(const ValueKey('music-discovery-loading'));
+    expect(placeholder, findsOneWidget);
+    expect(
+      find.descendant(
+          of: placeholder,
+          matching: find.byType(TweenAnimationBuilder<double>)),
+      findsNothing,
+    );
+    expect(tester.binding.hasScheduledFrame, isFalse);
+
+    catalog.discoveries.single.complete([]);
+    await tester.pumpAndSettle();
+    expect(placeholder, findsNothing);
+    expect(find.byKey(const ValueKey('music-discovery-empty')), findsOneWidget);
+  });
+
   testWidgets('visible Home discovers songs once and opens verified results',
       (tester) async {
     await tester.runAsync(installCommunityMusicFilters);
@@ -1347,6 +1625,161 @@ void main() {
     expect(catalog.trendingCalls, 0);
   });
 
+  testWidgets('Discovery snooze removes the recording and can be ended in Home',
+      (tester) async {
+    catalog.holdDiscovery = true;
+    await show(tester, settle: false);
+    catalog.discoveries.single.complete([_discovered]);
+    await tester.pumpAndSettle();
+    final card = find.byKey(const ValueKey('music-discovery-discover001'));
+    await tester.ensureVisible(card);
+    await tester.pumpAndSettle();
+    await tester.longPress(card);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Snooze in Discovery'));
+    await tester.pumpAndSettle();
+
+    final visibility = MusicVisibility.forProfile(db, db.profileId);
+    Future<void> change(Finder target) async {
+      await tester.runAsync(() async {
+        final saved = Completer<void>();
+        void changed() {
+          if (!saved.isCompleted) saved.complete();
+        }
+
+        visibility.addListener(changed);
+        try {
+          await tester.tap(target);
+          await tester.pumpAndSettle();
+          await saved.future.timeout(const Duration(seconds: 5));
+        } finally {
+          visibility.removeListener(changed);
+        }
+      });
+      await tester.pumpAndSettle();
+    }
+
+    await change(find.text('7 days'));
+    expect(card, findsNothing);
+    final manager = find.text('Snoozed songs');
+    await tester.ensureVisible(manager);
+    await tester.tap(manager);
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Until '), findsWidgets);
+    await change(find.byTooltip('End snooze'));
+    expect(visibility.activeSnoozes, isEmpty);
+    await tester.tap(find.text('Close'));
+    await tester.pumpAndSettle();
+    expect(card, findsOneWidget);
+    expect(catalog.discoveryCalls, 1);
+  });
+
+  testWidgets('offline discovery saves visible picks and plays readable files',
+      (tester) async {
+    final downloads = _Downloads();
+    addTearDown(downloads.close);
+    await tester.runAsync(installCommunityMusicFilters);
+    catalog.holdDiscovery = true;
+    await show(tester, downloads: downloads, settle: false);
+    const unreadable = MusicTrack(videoId: 'unreadable1', title: 'Unreadable');
+    const pending = MusicTrack(videoId: 'queuedSong1', title: 'Will download');
+    catalog.discoveries.single.complete([
+      _discovered,
+      const MusicTrack(
+          videoId: 'hiddenSong1',
+          title: 'Hidden song',
+          uploaderChannelId: musicListedUploader),
+      unreadable,
+      pending,
+    ]);
+    await tester.pumpAndSettle();
+    expect(downloads.requests, isEmpty);
+
+    final profileId = app.state.profileId;
+    final keep = find.byKey(const ValueKey('music-discovery-keep-offline'));
+    await tester.ensureVisible(keep);
+    await tester.tap(keep);
+    await tester.pumpAndSettle();
+    expect(downloads.requests.single.profileId, profileId);
+    expect(downloads.requests.single.ids,
+        [_discovered.videoId, unreadable.videoId, pending.videoId]);
+
+    DownloadedVideo row(MusicTrack track, {bool complete = true}) =>
+        DownloadedVideo(
+            videoId: track.videoId,
+            title: track.title,
+            profileId: profileId,
+            musicMetadata: track.musicMetadata,
+            lengthSeconds: 63,
+            quality: highestAudioDownloadQuality,
+            audioOnly: true,
+            downloadComplete: complete);
+    final available = row(_discovered);
+    final verified = DownloadedVideo.fromJson(available.toJson());
+    final proof = 'a' * 64;
+    downloads.readable = [
+      (
+        download: verified,
+        uri: 'file:///offline-song',
+        identity: proof,
+        byteLength: 42
+      ),
+    ];
+    downloads.report(
+        [available, row(unreadable), row(pending, complete: false)],
+        waitingForWifi: true);
+    await tester.pumpAndSettle();
+    expect(find.text('1 of 3 songs available offline'), findsOneWidget);
+    expect(find.text('Waiting for Wi-Fi'), findsOneWidget);
+
+    // The profile can listen and opt out even when the catalog is unavailable.
+    app.change(app.state.copyWith(server: null));
+    await tester.pumpAndSettle();
+    expect(keep, findsNothing);
+    final play = find.byKey(const ValueKey('music-discovery-play-offline'));
+    await tester.ensureVisible(play);
+    await tester.tap(play);
+    await tester.pumpAndSettle();
+    final entry = player.offlinePlays.single.single;
+    expect(entry.download, verified);
+    expect(entry.downloadFileProof, proof);
+
+    final stop = find.byKey(const ValueKey('music-discovery-stop-offline'));
+    await tester.ensureVisible(stop);
+    await tester.tap(stop);
+    await tester.pumpAndSettle();
+    expect(downloads.requests.last.profileId, profileId);
+    expect(downloads.requests.last.ids, isEmpty);
+    expect(play, findsNothing);
+    expect(stop, findsNothing);
+  });
+
+  testWidgets('offline discovery actions expire when the profile changes',
+      (tester) async {
+    final downloads = _Downloads();
+    addTearDown(downloads.close);
+    catalog.holdDiscovery = true;
+    final first = app.state.profileId;
+    downloads.selections[first] = [_discovered.videoId];
+    await show(tester, downloads: downloads, settle: false);
+    catalog.discoveries.single.complete([]);
+    await tester.pumpAndSettle();
+    final stop = find.byKey(const ValueKey('music-discovery-stop-offline'));
+    final stale = tester.widget<TextButton>(stop).onPressed!;
+
+    final next = (await tester.runAsync(() => db.createProfile('Second')))!;
+    await tester.runAsync(() => db.useProfile(next.id));
+    app.change(app.state.copyWith(profileId: next.id));
+    stale();
+    await tester.pump();
+    await tester.pump();
+    expect(downloads.requests, isEmpty);
+    expect(downloads.selections[first], [_discovered.videoId]);
+    expect(stop, findsNothing);
+    catalog.discoveries.last.complete([]);
+    await tester.pumpAndSettle();
+  });
+
   void rankDiscovery({bool Function()? available}) {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(const MethodChannel('videre/recommendations'),
@@ -1376,6 +1809,7 @@ void main() {
     await tester.tap(refresh);
     await tester.pump();
     expect(catalog.discoveryCalls, 2);
+    expect(find.byKey(const ValueKey('music-discovery-loading')), findsNothing);
     final card = find.byKey(const ValueKey('music-discovery-discover001'));
     final actions =
         find.descendant(of: card, matching: find.byTooltip('Music actions'));
@@ -1393,50 +1827,41 @@ void main() {
     expect(card, findsOneWidget);
   });
 
-  testWidgets(
-      'discovery exclusions survive native unavailability without refetch',
+  testWidgets('discovery undo restores the same slot without native ranking',
       (tester) async {
     var nativeAvailable = true;
     rankDiscovery(available: () => nativeAvailable);
     catalog.holdDiscovery = true;
     await show(tester, settle: false);
-    catalog.discoveries.single.complete([_discovered]);
+    const before = MusicTrack(videoId: 'discover002', title: 'First song');
+    const after = MusicTrack(videoId: 'discover003', title: 'Last song');
+    catalog.discoveries.single.complete([before, _discovered, after]);
     await tester.pumpAndSettle();
     final card = find.byKey(const ValueKey('music-discovery-discover001'));
+    final first = find.byKey(const ValueKey('music-discovery-discover002'));
+    final last = find.byKey(const ValueKey('music-discovery-discover003'));
     await tester.ensureVisible(card);
     await tester.pumpAndSettle();
+    final oldLocation = tester.getTopLeft(card);
     await tester.tap(
         find.descendant(of: card, matching: find.byTooltip('Music actions')));
     await tester.pumpAndSettle();
     expect(
         find.byKey(const ValueKey('music-song-add-to-queue')), findsOneWidget);
     nativeAvailable = false;
-    await tester.runAsync(() async {
-      final recommendations =
-          RecommendationService.forProfile(db, db.profileId);
-      final excluded = Completer<void>();
-      void changed() {
-        if (recommendations.eligibleMusic([_discovered]).isEmpty &&
-            !excluded.isCompleted) {
-          excluded.complete();
-        }
-      }
-
-      recommendations.changes.addListener(changed);
-      try {
-        await tester.tap(find.text('Not interested'));
-        await tester.pumpAndSettle();
-        await excluded.future.timeout(const Duration(seconds: 5));
-      } finally {
-        recommendations.changes.removeListener(changed);
-      }
-    });
-    await tester.pumpAndSettle();
+    await tapAndWaitForEligibility(
+        tester, find.text('Not interested'), _discovered, false);
     expect(card, findsNothing);
     expect(
         RecommendationService.forProfile(db, db.profileId)
             .eligibleMusic([_discovered]),
         isEmpty);
+    final undo = find.widgetWithText(SnackBarAction, 'Undo');
+    expect(undo, findsOneWidget);
+    await tapAndWaitForEligibility(tester, undo, _discovered, true);
+    expect(tester.getTopLeft(card), oldLocation);
+    expect(tester.getTopLeft(first).dx, lessThan(tester.getTopLeft(card).dx));
+    expect(tester.getTopLeft(last).dx, greaterThan(tester.getTopLeft(card).dx));
     expect(catalog.discoveryCalls, 1);
     expect(catalog.searchCalls, 0);
   });
@@ -2088,8 +2513,11 @@ void main() {
     await tester.pumpAndSettle();
     await show(tester);
     expect(catalog.discoveryCalls, 1);
+    expect(find.byKey(const ValueKey('music-discovery-loading')), findsNothing);
     expect(
         find.byKey(const ValueKey('music-discovery-failure')), findsOneWidget);
+    expect(find.byKey(const ValueKey('music-discovery-browse-offline')),
+        findsNothing);
     final retry = find.byKey(const ValueKey('music-discovery-retry'));
     await tester.ensureVisible(retry);
     await tester.pumpAndSettle();
@@ -2100,6 +2528,79 @@ void main() {
     expect(find.text('Discovered recording'), findsOneWidget);
     expect(find.byKey(const ValueKey('music-discovery-failure')), findsNothing);
     expect(catalog.discoveryCalls, 2);
+  });
+
+  testWidgets(
+      'offline browsing returns to the failed Discovery scroll position',
+      (tester) async {
+    catalog.holdDiscovery = true;
+    catalog.useGenreTracks = true;
+    tester.view.physicalSize = const Size(390, 500);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await show(tester, settle: false);
+    catalog.discoveries.single
+        .completeError(const SocketException('Network is unreachable'));
+    await tester.pumpAndSettle();
+
+    final home = find.byType(MusicHomePage);
+    final homeState = tester.state(home);
+    final scroll = tester
+        .widget<SingleChildScrollView>(
+            find.byKey(const PageStorageKey('music-home')))
+        .controller!;
+    final retry = find.byKey(const ValueKey('music-discovery-retry'));
+    final browse = find.byKey(const ValueKey('music-discovery-browse-offline'));
+    expect(retry, findsOneWidget);
+    expect(browse, findsOneWidget);
+    await tester.ensureVisible(browse);
+    await tester.pumpAndSettle();
+    final offset = scroll.offset;
+    expect(offset, greaterThan(0));
+    await tester.tap(browse);
+    await tester.pumpAndSettle();
+    expect(find.text('Offline music'), findsOneWidget);
+    expect(home, findsNothing);
+
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(tester.state(home), same(homeState));
+    expect(scroll.offset, offset);
+    expect(retry, findsOneWidget);
+    expect(browse, findsOneWidget);
+    expect(catalog.discoveryCalls, 1);
+  });
+
+  testWidgets('offline browsing retains the selected Discovery artist',
+      (tester) async {
+    await tester.runAsync(() => library.save(_saved));
+    catalog.holdDiscovery = true;
+    await show(tester, settle: false);
+    await finishDiscovery(tester, [_discovered]);
+    await finishDiscovery(tester, [artistSong]);
+    await tester.pumpAndSettle();
+
+    final artist = artistChip('Saved artist');
+    await tester.ensureVisible(artist);
+    await tester.tap(artist);
+    await tester.pumpAndSettle();
+    final refresh = find.byKey(const ValueKey('music-discovery-refresh'));
+    await tester.ensureVisible(refresh);
+    await tester.tap(refresh);
+    await tester.pump();
+    catalog.discoveries.last.completeError(TimeoutException('Connection lost'));
+    await tester.pumpAndSettle();
+
+    final browse = find.byKey(const ValueKey('music-discovery-browse-offline'));
+    await tester.ensureVisible(browse);
+    await tester.tap(browse);
+    await tester.pumpAndSettle();
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(tester.widget<ChoiceChip>(artist).selected, isTrue);
+    expect(find.text(artistSong.title), findsOneWidget);
+    expect(catalog.discoveryArtists, [null, 'Saved artist', 'Saved artist']);
   });
 
   for (final transition in [
@@ -2496,7 +2997,43 @@ void main() {
     await tester.ensureVisible(card);
     await tester.tap(card);
     expectSongQueue([second.id, _saved.id], 1);
-    expect((router.pushed!.args as MusicRouteArgs).queueTitle, 'Speed dial');
+    final launched = router.pushed!;
+    final args = launched.args as MusicRouteArgs;
+    expect(args.queueTitle, 'Speed dial');
+    expect(args.cardOrigin, (
+      surface: MusicCardSurface.speedDial,
+      collectionId: null,
+      entryId: _saved.id,
+    ));
+
+    Finder pauseIcon(Finder target) =>
+        find.descendant(of: target, matching: find.byIcon(Icons.pause_rounded));
+    final savedRow = find.byKey(ValueKey('music-home-saved-${_saved.id}'));
+    player.setCardPlaying(args.cardOrigin!);
+    await tester.pumpAndSettle();
+    expect(pauseIcon(card), findsOneWidget);
+    expect(pauseIcon(savedRow), findsNothing);
+
+    await tester.tap(card);
+    await tester.pumpAndSettle();
+    expect(pauseIcon(card), findsNothing);
+    expect(player.cardToggles, 1);
+    expect(router.pushed, same(launched));
+
+    await tester.tap(card);
+    await tester.pumpAndSettle();
+    expect(pauseIcon(card), findsOneWidget);
+    expect(player.cardToggles, 2);
+    expect(router.pushed, same(launched));
+
+    await tester.ensureVisible(savedRow);
+    await tester.tap(savedRow);
+    expect((router.pushed!.args as MusicRouteArgs).cardOrigin, (
+      surface: MusicCardSurface.savedSongs,
+      collectionId: null,
+      entryId: _saved.id,
+    ));
+    expect(player.cardToggles, 2);
 
     // Apply the filter before the button rebuilds to exercise tap admission.
     await tester.runAsync(
@@ -2504,7 +3041,9 @@ void main() {
     await tester.ensureVisible(random);
     await tester.tap(random);
     expectSongQueue([_saved.id], 0);
-    expect((router.pushed!.args as MusicRouteArgs).queueTitle, 'Random pick');
+    final randomArgs = router.pushed!.args as MusicRouteArgs;
+    expect(randomArgs.queueTitle, 'Random pick');
+    expect(randomArgs.cardOrigin, isNull);
   });
 
   testWidgets('stale Home picks are ignored after a profile switch',

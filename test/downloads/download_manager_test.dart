@@ -11,6 +11,7 @@ import 'package:clipious/downloads/states/download_manager.dart';
 import 'package:clipious/downloads/services/download_rename.dart';
 import 'package:clipious/downloads/services/download_storage.dart';
 import 'package:clipious/globals.dart';
+import 'package:clipious/music/services/cached_music.dart';
 import 'package:clipious/network/network_proxy.dart';
 import 'package:clipious/network/gateway_session_bridge.dart';
 import 'package:clipious/network/gateway_http_client.dart';
@@ -37,10 +38,12 @@ import 'package:clipious/videos/models/sponsor_segment_types.dart';
 import 'package:clipious/videos/states/video.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/foundation.dart';
 import 'package:dio/dio.dart';
 import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:path/path.dart' as p;
 
 import '../support/media_companion_transport.dart';
 
@@ -155,6 +158,36 @@ class _VideoCubit extends VideoCubit {
 class _AndroidDownloadStorage extends DownloadStorage {
   @override
   bool get supportsSharedMusic => true;
+}
+
+/// Exercises the manager's profile and availability wiring with real files.
+class _PrivateMusicProbeStorage extends _AndroidDownloadStorage {
+  @override
+  Future<List<MusicFileProbe>> probeMusicFiles(
+      String profileId, Iterable<DownloadedVideo> downloads) async {
+    final probes = <MusicFileProbe>[];
+    for (final download in downloads) {
+      if (download.profileId != profileId ||
+          !download.audioOnly ||
+          !download.downloadComplete ||
+          download.downloadFailed ||
+          download.storageFailed ||
+          download.authenticationRequired) {
+        continue;
+      }
+      final file = File(await download.effectivePath);
+      if (!await file.exists()) continue;
+      final bytes = await file.readAsBytes();
+      if (bytes.isEmpty) continue;
+      probes.add((
+        download: download,
+        uri: file.uri.toString(),
+        identity: sha256.convert(bytes).toString(),
+        byteLength: bytes.length,
+      ));
+    }
+    return probes;
+  }
 }
 
 void main() {
@@ -368,6 +401,224 @@ void main() {
     expect(manager.state.waitingForWifi, true);
     expect(manager.state.downloadProgresses, isEmpty);
     expect(manager.state.totalProgress, 0);
+  });
+
+  group('Keep cached Music', () {
+    const proxyChannel = MethodChannel('videre/proxy');
+    const bytes = [0x1a, 0x45, 0xdf, 0xa3, 1, 2, 3, 4];
+    final song = CachedMusicSong(
+        videoId: 'cached-song',
+        title: 'Cached title',
+        artist: 'Cached artist',
+        lengthSeconds: 27,
+        rendition: 'a' * 64);
+    late Server server;
+    late File snapshot;
+
+    setUp(() async {
+      final previousPlatform = debugDefaultTargetPlatformOverride;
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      addTearDown(() {
+        debugDefaultTargetPlatformOverride = previousPlatform;
+        messenger.setMockMethodCallHandler(proxyChannel, null);
+      });
+      server = await db.getCurrentlySelectedServer();
+      snapshot = File(p.join(documentsDirectory.path, 'cached-song.part'));
+    });
+
+    Map<String, Object> readable([int? length]) => {
+          song.videoId: {
+            'identity': 'a' * 64,
+            'byteLength': length ?? bytes.length
+          },
+        };
+
+    test('saves offline with the configured format, owner, and policy',
+        () async {
+      await MusicDownloadFormat.opus.save(db);
+      await manager.close();
+      final policy = MusicOfflinePolicy(
+          quality: MusicOfflineQuality.dataSaver, wifiOnly: true);
+      var encoded = 0;
+      manager = DownloadManagerCubit(const DownloadManagerState(), _Player(),
+          encodeMusic: (
+              {required input,
+              required output,
+              required video,
+              required token,
+              inputFormat,
+              sourceCodec}) async {
+        expect(video.container, DownloadContainer.webm);
+        expect(video.musicFormat, MusicDownloadFormat.opus);
+        expect(video.musicPolicy, policy);
+        expect(db.getDownloadByVideoId(song.videoId), isNull);
+        expect(await File(input).readAsBytes(), bytes);
+        await File(input).copy(output);
+        encoded++;
+      });
+      var copied = 0;
+      messenger.setMockMethodCallHandler(proxyChannel, (call) async {
+        expect(call.method, 'copyCachedMusicSong');
+        expect(call.arguments, {
+          'profileId': server.profileId,
+          'accountId': server.accountId,
+          'origin': Uri.parse(server.url).origin,
+          'contentId': song.videoId,
+          'rendition': song.rendition,
+        });
+        await snapshot.writeAsBytes(bytes);
+        copied++;
+        return snapshot.path;
+      });
+      messenger.setMockMethodCallHandler(storageChannel, (call) async {
+        expect(call.method, 'probeMusicFiles');
+        return readable();
+      });
+
+      expect(await manager.keepCachedMusicSong(server, song, policy: policy),
+          KeepCachedMusicResult.saved);
+      final saved = db.getDownloadByVideoId(song.videoId)!;
+      expect(saved.musicMetadata?.title, song.title);
+      expect(saved.musicMetadata?.artist, song.artist);
+      expect(saved.musicPolicy, policy);
+      expect(saved.downloadComplete, isTrue);
+      expect(saved.accountId, server.accountId);
+      expect(saved.profileId, server.profileId);
+      expect(saved.musicFormat, MusicDownloadFormat.opus);
+      expect(manager.isMusicDownloadPlaylistOnly(song.videoId), isFalse);
+      expect(await File(await saved.downloadPath).readAsBytes(), bytes);
+      expect(await snapshot.exists(), isFalse);
+      expect(await manager.keepCachedMusicSong(server, song),
+          KeepCachedMusicResult.alreadySaved);
+      expect(copied, 1);
+      expect(encoded, 1);
+    });
+
+    test('promotes a playable playlist copy and preserves conflicting copies',
+        () async {
+      final pinned = DownloadedVideo(
+        videoId: song.videoId,
+        title: song.title,
+        musicMetadata: MusicMetadata(title: song.title, artist: song.artist),
+        profileId: server.profileId,
+        accountId: server.accountId,
+        audioOnly: true,
+        downloadComplete: true,
+        lengthSeconds: song.lengthSeconds,
+        quality: highestAudioDownloadQuality,
+      );
+      await db.insertPlaylistOwnedMusicDownload(pinned);
+      var probes = 0;
+      var available = false;
+      messenger.setMockMethodCallHandler(storageChannel, (call) async {
+        expect(call.method, 'probeMusicFiles');
+        probes++;
+        return available ? readable() : <String, Object>{};
+      });
+      messenger.setMockMethodCallHandler(proxyChannel, (call) async {
+        fail('Unexpected cache copy for an existing download');
+      });
+
+      expect(await manager.keepCachedMusicSong(server, song),
+          KeepCachedMusicResult.conflictingDownload);
+      expect(manager.isMusicDownloadPlaylistOnly(song.videoId), isTrue);
+      available = true;
+      expect(await manager.keepCachedMusicSong(server, song),
+          KeepCachedMusicResult.saved);
+      expect(manager.isMusicDownloadPlaylistOnly(song.videoId), isFalse);
+      final foreign = pinned.copyWith(accountId: 'different-account');
+      await db.upsertDownload(foreign);
+      expect(await manager.keepCachedMusicSong(server, song),
+          KeepCachedMusicResult.conflictingDownload);
+      expect(db.getDownloadByVideoId(song.videoId)?.toJson(), foreign.toJson());
+      final partial = pinned.copyWith(downloadComplete: false);
+      await db.upsertDownload(partial);
+      expect(await manager.keepCachedMusicSong(server, song),
+          KeepCachedMusicResult.conflictingDownload);
+      expect(db.getDownloadByVideoId(song.videoId)?.toJson(), partial.toJson());
+      expect(probes, 2);
+    });
+
+    test('leaves no download after a cache miss or an account transition',
+        () async {
+      messenger.setMockMethodCallHandler(proxyChannel, (_) async => null);
+      expect(await manager.keepCachedMusicSong(server, song),
+          KeepCachedMusicResult.unavailable);
+      expect(db.getDownloadByVideoId(song.videoId), isNull);
+
+      final started = Completer<void>();
+      final copied = Completer<String>();
+      messenger.setMockMethodCallHandler(proxyChannel, (_) {
+        started.complete();
+        return copied.future;
+      });
+      final keeping = manager.keepCachedMusicSong(server, song);
+      await started.future;
+      final switching = manager.pauseForProfileSwitch();
+      await snapshot.writeAsBytes(bytes);
+      copied.complete(snapshot.path);
+      expect(await keeping, KeepCachedMusicResult.unavailable);
+      await switching;
+      expect(db.getDownloadByVideoId(song.videoId), isNull);
+      expect(await snapshot.exists(), isFalse);
+    });
+
+    test('cleans failed and short shared writes and can retry safely',
+        () async {
+      await openAndroidStorageManager();
+      const mp4Header = [0, 0, 0, 8, 0x66, 0x72, 0x65, 0x65];
+      messenger.setMockMethodCallHandler(proxyChannel, (call) async {
+        expect(call.method, 'copyCachedMusicSong');
+        await snapshot.writeAsBytes(mp4Header);
+        return snapshot.path;
+      });
+      var failWrite = true;
+      var shortWrite = true;
+      final removed = <String>[];
+      messenger.setMockMethodCallHandler(storageChannel, (call) async {
+        switch (call.method) {
+          case 'sharedMusicFolder':
+            return folder;
+          case 'prepareDocument':
+            expect(call.arguments['existing'], isNull);
+            return document;
+          case 'writeDocument':
+            expect(db.getDownloadByVideoId(song.videoId), isNull);
+            if (failWrite) throw PlatformException(code: 'DOWNLOAD_STORAGE');
+            final output = File(call.arguments['source'] as String);
+            expect(await output.length(), bytes.length + 1);
+          case 'deleteDocument':
+            removed.add(call.arguments['uri'] as String);
+          case 'probeMusicFiles':
+            expect((call.arguments['files'] as List).single['uri'], document);
+            return readable(shortWrite ? bytes.length : bytes.length + 1);
+          default:
+            fail('Unexpected method ${call.method}');
+        }
+        return null;
+      });
+      expect(await manager.keepCachedMusicSong(server, song),
+          KeepCachedMusicResult.failed);
+      expect(db.getDownloadByVideoId(song.videoId), isNull);
+      expect(await snapshot.exists(), isFalse);
+      expect(removed, [document]);
+
+      failWrite = false;
+      expect(await manager.keepCachedMusicSong(server, song),
+          KeepCachedMusicResult.failed);
+      expect(db.getDownloadByVideoId(song.videoId), isNull);
+      expect(await snapshot.exists(), isFalse);
+      expect(removed, [document, document]);
+
+      shortWrite = false;
+      expect(await manager.keepCachedMusicSong(server, song),
+          KeepCachedMusicResult.saved);
+      final saved = db.getDownloadByVideoId(song.videoId);
+      expect(saved?.storageUri, document);
+      expect(saved?.container, DownloadContainer.mp4);
+      expect(await snapshot.exists(), isFalse);
+      expect(removed, [document, document]);
+    });
   });
 
   test('a Wi-Fi-only Music job leaves an unrestricted download runnable',
@@ -601,6 +852,250 @@ void main() {
       expect(db.getDownloadByVideoId(track.videoId), isNull);
       expect(deletedUris.toSet(), {document});
       expect(manager.playlistOfflineProgress(playlist(id)), isNull);
+    });
+  });
+
+  group('Keep discovery offline', () {
+    Video song(String id) => Video(
+        videoId: id, musicMetadata: MusicMetadata(title: id, artist: 'Artist'));
+
+    Future<void> reopenDiscoveryManager(
+        {Future<int> Function()? budget}) async {
+      await manager.close();
+      manager = DownloadManagerCubit(const DownloadManagerState(), _Player(),
+          storage: _PrivateMusicProbeStorage(),
+          wifiConnected: () async => false,
+          discoveryBudgetBytes: budget ?? () async => 1024 * 1024,
+          encodeMusic: ({
+            required input,
+            required output,
+            required video,
+            required token,
+            inputFormat,
+            sourceCodec,
+          }) async {
+            final bytes = await File(input).readAsBytes();
+            await File(output).writeAsBytes([7, ...bytes]);
+          });
+      await manager.addDownloads([]);
+    }
+
+    Future<File> completeSong(Video track) async {
+      final row = db.getDownloadByVideoId(track.videoId)!;
+      final file = File(await row.downloadPath);
+      await file.writeAsString(track.videoId);
+      await db.upsertDownload(row.copyWith(downloadComplete: true));
+      manager.setVideos();
+      return file;
+    }
+
+    Future<List<String>> availableIds(String profileId) async =>
+        (await manager.probeOfflineDiscovery(profileId))
+            .map((file) => file.download.videoId)
+            .toList();
+
+    test('opt-in waits for Wi-Fi and opt-out preserves other owners', () async {
+      await db.deleteDownload(video);
+      await reopenDiscoveryManager();
+      final profileId = db.profileId;
+      final discoveryOnly = song('discovery01');
+      final playlistFirst = song('discovery02');
+      final discoveryFirst = song('discovery03');
+      final promoted = song('discovery04');
+      final legacy = song('discovery05');
+      final firstPin = (await service.createPlayList('Trip', 'local'))!;
+      final secondPin = (await service.createPlayList('Commute', 'local'))!;
+      await service.addVideoToPlaylist(firstPin, playlistFirst.videoId,
+          video: playlistFirst);
+      await service.addVideoToPlaylist(secondPin, discoveryFirst.videoId,
+          video: discoveryFirst);
+      await manager.usePrivateFolder(audioOnly: true);
+      expect(await manager.setPlaylistKeptOffline(firstPin, true), isTrue);
+      await manager.useDefaultFolder(audioOnly: true);
+      messenger.setMockMethodCallHandler(
+          storageChannel, (call) async => fail('Unexpected ${call.method}'));
+
+      await db.upsertDownload(video.copyWith(
+          videoId: legacy.videoId,
+          musicMetadata: legacy.musicMetadata,
+          audioOnly: true,
+          downloadComplete: true));
+      final legacyFile = await completeSong(legacy);
+      expect(manager.offlineDiscoveryIds(profileId), isEmpty);
+      expect(db.getDownloadByVideoId(discoveryOnly.videoId), isNull);
+
+      expect(
+          await manager.setOfflineDiscovery(profileId, [
+            discoveryOnly,
+            playlistFirst,
+            discoveryFirst,
+            promoted,
+            legacy,
+            discoveryOnly,
+          ]),
+          isTrue);
+      expect(manager.offlineDiscoveryIds(profileId), [
+        discoveryOnly.videoId,
+        playlistFirst.videoId,
+        discoveryFirst.videoId,
+        promoted.videoId,
+        legacy.videoId,
+      ]);
+      final queued = db.getDownloadByVideoId(discoveryOnly.videoId)!;
+      expect(manager.state.waitingForWifiFor(queued), isTrue);
+      expect(queued.musicPolicy?.quality, MusicOfflineQuality.dataSaver);
+      expect(queued.folderUri, isNull);
+      expect(await availableIds(profileId), [legacy.videoId]);
+
+      expect(await manager.setPlaylistKeptOffline(secondPin, true), isTrue);
+      final discoveryOnlyFile = await completeSong(discoveryOnly);
+      final playlistFirstFile = await completeSong(playlistFirst);
+      final discoveryFirstFile = await completeSong(discoveryFirst);
+      final promotedFile = await completeSong(promoted);
+      expect(
+          await manager.addDownload(promoted.videoId,
+              audioOnly: true,
+              quality: highestAudioDownloadQuality,
+              video: promoted),
+          isTrue);
+      expect(await manager.setPlaylistKeptOffline(firstPin, false), isTrue);
+      expect(await playlistFirstFile.readAsString(), playlistFirst.videoId);
+      expect(await availableIds(profileId),
+          unorderedEquals(manager.offlineDiscoveryIds(profileId)));
+
+      expect(await manager.setOfflineDiscovery(profileId, []), isTrue);
+      expect(manager.offlineDiscoveryIds(profileId), isEmpty);
+      expect(await availableIds(profileId), isEmpty);
+      expect(db.getDownloadByVideoId(discoveryOnly.videoId), isNull);
+      expect(await discoveryOnlyFile.exists(), isFalse);
+      expect(await playlistFirstFile.exists(), isFalse);
+      expect(await discoveryFirstFile.readAsString(), discoveryFirst.videoId);
+      expect(await promotedFile.readAsString(), promoted.videoId);
+      expect(await legacyFile.readAsString(), legacy.videoId);
+
+      expect(await manager.setPlaylistKeptOffline(secondPin, false), isTrue);
+      expect(await discoveryFirstFile.exists(), isFalse);
+      expect(db.getAllDownloads().map((download) => download.videoId),
+          unorderedEquals([promoted.videoId, legacy.videoId]));
+    });
+
+    test('applies the byte limit to source transfer and encoded output',
+        () async {
+      await db.deleteDownload(video);
+      var budget = 16;
+      await reopenDiscoveryManager(budget: () async => budget);
+      final fit = song('quota_song1');
+      final outputTooLarge = song('quota_song2');
+      final inputTooLarge = song('quota_song3');
+      final media = {
+        fit.videoId: List.filled(7, 1),
+        outputTooLarge.videoId: List.filled(8, 2),
+        inputTooLarge.videoId: List.filled(9, 3),
+      };
+      final requests = <String>[];
+      mediaServer!.listen((request) async {
+        final id = request.uri.pathSegments.single;
+        requests.add(id);
+        request.response.add(media[id]!);
+        await request.response.close();
+      });
+      final origin = 'http://127.0.0.1:${mediaServer!.port}';
+      service = _DownloadService((id) async {
+        final length = media[id]!.length;
+        return song(id).copyWith(adaptiveFormats: [
+          AdaptiveFormat(null, '64000', null, '$origin/$id', '251',
+              'audio/webm', '$length', '1', '', 'webm', 'opus', null, null),
+        ]);
+      });
+
+      expect(
+          await manager.setOfflineDiscovery(
+              db.profileId, [fit, outputTooLarge, inputTooLarge]),
+          isTrue);
+      expect(requests, isEmpty);
+      await manager.setWifiOnly(false);
+      await waitFor((state) =>
+          state.videos.length == 3 &&
+          state.videos
+              .every((row) => row.downloadComplete || row.downloadFailed));
+
+      expect(requests, [fit.videoId, outputTooLarge.videoId]);
+      expect(await availableIds(db.profileId), [fit.videoId]);
+      final completed = db.getDownloadByVideoId(fit.videoId)!;
+      expect(await File(await completed.effectivePath).length(), 8);
+      for (final track in [outputTooLarge, inputTooLarge]) {
+        final row = db.getDownloadByVideoId(track.videoId)!;
+        expect(row.downloadFailed, isTrue);
+        expect(await File(await row.downloadPath).exists(), isFalse);
+        expect(await File('${await row.stagingPath}.audio.part').exists(),
+            isFalse);
+      }
+
+      expect(
+          await manager.addDownload(inputTooLarge.videoId,
+              quality: highestAudioDownloadQuality,
+              audioOnly: true,
+              video: inputTooLarge),
+          isTrue);
+      await waitFor((state) => state.videos.any((row) =>
+          row.videoId == inputTooLarge.videoId && row.downloadComplete));
+
+      budget = 7;
+      await manager.reconcileOfflineDiscoveryBudget();
+      expect(await availableIds(db.profileId), [inputTooLarge.videoId]);
+      expect(await File(await completed.effectivePath).exists(), isFalse);
+      expect(manager.offlineDiscoveryIds(db.profileId),
+          [fit.videoId, outputTooLarge.videoId, inputTooLarge.videoId]);
+    });
+
+    test('reload scopes selection and readable files to the active profile',
+        () async {
+      await db.deleteDownload(video);
+      await reopenDiscoveryManager();
+      final originalId = db.profileId;
+      final track = song('discovery06');
+      expect(await manager.setOfflineDiscovery(originalId, [track]), isTrue);
+      final original = await completeSong(track);
+      expect(await availableIds(originalId), [track.videoId]);
+      await original.delete();
+      expect(db.getDownloadByVideoId(track.videoId)?.downloadComplete, isTrue);
+      expect(await availableIds(originalId), isEmpty);
+      await original.writeAsString('original');
+
+      await manager.pauseForProfileSwitch();
+      final other = await db.createProfile('Other');
+      await db.useProfile(other.id);
+      await db.useServer(Server(
+          profileId: other.id,
+          id: 'other-account',
+          url: 'https://instance.invalid'));
+      final otherRecord = video.copyWith(
+          videoId: track.videoId,
+          title: 'Other download',
+          profileId: other.id,
+          musicMetadata: track.musicMetadata,
+          audioOnly: true,
+          downloadComplete: true);
+      final otherFile = File(await otherRecord.downloadPath);
+      await otherFile.writeAsString('other');
+      await db.upsertDownload(otherRecord);
+      await manager.reloadForProfile();
+
+      expect(manager.offlineDiscoveryIds(other.id), isEmpty);
+      expect(manager.offlineDiscoveryIds(originalId), isEmpty);
+      expect(await availableIds(originalId), isEmpty);
+      expect(await manager.setOfflineDiscovery(originalId, []), isFalse);
+      expect(await original.readAsString(), 'original');
+      expect(await otherFile.readAsString(), 'other');
+
+      await manager.pauseForProfileSwitch();
+      await db.useProfile(originalId);
+      await manager.reloadForProfile();
+      expect(manager.offlineDiscoveryIds(originalId), [track.videoId]);
+      expect(await availableIds(originalId), [track.videoId]);
+      expect(await manager.setOfflineDiscovery(originalId, []), isTrue);
+      expect(await original.exists(), isFalse);
+      expect(await otherFile.readAsString(), 'other');
     });
   });
 

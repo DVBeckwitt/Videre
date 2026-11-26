@@ -1,12 +1,16 @@
 import 'dart:convert';
 
+import 'package:clipious/music/models/local_music_track.dart';
 import 'package:clipious/music/models/music_library_entry.dart';
 import 'package:clipious/music/models/music_artist.dart';
+import 'package:clipious/music/models/music_artist_identity.dart';
 import 'package:clipious/music/models/music_collection.dart';
 import 'package:clipious/music/models/music_track.dart';
 import 'package:clipious/music/services/music_library_service.dart';
+import 'package:clipious/music/services/music_visibility.dart';
 import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/playlists/models/playlist.dart';
+import 'package:clipious/playlists/models/playlist_reference.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/utils/models/image_object.dart';
@@ -34,6 +38,201 @@ void main() {
   });
 
   tearDown(() async => database.close());
+
+  test('playlist hides and Discovery snoozes keep their scope after reopen',
+      () async {
+    final factory = newDatabaseFactoryMemory();
+    final store = SembastSqfDb(await factory.openDatabase('visibility'));
+    final profile = store.profileId;
+    final other = await store.createProfile('Other listener');
+    const recording = MusicTrack(videoId: 'abcdefghijk', title: 'Recording');
+    PlaylistReference playlist(String id, {String? name, String? owner}) =>
+        PlaylistReference(
+          kind: PlaylistSourceKind.local,
+          playlistId: 'local:$id',
+          profileId: owner ?? profile,
+          displayTitle: name,
+        );
+    var now = DateTime.utc(2026, 1, 1, 18);
+    const day = Duration(days: 1);
+    final expiry = now.add(day);
+    final before =
+        MusicVisibility.withClock(store.forProfile(profile), () => now);
+    await Future.wait([
+      before.setHiddenInPlaylist(playlist('first'), recording.videoId, true),
+      before.snooze(recording, day),
+    ]);
+    await store.close();
+    before.dispose();
+
+    final reopened = SembastSqfDb(await factory.openDatabase('visibility'));
+    final after =
+        MusicVisibility.withClock(reopened.forProfile(profile), () => now);
+    final otherVisibility =
+        MusicVisibility.withClock(reopened.forProfile(other.id), () => now);
+    addTearDown(after.dispose);
+    addTearDown(otherVisibility.dispose);
+    expect(
+        after.isHiddenInPlaylist(
+            playlist('first', name: 'Renamed'), recording.videoId),
+        isTrue);
+    expect(after.isHiddenInPlaylist(playlist('second'), recording.videoId),
+        isFalse);
+    expect(
+        otherVisibility.isHiddenInPlaylist(
+            playlist('first', owner: other.id), recording.videoId),
+        isFalse);
+    expect(otherVisibility.isSnoozed(recording.videoId), isFalse);
+    expect(after.activeSnoozes.single.expiresAt, expiry);
+    expect(after.isSnoozed(recording.videoId), isTrue);
+
+    await after.setHiddenInPlaylist(
+        playlist('first'), recording.videoId, false);
+    expect(after.isHiddenInPlaylist(playlist('first'), recording.videoId),
+        isFalse);
+    now = expiry.subtract(const Duration(microseconds: 1));
+    expect(after.isSnoozed(recording.videoId), isTrue);
+    now = expiry;
+    expect(after.isSnoozed(recording.videoId), isFalse);
+    expect(after.activeSnoozes, isEmpty);
+    await reopened.close();
+
+    final restarted = SembastSqfDb(await factory.openDatabase('visibility'));
+    addTearDown(restarted.close);
+    final restored =
+        MusicVisibility.withClock(restarted.forProfile(profile), () => now);
+    addTearDown(restored.dispose);
+    expect(restored.isHiddenInPlaylist(playlist('first'), recording.videoId),
+        isFalse);
+    expect(restored.activeSnoozes, isEmpty);
+  });
+
+  testWidgets('Discovery announces the next expiry while observed',
+      (tester) async {
+    final start = DateTime.utc(2026, 1, 1);
+    var now = start;
+    final visibility = MusicVisibility.withClock(
+        database.forProfile(database.profileId), () => now);
+    addTearDown(visibility.dispose);
+    await tester.runAsync(() => visibility.snooze(
+        const MusicTrack(videoId: 'abcdefghijk', title: 'Recording'),
+        const Duration(seconds: 10)));
+    var changes = 0;
+    visibility.addListener(() => changes++);
+    now = start.add(const Duration(seconds: 9));
+    await tester.pump(const Duration(seconds: 9));
+    expect(visibility.isSnoozed('abcdefghijk'), isTrue);
+    expect(changes, 0);
+    now = now.add(const Duration(seconds: 1));
+    await tester.pump(const Duration(seconds: 1));
+    expect(visibility.isSnoozed('abcdefghijk'), isFalse);
+    expect(changes, 1);
+  });
+
+  test('catalog aliases persist per profile and separate namesake artists',
+      () async {
+    const first = MusicArtistIdentity.catalog('UC1234567890123456789012');
+    const second = MusicArtistIdentity.catalog('UC0123456789012345678901');
+    const credits = [
+      MusicArtistCredit(name: 'Same Name', id: 'UC1234567890123456789012'),
+      MusicArtistCredit(name: 'Same Name', id: 'UC0123456789012345678901'),
+      MusicArtistCredit(name: 'Session Artist'),
+    ];
+    const original = 'Same Name, Same Name, Session Artist';
+    const bookmark = MusicLibraryEntry(
+        kind: MusicLibraryKind.song,
+        id: 'artistAlias',
+        title: 'Song with credits',
+        subtitle: original,
+        artistCredits: credits);
+    final factory = newDatabaseFactoryMemory();
+    var store = SembastSqfDb(await factory.openDatabase('artist-aliases'));
+    await store.getProfiles();
+    final ownerId = store.profileId;
+    final otherId = (await store.createProfile('Another listener')).id;
+    var saved = MusicLibraryService.forProfile(store, ownerId);
+    await saved.save(bookmark);
+    final sameOwner = MusicLibraryService.forProfile(store, ownerId);
+    var notifications = 0;
+    sameOwner.changes.addListener(() => notifications++);
+    expect(
+        await Future.wait([
+          saved.setArtistAlias(first, '  Stage Name  ', isCurrent: () => true),
+          sameOwner.setArtistAlias(second, 'Stage Name', isCurrent: () => true),
+        ]),
+        [true, true]);
+    expect(notifications, 2);
+    await store.close();
+
+    store = SembastSqfDb(await factory.openDatabase('artist-aliases'));
+    await store.getProfiles();
+    saved = MusicLibraryService.forProfile(store, ownerId);
+    final other = MusicLibraryService.forProfile(store, otherId);
+    expect(saved.catalogArtistByline(original, credits),
+        'Stage Name, Stage Name, Session Artist');
+    expect(other.catalogArtistByline(original, credits), original);
+    expect(
+        await saved.setArtistAlias(first, null, isCurrent: () => true), true);
+    expect(saved.artistDisplayName(first, credits.first.name), 'Same Name');
+    expect(saved.artistAlias(second), 'Stage Name');
+    expect(saved.catalogArtistByline(original, credits),
+        'Same Name, Stage Name, Session Artist');
+    expect(saved.entries.single.toJson(), bookmark.toJson());
+    await store.close();
+  });
+
+  test('device aliases resolve from original credits and leave the tags intact',
+      () async {
+    const performer = MusicArtistIdentity.device('raw artist');
+    const albumArtist = MusicArtistIdentity.device('raw album artist');
+    const track = LocalMusicTrack(
+        uri: 'content://media/external/audio/media/1',
+        title: 'Track',
+        artist: 'Raw Artist',
+        albumArtist: 'Raw Album Artist');
+    await library.setArtistAlias(albumArtist, 'New Label',
+        isCurrent: () => true);
+    expect(library.deviceArtistByline(track), 'Raw Artist');
+    await library.setArtistAlias(performer, 'New Label', isCurrent: () => true);
+    expect(library.deviceArtistByline(track), 'New Label');
+    expect(library.artistDisplayName(albumArtist, track.albumArtist!),
+        'New Label');
+
+    await library.setArtistAlias(performer, null, isCurrent: () => true);
+    expect(library.deviceArtistByline(track), 'Raw Artist');
+    expect(library.artistAlias(albumArtist), 'New Label');
+    expect(track.artist, 'Raw Artist');
+    expect(track.albumArtist, 'Raw Album Artist');
+  });
+
+  test('artist alias writes reject stale sessions and ignore damaged settings',
+      () async {
+    const artist = MusicArtistIdentity.device('device:artist');
+    await database.saveSetting(SettingsValue(
+        musicArtistAliasesSettingName,
+        jsonEncode({
+          artist.storageKey: ' \t ',
+          'catalog:not-a-channel': 'Invalid credit',
+          'device:another artist': '  Existing Artist ',
+        })));
+    expect(library.artistAlias(artist), isNull);
+    expect(
+        await library.setArtistAlias(artist, 'Stale', isCurrent: () => false),
+        isFalse);
+    expect(library.artistAlias(artist), isNull);
+    await expectLater(
+        library.setArtistAlias(artist, ''.padRight(1025, 'a'),
+            isCurrent: () => true),
+        throwsArgumentError);
+    await library.setArtistAlias(artist, ' Local\tAlias ',
+        isCurrent: () => true);
+    expect(
+        jsonDecode(database.getSettings(musicArtistAliasesSettingName)!.value),
+        {
+          artist.storageKey: 'Local Alias',
+          'device:another artist': 'Existing Artist'
+        });
+  });
 
   test('bookmarks and explicit empty playlists persist after database reopen',
       () async {
@@ -141,6 +340,25 @@ void main() {
     expect(library.entries, hasLength(30));
   });
 
+  test('save if absent deduplicates queued writes without refreshing a song',
+      () async {
+    final duplicate = MusicLibraryEntry(
+        kind: song.kind, id: song.id, title: 'Different metadata');
+    final another =
+        MusicLibraryService.forProfile(database, database.profileId);
+    final results = await Future.wait(
+        [library.saveIfAbsent(song), another.saveIfAbsent(duplicate)]);
+    expect(results, [true, false]);
+    expect(library.entries.single.title, song.title);
+
+    const latest = MusicLibraryEntry(
+        kind: MusicLibraryKind.song, id: 'secondsong2', title: 'Latest song');
+    await library.save(latest);
+    expect(await another.saveIfAbsent(duplicate), isFalse);
+    expect(library.entries.map((entry) => entry.title),
+        [latest.title, song.title]);
+  });
+
   test('saved song title is private to its profile and survives reopening',
       () async {
     final factory = newDatabaseFactoryMemory();
@@ -221,6 +439,113 @@ void main() {
       expect(parsed?.displayTitle, song.title);
     }
     expect(library.savedSong(song.id)?.toJson(), song.toJson());
+  });
+
+  test('explicit Likes import deduplicates without adding saved songs',
+      () async {
+    expect(await library.importSongs([song, song], asLikes: true), 1);
+    expect(await library.importSongs([song], asLikes: true), 0);
+    expect(library.likedSongs.single.id, song.id);
+    expect(library.entries, isEmpty);
+    expect(await library.importSongs([song]), 1);
+    expect(library.entries.single.id, song.id);
+    expect(library.likedSongs, hasLength(1));
+  });
+
+  test('checks the playback owner when the queued Like write starts', () async {
+    var isCurrent = true;
+    final pending =
+        library.setSongLiked(song, liked: true, isCurrent: () => isCurrent);
+    isCurrent = false;
+    await pending;
+    expect(library.isLiked(song.id), isFalse);
+    await library.setSongLiked(song, liked: true, isCurrent: () => true);
+    expect(library.isLiked(song.id), isTrue);
+  });
+
+  test('legacy saves and Likes remain independent through removal', () async {
+    await database.saveSetting(SettingsValue(
+        musicLibrarySettingName,
+        jsonEncode({
+          'version': 1,
+          'entries': [song.toJson()],
+          'playlists': ['local:music'],
+        })));
+    expect(library.contains(song.kind, song.id), isTrue);
+    expect(library.likedSongs, isEmpty);
+    expect(library.isLiked(song.id), isFalse);
+
+    await library.setSongLiked(song, liked: true);
+    expect(library.likedSongs.single.toJson(), song.toJson());
+    expect(library.contains(song.kind, song.id), isTrue);
+
+    await library.remove(song.kind, song.id);
+    expect(library.entries, isEmpty);
+    expect(library.isLiked(song.id), isTrue);
+
+    await library.save(song);
+    await library.setSongLiked(song, liked: false);
+    expect(library.likedSongs, isEmpty);
+    expect(library.entries.single.toJson(), song.toJson());
+    expect(library.localPlaylistIds, {'local:music'});
+  });
+
+  test('concurrent library writes keep all Likes, saves and playlist markers',
+      () async {
+    const otherSong = MusicLibraryEntry(
+        kind: MusicLibraryKind.song, id: '12345678901', title: 'Second song');
+    final another =
+        MusicLibraryService.forProfile(database, database.profileId);
+    await Future.wait([
+      library.setSongLiked(song, liked: true),
+      another.save(song),
+      another.setSongLiked(song, liked: true),
+      library.markLocalPlaylist('local:music'),
+      another.setSongLiked(otherSong, liked: true),
+    ]);
+    expect(another.likedSongs.map((entry) => entry.id),
+        unorderedEquals([song.id, otherSong.id]));
+    expect(library.entries.single.id, song.id);
+    expect(another.localPlaylistIds, {'local:music'});
+  });
+
+  test('Likes follow their original profile and persist on reopen', () async {
+    final factory = newDatabaseFactoryMemory();
+    var connection = await factory.openDatabase('music-likes');
+    var store = SembastSqfDb(connection);
+    await store.getProfiles();
+    final original = store.profileId;
+    final originalLibrary = MusicLibraryService.forProfile(store, original);
+    final second = await store.createProfile('Second listener');
+    await store.useProfile(second.id);
+    await originalLibrary.setSongLiked(song, liked: true);
+    expect(
+        MusicLibraryService.forProfile(store, second.id).likedSongs, isEmpty);
+    await store.close();
+
+    connection = await factory.openDatabase('music-likes');
+    store = SembastSqfDb(connection);
+    addTearDown(store.close);
+    await store.getProfiles();
+    final restored = MusicLibraryService.forProfile(store, original);
+    expect(restored.likedSongs.single.toJson(), song.toJson());
+    expect(restored.entries, isEmpty);
+    expect(MusicLibraryService.forProfile(store, second.id).isLiked(song.id),
+        isFalse);
+  });
+
+  test('only Likes accept a display-only device song identity', () async {
+    final deviceSong = MusicLibraryEntry(
+        kind: MusicLibraryKind.song,
+        id: 'device:${'a' * 64}',
+        title: 'Device song');
+    await library.setSongLiked(deviceSong, liked: true);
+    expect(library.likedSongs.single.toJson(), deviceSong.toJson());
+    expect(library.entries, isEmpty);
+    await expectLater(
+        Future.sync(() => library.save(deviceSong)), throwsArgumentError);
+    await library.setSongLiked(deviceSong, liked: false);
+    expect(library.likedSongs, isEmpty);
   });
 
   test('fills imported song details in place and preserves existing metadata',

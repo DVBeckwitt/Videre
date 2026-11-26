@@ -155,6 +155,222 @@ void main() {
     expect(musicCatalogService, isA<InvidiousMusicCatalogService>());
   });
 
+  group('playlist recording availability', () {
+    const missingBody = '{"error":"Video unavailable"}';
+    const jsonHeaders = {'content-type': 'application/json'};
+
+    test('checks the current metadata after a recording-specific 404',
+        () async {
+      respond = (request) async => http.Response(missingBody, 404,
+          request: request, headers: jsonHeaders);
+      expect(
+          await catalog.checkRecordingAvailability(_songId,
+              isCurrent: () => true),
+          MusicRecordingAvailability.missing);
+
+      respond = (request) async => _json(_song(), request);
+      expect(
+          await catalog.checkRecordingAvailability(_songId,
+              isCurrent: () => true),
+          MusicRecordingAvailability.available);
+      expect(requests.map((request) => request.url.path),
+          List.filled(2, '/api/v1/videos/$_songId'));
+    });
+
+    test('recognizes a private placeholder for the requested recording',
+        () async {
+      respond = (request) async =>
+          _json({..._song(), 'title': '[Private video]'}, request);
+      expect(
+          await catalog.checkRecordingAvailability(_songId,
+              isCurrent: () => true),
+          MusicRecordingAvailability.missing);
+    });
+
+    for (final (body, status, headers) in [
+      ('Not Found', 404, const <String, String>{}),
+      ('{"error":"Backend not found"}', 404, jsonHeaders),
+      (missingBody, 404, const {'content-type': 'text/html'}),
+      (missingBody, 410, const {'retry-after': '600'}),
+      (missingBody, 500, jsonHeaders),
+      ('{"error":"Temporarily unavailable"}', 503, jsonHeaders),
+      ('{"error":"Unauthorized"}', 403, jsonHeaders),
+      ('', 200, jsonHeaders),
+    ]) {
+      test('does not infer absence from HTTP $status and $body ($headers)',
+          () async {
+        respond = (request) async =>
+            http.Response(body, status, request: request, headers: headers);
+        await expectLater(
+            catalog.checkRecordingAvailability(_songId, isCurrent: () => true),
+            throwsA(isA<InvidiousServiceError>()));
+      });
+    }
+
+    test('rejects a valid response describing a different recording', () async {
+      respond = (request) async =>
+          _json({..._discoveryVideo(0), 'title': '[Private video]'}, request);
+      await expectLater(
+          catalog.checkRecordingAvailability(_songId, isCurrent: () => true),
+          throwsFormatException);
+    });
+
+    for (final switchServer in [false, true]) {
+      test(
+          'discards a missing response after '
+          '${switchServer ? 'a server switch' : 'caller cancellation'}',
+          () async {
+        var current = true;
+        final started = Completer<http.Request>();
+        final pending = Completer<http.Response>();
+        respond = (request) {
+          started.complete(request);
+          return pending.future;
+        };
+        final check = catalog.checkRecordingAvailability(_songId,
+            isCurrent: () => current);
+        final request = await started.future;
+        if (switchServer) {
+          const other = Server(url: 'https://other.example');
+          await db.upsertServer(other);
+          await db.useServer(other);
+        } else {
+          current = false;
+        }
+        pending.complete(http.Response(missingBody, 404,
+            request: request, headers: jsonHeaders));
+        await expectLater(check,
+            throwsA(anyOf(isA<MusicCatalogException>(), isA<StateError>())));
+      });
+    }
+  });
+
+  group('saved public playlist overlap', () {
+    const source = 'PLsource';
+    const weak = 'PLweak';
+    const strong = 'PLstrong';
+    const disjoint = 'PLdisjoint';
+    const private = 'PLprivate';
+    const unknown = 'PLunknown';
+    const unavailable = 'PLunavailable';
+    const otherSong = 'aaaaaaaaaaa';
+    const unrelatedSong = 'bbbbbbbbbbb';
+
+    Map<String, Object?> page(String id, List<Object> songs,
+            {bool? listed = true}) =>
+        {
+          ..._playlist(songs: songs, count: songs.length),
+          'playlistId': id,
+          'title': 'Current title for $id',
+          if (listed != null) 'isListed': listed,
+        };
+
+    Future<List<String>> findMatches(
+        {String playlistId = source,
+        List<String> candidates = const [weak],
+        bool Function()? isCurrent}) async {
+      final result = await catalog.findPlaylistsWithSongsInCommon(
+          playlistId, candidates,
+          isCurrent: isCurrent ?? () => true);
+      return result.map((entry) => entry.id).toList();
+    }
+
+    test('ranks unique verified track IDs and skips absent or private lists',
+        () async {
+      final pages = {
+        source: page(source, [_song(), _song(id: otherSong)]),
+        weak: page(weak, [_song(), _song(), _song()]),
+        strong: page(strong, [_song(), _song(id: otherSong)]),
+        disjoint: page(disjoint, [_song(id: unrelatedSong)]),
+        private: page(private, [_song(), _song(id: otherSong)], listed: false),
+        unknown: page(unknown, [_song()], listed: null),
+      };
+      respond = (request) async {
+        final id = request.url.pathSegments.last;
+        if (id == unavailable) {
+          return http.Response('{"error":"Not found"}', 404, request: request);
+        }
+        return _json(pages[id]!, request);
+      };
+
+      final results = await catalog.findPlaylistsWithSongsInCommon(
+          source,
+          [
+            'IVPaccount',
+            'local:mine',
+            'RDmix',
+            'OLAK5uy_album',
+            source,
+            weak,
+            weak,
+            private,
+            unavailable,
+            strong,
+            unknown,
+            disjoint,
+            'PLoverBudget',
+          ],
+          isCurrent: () => true);
+
+      expect(results.map((entry) => entry.id), [strong, weak]);
+      expect(results.first.title, 'Current title for $strong');
+      expect(requests.map((request) => request.url.pathSegments.last),
+          [source, weak, private, unavailable, strong, unknown, disjoint]);
+      for (final request in requests) {
+        expect(request.url.origin, 'https://invidious.example');
+        expect(request.url.pathSegments.take(3), ['api', 'v1', 'playlists']);
+        expect(request.url.queryParameters['page'], '1');
+      }
+    });
+
+    test('never checks candidates for empty, unlisted or unknown sources',
+        () async {
+      for (final data in [
+        page(source, []),
+        page(source, [_song()], listed: false),
+        page(source, [_song()], listed: null),
+        page(source, [
+          {..._song(), 'title': '[Private video]'}
+        ]),
+      ]) {
+        requests.clear();
+        respond = (request) async => _json(data, request);
+        expect(await findMatches(), isEmpty);
+        expect(requests.single.url.pathSegments.last, source);
+      }
+      requests.clear();
+      expect(await findMatches(playlistId: 'IVPaccount'), isEmpty);
+      expect(await findMatches(candidates: ['IVPaccount', source]), isEmpty);
+      expect(requests, isEmpty);
+    });
+
+    test('a retired shelf stops before requesting any candidate', () async {
+      var current = true;
+      respond = (request) async {
+        current = false;
+        return _json(page(source, [_song()]), request);
+      };
+      await expectLater(
+        findMatches(isCurrent: () => current),
+        throwsA(isA<MusicCatalogException>()),
+      );
+      expect(requests.single.url.pathSegments.last, source);
+    });
+
+    test('a rate limit stops further candidate requests', () async {
+      respond = (request) async {
+        final id = request.url.pathSegments.last;
+        if (id == strong) {
+          return http.Response('{"error":"Rate limit"}', 429, request: request);
+        }
+        return _json(page(id, [_song()]), request);
+      };
+      expect(await findMatches(candidates: [weak, strong, disjoint]), [weak]);
+      expect(requests.map((request) => request.url.pathSegments.last),
+          [source, weak, strong]);
+    });
+  });
+
   group('stock Music search pages', () {
     test('mixed page keeps wire order and tracks filtered raw rows', () async {
       await db.saveSetting(SettingsValue(browsingCountry, 'DE'));
@@ -1279,6 +1495,78 @@ void main() {
     expect(requests, isEmpty);
   });
 
+  test('artist mixes verify interleaved unique uploads and then related songs',
+      () async {
+    const second = 'UC1234567890123456789012';
+    const missing = 'UC2345678901234567890123';
+    const related = 'UC3456789012345678901234';
+    respond = (request) async {
+      final path = request.url.path;
+      if (path == '/api/v1/channels/$missing') {
+        return http.Response('{"error":"Channel unavailable"}', 404,
+            request: request, headers: {'content-type': 'application/json'});
+      }
+      if (path == '/api/v1/channels/$_channelId' ||
+          path == '/api/v1/channels/$second') {
+        return _json({
+          ..._channel(),
+          'authorId': request.url.pathSegments.last,
+        }, request);
+      }
+      if (path == '/api/v1/channels/$_channelId/videos') {
+        return _json({
+          'videos': [
+            _discoveryVideo(1),
+            _discoveryVideo(3),
+            _discoveryVideo(4)..remove('authorId'),
+            _discoveryVideo(6),
+          ],
+        }, request);
+      }
+      if (path == '/api/v1/channels/$second/videos') {
+        return _json({
+          'videos': [
+            for (final index in [2, 4, 5])
+              {..._discoveryVideo(index), 'authorId': second},
+          ],
+        }, request);
+      }
+      expect(path, startsWith('/api/v1/videos/'));
+      final index =
+          int.parse(request.url.pathSegments.last.replaceAll('v', ''));
+      return _json({
+        ..._discoveryVideo(index, genre: index == 9 ? 'Education' : 'Music'),
+        'authorId': switch (index) {
+          1 || 3 => _channelId,
+          2 || 4 || 5 => second,
+          7 || 8 => related,
+          _ => missing,
+        },
+        'recommendedVideos': [
+          if (index == 1)
+            for (final id in [3, 7, 9]) _discoveryVideo(id),
+          if (index == 2)
+            for (final id in [7, 8, 10]) _discoveryVideo(id),
+        ],
+      }, request);
+    };
+
+    final songs = await catalog.getArtistMixSongs(
+        [_channelId, missing, '/channel/$_channelId', second]);
+    expect(songs.map((song) => song.videoId), [
+      for (final index in [1, 2, 3, 4, 5, 7, 8]) _discoveryId(index)
+    ]);
+    expect(requests.map((request) => request.url.path), [
+      '/api/v1/channels/$_channelId',
+      '/api/v1/channels/$_channelId/videos',
+      '/api/v1/channels/$missing',
+      '/api/v1/channels/$second',
+      '/api/v1/channels/$second/videos',
+      for (final index in [1, 2, 3, 4, 5, 6, 7, 9, 8, 10])
+        '/api/v1/videos/${_discoveryId(index)}',
+    ]);
+  });
+
   test('related music shares the verification budget across learned seeds',
       () async {
     final lanes = [
@@ -1451,12 +1739,13 @@ void main() {
     expect(requests, hasLength(2));
   });
 
-  test('discovery offers retry when every metadata lookup fails', () async {
+  test('discovery preserves connection failure when no tracks are verified',
+      () async {
     respond = (request) async => request.url.path == '/api/v1/search'
         ? _json([_discoveryVideo(0), _discoveryVideo(1)], request)
         : http.Response('Unavailable', 503, request: request);
-    await expectLater(
-        catalog.getDiscoverySongs(), throwsA(isA<MusicCatalogException>()));
+    await expectLater(catalog.getDiscoverySongs(),
+        throwsA(isA<MusicCatalogConnectionFailure>()));
     expect(requests, hasLength(3));
   });
 

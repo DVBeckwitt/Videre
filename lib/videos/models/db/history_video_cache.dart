@@ -14,31 +14,55 @@ part 'history_video_cache.g.dart';
 enum PlaybackHistoryOrigin { video, music }
 
 /// A pending play may fill its history row once, unless a later edit cancels it.
+/// Music events can keep the write open to checkpoint observed playback.
 class PlaybackHistoryWrite {
   final String profileId;
   final PlaybackHistoryOrigin origin;
   final String videoId;
-  final Future<void> Function(
-      HistoryVideoCache, PlaylistReference?, bool Function()) _store;
+  final Future<bool> Function(
+      HistoryVideoCache, PlaylistReference?, bool, bool Function()) _store;
+  final Future<void> Function(Duration, bool Function())? _storeListeningTime;
   final void Function(PlaybackHistoryWrite)? _onFinish;
   bool _cancelled = false;
   bool _started = false;
+  Future<bool>? _listeningStart;
 
   PlaybackHistoryWrite(this.profileId, this.origin, this.videoId, this._store,
-      {void Function(PlaybackHistoryWrite)? onFinish})
-      : _onFinish = onFinish;
+      {Future<void> Function(Duration, bool Function())? storeListeningTime,
+      void Function(PlaybackHistoryWrite)? onFinish})
+      : _storeListeningTime = storeListeningTime,
+        _onFinish = onFinish;
 
   Future<void> record(HistoryVideoCache entry,
-      {PlaylistReference? playlist}) async {
+      {PlaylistReference? playlist, bool trackElapsed = false}) async {
     if (_cancelled || _started) return;
     _started = true;
+    final tracksElapsed = trackElapsed && _storeListeningTime != null;
+    var keepOpen = false;
     try {
       if (entry.videoId != videoId) {
         throw ArgumentError('Playback history belongs to another video.');
       }
-      await _store(entry, playlist, () => !_cancelled);
+      final stored = _store(entry, playlist, tracksElapsed, () => !_cancelled);
+      if (tracksElapsed) _listeningStart = stored;
+      keepOpen = await stored && tracksElapsed;
     } finally {
-      cancel();
+      if (!keepOpen) cancel();
+    }
+  }
+
+  /// Checkpoint the total observed playback since this occurrence started.
+  Future<void> recordListeningTime(Duration elapsed) async {
+    final start = _listeningStart;
+    final store = _storeListeningTime;
+    if (_cancelled ||
+        start == null ||
+        store == null ||
+        elapsed <= Duration.zero) {
+      return;
+    }
+    if (await start && !_cancelled) {
+      await store(elapsed, () => !_cancelled);
     }
   }
 

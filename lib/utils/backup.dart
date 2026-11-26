@@ -55,8 +55,9 @@ class UserBackup {
   static final _videoId = RegExp(r'^[a-zA-Z0-9_-]{11}$');
   static final _channelId = RegExp(r'^UC[a-zA-Z0-9_-]{22}$');
   static final _deviceTrackId = RegExp(r'^device:[a-f0-9]{64}$');
+  // Native plays use v4 and deterministic history imports use v5.
   static final _listeningEventId = RegExp(
-      r'^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$');
+      r'^[0-9a-f]{8}-[0-9a-f]{4}-[45][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$');
   static final _relativeImageRoute =
       RegExp(r'^/?(?:vi|vi_webp|s_p|pl_c|tvfilm_banner|ggpht|sb)/');
   static final _ambiguousImagePath =
@@ -448,13 +449,18 @@ class UserBackup {
     }
     if (value.length > 2048) return false;
     const booleans = {
+      deviceMusicArtworkLoadingSettingName,
       musicArtworkSwipeSettingName,
       musicArtworkDoubleTapSeekSettingName,
       musicResumeAfterAudioFocusLossSettingName,
       musicPauseAtZeroVolumeSettingName,
+      musicResumeOnVolumeRiseSettingName,
       musicAutoReconnectSettingName,
+      musicResumeOnBluetoothReconnectSettingName,
       musicSkipAfterRetryExhaustionSettingName,
       musicScreenPrivacySettingName,
+      preserveAlbumTransitionsSettingName,
+      musicWiredHeadsetAutoplaySettingName,
       dynamicTheme,
       useDashSettingName,
       playerShuffle,
@@ -604,6 +610,7 @@ class UserBackup {
     }
     final entries = <String, dynamic>{};
     final playlists = <String>{};
+    final likes = <String, dynamic>{};
     for (final value in [existing, incoming]) {
       final data = jsonDecode(value) as Map<String, dynamic>;
       for (final row in data['entries'] as List) {
@@ -612,11 +619,15 @@ class UserBackup {
         entries.putIfAbsent('${row['kind']}:${row['id']}', () => row);
       }
       playlists.addAll((data['playlists'] as List).cast<String>());
+      for (final row in (data['likes'] as List?) ?? const []) {
+        likes.putIfAbsent(row['id'] as String, () => row);
+      }
     }
     final merged = jsonEncode({
       'version': 1,
       'entries': entries.values.toList(),
       'playlists': playlists.toList(),
+      if (likes.isNotEmpty) 'likes': likes.values.toList(),
     });
     if (!_validMusicLibrary(merged)) {
       throw const FormatException(
@@ -636,34 +647,21 @@ class UserBackup {
     try {
       final data = jsonDecode(value);
       if (data is! Map ||
-          data.length != 3 ||
+          data.length != (data.containsKey('likes') ? 4 : 3) ||
           data['version'] is! int ||
           data['version'] != 1 ||
           data['entries'] is! List ||
-          data['playlists'] is! List) {
+          data['playlists'] is! List ||
+          (data.containsKey('likes') && data['likes'] is! List)) {
         return false;
       }
       final entries = data['entries'] as List;
       final playlists = data['playlists'] as List;
-      if (entries.length > musicLibraryMaximumEntries ||
-          playlists.length > musicLibraryMaximumEntries) {
+      final likes = (data['likes'] as List?) ?? const [];
+      if (playlists.length > musicLibraryMaximumEntries ||
+          !_validMusicEntries(entries, MusicLibraryEntry.tryParse) ||
+          !_validMusicEntries(likes, MusicLibraryEntry.tryParseLikedSong)) {
         return false;
-      }
-      final identities = <String>{};
-      for (final row in entries) {
-        if (row is! Map) return false;
-        final entry = MusicLibraryEntry.tryParse(row);
-        if (entry == null) return false;
-        final canonical = entry.toJson();
-        // Older v1 backups omitted the artwork source marker. Keep the
-        // canonical check for every other field in the row.
-        if (!row.containsKey('usesVideoThumbnails')) {
-          canonical.remove('usesVideoThumbnails');
-        }
-        if (!_sameJson(row, canonical) ||
-            !identities.add('${entry.kind.name}:${entry.id}')) {
-          return false;
-        }
       }
       final localIds = <String>{};
       final localId = RegExp(r'^local:[A-Za-z0-9_-]{1,128}$');
@@ -678,6 +676,28 @@ class UserBackup {
     } on FormatException {
       return false;
     }
+  }
+
+  static bool _validMusicEntries(
+      List rows, MusicLibraryEntry? Function(Object?) parse) {
+    if (rows.length > musicLibraryMaximumEntries) return false;
+    final identities = <String>{};
+    for (final row in rows) {
+      if (row is! Map) return false;
+      final entry = parse(row);
+      if (entry == null) return false;
+      final canonical = entry.toJson();
+      // Older v1 backups omitted the artwork source marker. Keep the
+      // canonical check for every other field in the row.
+      if (!row.containsKey('usesVideoThumbnails')) {
+        canonical.remove('usesVideoThumbnails');
+      }
+      if (!_sameJson(row, canonical) ||
+          !identities.add('${entry.kind.name}:${entry.id}')) {
+        return false;
+      }
+    }
+    return true;
   }
 
   static bool _sameJson(Object? left, Object? right) {

@@ -7,7 +7,7 @@ import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.PluginRegistry.NewIntentListener
 
-/** Retains web links across the gap before the Dart method handler subscribes. */
+/** Retains incoming opens across the gap before the Dart method handler subscribes. */
 internal class IncomingLinksPlugin : FlutterPlugin, ActivityAware, NewIntentListener {
     private val inbox = IncomingLinkInbox()
     private var channel: MethodChannel? = null
@@ -17,8 +17,12 @@ internal class IncomingLinksPlugin : FlutterPlugin, ActivityAware, NewIntentList
         channel = MethodChannel(binding.binaryMessenger, "videre/incoming_links").also { channel ->
             channel.setMethodCallHandler { call, result ->
                 if (call.method == "takePending") {
-                    result.success(inbox.takePending().map {
-                        mapOf("text" to it.payload.text, "share" to it.payload.share, "initial" to it.initial)
+                    result.success(inbox.takePending().map { delivery ->
+                        when (val payload = delivery.payload) {
+                            is IncomingLinkPayload -> mapOf("text" to payload.text, "share" to payload.share,
+                                "initial" to delivery.initial)
+                            is IncomingAudioPayload -> mapOf("audioUri" to payload.uri)
+                        }
                     })
                 } else result.notImplemented()
             }
@@ -63,8 +67,15 @@ internal class IncomingLinksPlugin : FlutterPlugin, ActivityAware, NewIntentList
         // crash startup, and never read streams or fetch the supplied address.
         val payload = runCatching {
             incomingLinkPayload(intent.action, intent.dataString, intent.type,
-                if (intent.action == Intent.ACTION_SEND) intent.getCharSequenceExtra(Intent.EXTRA_TEXT) else null)
+                if (intent.action == Intent.ACTION_SEND) intent.getCharSequenceExtra(Intent.EXTRA_TEXT) else null,
+                if (intent.action == MUSIC_SHUFFLE_LOCAL) intent.getStringExtra(SHUFFLE_SHORTCUT_TOKEN) else null)
+                ?: incomingAudioPayload(intent.action, intent.dataString, intent.type) {
+                    val host = activityBinding?.activity ?: return@incomingAudioPayload false
+                    val uri = intent.data ?: return@incomingAudioPayload false
+                    intent.flags and Intent.FLAG_GRANT_READ_URI_PERMISSION != 0 && hasOpenedAudioReadGrant(host, uri)
+                }
         }.getOrNull() ?: return false
+        if (intent.action == MUSIC_SHUFFLE_LOCAL) intent.removeExtra(SHUFFLE_SHORTCUT_TOKEN)
         val previousMarker = runCatching { intent.getStringExtra(ATTACHMENT_MARKER) }.getOrNull()
         if (!inbox.offer(payload, initial, previousMarker)) return false
         intent.putExtra(ATTACHMENT_MARKER, inbox.attachmentMarker)

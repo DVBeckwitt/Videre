@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="car_add_to_queue">Add to queue</string>
+    <string name="car_remove_from_queue">Remove from queue</string>
+    <string name="car_move_queue_earlier">Move earlier</string>
+    <string name="car_move_queue_later">Move later</string>
+</resources>

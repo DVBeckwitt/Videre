@@ -6,8 +6,11 @@ import 'package:auto_route/auto_route.dart';
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/content_filter/community_filter.dart';
 import 'package:clipious/content_filter/community_filter_widgets.dart';
+import 'package:clipious/downloads/states/download_manager.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
+import 'package:clipious/main.dart' show isTv;
+import 'package:clipious/music/models/music_card_origin.dart';
 import 'package:clipious/music/models/music_charts.dart';
 import 'package:clipious/music/models/music_collection.dart';
 import 'package:clipious/music/models/music_layout.dart';
@@ -16,10 +19,16 @@ import 'package:clipious/music/models/music_track.dart';
 import 'package:clipious/music/services/music_catalog_service.dart';
 import 'package:clipious/music/services/music_library_service.dart';
 import 'package:clipious/music/services/music_starter_artists.dart';
+import 'package:clipious/music/services/music_visibility.dart';
 import 'package:clipious/music/views/components/music_catalog_cards.dart';
 import 'package:clipious/music/views/components/community_music_artwork.dart';
+import 'package:clipious/music/views/components/music_card_playback.dart';
 import 'package:clipious/music/views/components/music_chart_picker.dart';
+import 'package:clipious/music/views/components/music_discovery_snooze.dart';
+import 'package:clipious/music/views/components/music_dismissal_notice.dart';
+import 'package:clipious/music/views/components/music_discovery_offline.dart';
 import 'package:clipious/music/views/components/music_library_actions.dart';
+import 'package:clipious/music/views/components/music_offline_recovery.dart';
 import 'package:clipious/music/views/components/music_recommendation_collection.dart';
 import 'package:clipious/music/views/components/music_recommendation_shelves.dart';
 import 'package:clipious/music/views/components/music_starter_artists.dart';
@@ -34,6 +43,8 @@ import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/models/errors/invidious_service_error.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/interfaces/db.dart';
+import 'package:clipious/utils/motion.dart';
+import 'package:clipious/utils/views/components/placeholders.dart';
 import 'package:clipious/utils/views/components/thumbnail.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/foundation.dart';
@@ -61,6 +72,7 @@ class MusicHomePage extends StatefulWidget {
 class _MusicHomePageState extends State<MusicHomePage> {
   final _scroll = ScrollController();
   final _discovery = GlobalKey();
+  final _loading = _DiscoveryLoading();
 
   void _showDiscovery() {
     final target = _discovery.currentContext;
@@ -70,6 +82,7 @@ class _MusicHomePageState extends State<MusicHomePage> {
   @override
   void dispose() {
     _scroll.dispose();
+    _loading.dispose();
     super.dispose();
   }
 
@@ -82,7 +95,7 @@ class _MusicHomePageState extends State<MusicHomePage> {
       return state != null &&
           (state.isPip || (!state.isHidden && !state.isMini));
     });
-    return TickerMode(
+    final home = TickerMode(
       enabled: !covered,
       child: _DiscoverySongs(
           builder: (canDiscover, freshShelves, songs) => _DiscoveryScroll(
@@ -101,12 +114,184 @@ class _MusicHomePageState extends State<MusicHomePage> {
                   ),
                   const MusicStarterArtistsSection(),
                   const MusicRecommendationShelves(),
+                  const _SnoozedSongs(),
                   _SavedSongs(onLibrary: widget.onLibrary),
                   freshShelves,
                   const _MusicExplore(),
                   KeyedSubtree(key: _discovery, child: songs),
                 ],
               )),
+    );
+    return _DiscoveryLoadingScope(
+      loading: _loading,
+      child: ValueListenableBuilder<bool>(
+        valueListenable: _loading,
+        builder: (context, loading, child) => Semantics(
+          container: true,
+          explicitChildNodes: true,
+          liveRegion: loading,
+          label: loading
+              ? AppLocalizations.of(context)!.musicDiscoverLoading
+              : null,
+          child: child,
+        ),
+        child: home,
+      ),
+    );
+  }
+}
+
+/// Keeps a single live region active while any initial section is loading.
+class _DiscoveryLoading extends ValueNotifier<bool> {
+  _DiscoveryLoading() : super(false);
+
+  int _sections = 0;
+  bool _scheduled = false;
+  bool _disposed = false;
+
+  void updateSections(int delta) {
+    _sections += delta;
+    if (_scheduled || _disposed) return;
+    _scheduled = true;
+    // Coalesce shelves that appear and resolve in the same frame.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _scheduled = false;
+      if (!_disposed) value = _sections > 0;
+    });
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    super.dispose();
+  }
+}
+
+class _DiscoveryLoadingScope extends InheritedWidget {
+  final _DiscoveryLoading loading;
+
+  const _DiscoveryLoadingScope({required this.loading, required super.child});
+
+  @override
+  bool updateShouldNotify(_DiscoveryLoadingScope oldWidget) =>
+      loading != oldWidget.loading;
+}
+
+class _DiscoveryPlaceholder extends StatefulWidget {
+  final Widget child;
+
+  const _DiscoveryPlaceholder({super.key, required this.child});
+
+  @override
+  State<_DiscoveryPlaceholder> createState() => _DiscoveryPlaceholderState();
+}
+
+class _DiscoveryPlaceholderState extends State<_DiscoveryPlaceholder> {
+  _DiscoveryLoading? _loading;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final loading = context
+        .dependOnInheritedWidgetOfExactType<_DiscoveryLoadingScope>()!
+        .loading;
+    if (_loading == loading) return;
+    _loading?.updateSections(-1);
+    _loading = loading;
+    loading.updateSections(1);
+  }
+
+  @override
+  void dispose() {
+    _loading?.updateSections(-1);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => ExcludeSemantics(
+        child: ExcludeFocus(
+          child: IgnorePointer(
+            child: AppMotion.allowsMovement(context)
+                ? TweenAnimationBuilder<double>(
+                    tween: Tween(begin: 0.6, end: 1),
+                    duration: AppMotion.duration(context),
+                    child: widget.child,
+                    builder: (_, opacity, child) =>
+                        Opacity(opacity: opacity, child: child),
+                  )
+                : widget.child,
+          ),
+        ),
+      );
+}
+
+class _DiscoveryShelfPlaceholder extends StatelessWidget {
+  final String? title;
+
+  const _DiscoveryShelfPlaceholder({super.key, this.title});
+
+  @override
+  Widget build(BuildContext context) => _DiscoveryPlaceholder(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (title case final title?) _SectionHeading(title: title),
+            MusicCatalogShelf(
+              itemCount: 10,
+              itemBuilder: (context, _) => const Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  AspectRatio(
+                      aspectRatio: 1, child: _DiscoveryPlaceholderBlock()),
+                  SizedBox(height: 6),
+                  FractionallySizedBox(
+                      widthFactor: 0.8, child: TextPlaceHolder()),
+                  SizedBox(height: 6),
+                  FractionallySizedBox(
+                    widthFactor: 0.55,
+                    child: TextPlaceHolder(small: true),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+}
+
+class _DiscoveryPlaceholderBlock extends StatelessWidget {
+  const _DiscoveryPlaceholderBlock();
+
+  @override
+  Widget build(BuildContext context) => DecoratedBox(
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.secondaryContainer,
+          borderRadius: BorderRadius.circular(6),
+        ),
+      );
+}
+
+class _SnoozedSongs extends StatelessWidget {
+  const _SnoozedSongs();
+
+  @override
+  Widget build(BuildContext context) {
+    final profileId = context.select((AppCubit app) => app.state.profileId);
+    if (profileId != db.profileId) return const SizedBox.shrink();
+    final visibility = MusicVisibility.forProfile(db, profileId);
+    return ListenableBuilder(
+      listenable: visibility,
+      builder: (context, _) => visibility.activeSnoozes.isEmpty
+          ? const SizedBox.shrink()
+          : Align(
+              alignment: AlignmentDirectional.centerStart,
+              child: TextButton.icon(
+                onPressed: () => showMusicDiscoverySnoozes(context, visibility),
+                icon: const Icon(Icons.snooze),
+                label: Text(
+                    AppLocalizations.of(context)!.musicDiscoverySnoozedSongs),
+              ),
+            ),
     );
   }
 }
@@ -246,7 +431,7 @@ class _SavedSongs extends StatelessWidget {
                   else
                     _SavedSongRows(
                         songs: songs,
-                        onOpen: (song) async {
+                        onOpen: (song, cardOrigin) async {
                           if (!context.mounted ||
                               !_sameSession(
                                   session, context.read<AppCubit>().state)) {
@@ -256,7 +441,8 @@ class _SavedSongs extends StatelessWidget {
                               context,
                               song.id,
                               preview().map((entry) => entry.toVideo()),
-                              locals.musicSavedSongs);
+                              locals.musicSavedSongs,
+                              cardOrigin: cardOrigin);
                         }),
                 ],
               );
@@ -270,7 +456,7 @@ class _SavedSongs extends StatelessWidget {
 /// A nested horizontal list owns its drags instead of switching the Home tab.
 class _SavedSongRows extends StatelessWidget {
   final List<MusicLibraryEntry> songs;
-  final Future<void> Function(MusicLibraryEntry) onOpen;
+  final Future<void> Function(MusicLibraryEntry, MusicCardOrigin) onOpen;
 
   const _SavedSongRows({required this.songs, required this.onOpen});
 
@@ -317,7 +503,7 @@ class _SavedSongRows extends StatelessWidget {
                       song: song,
                       compact: compact,
                       titleLines: titleLines,
-                      onOpen: () => onOpen(song),
+                      onOpen: (origin) => onOpen(song, origin),
                     ),
                   ),
               ],
@@ -333,7 +519,7 @@ class _SavedSongRow extends StatelessWidget {
   final MusicLibraryEntry song;
   final bool compact;
   final int titleLines;
-  final Future<void> Function() onOpen;
+  final Future<void> Function(MusicCardOrigin) onOpen;
 
   const _SavedSongRow({
     super.key,
@@ -348,14 +534,23 @@ class _SavedSongRow extends StatelessWidget {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
     final covers = song.displayThumbnails;
-    return Material(
+    final MusicCardOrigin cardOrigin = (
+      surface: MusicCardSurface.savedSongs,
+      collectionId: null,
+      entryId: song.id,
+    );
+    final playing = watchMusicCardPlaying(context, cardOrigin);
+    final playbackIcon = musicCardPlaybackIcon(playing);
+    Future<void> open() => onOpen(cardOrigin);
+    void activate() => activateMusicCard(context, cardOrigin, open);
+    final row = Material(
       color: Colors.transparent,
       borderRadius: BorderRadius.circular(12),
       child: InkWell(
-        onTap: onOpen,
+        onTap: activate,
         onLongPress: () => MusicLibraryActions.showSongMenu(
             context, song.toVideo(),
-            onPlay: onOpen),
+            onPlay: open),
         borderRadius: BorderRadius.circular(12),
         onFocusChange: (focused) {
           if (focused) Scrollable.ensureVisible(context, alignment: 0.5);
@@ -411,12 +606,15 @@ class _SavedSongRow extends StatelessWidget {
                   ],
                 ),
               ),
-              MusicLibraryActions(videos: [song.toVideo()], onPlay: onOpen),
+              if (playbackIcon != null) playbackIcon,
+              MusicLibraryActions(videos: [song.toVideo()], onPlay: open),
             ],
           ),
         ),
       ),
     );
+    return Semantics(
+        onTapHint: musicCardPlaybackHint(context, playing), child: row);
   }
 }
 
@@ -490,13 +688,16 @@ class _DiscoverySongsState extends State<_DiscoverySongs>
   final _freshSelection = GlobalKey<_FreshSelectionState>();
   _DiscoverySession? _session;
   final _batches = <String?, _DiscoveryBatch>{};
-  final _failures = <String?>{};
+  final _failures = <String?, Object>{};
   String? _artist;
+  int _artistSelectionRevision = 0;
+  UndoMusicDismissal? _visibleUndo;
   String? _loadingArtist;
   int _generation = 0;
   bool _loading = false;
   Future<void>? _request;
-  bool _paused = false;
+  InvidiousServiceError? _pauseFailure;
+  bool get _paused => _pauseFailure != null;
   Timer? _cooldown;
   bool _visible = false;
   late bool _foreground;
@@ -548,11 +749,11 @@ class _DiscoverySongsState extends State<_DiscoverySongs>
   void _clearPause() {
     _cooldown?.cancel();
     _cooldown = null;
-    _paused = false;
+    _pauseFailure = null;
   }
 
   void _pause(InvidiousServiceError error) {
-    _paused = true;
+    _pauseFailure = error;
     final delay = error.retryAfter;
     if (delay == null || delay <= Duration.zero) return;
     _cooldown?.cancel();
@@ -618,7 +819,7 @@ class _DiscoverySongsState extends State<_DiscoverySongs>
       if (current()) _batches[artist] = batch;
     } catch (error) {
       if (current()) {
-        _failures.add(artist);
+        _failures[artist] = error;
         if (error is InvidiousServiceError && musicDiscoveryMustStop(error)) {
           _pause(error);
         }
@@ -709,15 +910,34 @@ class _DiscoverySongsState extends State<_DiscoverySongs>
     final recommendations = RecommendationService.forProfile(
         session.database, session.app.profileId);
     try {
+      if (feedback != RecommendationFeedback.like) {
+        final selection = _artistSelectionRevision;
+        final undo =
+            await recommendations.dismissMusicRecommendation(song, feedback);
+        bool sessionCurrent() => _pageVisible && _sameConnection(session);
+        if (undo == null || !mounted || !sessionCurrent()) return;
+        _visibleUndo = undo;
+        await showMusicDismissalNotice(context,
+            feedback: feedback,
+            undo: undo,
+            isCurrent: sessionCurrent, onRestored: () {
+          if (selection == _artistSelectionRevision &&
+              identical(_batches[artist], batch)) {
+            setState(() => _artist = artist);
+          }
+        }).whenComplete(() {
+          if (identical(_visibleUndo, undo)) _visibleUndo = null;
+        });
+        return;
+      }
       await recommendations.feedback(
           song.toVideo(), RecommendationDomain.music, feedback);
-      if (!current()) return;
+      if (!current() || _visibleUndo != null) return;
       final ranked = await _rank(recommendations, batch.songs);
       if (current()) setState(() => _batches[artist] = ranked);
     } catch (_) {
       if (mounted && current()) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text(AppLocalizations.of(context)!.recommendationError)));
+        showMusicRecommendationError(context);
       }
     }
   }
@@ -749,6 +969,9 @@ class _DiscoverySongsState extends State<_DiscoverySongs>
     final starterArtists = session.eligible
         ? MusicStarterArtists(session.database, session.app.profileId)
         : null;
+    final visibility = session.eligible
+        ? MusicVisibility.forProfile(session.database, session.app.profileId)
+        : null;
     return RefreshIndicator(
       key: const ValueKey('music-home-pull-refresh'),
       notificationPredicate: (notification) =>
@@ -760,13 +983,33 @@ class _DiscoverySongsState extends State<_DiscoverySongs>
           library?.changes,
           recommendations?.changes,
           starterArtists?.changes,
+          visibility,
         ]),
-        builder: (context, _) => library == null || recommendations == null
-            ? widget.builder(
-                null, const SizedBox.shrink(), const SizedBox.shrink())
-            : _buildSelection(context, session, library, recommendations,
-                starterArtists?.picks ?? const []),
+        builder: (context, _) =>
+            library == null || recommendations == null || visibility == null
+                ? widget.builder(
+                    null, const SizedBox.shrink(), _offlineSelection(session))
+                : _buildSelection(context, session, library, recommendations,
+                    visibility, starterArtists?.picks ?? const []),
       ),
+    );
+  }
+
+  Widget _offlineSelection(_DiscoverySession session,
+      {List<Video> Function()? selectedSongs}) {
+    if (isTv) return const SizedBox.shrink();
+    bool current() =>
+        mounted &&
+        identical(session.database, db) &&
+        _sameSession(session.app, context.read<AppCubit>().state);
+    final manager = context.read<DownloadManagerCubit?>();
+    if (manager == null || !current()) return const SizedBox.shrink();
+    return MusicDiscoveryOffline(
+      key: ValueKey((session.database, session.app.profileId, manager)),
+      manager: manager,
+      profileId: session.app.profileId,
+      isCurrent: current,
+      selectedSongs: selectedSongs,
     );
   }
 
@@ -775,6 +1018,7 @@ class _DiscoverySongsState extends State<_DiscoverySongs>
       _DiscoverySession session,
       MusicLibraryService library,
       RecommendationService recommendations,
+      MusicVisibility visibility,
       List<String> starterArtists) {
     final seeds = <String?>[null, ..._savedArtistNames(library)];
     final starterKeys =
@@ -798,17 +1042,17 @@ class _DiscoverySongsState extends State<_DiscoverySongs>
         if (entry.kind == MusicLibraryKind.song) entry.id,
     };
     _batches.removeWhere((seed, _) => !seeds.contains(seed));
-    _failures.removeWhere((seed) => !seeds.contains(seed));
+    _failures.removeWhere((seed, _) => !seeds.contains(seed));
     if (_loading && !seeds.contains(_loadingArtist)) _cancelLoading();
     final pending = seeds.where(
-        (seed) => !_batches.containsKey(seed) && !_failures.contains(seed));
+        (seed) => !_batches.containsKey(seed) && !_failures.containsKey(seed));
     if (_visible && !_loading && !_paused && pending.isNotEmpty) {
       final next = pending.first;
       final generation = _generation;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (generation == _generation &&
             !_batches.containsKey(next) &&
-            !_failures.contains(next)) {
+            !_failures.containsKey(next)) {
           _load(session, next);
         }
       });
@@ -818,10 +1062,11 @@ class _DiscoverySongsState extends State<_DiscoverySongs>
         if (_batches[seed] case final batch?)
           seed: musicTrackResults(
               recommendations.eligibleMusic(
-                  seed == null
-                      ? ordered(seed, batch.songs)
-                      : batch.songs
-                          .where((song) => !savedSongs.contains(song.videoId)),
+                  (seed == null
+                          ? ordered(seed, batch.songs)
+                          : batch.songs.where(
+                              (song) => !savedSongs.contains(song.videoId)))
+                      .where((song) => !visibility.isSnoozed(song.videoId)),
                   includeCommunityHidden: true),
               showHidden: _showCommunityHidden),
     };
@@ -835,17 +1080,22 @@ class _DiscoverySongsState extends State<_DiscoverySongs>
     final songs = results?.visible ?? const <MusicTrackResult>[];
     final hidden = choices.values.fold(0, (sum, result) => sum + result.hidden);
     final locals = AppLocalizations.of(context)!;
-    final refreshing = _loading && _loadingArtist == artist;
-    final failed = _failures.contains(artist);
-    final missing = _failures
+    final failed = _failures.containsKey(artist);
+    final missing = _failures.keys
         .where((seed) => _batches[seed]?.songs.isNotEmpty != true)
         .toList();
+    final connectionFailed =
+        isMusicBrowseConnectionFailure(_failures[artist]) ||
+            isMusicBrowseConnectionFailure(_pauseFailure) ||
+            missing
+                .any((seed) => isMusicBrowseConnectionFailure(_failures[seed]));
     List<MusicTrack> playable(String? seed, Iterable<MusicTrack> tracks) =>
         recommendations.eligibleMusic(
-            seed == null
-                ? ordered(seed, tracks)
-                : tracks.where((song) =>
-                    !library.contains(MusicLibraryKind.song, song.videoId)),
+            (seed == null
+                    ? ordered(seed, tracks)
+                    : tracks.where((song) =>
+                        !library.contains(MusicLibraryKind.song, song.videoId)))
+                .where((song) => !visibility.isSnoozed(song.videoId)),
             includeCommunityHidden: _showCommunityHidden);
     bool readyNow(String? seed) {
       final saved = _batches[seed];
@@ -905,7 +1155,10 @@ class _DiscoverySongsState extends State<_DiscoverySongs>
                         selected: seed == artist,
                         onSelected: (selected) {
                           if (selected && seed != artist && readyNow(seed)) {
-                            setState(() => _artist = seed);
+                            setState(() {
+                              _artist = seed;
+                              _artistSelectionRevision++;
+                            });
                           }
                         },
                       ),
@@ -913,21 +1166,14 @@ class _DiscoverySongsState extends State<_DiscoverySongs>
                 ),
               ),
             ],
-            if (_loading && (ready.isEmpty || refreshing))
-              Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(locals.musicDiscoverLoading),
-                    const SizedBox(height: 8),
-                    LinearProgressIndicator(
-                      key: const ValueKey('music-discovery-loading'),
-                      semanticsLabel: locals.musicDiscoverLoading,
-                    ),
-                  ],
-                ),
-              ),
+            if (_visible &&
+                ready.isEmpty &&
+                hidden == 0 &&
+                !_paused &&
+                missing.isEmpty &&
+                (pending.isNotEmpty || (_loading && batch == null)))
+              const _DiscoveryShelfPlaceholder(
+                  key: ValueKey('music-discovery-loading')),
             if (missing.isNotEmpty || failed || _paused)
               Padding(
                 padding: const EdgeInsets.only(bottom: 12),
@@ -951,6 +1197,11 @@ class _DiscoverySongsState extends State<_DiscoverySongs>
                 itemCount: songs.length,
                 itemBuilder: (context, index) {
                   final (song, matches) = songs[index];
+                  final MusicCardOrigin cardOrigin = (
+                    surface: MusicCardSurface.discovery,
+                    collectionId: artist,
+                    entryId: song.videoId,
+                  );
                   final reason = batch.reasons[song.videoId];
                   // Opening a menu can cancel a pending refresh. Its actions still
                   // belong to this displayed list until the selection changes.
@@ -966,16 +1217,19 @@ class _DiscoverySongsState extends State<_DiscoverySongs>
                           song.videoId,
                           playable(artist, batch.songs)
                               .map((track) => track.toVideo()),
-                          locals.musicDiscover);
+                          locals.musicDiscover,
+                          cardOrigin: cardOrigin);
                     }
                   }
 
-                  final recommendation = reason == null
-                      ? null
-                      : MusicSongRecommendation(
-                          reason: reason,
-                          isCurrent: currentSong,
-                          onFeedback: (feedback) => _feedback(
+                  final recommendation = MusicSongRecommendation(
+                      reason: reason,
+                      isCurrent: currentSong,
+                      onSnooze: () => showMusicDiscoverySnooze(
+                          context, visibility, song, currentSong),
+                      onFeedback: reason == null
+                          ? null
+                          : (feedback) => _feedback(
                               session, artist, batch, song, feedback));
                   return MusicCatalogCard(
                     key: ValueKey('music-discovery-${song.videoId}'),
@@ -983,6 +1237,7 @@ class _DiscoverySongsState extends State<_DiscoverySongs>
                     subtitle: song.artists.join(', '),
                     song: song,
                     showPlayIndicator: true,
+                    cardOrigin: cardOrigin,
                     badge: Row(mainAxisSize: MainAxisSize.min, children: [
                       if (matches.isNotEmpty)
                         Flexible(
@@ -1006,31 +1261,52 @@ class _DiscoverySongsState extends State<_DiscoverySongs>
                 hidden == 0)
               Text(locals.musicDiscoverEmpty,
                   key: const ValueKey('music-discovery-empty')),
-            if (missing.isNotEmpty || _paused)
-              Align(
-                alignment: Alignment.centerLeft,
-                child: FilledButton.tonalIcon(
-                  key: const ValueKey('music-discovery-retry'),
-                  onPressed: _loading || _cooldown != null
-                      ? null
-                      : () {
-                          if (!_sameConnection(session) || !_pageVisible) {
-                            return;
-                          }
-                          final refreshPartial =
-                              _paused && pending.isEmpty && missing.isEmpty;
-                          setState(() {
-                            _clearPause();
-                            for (final seed in missing) {
-                              _failures.remove(seed);
-                              _batches.remove(seed);
+            _offlineSelection(session,
+                selectedSongs: batch != null && songs.isNotEmpty
+                    ? () {
+                        if (_artist != artist ||
+                            !identical(_batches[artist]?.songs, batch.songs) ||
+                            !_current(session, artist)) {
+                          return const [];
+                        }
+                        return playable(artist, batch.songs)
+                            .map((track) => track.toVideo())
+                            .toList(growable: false);
+                      }
+                    : null),
+            if (missing.isNotEmpty || _paused || connectionFailed)
+              Wrap(
+                spacing: 8,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  FilledButton.tonalIcon(
+                    key: const ValueKey('music-discovery-retry'),
+                    onPressed: _loading || _cooldown != null
+                        ? null
+                        : () {
+                            if (!_sameConnection(session) || !_pageVisible) {
+                              return;
                             }
-                          });
-                          if (refreshPartial) _load(session, artist);
-                        },
-                  icon: const Icon(Icons.refresh),
-                  label: Text(locals.retry),
-                ),
+                            final refreshPartial =
+                                (_paused || connectionFailed) &&
+                                    pending.isEmpty &&
+                                    missing.isEmpty;
+                            setState(() {
+                              _clearPause();
+                              for (final seed in missing) {
+                                _failures.remove(seed);
+                                _batches.remove(seed);
+                              }
+                            });
+                            if (refreshPartial) _load(session, artist);
+                          },
+                    icon: const Icon(Icons.refresh),
+                    label: Text(locals.retry),
+                  ),
+                  if (connectionFailed)
+                    const BrowseOfflineMusicButton(
+                        key: ValueKey('music-discovery-browse-offline')),
+                ],
               ),
           ],
         ));
@@ -1183,14 +1459,18 @@ class _MusicExploreState extends State<_MusicExplore>
               when tracks.isNotEmpty)
             (index: index, tracks: tracks),
     ];
-    if (ready.isEmpty) return const SizedBox.shrink();
+    final loading = ready.isEmpty &&
+        _active &&
+        musicExploreGenres.any((genre) => !_recordings.containsKey(genre));
+    if (ready.isEmpty && !loading) return const SizedBox.shrink();
     final token = recommendations.generation(RecommendationDomain.music);
     bool current() =>
         _same(session) &&
         token == recommendations.generation(RecommendationDomain.music);
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
-    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+    final tiles =
+        Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       _SectionHeading(title: locals.musicExplore),
       LayoutBuilder(builder: (context, constraints) {
         final columns = constraints.maxWidth >= 760 ? 4 : 2;
@@ -1200,6 +1480,13 @@ class _MusicExploreState extends State<_MusicExplore>
           spacing: gap,
           runSpacing: gap,
           children: [
+            if (loading)
+              for (final _ in musicExploreGenres)
+                SizedBox(
+                  width: width,
+                  height: 48,
+                  child: const _DiscoveryPlaceholderBlock(),
+                ),
             for (final (:index, :tracks) in ready)
               Builder(
                   builder: (tileContext) => SizedBox(
@@ -1229,6 +1516,7 @@ class _MusicExploreState extends State<_MusicExplore>
                                       builder: (_) =>
                                           MusicRecommendationCollection(
                                               title: labels[index],
+                                              collectionId: 'explore:$index',
                                               tracks: tracks,
                                               isCurrent: current,
                                               eligible:
@@ -1257,11 +1545,16 @@ class _MusicExploreState extends State<_MusicExplore>
         );
       }),
     ]);
+    return loading
+        ? _DiscoveryPlaceholder(
+            key: const ValueKey('music-explore-loading'), child: tiles)
+        : tiles;
   }
 }
 
 Future<void> _openSong(BuildContext context, String videoId,
-    Iterable<Video> songs, String queueTitle) async {
+    Iterable<Video> songs, String queueTitle,
+    {required MusicCardOrigin cardOrigin}) async {
   final queue = songs.toList(growable: false);
   final index = queue.indexWhere((video) => video.videoId == videoId);
   if (index < 0) return;
@@ -1270,6 +1563,7 @@ Future<void> _openSong(BuildContext context, String videoId,
       artistCredits: queue[index].musicMetadata?.artistCredits ?? const [],
       queue: queue,
       queueTitle: queueTitle,
+      cardOrigin: cardOrigin,
       startIndex: index));
 }
 
@@ -1372,7 +1666,7 @@ class _FreshSelectionState extends State<_FreshSelection>
   Future<void>? _request;
   bool _prepared = false;
   bool _chartPrepared = false;
-  bool _failed = false;
+  Object? _failure;
   int _generation = 0;
   Timer? _cooldown;
   late bool _foreground;
@@ -1400,7 +1694,7 @@ class _FreshSelectionState extends State<_FreshSelection>
       _recentTracks.clear();
       _chartTracks = const [];
       _chartPrepared = false;
-      _failed = false;
+      _failure = null;
       if (!widget.session.sameConnection(oldWidget.session)) {
         _cooldown?.cancel();
         _cooldown = null;
@@ -1484,7 +1778,7 @@ class _FreshSelectionState extends State<_FreshSelection>
     bool current() => generation == _generation && _current(session);
     setState(() {
       _loading = true;
-      _failed = false;
+      _failure = null;
     });
 
     Future<bool> tryLoad(Future<void> Function() load) async {
@@ -1494,7 +1788,9 @@ class _FreshSelectionState extends State<_FreshSelection>
         return current();
       } catch (error) {
         if (!current()) return false;
-        _failed = true;
+        if (_failure == null || isMusicBrowseConnectionFailure(error)) {
+          _failure = error;
+        }
         if (error is InvidiousServiceError && musicDiscoveryMustStop(error)) {
           final delay = error.retryAfter;
           if (delay != null && delay > Duration.zero) {
@@ -1517,7 +1813,7 @@ class _FreshSelectionState extends State<_FreshSelection>
           if (current()) setState(() => _chooseChartTracks(tracks));
         });
         if (!proceed) return;
-        _chartPrepared = true;
+        setState(() => _chartPrepared = true);
       }
       for (final id in artists) {
         if (!refresh && _releases.containsKey(id)) continue;
@@ -1578,16 +1874,32 @@ class _FreshSelectionState extends State<_FreshSelection>
     final locals = AppLocalizations.of(context)!;
     final refreshSelection =
         _loading || _cooldown != null ? null : refreshShelves;
-    if (releases.isEmpty && tracks.isEmpty) {
-      if (!_failed && !(_prepared && _loading)) return const SizedBox.shrink();
+    final initialLoad = visible && !_prepared && (_scheduled || _loading);
+    final loadingReleases =
+        initialLoad && widget.artists.any((id) => !_releases.containsKey(id));
+    final loadingChart = initialLoad && !_chartPrepared;
+    if (releases.isEmpty &&
+        tracks.isEmpty &&
+        !loadingReleases &&
+        !loadingChart) {
+      if (_failure == null) return const SizedBox.shrink();
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(_loading ? locals.musicDiscoverLoading : locals.musicLoadError),
-          TextButton(
-            key: const ValueKey('music-home-fresh-retry'),
-            onPressed: refreshSelection,
-            child: Text(locals.retry),
+          Text(locals.musicLoadError),
+          Wrap(
+            spacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              TextButton(
+                key: const ValueKey('music-home-fresh-retry'),
+                onPressed: refreshSelection,
+                child: Text(locals.retry),
+              ),
+              if (isMusicBrowseConnectionFailure(_failure))
+                const BrowseOfflineMusicButton(
+                    key: ValueKey('music-home-fresh-browse-offline')),
+            ],
           ),
         ],
       );
@@ -1629,7 +1941,11 @@ class _FreshSelectionState extends State<_FreshSelection>
               );
             },
           ),
-        ],
+        ] else if (loadingReleases)
+          _DiscoveryShelfPlaceholder(
+            key: const ValueKey('music-home-releases-loading'),
+            title: locals.musicSavedArtistReleases,
+          ),
         if (tracks.isNotEmpty) ...[
           _SectionHeading(title: chartTitle, action: refresh),
           MusicCatalogShelf(
@@ -1637,22 +1953,34 @@ class _FreshSelectionState extends State<_FreshSelection>
             itemCount: tracks.length,
             itemBuilder: (context, index) {
               final track = tracks[index];
+              final MusicCardOrigin cardOrigin = (
+                surface: MusicCardSurface.chart,
+                collectionId: chart.playlistId,
+                entryId: track.videoId,
+              );
               return MusicCatalogCard(
                 title: track.title,
                 subtitle: track.artists.join(', '),
                 song: track,
                 showPlayIndicator: true,
+                cardOrigin: cardOrigin,
                 onOpen: () {
                   if (!current()) return;
                   final playable = recommendations.eligibleMusic(tracks);
                   _openSong(context, track.videoId,
-                      playable.map((track) => track.toVideo()), chartTitle);
+                      playable.map((track) => track.toVideo()), chartTitle,
+                      cardOrigin: cardOrigin);
                 },
               );
             },
           ),
-        ],
-        if (_failed && !_loading) Text(locals.musicDiscoverRefreshFailed),
+        ] else if (loadingChart)
+          _DiscoveryShelfPlaceholder(
+            key: const ValueKey('music-home-chart-loading'),
+            title: chartTitle,
+          ),
+        if (_failure != null && !_loading)
+          Text(locals.musicDiscoverRefreshFailed),
       ],
     );
   }

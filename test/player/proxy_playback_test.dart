@@ -68,6 +68,14 @@ class _HeldAudioPlayer implements AudioPlayer {
   bool get androidMusicGainEnabled => false;
 
   @override
+  bool skipSilenceEnabled = false;
+
+  @override
+  Future<void> setSkipSilenceEnabled(bool value) async {
+    skipSilenceEnabled = value;
+  }
+
+  @override
   double volume = 1;
 
   @override

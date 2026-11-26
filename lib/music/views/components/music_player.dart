@@ -10,19 +10,22 @@ import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' show isTv;
 import 'package:clipious/music/models/local_music_artist.dart';
 import 'package:clipious/music/models/local_music_track.dart';
+import 'package:clipious/music/models/music_artist_identity.dart';
 import 'package:clipious/music/models/music_content_advisory.dart';
 import 'package:clipious/music/models/music_library_entry.dart';
 import 'package:clipious/music/models/music_lyrics.dart';
 import 'package:clipious/music/models/music_mix.dart';
 import 'package:clipious/music/models/music_player_appearance.dart';
+import 'package:clipious/music/models/music_search_text.dart';
 import 'package:clipious/music/services/local_music_library.dart';
 import 'package:clipious/music/services/music_library_service.dart';
-import 'package:clipious/music/services/music_lyrics_service.dart';
+import 'package:clipious/music/services/music_waveform.dart';
 import 'package:clipious/music/views/components/music_playback_toggles.dart';
 import 'package:clipious/music/views/screens/music.dart';
 import 'package:clipious/player/models/local_music_playback.dart';
 import 'package:clipious/player/models/media_event.dart';
 import 'package:clipious/player/models/playback_queue.dart';
+import 'package:clipious/player/states/audio_player.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/player/views/components/backend_recovery_notice.dart';
 import 'package:clipious/player/views/components/player_backend_picker.dart';
@@ -44,6 +47,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import 'local_music_folder.dart' show renameLocalMusicTrack;
+import 'music_ab_repeat_control.dart';
 import 'music_audio_quality_button.dart';
 import 'music_duration_label.dart';
 import 'music_library_actions.dart';
@@ -61,13 +65,13 @@ import 'music_wide_player_layout.dart';
 /// Presentation only: commands still reach the existing mounted audio decoder.
 class MusicPlayer extends StatefulWidget {
   final bool television;
-  final MusicLyricsLoader lyricsLoader;
+  final MusicLyricsLoader? lyricsLoader;
   final MusicVideoSurfaceBuilder? videoSurfaceBuilder;
 
   const MusicPlayer(
       {super.key,
       this.television = false,
-      this.lyricsLoader = loadMusicLyrics,
+      this.lyricsLoader,
       this.videoSurfaceBuilder});
 
   @override
@@ -76,11 +80,11 @@ class MusicPlayer extends StatefulWidget {
 
 const _canvas = Color(0xff121212);
 
-/// Resolves saved titles for the visible player without changing its queue.
+/// Rebuilds playback labels when the active profile's library changes.
 class MusicPlaybackTitles extends StatelessWidget {
   const MusicPlaybackTitles({super.key, required this.builder});
 
-  final Widget Function(BuildContext, String? Function(IdedVideo?)) builder;
+  final Widget Function(BuildContext, MusicPlaybackLabels) builder;
 
   @override
   Widget build(BuildContext context) {
@@ -97,32 +101,64 @@ class MusicPlaybackTitles extends StatelessWidget {
         ? MusicLibraryService.forProfile(db, profileId)
         : null;
 
-    String? savedTitle(IdedVideo? entry) {
-      if (library == null ||
-          entry == null ||
-          isLocalMusicPlaybackId(entry.videoId)) {
-        return null;
-      }
-      final ownedSong = switch (entry) {
-        Video(
-          :final musicMetadata,
-          :final playbackConnection,
-          :final backendPlayback
-        ) =>
-          musicMetadata != null &&
-              ((playbackConnection ?? backendPlayback)?.server.profileId ??
-                      library.profileId) ==
-                  library.profileId,
-        DownloadedVideo(:final musicMetadata, :final profileId) =>
-          musicMetadata != null && profileId == library.profileId,
-        _ => false,
-      };
-      return ownedSong ? library.savedSong(entry.videoId)?.savedTitle : null;
-    }
-
     return ListenableBuilder(
       listenable: library?.changes ?? const AlwaysStoppedAnimation(0),
-      builder: (context, _) => builder(context, savedTitle),
+      builder: (context, _) => builder(context, MusicPlaybackLabels._(library)),
+    );
+  }
+}
+
+/// Projects local labels for each occurrence without changing queue metadata.
+class MusicPlaybackLabels {
+  const MusicPlaybackLabels._(this._library);
+
+  final MusicLibraryService? _library;
+
+  ({MusicLibraryService library, MusicMetadata metadata})? _ownedMusic(
+      IdedVideo? entry) {
+    final library = _library;
+    if (library == null) return null;
+    final metadata = switch (entry) {
+      Video(
+        :final musicMetadata,
+        :final playbackConnection,
+        :final backendPlayback
+      )
+          when ((playbackConnection ?? backendPlayback)?.server.profileId ??
+                  library.profileId) ==
+              library.profileId =>
+        musicMetadata,
+      DownloadedVideo(:final musicMetadata, :final profileId)
+          when profileId == library.profileId =>
+        musicMetadata,
+      _ => null,
+    };
+    return metadata == null ? null : (library: library, metadata: metadata);
+  }
+
+  String? savedTitle(IdedVideo? entry) {
+    if (entry == null || isLocalMusicPlaybackId(entry.videoId)) return null;
+    return _ownedMusic(entry)?.library.savedSong(entry.videoId)?.savedTitle;
+  }
+
+  String artistName(
+          IdedVideo? entry, MusicArtistIdentity identity, String original) =>
+      _ownedMusic(entry)?.library.artistDisplayName(identity, original) ??
+      original;
+
+  String artistByline(IdedVideo? entry, String fallback) {
+    final owned = _ownedMusic(entry);
+    if (owned == null || entry == null) return fallback;
+    final occurrence = playbackQueueId(entry);
+    if (isLocalMusicPlaybackId(occurrence)) {
+      final track = localMusicTrackForPlayback(occurrence);
+      return track == null
+          ? fallback
+          : owned.library.deviceArtistByline(track) ?? fallback;
+    }
+    return owned.library.catalogArtistByline(
+      fallback,
+      owned.metadata.artistCredits,
     );
   }
 }
@@ -222,9 +258,9 @@ class _MusicPlayerState extends State<MusicPlayer>
   final _queueButtonFocus = FocusNode(debugLabel: 'Music queue');
   final _closeQueueFocus = FocusNode(debugLabel: 'Close music queue');
   final _queueScope = FocusScopeNode(debugLabel: 'Music queue overlay');
-  double? _seekPosition;
-  String? _queueId;
+  (Object, double)? _seekPosition;
   (int, MusicNowPlayingStyle)? _layoutMode;
+  Size? _seekViewport;
   int _layoutRevision = 0;
 
   @override
@@ -304,8 +340,7 @@ class _MusicPlayerState extends State<MusicPlayer>
     );
   }
 
-  Widget _buildPlayer(
-      BuildContext context, String? Function(IdedVideo?) savedTitle) {
+  Widget _buildPlayer(BuildContext context, MusicPlaybackLabels labels) {
     final app = context.watch<AppCubit>();
     final session = app.state;
     final database = db;
@@ -348,13 +383,9 @@ class _MusicPlayerState extends State<MusicPlayer>
       player.playlistGeneration,
       queueId,
     );
-    if (queueId != _queueId) {
-      _queueId = queueId;
-      _seekPosition = null;
-    }
     final music = video?.musicMetadata ?? offline?.musicMetadata;
     if (music == null) return const SizedBox.shrink();
-    final displayTitle = savedTitle(entry) ?? music.title;
+    final displayTitle = labels.savedTitle(entry) ?? music.title;
     final locals = AppLocalizations.of(context)!;
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
@@ -377,6 +408,8 @@ class _MusicPlayerState extends State<MusicPlayer>
       final showQueue = fixedQueue || _queueVisibility == true;
       final sideQueue = wide && showQueue;
       final interactiveArtwork = sideQueue || (!showQueue && !_draggingQueue);
+      final allowLocalVideo =
+          onDevice && advisoryQueueId != null && (!showQueue || sideQueue);
       final allowOnlineArtwork = pending == null &&
           video != null &&
           !onDevice &&
@@ -397,10 +430,13 @@ class _MusicPlayerState extends State<MusicPlayer>
               ? 2
               : 0;
       final mode = (viewportMode, style);
-      if (_layoutMode != mode) {
-        _layoutMode = mode;
+      if (_seekViewport != constraints.biggest || _layoutMode != mode) {
+        _seekViewport = constraints.biggest;
         _layoutRevision++;
         _seekPosition = null;
+      }
+      if (_layoutMode != mode) {
+        _layoutMode = mode;
         // The previous layout's drag recognizer can disappear before pointer-up.
         if (_draggingQueue) {
           _draggingQueue = false;
@@ -432,6 +468,8 @@ class _MusicPlayerState extends State<MusicPlayer>
                               : 0.0;
                           final mountedVideo = state.currentlyPlaying;
                           final mountedOffline = state.offlineCurrentlyPlaying;
+                          final IdedVideo? mountedEntry =
+                              mountedVideo ?? mountedOffline;
                           final mountedMusic = mountedVideo?.musicMetadata ??
                               mountedOffline?.musicMetadata;
                           // Keep the artwork in place while the header previews
@@ -456,26 +494,33 @@ class _MusicPlayerState extends State<MusicPlayer>
                                   (hasSeparateAlbumLabel
                                       ? 22 + metadataHeight
                                       : 0.0);
-                          final metadataReserve = portraitPhone &&
-                                  mountedMusic != null
-                              ? _portraitMetadataReserve(
-                                  context,
-                                  mountedMusic,
-                                  savedTitle(mountedVideo ?? mountedOffline) ??
-                                      mountedMusic.title,
-                                  titleStyle,
-                                  width: panel.maxWidth,
-                                  hasBookmark: mountedVideo != null,
-                                  deviceArtist: mountedDeviceTrack == null
-                                      ? null
-                                      : localMusicArtistCredits(
-                                              mountedDeviceTrack)
-                                          .firstOrNull
-                                          ?.name,
-                                  onDevice: isLocalMusicPlaybackId(
-                                      mountedVideo?.videoId ??
-                                          mountedOffline?.videoId))
-                              : 0.0;
+                          final deviceCredit =
+                              portraitPhone && mountedDeviceTrack != null
+                                  ? localMusicArtistCredits(mountedDeviceTrack)
+                                      .firstOrNull
+                                  : null;
+                          final metadataReserve =
+                              portraitPhone && mountedMusic != null
+                                  ? _portraitMetadataReserve(
+                                      context,
+                                      mountedMusic,
+                                      labels.savedTitle(mountedEntry) ??
+                                          mountedMusic.title,
+                                      titleStyle,
+                                      width: panel.maxWidth,
+                                      hasBookmark: mountedVideo != null,
+                                      displayArtist: labels.artistByline(
+                                          mountedEntry, mountedMusic.artist),
+                                      deviceArtist: deviceCredit == null
+                                          ? null
+                                          : labels.artistName(
+                                              mountedEntry,
+                                              MusicArtistIdentity.device(
+                                                  deviceCredit.key),
+                                              deviceCredit.name),
+                                      onDevice: isLocalMusicPlaybackId(
+                                          mountedEntry?.videoId))
+                                  : 0.0;
                           final controlBudget = 318 +
                               metadataHeight * 2 +
                               metadataReserve +
@@ -515,6 +560,7 @@ class _MusicPlayerState extends State<MusicPlayer>
                                   child: _artworkFrame(
                                       music, video, offline, artworkSize,
                                       allowOnlineArtwork: allowOnlineArtwork,
+                                      allowLocalVideo: allowLocalVideo,
                                       interactive: interactiveArtwork,
                                       onSeekStep:
                                           widget.television ? null : seekStep))
@@ -554,7 +600,9 @@ class _MusicPlayerState extends State<MusicPlayer>
                                                       context,
                                                       music,
                                                       onDevice,
-                                                      metadataOccurrence),
+                                                      metadataOccurrence,
+                                                      entry,
+                                                      labels),
                                                 ),
                                               ],
                                             ),
@@ -849,6 +897,7 @@ class _MusicPlayerState extends State<MusicPlayer>
                         math.max(1, constraints.maxHeight - 32),
                       ),
                       allowOnlineArtwork: allowOnlineArtwork,
+                      allowLocalVideo: allowLocalVideo,
                       interactive: interactiveArtwork,
                       onSeekStep: widget.television ? null : seekStep)),
               Expanded(flex: 5, child: nowPlaying),
@@ -1072,6 +1121,7 @@ class _MusicPlayerState extends State<MusicPlayer>
       String displayTitle, TextStyle? titleStyle,
       {required double width,
       required bool hasBookmark,
+      required String displayArtist,
       required String? deviceArtist,
       required bool onDevice}) {
     final titleDirection = Directionality.of(context);
@@ -1080,9 +1130,9 @@ class _MusicPlayerState extends State<MusicPlayer>
     final linked = deviceArtist != null ||
         !onDevice && music.artistCredits.any((credit) => credit.id != null);
     final artist = deviceArtist ??
-        (onDevice && music.artist.isEmpty
+        (onDevice && displayArtist.isEmpty
             ? AppLocalizations.of(context)!.onDevice
-            : music.artist);
+            : displayArtist);
     final measurement = (
       width,
       displayTitle,
@@ -1208,11 +1258,16 @@ class _MusicPlayerState extends State<MusicPlayer>
     );
   }
 
-  Widget _artistByline(BuildContext context, MusicMetadata music, bool onDevice,
-      (String, int, int, String?) occurrence) {
+  Widget _artistByline(
+      BuildContext context,
+      MusicMetadata music,
+      bool onDevice,
+      (String, int, int, String?) occurrence,
+      IdedVideo? entry,
+      MusicPlaybackLabels labels) {
     if (onDevice) {
       return MusicPlayingDeviceArtists(
-        byline: music.artist,
+        byline: labels.artistByline(entry, music.artist),
         occurrence: occurrence,
         television: widget.television,
       );
@@ -1272,7 +1327,9 @@ class _MusicPlayerState extends State<MusicPlayer>
                     padding: const EdgeInsets.symmetric(horizontal: 2),
                     alignment: AlignmentDirectional.centerStart),
                 onPressed: () => openArtist(id),
-                child: Text(credit.name,
+                child: Text(
+                    labels.artistName(
+                        entry, MusicArtistIdentity.catalog(id), credit.name),
                     style:
                         style?.copyWith(decoration: TextDecoration.underline)))
           else
@@ -1284,6 +1341,7 @@ class _MusicPlayerState extends State<MusicPlayer>
   Widget _artworkFrame(MusicMetadata music, Video? video,
           DownloadedVideo? offline, double size,
           {required bool allowOnlineArtwork,
+          required bool allowLocalVideo,
           required bool interactive,
           required ValueChanged<bool>? onSeekStep}) =>
       MusicPlayerArtwork(
@@ -1293,6 +1351,7 @@ class _MusicPlayerState extends State<MusicPlayer>
           offline: offline,
           size: size,
           active: allowOnlineArtwork,
+          localVideoActive: allowLocalVideo,
           interactive: interactive,
           scaleWithPlayback: !widget.television,
           onSeekStep: onSeekStep,
@@ -1304,61 +1363,152 @@ class _MusicPlayerState extends State<MusicPlayer>
       required int? length,
       required bool live}) {
     final locals = AppLocalizations.of(context)!;
+    final app = context.read<AppCubit>();
+    final session = app.state;
     final opening = player.openingMusicEntry != null;
-    final duration = math.max(
-        0,
-        opening || length == null
-            ? (length ?? 0) * 1000
-            : player.duration.inMilliseconds);
-    final canSeek = !opening && duration > 0 && !live;
-    final queueId = _queueId;
+    final timelineLength = opening || length == null
+        ? (length ?? 0) * 1000
+        : player.duration.inMilliseconds;
+    final queueId = state.currentQueueId;
+    bool seekAllowed() =>
+        !isLocalMusicPlaybackId(queueId) || player.canSeekCurrentMedia;
     final layoutRevision = _layoutRevision;
+    final playlistGeneration = player.playlistGeneration;
+    final playbackGeneration = player.backendPlaybackGeneration;
     bool isCurrent() =>
         mounted &&
+        !player.isClosed &&
+        !app.isClosed &&
+        !app.state.globalLoading &&
+        !app.state.sessionRecoveryRequired &&
+        app.state.sessionRevision == session.sessionRevision &&
+        app.state.profileId == session.profileId &&
+        db.profileId == session.profileId &&
+        !player.state.isClosing &&
         player.openingMusicEntry == null &&
+        playlistGeneration == player.playlistGeneration &&
+        playbackGeneration == player.backendPlaybackGeneration &&
         queueId == player.state.currentQueueId &&
         layoutRevision == _layoutRevision;
-    final maxPosition = math.max(1, duration).toDouble();
-    final elapsed = opening ? 0 : state.position.inMilliseconds;
-    final position =
-        (_seekPosition ?? elapsed.toDouble()).clamp(0.0, maxPosition);
-    return Column(children: [
-      MusicPlayerScrubber(
-        // Flutter replaces callbacks on a mounted slider. Retire its gesture
-        // state with the queue occurrence or layout that accepted the drag.
-        key: ValueKey((queueId, layoutRevision)),
-        style: style,
-        semanticLabel: locals.musicPosition,
-        maxPosition: maxPosition,
-        position: position,
-        onChanged: !canSeek
-            ? null
-            : (value) {
-                if (isCurrent()) setState(() => _seekPosition = value);
-              },
-        onChangeEnd: !canSeek
-            ? null
-            : (value) {
-                if (!isCurrent()) return;
-                player.seek(Duration(milliseconds: value.round()));
-                setState(() => _seekPosition = null);
-              },
+    final preparer = player.manualMusicPreparer;
+    final audio = preparer is AudioPlayerCubit ? preparer : null;
+
+    Widget progress({MountedMusicWaveform? recording}) {
+      final decodedLength = recording?.duration;
+      final duration =
+          math.max(0, decodedLength?.inMilliseconds ?? timelineLength);
+      final canSeek = !opening &&
+          !state.isClosing &&
+          duration > 0 &&
+          !live &&
+          seekAllowed();
+      if (!canSeek) _seekPosition = null;
+      final recordingOwner = (
+        queueId,
+        playlistGeneration,
+        playbackGeneration,
+        session.profileId,
+        session.sessionRevision,
+        recording,
+      );
+      final owner = (recordingOwner, layoutRevision, style);
+      final maxPosition = math.max(1, duration).toDouble();
+      final elapsed = opening ? 0 : state.position.inMilliseconds;
+      final preview = _seekPosition;
+      final position = (preview?.$1 == owner ? preview!.$2 : elapsed.toDouble())
+          .clamp(0.0, maxPosition);
+      bool recordingIsCurrent() =>
+          isCurrent() &&
+          seekAllowed() &&
+          (style != MusicScrubberStyle.wave ||
+              MusicScrubberStyle.forDatabase(db) == style &&
+                  !player.state.isHidden &&
+                  !player.state.isMini &&
+                  identical(player.manualMusicPreparer, preparer) &&
+                  audio?.mountedMusicWaveform == recording);
+
+      Widget slider(List<double>? peaks) => MusicPlayerScrubber(
+            // Retire gestures that belonged to the previous track or layout.
+            key: ValueKey(owner),
+            style: style,
+            waveformPeaks: peaks,
+            semanticLabel: locals.musicPosition,
+            maxPosition: maxPosition,
+            position: position,
+            onChanged: !canSeek
+                ? null
+                : (value) {
+                    if (recordingIsCurrent()) {
+                      setState(() => _seekPosition = (owner, value));
+                    }
+                  },
+            onChangeEnd: !canSeek
+                ? null
+                : (value) {
+                    if (!recordingIsCurrent()) return;
+                    player.seek(Duration(milliseconds: value.round()));
+                    setState(() => _seekPosition = null);
+                  },
+          );
+      return Column(children: [
+        if (recording == null || !canSeek)
+          slider(null)
+        else
+          _WaveformScrubber(
+            key: ValueKey(recordingOwner),
+            profileId: session.profileId,
+            source: recording.source,
+            isCurrent: recordingIsCurrent,
+            builder: slider,
+          ),
+        SizedBox(
+            width: double.infinity,
+            child: ValueListenableBuilder(
+                valueListenable: player.musicAbRepeat,
+                builder: (context, repeat, _) => Wrap(
+                        alignment: WrapAlignment.spaceBetween,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        spacing: 16,
+                        children: [
+                          Text(prettyDurationCustom(Duration(
+                              milliseconds: duration > 0
+                                  ? position.round()
+                                  : math.max(0, elapsed)))),
+                          if (!opening &&
+                              seekAllowed() &&
+                              !live &&
+                              repeat != null &&
+                              repeat.generation ==
+                                  player.backendPlaybackGeneration)
+                            MusicAbRepeatControl(
+                                key: ValueKey(
+                                    (repeat.generation, repeat.sourceRevision)),
+                                controls: repeat),
+                          Text(duration > 0
+                              ? prettyDurationCustom(
+                                  Duration(milliseconds: duration))
+                              : '--:--'),
+                        ]))),
+      ]);
+    }
+
+    if (opening ||
+        live ||
+        state.isHidden ||
+        state.isMini ||
+        style != MusicScrubberStyle.wave ||
+        audio == null) {
+      return progress();
+    }
+    return StreamBuilder<AudioPlayerState>(
+      stream: audio.stream,
+      builder: (context, _) => ListenableBuilder(
+        listenable: LocalMusicLibrary.instance,
+        builder: (context, _) => progress(
+          recording: isCurrent() ? audio.mountedMusicWaveform : null,
+        ),
       ),
-      SizedBox(
-          width: double.infinity,
-          child: Wrap(
-              alignment: WrapAlignment.spaceBetween,
-              spacing: 16,
-              children: [
-                Text(prettyDurationCustom(Duration(
-                    milliseconds: duration > 0
-                        ? position.round()
-                        : math.max(0, elapsed)))),
-                Text(duration > 0
-                    ? prettyDurationCustom(Duration(milliseconds: duration))
-                    : '--:--'),
-              ])),
-    ]);
+    );
   }
 
   ValueChanged<bool>? _seekStep(
@@ -1373,7 +1523,10 @@ class _MusicPlayerState extends State<MusicPlayer>
             state.offlineCurrentlyPlaying?.lengthSeconds) !=
         null;
     final length = player.duration.inMilliseconds;
-    if (player.openingMusicEntry != null ||
+    bool seekAllowed() =>
+        !isLocalMusicPlaybackId(occurrence) || player.canSeekCurrentMedia;
+    if (!seekAllowed() ||
+        player.openingMusicEntry != null ||
         !hasDuration ||
         length <= 0 ||
         state.currentlyPlaying?.liveNow == true) {
@@ -1386,6 +1539,7 @@ class _MusicPlayerState extends State<MusicPlayer>
           app.state.sessionRecoveryRequired ||
           app.state.sessionRevision != session.sessionRevision ||
           app.state.profileId != session.profileId ||
+          !seekAllowed() ||
           player.openingMusicEntry != null ||
           player.playlistGeneration != generation ||
           player.state.currentQueueId != occurrence ||
@@ -1573,7 +1727,10 @@ Future<void> _showMusicSleepTimer(
   var minutes = 30;
   var tracks = 3;
   var byTrackCount = false;
-  final selected = await showDialog<({_MusicSleepMode mode, int value})>(
+  var finishSong = false;
+  var fadeOut = false;
+  final selected =
+      await showDialog<({_MusicSleepMode mode, int value, bool fadeOut})>(
     context: context,
     useRootNavigator: false,
     builder: (context) {
@@ -1612,11 +1769,31 @@ Future<void> _showMusicSleepTimer(
                 }),
               ),
               if (byTrackCount) Text(locals.musicSleepTrackCountExplanation),
+              if (!byTrackCount)
+                CheckboxListTile(
+                  key: const ValueKey('music-sleep-finish-song'),
+                  contentPadding: EdgeInsets.zero,
+                  title: Text(locals.musicSleepFinishSong),
+                  subtitle: Text(locals.musicSleepFinishSongExplanation),
+                  value: finishSong,
+                  onChanged: (value) =>
+                      setState(() => finishSong = value ?? false),
+                ),
+              CheckboxListTile(
+                key: const ValueKey('music-sleep-fade-out'),
+                contentPadding: EdgeInsets.zero,
+                title: Text(locals.musicSleepFadeOut),
+                value: fadeOut,
+                onChanged: (value) => setState(() => fadeOut = value ?? false),
+              ),
               if (!byTrackCount && canEnd)
                 OutlinedButton(
                   key: const ValueKey('music-sleep-end-of-song'),
-                  onPressed: () => Navigator.of(context)
-                      .pop((mode: _MusicSleepMode.endOfSong, value: 1)),
+                  onPressed: () => Navigator.of(context).pop((
+                    mode: _MusicSleepMode.endOfSong,
+                    value: 1,
+                    fadeOut: fadeOut,
+                  )),
                   child: Text(locals.musicSleepEndOfSong),
                 ),
               if (!byTrackCount && canCount)
@@ -1631,9 +1808,13 @@ Future<void> _showMusicSleepTimer(
                   onPressed: () => Navigator.of(context).pop(),
                   child: Text(locals.cancel)),
               FilledButton(
-                onPressed: () => Navigator.of(context).pop(byTrackCount
-                    ? (mode: _MusicSleepMode.trackCount, value: tracks)
-                    : (mode: _MusicSleepMode.timed, value: minutes)),
+                onPressed: () => Navigator.of(context).pop((
+                  mode: byTrackCount
+                      ? _MusicSleepMode.trackCount
+                      : _MusicSleepMode.timed,
+                  value: byTrackCount ? tracks : minutes,
+                  fadeOut: fadeOut,
+                )),
                 child: Text(locals.setTimer),
               ),
             ],
@@ -1657,13 +1838,52 @@ Future<void> _showMusicSleepTimer(
   }
   switch (selected.mode) {
     case _MusicSleepMode.timed:
-      player.sleep(SleepTimer(
-          duration: Duration(minutes: selected.value), stopVideo: false));
+      player.sleep(
+          SleepTimer(
+              duration: Duration(minutes: selected.value), stopVideo: false),
+          finishSong: finishSong,
+          fadeOut: selected.fadeOut);
     case _MusicSleepMode.endOfSong:
-      player.sleepAtEndOfTrack();
+      player.sleepAtEndOfTrack(fadeOut: selected.fadeOut);
     case _MusicSleepMode.trackCount:
-      player.sleepAfterTracks(selected.value);
+      player.sleepAfterTracks(selected.value, fadeOut: selected.fadeOut);
   }
+}
+
+class _WaveformScrubber extends StatefulWidget {
+  const _WaveformScrubber({
+    required super.key,
+    required this.profileId,
+    required this.source,
+    required this.isCurrent,
+    required this.builder,
+  });
+
+  final String profileId;
+  final MusicWaveformSource source;
+  final bool Function() isCurrent;
+  final Widget Function(List<double>?) builder;
+
+  @override
+  State<_WaveformScrubber> createState() => _WaveformScrubberState();
+}
+
+class _WaveformScrubberState extends State<_WaveformScrubber> {
+  late final _request =
+      MusicWaveforms.instance.load(widget.profileId, widget.source);
+
+  @override
+  void dispose() {
+    unawaited(_request.cancel());
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => FutureBuilder<List<double>?>(
+        future: _request.peaks,
+        builder: (context, snapshot) =>
+            widget.builder(widget.isCurrent() ? snapshot.data : null),
+      );
 }
 
 class _MusicAdvisoryBadge extends StatelessWidget {
@@ -1759,8 +1979,7 @@ class _MusicQueueFooterLabel extends StatelessWidget {
   Widget build(BuildContext context) =>
       MusicPlaybackTitles(builder: _buildPreview);
 
-  Widget _buildPreview(
-      BuildContext context, String? Function(IdedVideo?) savedTitle) {
+  Widget _buildPreview(BuildContext context, MusicPlaybackLabels labels) {
     // Position updates and sheet animation frames do not change this target.
     context.select((PlayerCubit player) {
       final state = player.state;
@@ -1783,7 +2002,7 @@ class _MusicQueueFooterLabel extends StatelessWidget {
       builder: (context, _, __) {
         final locals = AppLocalizations.of(context)!;
         final next = player.adjacentMusicEntry(previous: false);
-        final (catalogTitle, artist) = switch (next) {
+        final (catalogTitle, originalArtist) = switch (next) {
           Video(:final musicMetadata, :final title, :final author) => (
               musicMetadata?.title ?? title ?? '',
               musicMetadata?.artist ?? author ?? '',
@@ -1795,7 +2014,8 @@ class _MusicQueueFooterLabel extends StatelessWidget {
             ),
           _ => ('', ''),
         };
-        final title = savedTitle(next) ?? catalogTitle;
+        final title = labels.savedTitle(next) ?? catalogTitle;
+        final artist = labels.artistByline(next, originalArtist);
         const overflow = TextOverflow.ellipsis;
         final queue = Text(locals.musicQueue, maxLines: 1, overflow: overflow);
         if (title.isEmpty) return queue;
@@ -2009,12 +2229,23 @@ enum _QueueRowAction {
 
 typedef _QueueMenuCommand = Future<void> Function();
 
-enum _QueueFollow { reveal, center, jump }
+enum _QueueFollow { reveal, center, jump, find }
+
+({String title, String artist}) _queueDisplayLabels(
+    IdedVideo entry, MusicPlaybackLabels labels) {
+  final raw = musicQueueLabels(entry);
+  return (
+    title: labels.savedTitle(entry) ?? raw.title,
+    artist: labels.artistByline(entry, raw.artist),
+  );
+}
 
 class _MusicQueueState extends State<MusicQueue> {
   final _scroll = ScrollController();
   final _scrollPointers = <int>{};
   ({(String, int, int) owner, String id, int index, double extent})? _activeRow;
+  String? _foundId;
+  (int, double)? _foundRow;
   _QueueFollow? _pendingFollow;
   bool _followScheduled = false;
   ({
@@ -2025,7 +2256,10 @@ class _MusicQueueState extends State<MusicQueue> {
     int from,
   })? _drag;
   Set<String>? _selection;
-  (String, int, int)? _selectionOwner;
+  (String, int, int)? _queueOwner;
+  ({int count, bool Function() restore})? _removalUndo;
+  bool _removalUndoUnavailable = false;
+  Timer? _removalNoticeTimer;
 
   List<IdedVideo> _sources(PlayerState state) =>
       state.videos.isNotEmpty ? state.videos : state.offlineVideos;
@@ -2125,23 +2359,28 @@ class _MusicQueueState extends State<MusicQueue> {
   void _followActiveRow(
       (String, int, int) owner, String? id, int index, double extent) {
     final previous = _activeRow;
-    if (id == null || index < 0) {
-      _activeRow = null;
-      _pendingFollow = null;
-      return;
-    }
-    _activeRow = (owner: owner, id: id, index: index, extent: extent);
-    if (previous?.owner != owner) {
-      _pendingFollow = _QueueFollow.center;
-    } else if (previous?.id != id || previous?.extent != extent) {
-      _pendingFollow ??= _QueueFollow.reveal;
+    _activeRow = id == null || index < 0
+        ? null
+        : (owner: owner, id: id, index: index, extent: extent);
+    // An explicit reveal takes priority over automatic playhead following.
+    if (_pendingFollow != _QueueFollow.find) {
+      if (_activeRow == null) {
+        _pendingFollow = null;
+      } else if (previous?.owner != owner) {
+        _pendingFollow = _QueueFollow.center;
+      } else if (previous?.id != id || previous?.extent != extent) {
+        _pendingFollow ??= _QueueFollow.reveal;
+      }
     }
     _scheduleFollow();
   }
 
+  bool _isExplicitFollow(_QueueFollow? follow) =>
+      follow == _QueueFollow.jump || follow == _QueueFollow.find;
+
   void _scheduleFollow() {
     if (_followScheduled || _pendingFollow == null) return;
-    if (_pendingFollow != _QueueFollow.jump && _scrollPointers.isNotEmpty) {
+    if (!_isExplicitFollow(_pendingFollow) && _scrollPointers.isNotEmpty) {
       return;
     }
     _followScheduled = true;
@@ -2150,22 +2389,28 @@ class _MusicQueueState extends State<MusicQueue> {
       _followScheduled = false;
       if (!mounted || !_scroll.hasClients) return;
       final follow = _pendingFollow;
-      final row = _activeRow;
+      final activeRow = _activeRow;
+      final row = follow == _QueueFollow.find
+          ? _foundRow
+          : activeRow == null
+              ? null
+              : (activeRow.index, activeRow.extent);
       if (follow == null || row == null) return;
       final position = _scroll.position;
       // A pointer can be holding a row without moving the ScrollPosition.
-      if (follow != _QueueFollow.jump &&
+      if (!_isExplicitFollow(follow) &&
           (_scrollPointers.isNotEmpty || position.isScrollingNotifier.value)) {
         return;
       }
       _pendingFollow = null;
-      final rowTop = row.index * row.extent;
+      final (index, extent) = row;
+      final rowTop = index * extent;
       if (follow == _QueueFollow.reveal &&
           rowTop >= position.pixels &&
-          rowTop + row.extent <= position.pixels + position.viewportDimension) {
+          rowTop + extent <= position.pixels + position.viewportDimension) {
         return;
       }
-      final centered = rowTop - (position.viewportDimension - row.extent) / 2;
+      final centered = rowTop - (position.viewportDimension - extent) / 2;
       final offset = centered
           .clamp(position.minScrollExtent, position.maxScrollExtent)
           .toDouble();
@@ -2181,11 +2426,31 @@ class _MusicQueueState extends State<MusicQueue> {
 
   @override
   void dispose() {
+    _removalNoticeTimer?.cancel();
     _scroll.dispose();
     super.dispose();
   }
 
   void _closeSelection() => setState(() => _selection = null);
+
+  void _showRemovalNotice({
+    ({int count, bool Function() restore})? undo,
+    bool unavailable = false,
+  }) {
+    _removalNoticeTimer?.cancel();
+    setState(() {
+      _removalUndo = undo;
+      _removalUndoUnavailable = unavailable;
+    });
+    if (undo != null || unavailable) {
+      _removalNoticeTimer = Timer(MusicQueueRemovalUndo.duration, () {
+        setState(() {
+          _removalUndo = null;
+          _removalUndoUnavailable = false;
+        });
+      });
+    }
+  }
 
   String _durationLabel(AppLocalizations locals, List<IdedVideo> entries,
       {required bool complete}) {
@@ -2206,8 +2471,7 @@ class _MusicQueueState extends State<MusicQueue> {
   Widget build(BuildContext context) =>
       MusicPlaybackTitles(builder: _buildQueue);
 
-  Widget _buildQueue(
-      BuildContext context, String? Function(IdedVideo?) savedTitle) {
+  Widget _buildQueue(BuildContext context, MusicPlaybackLabels labels) {
     final player = context.read<PlayerCubit>();
     final state = context.watch<PlayerCubit>().state;
     final videos = _entries(player);
@@ -2221,9 +2485,13 @@ class _MusicQueueState extends State<MusicQueue> {
     final playlistGeneration = player.playlistGeneration;
     final owner =
         (session.profileId, session.sessionRevision, playlistGeneration);
-    if (_selectionOwner != owner) {
-      _selectionOwner = owner;
+    if (_queueOwner != owner) {
+      _queueOwner = owner;
       _selection = null;
+      _foundId = null;
+      _removalNoticeTimer?.cancel();
+      _removalUndo = null;
+      _removalUndoUnavailable = false;
     }
     final settings = context.watch<SettingsCubit>();
     final locked = settings.state.musicQueueLocked;
@@ -2239,6 +2507,12 @@ class _MusicQueueState extends State<MusicQueue> {
         scaler.scale(text.titleMedium?.fontSize ?? 16) * 1.45 +
             scaler.scale(text.bodyMedium?.fontSize ?? 14) * 1.45 +
             24);
+    final foundIndex = _foundId == null ? -1 : order.indexOf(_foundId!);
+    _foundRow = foundIndex < 0 ? null : (foundIndex, extent);
+    if (_foundRow == null) {
+      _foundId = null;
+      if (_pendingFollow == _QueueFollow.find) _pendingFollow = null;
+    }
     _followActiveRow(owner, currentId, active, extent);
     final selection = _selection?..retainAll(ids);
     final allSelected = ids.isNotEmpty && selection?.length == ids.length;
@@ -2255,6 +2529,42 @@ class _MusicQueueState extends State<MusicQueue> {
         !player.state.isClosing;
     bool current() =>
         sessionCurrent() && player.playlistGeneration == playlistGeneration;
+
+    Future<void> findInQueue() async {
+      if (!current()) return;
+      final id = await showDialog<String>(
+        context: context,
+        useRootNavigator: false,
+        builder: (context) => PlayerModalBackHandler(
+          priority: 5,
+          child: BlocBuilder<AppCubit, AppState>(
+            bloc: app,
+            builder: (context, _) => BlocBuilder<PlayerCubit, PlayerState>(
+              bloc: player,
+              builder: (context, _) => BlocProvider<AppCubit>.value(
+                value: app,
+                child: _MusicQueueFindDialog(
+                  entries: current() ? _entries(player) : const [],
+                  onReveal: (id) {
+                    if (current() &&
+                        _entries(player)
+                            .any((entry) => playbackQueueId(entry) == id)) {
+                      Navigator.pop(context, id);
+                    }
+                  },
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      if (id == null || !current()) return;
+      setState(() {
+        _foundId = id;
+        _pendingFollow = _QueueFollow.find;
+      });
+    }
+
     // Muzza Queue.kt binds selection to Timeline.Window UIDs. Local occurrence
     // IDs have the same role and make repeat uploads independently selectable.
     void toggle(String id) {
@@ -2274,6 +2584,20 @@ class _MusicQueueState extends State<MusicQueue> {
         ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(content: Text(locals.musicLibraryActionError)));
       }
+    }
+
+    void removeOccurrences(Set<String> selectedIds) {
+      if (!current() || settings.state.musicQueueLocked) return;
+      final undo = player.removeInactiveQueueOccurrences(selectedIds
+          .where((id) => !_isProtectedOccurrence(player, id))
+          .toSet());
+      if (undo == null) return;
+      _showRemovalNotice(
+        undo: (
+          count: undo.count,
+          restore: () => current() && player.undoQueueRemoval(undo),
+        ),
+      );
     }
 
     Future<void> selectedAction(
@@ -2319,10 +2643,7 @@ class _MusicQueueState extends State<MusicQueue> {
                   .toList(),
               inPlayer: true);
         case _QueueSelectionAction.remove:
-          if (settings.state.musicQueueLocked) return;
-          player.removeInactiveQueueOccurrences(selectedIds
-              .where((id) => !_isProtectedOccurrence(player, id))
-              .toSet());
+          removeOccurrences(selectedIds);
       }
     }
 
@@ -2392,7 +2713,7 @@ class _MusicQueueState extends State<MusicQueue> {
                     : null);
           }
         case _QueueRowAction.remove:
-          if (canEdit) player.removeInactiveQueueOccurrences({id});
+          if (canEdit) removeOccurrences({id});
       }
     }
 
@@ -2451,9 +2772,16 @@ class _MusicQueueState extends State<MusicQueue> {
         final id = playbackQueueId(item);
         final video = item is Video ? item : null;
         final offline = item is DownloadedVideo ? item : null;
+        final devicePlaylistRow =
+            video != null && isLocalMusicPlaybackId(video.videoId);
         final music = video?.musicMetadata ?? offline?.musicMetadata;
-        final (title: catalogTitle, :artist) = musicQueueLabels(item);
-        final title = savedTitle(item) ?? catalogTitle;
+        final (:title, :artist) = _queueDisplayLabels(item, labels);
+        final subtitle = isMusicQueueSuggestion(item)
+            ? [locals.musicQueueSuggested, if (artist.isNotEmpty) artist]
+                .join(' • ')
+            : isLocalMusicPlaybackId(item.videoId) && artist.isEmpty
+                ? locals.onDevice
+                : artist;
         final isActive = id == currentId;
         final canEdit = editing && !_isProtectedOccurrence(player, id);
         final isEarlier = active >= 0 && index < active;
@@ -2470,17 +2798,29 @@ class _MusicQueueState extends State<MusicQueue> {
             player.playbackStatus == MediaState.playing;
         final canMoveUp = index > 0;
         final canMoveDown = index < order.length - 1;
+        final found = id == _foundId;
         final colors = Theme.of(context).colorScheme;
-        return Builder(
+        return ListenableBuilder(
           key: ValueKey(('music-queue-row', id)),
-          builder: (rowContext) {
+          listenable: devicePlaylistRow
+              ? LocalMusicLibrary.instance
+              : const AlwaysStoppedAnimation(false),
+          builder: (rowContext, _) {
+            final missing = (offline != null &&
+                    isLocalMusicPlaybackId(offline.videoId) &&
+                    offline.storageUri == null) ||
+                (devicePlaylistRow &&
+                    localMusicTrackForPlayback(video.videoId) == null);
             final tile = ListTile(
               key: ValueKey('music-queue-$id'),
               selected: isActive,
               minVerticalPadding: 8,
               contentPadding: const EdgeInsetsDirectional.fromSTEB(12, 0, 4, 0),
               shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12)),
+                  borderRadius: BorderRadius.circular(12),
+                  side: found
+                      ? BorderSide(color: colors.primary, width: 2)
+                      : BorderSide.none),
               selectedTileColor: colors.surfaceContainerHighest,
               textColor: isEarlier ? colors.onSurfaceVariant : null,
               leading: SizedBox.square(
@@ -2512,9 +2852,7 @@ class _MusicQueueState extends State<MusicQueue> {
               ),
               title: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
               subtitle: Text(
-                  isLocalMusicPlaybackId(item.videoId) && artist.isEmpty
-                      ? locals.onDevice
-                      : artist,
+                  missing ? locals.localMusicHiddenFileUnavailable : subtitle,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis),
               onFocusChange: (focused) {
@@ -2524,16 +2862,20 @@ class _MusicQueueState extends State<MusicQueue> {
                   Scrollable.ensureVisible(rowContext, alignment: 0.5);
                 }
               },
-              onTap: () {
-                if (!current()) return;
-                if (_selection != null) {
-                  toggle(id);
-                } else if (_activeId(player) == id) {
-                  if (player.openingMusicEntry == null) player.togglePlaying();
-                } else {
-                  unawaited(player.selectQueueOccurrence(id));
-                }
-              },
+              onTap: missing && selection == null
+                  ? null
+                  : () {
+                      if (!current()) return;
+                      if (_selection != null) {
+                        toggle(id);
+                      } else if (_activeId(player) == id) {
+                        if (player.openingMusicEntry == null) {
+                          player.togglePlaying();
+                        }
+                      } else {
+                        unawaited(player.selectQueueOccurrence(id));
+                      }
+                    },
               onLongPress: selection == null
                   ? () {
                       HapticFeedback.lightImpact();
@@ -2591,7 +2933,7 @@ class _MusicQueueState extends State<MusicQueue> {
                               {
                                 if (pause)
                                   _QueueRowAction.pause: locals.musicPause
-                                else
+                                else if (!missing)
                                   _QueueRowAction.play: locals.musicPlay,
                                 if (canEnqueue) ...{
                                   _QueueRowAction.next: locals.playNext,
@@ -2638,7 +2980,12 @@ class _MusicQueueState extends State<MusicQueue> {
             );
             // Hold a row to select it, then choose Remove selected. Horizontal
             // navigation must never remove a queue occurrence.
-            return tile;
+            return found
+                ? Semantics(
+                    label: locals.musicQueueFoundSong,
+                    liveRegion: true,
+                    child: tile)
+                : tile;
           },
         );
       },
@@ -2708,27 +3055,62 @@ class _MusicQueueState extends State<MusicQueue> {
           onSelected: (command) => unawaited(command()),
           itemBuilder: (_) {
             final generation = player.playlistGeneration;
-            return _menuItems(
-              {
-                MusicMixSteering.balanced: locals.musicMixBalanced,
-                if (player.musicMixCanFocusSeedArtist)
-                  MusicMixSteering.moreFromSeedArtist:
-                      locals.musicMixMoreFromSeedArtist,
-                MusicMixSteering.moreVariety: locals.musicMixMoreVariety,
-              },
-              (steering) async {
-                if (!current() ||
-                    _selection != null ||
-                    player.playlistGeneration != generation ||
-                    !player.canSteerMusicMix) {
-                  return;
-                }
-                if (!player.steerMusicMix(steering) && context.mounted) {
-                  ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-                      SnackBar(content: Text(locals.musicMixNoChange)));
-                }
-              },
-            );
+            Future<void> steer(bool Function() apply) async {
+              if (!current() ||
+                  _selection != null ||
+                  player.playlistGeneration != generation ||
+                  !player.canSteerMusicMix) {
+                return;
+              }
+              if (!apply() && context.mounted) {
+                ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+                    SnackBar(content: Text(locals.musicMixNoChange)));
+              }
+            }
+
+            final artistLabels = {
+              MusicMixSteering.balanced: locals.musicMixBalanced,
+              if (player.musicMixCanFocusSeedArtist)
+                MusicMixSteering.moreFromSeedArtist:
+                    locals.musicMixMoreFromSeedArtist,
+              MusicMixSteering.moreVariety: locals.musicMixMoreVariety,
+            };
+            final familiarityLabels = {
+              MusicMixFamiliarity.balanced: locals.musicMixAnyFamiliarity,
+              MusicMixFamiliarity.moreFamiliar: locals.musicMixMoreFamiliar,
+              MusicMixFamiliarity.moreDiscovery: locals.musicMixMoreDiscovery,
+            };
+            return [
+              PopupMenuItem<_QueueMenuCommand>(
+                enabled: false,
+                child: PlayerModalBackHandler(
+                    priority: 5, child: Text(locals.musicMixArtistVariety)),
+              ),
+              for (final entry in artistLabels.entries)
+                CheckedPopupMenuItem<_QueueMenuCommand>(
+                  value: () => steer(() => player.steerMusicMix(entry.key)),
+                  checked: player.musicMixSteering == entry.key,
+                  child: Text(entry.value),
+                ),
+              const PopupMenuDivider(),
+              PopupMenuItem<_QueueMenuCommand>(
+                enabled: false,
+                child: Text(locals.musicMixFamiliarity),
+              ),
+              if (player.musicMixLearningEnabled)
+                for (final entry in familiarityLabels.entries)
+                  CheckedPopupMenuItem<_QueueMenuCommand>(
+                    value: () =>
+                        steer(() => player.steerMusicMixFamiliarity(entry.key)),
+                    checked: player.musicMixFamiliarity == entry.key,
+                    child: Text(entry.value),
+                  )
+              else
+                PopupMenuItem<_QueueMenuCommand>(
+                  enabled: false,
+                  child: Text(locals.recommendationLearningPaused),
+                ),
+            ];
           },
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -2798,6 +3180,14 @@ class _MusicQueueState extends State<MusicQueue> {
                 if (hasTitle && locked) Text(locals.musicQueueLocked),
               ]),
             );
+            final find = widget.television || isTv
+                ? null
+                : IconButton(
+                    key: const ValueKey('music-queue-find'),
+                    tooltip: locals.musicQueueFind,
+                    onPressed: videos.isEmpty ? null : findInQueue,
+                    icon: const Icon(Icons.search),
+                  );
             return Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -2820,6 +3210,7 @@ class _MusicQueueState extends State<MusicQueue> {
                     child: Row(children: [
                       Expanded(child: summary),
                       if (!compact && sort != null) Flexible(child: sort),
+                      if (find != null) find,
                       requests,
                       IconButton(
                         key: const ValueKey('music-queue-saved-queues'),
@@ -2845,6 +3236,7 @@ class _MusicQueueState extends State<MusicQueue> {
               onPressed: active < 0
                   ? null
                   : () {
+                      if (_foundId != null) setState(() => _foundId = null);
                       _pendingFollow = _QueueFollow.jump;
                       _scheduleFollow();
                     },
@@ -2935,8 +3327,48 @@ class _MusicQueueState extends State<MusicQueue> {
               },
             ),
           ]);
+    final undo = _removalUndo;
     final content = Column(children: [
       toolbar,
+      // MusicQueue is above the routed Scaffolds in the expanded player.
+      if (undo != null || _removalUndoUnavailable)
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+          child: Material(
+            color: colors.secondaryContainer,
+            borderRadius: BorderRadius.circular(8),
+            child: Padding(
+              padding: const EdgeInsetsDirectional.only(start: 12, end: 4),
+              child: Row(children: [
+                Expanded(
+                  child: Semantics(
+                    liveRegion: true,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      child: Text(
+                        undo == null
+                            ? locals.musicQueueUndoUnavailable
+                            : locals.musicQueueRemoved(undo.count),
+                        style: text.bodyMedium
+                            ?.copyWith(color: colors.onSecondaryContainer),
+                      ),
+                    ),
+                  ),
+                ),
+                if (undo != null)
+                  TextButton(
+                    style: TextButton.styleFrom(
+                        foregroundColor: colors.onSecondaryContainer),
+                    onPressed: () {
+                      if (undo != _removalUndo) return;
+                      _showRemovalNotice(unavailable: !undo.restore());
+                    },
+                    child: Text(locals.musicQueueUndo),
+                  ),
+              ]),
+            ),
+          ),
+        ),
       Expanded(
         child: Listener(
           onPointerDown: (event) => _scrollPointers.add(event.pointer),
@@ -2957,5 +3389,118 @@ class _MusicQueueState extends State<MusicQueue> {
         priority: 4,
         onBack: _closeSelection,
         child: content);
+  }
+}
+
+class _MusicQueueFindDialog extends StatefulWidget {
+  const _MusicQueueFindDialog({required this.entries, required this.onReveal});
+
+  final List<IdedVideo> entries;
+  final ValueChanged<String> onReveal;
+
+  @override
+  State<_MusicQueueFindDialog> createState() => _MusicQueueFindDialogState();
+}
+
+class _MusicQueueFindDialogState extends State<_MusicQueueFindDialog> {
+  final _query = TextEditingController();
+
+  @override
+  void dispose() {
+    _query.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) =>
+      MusicPlaybackTitles(builder: _buildDialog);
+
+  Widget _buildDialog(BuildContext context, MusicPlaybackLabels labels) {
+    final locals = AppLocalizations.of(context)!;
+    final material = MaterialLocalizations.of(context);
+    final terms = musicSearchTerms(_query.text);
+    final matches =
+        <({int position, String id, String title, String artist})>[];
+    for (final (index, entry) in widget.entries.indexed) {
+      final (:title, :artist) = _queueDisplayLabels(entry, labels);
+      if (terms.isNotEmpty &&
+          !terms.every(normalizeMusicSearchText('$title $artist').contains)) {
+        continue;
+      }
+      matches.add((
+        position: index + 1,
+        id: playbackQueueId(entry),
+        title: title,
+        artist: artist,
+      ));
+    }
+
+    return Dialog(
+      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      constraints: const BoxConstraints(maxWidth: 560),
+      child: SizedBox(
+        height: 440,
+        child: Column(children: [
+          Padding(
+            padding: const EdgeInsetsDirectional.fromSTEB(16, 8, 8, 0),
+            child: Row(children: [
+              Expanded(
+                child: TextField(
+                  key: const ValueKey('music-queue-find-query'),
+                  controller: _query,
+                  autofocus: true,
+                  textInputAction: TextInputAction.search,
+                  onChanged: (_) => setState(() {}),
+                  decoration: InputDecoration(
+                    labelText: locals.musicQueueFind,
+                    suffixIcon: _query.text.isEmpty
+                        ? null
+                        : IconButton(
+                            tooltip: material.clearButtonTooltip,
+                            icon: const Icon(Icons.clear),
+                            onPressed: () => setState(_query.clear),
+                          ),
+                  ),
+                ),
+              ),
+              const CloseButton(),
+            ]),
+          ),
+          Expanded(
+            child: matches.isEmpty
+                ? Center(
+                    child: Semantics(
+                      liveRegion: true,
+                      child: Text(locals.musicNoResults),
+                    ),
+                  )
+                : ListView.builder(
+                    key: ValueKey(_query.text),
+                    keyboardDismissBehavior:
+                        ScrollViewKeyboardDismissBehavior.onDrag,
+                    itemCount: matches.length,
+                    itemBuilder: (context, index) {
+                      final (:position, :id, :title, :artist) = matches[index];
+                      return ListTile(
+                        key: ValueKey('music-queue-find-result-$id'),
+                        leading: Text(
+                          material.formatDecimal(position),
+                          semanticsLabel:
+                              locals.musicQueueFindPosition(position),
+                        ),
+                        title: Text(title,
+                            maxLines: 1, overflow: TextOverflow.ellipsis),
+                        subtitle: artist.isEmpty
+                            ? null
+                            : Text(artist,
+                                maxLines: 1, overflow: TextOverflow.ellipsis),
+                        onTap: () => widget.onReveal(id),
+                      );
+                    },
+                  ),
+          ),
+        ]),
+      ),
+    );
   }
 }

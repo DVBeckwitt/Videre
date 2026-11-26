@@ -6,14 +6,18 @@ import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' show isTv;
 import 'package:clipious/music/models/local_music_album.dart';
 import 'package:clipious/music/models/local_music_artist.dart';
+import 'package:clipious/music/models/device_music_artwork_preferences.dart';
 import 'package:clipious/music/models/local_music_track.dart';
+import 'package:clipious/music/models/music_artist_identity.dart';
 import 'package:clipious/music/services/local_music_library.dart';
+import 'package:clipious/music/services/music_library_service.dart';
 import 'package:clipious/utils.dart' show selectKeys;
 import 'package:clipious/utils/views/tv/components/tv_overscan.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../components/device_music_artwork.dart';
+import '../components/local_music_album_tag_editor.dart';
 import '../components/music_collection_panes.dart';
 import '../components/music_fast_scroll.dart';
 import '../components/music_screen_privacy.dart';
@@ -69,6 +73,7 @@ class _MusicDeviceAlbumPageState extends State<MusicDeviceAlbumPage> {
     String? releaseDate,
     String? originalReleaseDate,
     List<LocalMusicTrack> tracks,
+    Map<int, ({int number, String? subtitle})> discHeadings,
   })? get _album {
     if (_checking ||
         !_current ||
@@ -88,6 +93,7 @@ class _MusicDeviceAlbumPageState extends State<MusicDeviceAlbumPage> {
           ? anchor?.originalReleaseDate
           : album.originalReleaseDate,
       tracks: album?.tracks ?? const [],
+      discHeadings: album?.discHeadings ?? const {},
     );
   }
 
@@ -138,13 +144,30 @@ class _MusicDeviceAlbumPageState extends State<MusicDeviceAlbumPage> {
     if (index < 0) return;
     try {
       await MusicScreen.playLocalTracks(context, tracks,
-          startIndex: index, queueTitle: album.title, songTap: id != null);
+          startIndex: index,
+          queueTitle: album.title,
+          songTap: id != null,
+          collectionDetail: true);
     } catch (_) {
       if (mounted && _album != null) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
             content: Text(AppLocalizations.of(context)!.musicPlaybackError)));
       }
     }
+  }
+
+  Future<void> _editTags() async {
+    final album = _album;
+    if (album == null) return;
+    final library = _library;
+    final selectionId = widget.selectionId;
+    final request = _request;
+    // Editing album tags can move the anchor before the remaining files save.
+    await editLocalMusicAlbumTags(context, library, album.tracks,
+        isCurrent: () =>
+            _current &&
+            _request == request &&
+            library.acceptsSessionSelection(selectionId));
   }
 
   @override
@@ -154,8 +177,9 @@ class _MusicDeviceAlbumPageState extends State<MusicDeviceAlbumPage> {
   Widget _buildAlbum(BuildContext context) {
     context.watch<AppCubit>();
     final locals = AppLocalizations.of(context)!;
+    final aliases = MusicLibraryService.forProfile(db, db.profileId);
     return ListenableBuilder(
-        listenable: _library,
+        listenable: Listenable.merge([_library, aliases.changes]),
         builder: (context, _) {
           final album = _album;
           final Widget body;
@@ -185,8 +209,12 @@ class _MusicDeviceAlbumPageState extends State<MusicDeviceAlbumPage> {
             ]));
           } else {
             final tracks = album.tracks;
-            final artist = album.albumArtist;
-            final artistKey = localMusicArtistKey(artist);
+            final originalArtist = album.albumArtist;
+            final artistKey = localMusicArtistKey(originalArtist);
+            final artist = originalArtist == null || artistKey == null
+                ? originalArtist
+                : aliases.artistDisplayName(
+                    MusicArtistIdentity.device(artistKey), originalArtist);
             final releaseDate = album.releaseDate;
             final originalReleaseDate = album.originalReleaseDate;
             final details = Padding(
@@ -198,9 +226,10 @@ class _MusicDeviceAlbumPageState extends State<MusicDeviceAlbumPage> {
                     spacing: 12,
                     runSpacing: 4,
                     children: [
-                      if (tracks.any((track) =>
-                          track.artPath != null ||
-                          track.adjacentArtPath != null))
+                      if (!DeviceMusicArtworkPreferences.loadsCovers(db) ||
+                          tracks.any((track) =>
+                              track.artPath != null ||
+                              track.adjacentArtPath != null))
                         SizedBox.square(
                           dimension: 96,
                           child: ClipRRect(
@@ -262,6 +291,12 @@ class _MusicDeviceAlbumPageState extends State<MusicDeviceAlbumPage> {
                           onPressed: tracks.isEmpty ? null : () => _play(null),
                           icon: const Icon(Icons.play_arrow),
                           label: Text(locals.musicPlayAll)),
+                      if (tracks.any(_library.canEditTags))
+                        OutlinedButton.icon(
+                          onPressed: _editTags,
+                          icon: const Icon(Icons.edit_outlined),
+                          label: Text(locals.localMusicBatchEditTags),
+                        ),
                     ]));
             body = MusicCollectionPanes(
               details: details,
@@ -280,6 +315,8 @@ class _MusicDeviceAlbumPageState extends State<MusicDeviceAlbumPage> {
                                 widget.albumKey
                               )),
                               tracks: tracks,
+                              aliases: aliases,
+                              discHeadings: album.discHeadings,
                               anchorId: widget.playbackId,
                               play: _play)),
                 ],
@@ -303,10 +340,14 @@ class _AlbumTracks extends StatefulWidget {
   const _AlbumTracks(
       {super.key,
       required this.tracks,
+      required this.aliases,
+      required this.discHeadings,
       required this.anchorId,
       required this.play});
 
   final List<LocalMusicTrack> tracks;
+  final MusicLibraryService aliases;
+  final Map<int, ({int number, String? subtitle})> discHeadings;
   final String? anchorId;
   final ValueChanged<String> play;
 
@@ -325,19 +366,28 @@ class _AlbumTracksState extends State<_AlbumTracks> {
 
   @override
   Widget build(BuildContext context) {
+    final locals = AppLocalizations.of(context)!;
+    final material = MaterialLocalizations.of(context);
     final scaler = MediaQuery.textScalerOf(context);
     final extent =
         math.max(72.0, 24 + scaler.scale(16) * 1.5 + scaler.scale(14) * 1.5);
+    final headings = widget.discHeadings;
+    final headingExtent = 16 + scaler.scale(16) * 1.5;
     final anchorId = widget.anchorId;
     final anchorIndex = anchorId == null
         ? -1
         : widget.tracks.indexWhere((track) => track.playbackId == anchorId);
     final view = LayoutBuilder(builder: (context, size) {
       if (_scroll == null) {
-        final maxOffset =
-            math.max(0.0, extent * widget.tracks.length - size.maxHeight);
-        final offset = ((anchorIndex + 0.5) * extent - size.maxHeight / 2)
-            .clamp(0.0, maxOffset);
+        final height =
+            extent * widget.tracks.length + headingExtent * headings.length;
+        final maxOffset = math.max(0.0, height - size.maxHeight);
+        final precedingHeadings =
+            headings.keys.where((index) => index <= anchorIndex).length;
+        final anchorCenter =
+            (anchorIndex + 0.5) * extent + precedingHeadings * headingExtent;
+        final offset =
+            (anchorCenter - size.maxHeight / 2).clamp(0.0, maxOffset);
         _scroll = ScrollController(
             initialScrollOffset: offset.toDouble(), keepScrollOffset: false);
       }
@@ -345,13 +395,19 @@ class _AlbumTracksState extends State<_AlbumTracks> {
         controller: _scroll,
         primary: false,
         itemCount: widget.tracks.length,
-        itemExtent: extent,
+        itemExtent: headings.isEmpty ? extent : null,
+        itemExtentBuilder: headings.isEmpty
+            ? null
+            : (index, _) => index >= widget.tracks.length
+                ? null
+                : extent + (headings.containsKey(index) ? headingExtent : 0),
         itemBuilder: (context, index) {
           final track = widget.tracks[index];
+          final artist = widget.aliases.deviceArtistByline(track);
           final selected = index == anchorIndex;
           final discNumber = track.discNumber;
           final trackNumber = track.trackNumber;
-          return ListTile(
+          final tile = ListTile(
             key: ValueKey(track.playbackId),
             selected: selected,
             autofocus: isTv && index == math.max(anchorIndex, 0),
@@ -369,11 +425,40 @@ class _AlbumTracksState extends State<_AlbumTracks> {
                         overflow: TextOverflow.ellipsis)),
             title:
                 Text(track.title, maxLines: 1, overflow: TextOverflow.ellipsis),
-            subtitle: track.artist == null
+            subtitle: artist == null
                 ? null
-                : Text(track.artist!,
-                    maxLines: 1, overflow: TextOverflow.ellipsis),
+                : Text(artist, maxLines: 1, overflow: TextOverflow.ellipsis),
             onTap: () => widget.play(track.playbackId),
+          );
+          final heading = headings[index];
+          if (heading == null) return tile;
+          final number = locals
+              .localMusicDiscNumber(material.formatDecimal(heading.number));
+          final subtitle = heading.subtitle;
+          // Keep one list item per track so section jumps use track indices.
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              SizedBox(
+                height: headingExtent,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: Align(
+                    alignment: AlignmentDirectional.centerStart,
+                    child: Semantics(
+                      header: true,
+                      child: Text(
+                        subtitle == null ? number : '$number · $subtitle',
+                        style: Theme.of(context).textTheme.titleMedium,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              SizedBox(height: extent, child: tile),
+            ],
           );
         },
       );

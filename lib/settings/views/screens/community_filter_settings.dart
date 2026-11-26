@@ -13,8 +13,15 @@ void showCommunityFilterSettings(BuildContext context, {bool tv = false}) {
 
 class CommunityFilterSettingsScreen extends StatelessWidget {
   final bool tv;
+  final CommunityRule? focusRule;
+  final FocusNode? ruleFocusNode;
 
-  const CommunityFilterSettingsScreen({super.key, this.tv = false});
+  const CommunityFilterSettingsScreen({
+    super.key,
+    this.tv = false,
+    this.focusRule,
+    this.ruleFocusNode,
+  });
 
   Future<void> _chooseAction(BuildContext context, CommunityRule rule) async {
     final filters = communityFilters;
@@ -42,15 +49,17 @@ class CommunityFilterSettingsScreen extends StatelessWidget {
       tv: tv,
       child: ListenableBuilder(
         listenable: communityFilters.changes,
-        builder: (context, _) => ListView(
+        builder: (context, _) => SingleChildScrollView(
           padding: const EdgeInsets.symmetric(vertical: 8),
-          children: [
+          child: ListBody(children: [
             for (final source in CommunityList.values) ...[
               _SourceDescription(key: ValueKey(source), source: source),
               for (final rule in _rulesFor(source))
                 ListTile(
                   key: ValueKey(rule),
-                  autofocus: rule == CommunityRule.youtubeBlock,
+                  focusNode: focusRule == rule ? ruleFocusNode : null,
+                  autofocus:
+                      focusRule == null && rule == CommunityRule.youtubeBlock,
                   title: Text(communityRuleLabel(locals, rule)),
                   subtitle: Text(
                     communityActionLabel(locals, communityFilters.action(rule)),
@@ -74,7 +83,7 @@ class CommunityFilterSettingsScreen extends StatelessWidget {
               ),
               if (source == CommunityList.aislist) const Divider(),
             ],
-          ],
+          ]),
         ),
       ),
     );

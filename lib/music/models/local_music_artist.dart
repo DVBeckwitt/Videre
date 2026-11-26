@@ -16,6 +16,12 @@ class LocalMusicArtist {
   final String key;
   final String name;
   final List<LocalMusicTrack> tracks;
+
+  bool get hasAlbumArtistCredit => tracks.any((track) =>
+      localMusicArtistCredit(track, key)
+          ?.roles
+          .contains(LocalMusicArtistRole.albumArtist) ==
+      true);
 }
 
 String? localMusicArtistKey(String? name) {
@@ -23,21 +29,26 @@ String? localMusicArtistKey(String? name) {
   return key == null || key.isEmpty || key == '<unknown>' ? null : key;
 }
 
-/// File tags may contain a band name or a joint credit in a single field.
-/// Preserve that credit verbatim apart from surrounding whitespace.
+/// Combines artist roles in credit order using each artist's first spelling.
 List<LocalMusicArtistCredit> localMusicArtistCredits(LocalMusicTrack track) {
-  final performer = localMusicArtistKey(track.artist);
-  final albumArtist = localMusicArtistKey(track.albumArtist);
+  final credits = <String, ({String name, Set<LocalMusicArtistRole> roles})>{};
+  for (final (names, role) in [
+    (track.artists, LocalMusicArtistRole.trackArtist),
+    (track.albumArtists, LocalMusicArtistRole.albumArtist),
+  ]) {
+    for (final name in names) {
+      final key = localMusicArtistKey(name);
+      if (key == null) continue;
+      credits
+          .putIfAbsent(key, () => (name: name.trim(), roles: {}))
+          .roles
+          .add(role);
+    }
+  }
   return [
-    if (performer != null)
-      LocalMusicArtistCredit(performer, track.artist!.trim(), [
-        LocalMusicArtistRole.trackArtist,
-        if (albumArtist == performer) LocalMusicArtistRole.albumArtist,
-      ]),
-    if (albumArtist != null && albumArtist != performer)
-      LocalMusicArtistCredit(albumArtist, track.albumArtist!.trim(), const [
-        LocalMusicArtistRole.albumArtist,
-      ]),
+    for (final credit in credits.entries)
+      LocalMusicArtistCredit(
+          credit.key, credit.value.name, List.unmodifiable(credit.value.roles)),
   ];
 }
 

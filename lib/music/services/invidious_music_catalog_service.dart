@@ -216,6 +216,85 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
       );
 
   @override
+  Future<List<MusicPlaylist>> findPlaylistsWithSongsInCommon(
+      String playlistId, List<String> savedPlaylistIds,
+      {required bool Function() isCurrent}) async {
+    if (!isCurrent() || !isMusicPlaylistOverlapCandidate(playlistId)) {
+      return const [];
+    }
+    final candidates = savedPlaylistIds
+        .where((id) => id != playlistId && isMusicPlaylistOverlapCandidate(id))
+        .toSet()
+        .take(musicPlaylistOverlapCandidateLimit);
+    if (candidates.isEmpty) return const [];
+
+    return _inSession((api, server, checkSession) async {
+      Future<void> check() => _checkDiscovery(checkSession, isCurrent);
+      Future<Playlist?> publicPage(String id) async {
+        // A successful lookup can also resolve unlisted playlists. Require
+        // explicit public visibility before using any membership or artwork.
+        final page = await api.getMusicPlaylistPage(id, 1, server, check);
+        await check();
+        return page.playlistId == id &&
+                page.type != invidiousPlaylist &&
+                page.isListed == true &&
+                page.videoCount > 0 &&
+                page.title.trim().isNotEmpty
+            ? page
+            : null;
+      }
+
+      Iterable<Video> visibleTracks(Playlist page) =>
+          page.videos.where((video) =>
+              _videoId.stringMatch(video.videoId) == video.videoId &&
+              video.title?.trim().isNotEmpty == true &&
+              musicVideoAllowed(video));
+
+      final source = await publicPage(playlistId);
+      if (source == null) return const <MusicPlaylist>[];
+      final sourceIds =
+          visibleTracks(source).map((video) => video.videoId).toSet();
+      if (sourceIds.isEmpty) return const <MusicPlaylist>[];
+
+      final matches = <({MusicPlaylist playlist, int shared, int position})>[];
+      // Bounded first-page reads keep the shelf independent of normal
+      // playlist loading. Each match still proves actual track membership.
+      for (final (position, id) in candidates.indexed) {
+        try {
+          final page = await publicPage(id);
+          if (page == null) continue;
+          final tracks = visibleTracks(page).toList();
+          final shared = tracks
+              .map((video) => video.videoId)
+              .where(sourceIds.contains)
+              .toSet()
+              .length;
+          if (shared > 0) {
+            matches.add((
+              playlist: _searchPlaylist(page.copyWith(videos: tracks), server),
+              shared: shared,
+              position: position,
+            ));
+          }
+        } on InvidiousServiceError catch (error) {
+          await check();
+          if (musicDiscoveryMustStop(error)) break;
+        } on FormatException {
+          await check();
+        } on TypeError {
+          await check();
+        }
+      }
+      matches.sort((a, b) {
+        final shared = b.shared.compareTo(a.shared);
+        return shared != 0 ? shared : a.position.compareTo(b.position);
+      });
+      await check();
+      return [for (final match in matches) match.playlist];
+    });
+  }
+
+  @override
   Future<MusicCatalogSearchPage> searchPage(
     String query,
     MusicCatalogSearchType type,
@@ -390,14 +469,7 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
         await check();
         try {
           final video = await _discoveryVideo(api, server, seed, isCurrent);
-          lanes.add({
-            for (final related in video.recommendedVideos)
-              if (_videoId.hasMatch(related.videoId) &&
-                  !seeds.contains(related.videoId) &&
-                  !related.filtered &&
-                  !related.filterHide)
-                related.videoId,
-          }.take(_discoveryCandidateLimit).toList());
+          lanes.add(_relatedLane(video, excluding: seeds));
         } catch (error) {
           await check();
           if (musicDiscoveryMustStop(error)) {
@@ -408,18 +480,112 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
         await check();
       }
 
-      // Flow recalls multiple seed lanes. Interleave their first entries so
-      // one long Invidious lane cannot use the entire verification budget.
-      final candidates = <String>{};
-      for (var index = 0; index < _discoveryCandidateLimit; index++) {
-        for (final lane in lanes) {
-          if (index < lane.length) candidates.add(lane[index]);
-        }
-      }
-      return _inspectDiscoverySongs(api, server,
-          candidates.take(_discoveryCandidateLimit).toList(), check, isCurrent,
+      return _inspectDiscoverySongs(
+          api, server, _interleaveDiscoveryLanes(lanes), check, isCurrent,
           seedFailures: seedFailures);
     });
+  }
+
+  @override
+  Future<List<MusicTrack>> getArtistMixSongs(Iterable<String> artistIds,
+      {bool Function()? isCurrent}) async {
+    final seeds = <String>{};
+    for (final artistId in artistIds) {
+      final id = normalizeChannelId(artistId);
+      if (id != null) seeds.add(id);
+      if (seeds.length == MusicCatalogService.artistMixSeedLimit) break;
+    }
+    if (seeds.isEmpty) return const [];
+    _requireCurrentDiscovery(isCurrent);
+    return _inSession((api, server, checkSession) async {
+      Future<void> check() => _checkDiscovery(checkSession, isCurrent);
+      final lanes = <List<String>>[];
+      final expectedAuthors = <String, Set<String>>{};
+      for (final id in seeds) {
+        await check();
+        try {
+          final channel = await api.getMusicChannel(id, server, check);
+          await check();
+          if (channel.authorId != id) continue;
+          final uploads = await api.getMusicChannelVideos(id, server, check);
+          await check();
+          final lane = {
+            for (final row in uploads.videos)
+              if (_videoId.hasMatch(row.videoId) &&
+                  !row.filtered &&
+                  !row.filterHide &&
+                  (row.authorId == null || row.authorId == id))
+                row.videoId,
+          }.take(_discoveryCandidateLimit).toList();
+          lanes.add(lane);
+          for (final videoId in lane) {
+            (expectedAuthors[videoId] ??= {}).add(id);
+          }
+        } catch (error) {
+          await check();
+          if (musicDiscoveryMustStop(error)) rethrow;
+        }
+      }
+
+      final anchors = <String, Video>{};
+      var instanceRejected = false;
+      final directIds = _interleaveDiscoveryLanes(lanes);
+      final direct = await _inspectDiscoverySongs(
+          api, server, directIds, check, isCurrent,
+          accept: (video) =>
+              expectedAuthors[video.videoId]?.contains(video.authorId) == true,
+          onInstanceFailure: (_) => instanceRejected = true,
+          onVerified: (video) {
+            if (video.authorId case final id?) {
+              anchors.putIfAbsent(id, () => video);
+            }
+          });
+      if (direct.isEmpty || instanceRejected) return direct;
+
+      // Keep one related lane per verified artist. Seed tracks win duplicate
+      // IDs, and a failure in related lookup leaves the verified tracks usable.
+      final seen = directIds.toSet();
+      final relatedIds = _interleaveDiscoveryLanes([
+        for (final id in seeds)
+          if (anchors[id] case final video?)
+            _relatedLane(video, excluding: seen),
+      ]);
+      try {
+        final related = await _inspectDiscoverySongs(
+            api, server, relatedIds, check, isCurrent,
+            accept: (video) =>
+                !seeds.contains(video.authorId) ||
+                anchors.containsKey(video.authorId),
+            onInstanceFailure: (_) {});
+        return [...direct, ...related];
+      } catch (_) {
+        await check();
+        return direct;
+      }
+    });
+  }
+
+  static List<String> _relatedLane(Video video,
+          {required Set<String> excluding}) =>
+      {
+        for (final related in video.recommendedVideos)
+          if (_videoId.hasMatch(related.videoId) &&
+              !excluding.contains(related.videoId) &&
+              !related.filtered &&
+              !related.filterHide)
+            related.videoId,
+      }.take(_discoveryCandidateLimit).toList();
+
+  /// Walk each seed's bounded lane in selection order. Only the first
+  /// occurrence of a video ID consumes a lookup.
+  static List<String> _interleaveDiscoveryLanes(List<List<String>> lanes) {
+    final candidates = <String>{};
+    for (var index = 0; index < _discoveryCandidateLimit; index++) {
+      for (final lane in lanes) {
+        if (index < lane.length) candidates.add(lane[index]);
+      }
+    }
+    return candidates.take(_discoveryCandidateLimit).toList();
   }
 
   static void _requireCurrentDiscovery(bool Function()? isCurrent) {
@@ -483,7 +649,7 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
 
       return _inspectDiscoverySongs(
           api, server, authors.keys.toList(), check, isCurrent,
-          expectedAuthors: authors);
+          accept: (video) => video.authorId == authors[video.videoId]);
     });
   }
 
@@ -495,21 +661,27 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
       bool Function()? isCurrent,
       {int seedFailures = 0,
       void Function(InvidiousServiceError)? onInstanceFailure,
-      Map<String, String>? expectedAuthors}) async {
+      bool Function(Video)? accept,
+      void Function(Video)? onVerified}) async {
     final covers = _savedCovers(server);
-    Future<({MusicTrack? track, bool failed, InvidiousServiceError? rejection})>
-        inspect(String id) async {
+    Future<
+        ({
+          (MusicTrack, Video)? verified,
+          bool failed,
+          bool connectionFailed,
+          InvidiousServiceError? rejection,
+        })> inspect(String id) async {
       await check();
-      MusicTrack? track;
+      (MusicTrack, Video)? verified;
       var failed = false;
+      var connectionFailed = false;
       InvidiousServiceError? rejection;
       try {
         // One noninteractive lookup per candidate. Service retains its own
         // transport policy (short 429 and NerdVPN startup retries), but
         // discovery neither rotates backends nor adds retries or refills.
         final video = await _discoveryVideo(api, server, id, isCurrent);
-        if ((expectedAuthors == null ||
-                video.authorId == expectedAuthors[id]) &&
+        if (accept?.call(video) != false &&
             video.genre?.trim().toLowerCase() == 'music' &&
             video.title != privateVideoString &&
             video.liveNow != true &&
@@ -517,12 +689,13 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
             (video.premiereTimestamp ?? 0) <=
                 DateTime.now().millisecondsSinceEpoch ~/ 1000 &&
             !db.getAllFilters().any((filter) => filter.filterVideo(video))) {
-          track = _track(video, covers, server);
+          verified = (_track(video, covers, server), video);
         }
       } catch (error) {
         // One unavailable or malformed candidate must not hide other verified
         // music. Session cancellation is checked outside this partial result.
         failed = true;
+        connectionFailed = isMusicBrowseConnectionFailure(error);
         if (error is InvidiousServiceError &&
             (_discoveryCooldown(error) ||
                 (onInstanceFailure != null && musicDiscoveryMustStop(error)))) {
@@ -530,7 +703,12 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
         }
       }
       await check();
-      return (track: track, failed: failed, rejection: rejection);
+      return (
+        verified: verified,
+        failed: failed,
+        connectionFailed: connectionFailed,
+        rejection: rejection,
+      );
     }
 
     final host = Uri.parse(server.url).host.toLowerCase();
@@ -540,6 +718,7 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
         : 2;
     final songs = <MusicTrack>[];
     var failures = seedFailures;
+    var connectionFailed = false;
     for (var offset = 0; offset < candidates.length;) {
       await check();
       final batch = candidates.skip(offset).take(concurrency).toList();
@@ -549,7 +728,12 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
       InvidiousServiceError? rejection;
       for (final item in inspected) {
         if (item.failed) failures++;
-        if (item.track case final track?) songs.add(track);
+        connectionFailed = connectionFailed || item.connectionFailed;
+        if (item.verified case (final track, final video)
+            when songs.length < _discoverySongLimit) {
+          songs.add(track);
+          onVerified?.call(video);
+        }
         if (item.rejection case final error?) {
           if (rejection == null ||
               (error.retryAfter ?? Duration.zero) >
@@ -568,8 +752,11 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
       if (songs.length >= _discoverySongLimit) break;
     }
     if (songs.isEmpty && failures > 0) {
-      throw const MusicCatalogException(
-          'Music discovery could not verify any tracks. Retry the request.');
+      const message =
+          'Music discovery could not verify any tracks. Retry the request.';
+      throw connectionFailed
+          ? const MusicCatalogConnectionFailure(message)
+          : const MusicCatalogException(message);
     }
     return songs.take(_discoverySongLimit).toList();
   }
@@ -679,6 +866,43 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
                       video.backendPlayback ??
                       connection));
     });
+  }
+
+  @override
+  Future<MusicRecordingAvailability> checkRecordingAvailability(String videoId,
+      {required bool Function() isCurrent}) async {
+    if (_videoId.stringMatch(videoId) != videoId) {
+      throw const MusicCatalogException('Invalid music track.');
+    }
+    _requireCurrentDiscovery(isCurrent);
+    final availability = await _inSession((api, server, _) async {
+      _requireCurrentDiscovery(isCurrent);
+      try {
+        final video = await _discoveryVideo(api, server, videoId, isCurrent);
+        final title = video.title?.trim();
+        if (title == null || title.isEmpty) {
+          throw const MusicCatalogException(
+              'The server returned an invalid music track.');
+        }
+        return title == privateVideoString
+            ? MusicRecordingAvailability.missing
+            : MusicRecordingAvailability.available;
+      } on InvidiousServiceError catch (error) {
+        // Invidious reports this recording-specific reason as a JSON 404.
+        // A missing endpoint or a provider outage can also produce a 404.
+        if ((error.statusCode == 404 || error.statusCode == 410) &&
+            error.errorCode == 'Video unavailable' &&
+            !error.responseWasHtml &&
+            !error.isGatewayAccessFailure &&
+            !error.retryAfterIsInvalid &&
+            error.retryAfter == null) {
+          return MusicRecordingAvailability.missing;
+        }
+        rethrow;
+      }
+    });
+    _requireCurrentDiscovery(isCurrent);
+    return availability;
   }
 
   @override

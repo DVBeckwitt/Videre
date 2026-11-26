@@ -5,7 +5,9 @@ import 'package:clipious/player/states/video_player.dart';
 import 'package:clipious/player/views/components/playback_speed_controls.dart';
 import 'package:clipious/player/views/components/player_backend_picker.dart';
 import 'package:clipious/player/views/components/subtitle_size_picker.dart';
+import 'package:clipious/player/views/components/subtitle_timing_picker.dart';
 import 'package:clipious/player/views/components/video_display_mode_picker.dart';
+import 'package:clipious/player/views/components/watch_local_subtitle_actions.dart';
 import 'package:clipious/player/views/tv/components/sleep_timer.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils.dart';
@@ -57,12 +59,22 @@ class _TvPlayerSettingsState extends State<TvPlayerSettings> {
                 ))
             .toList();
       case Tabs.captions:
-        return cubit.availableCaptions
-            .map((e) => TvSettingButton(
-                  label: e,
-                  onPressed: cubit.changeSubtitles,
-                ))
-            .toList();
+        final captions = cubit.availableCaptions;
+        final subtitleScope = cubit.player.canManageLocalSubtitles
+            ? captureWatchLocalSubtitleScope(cubit.player)
+            : null;
+        return [
+          for (final (index, label) in captions.indexed)
+            TvSettingButton(
+              label: label,
+              onPressed: (_) {
+                if (subtitleScope?.call() != false &&
+                    listEquals(captions, cubit.availableCaptions)) {
+                  cubit.player.selectSubtitle(index);
+                }
+              },
+            ),
+        ];
       case Tabs.playbackSpeed:
         return [
           PlaybackSpeedControls(
@@ -112,6 +124,7 @@ class _TvPlayerSettingsState extends State<TvPlayerSettings> {
                   builder: (context, playerState) {
                 var cubit = context.read<TvPlayerSettingsCubit>();
                 var settings = context.read<SettingsCubit>();
+                final player = context.read<PlayerCubit>();
 
                 return FocusScope(
                   child: Column(
@@ -231,6 +244,22 @@ class _TvPlayerSettingsState extends State<TvPlayerSettings> {
                                 label: Text(locals.subtitleFontSize),
                               ),
                             ),
+                          if (cubit.player.hasSubtitleTracks &&
+                              cubit.player.subtitleTimingTarget != null)
+                            Shortcuts(
+                              shortcuts: {
+                                for (final key in selectKeys)
+                                  SingleActivator(key): const ActivateIntent(),
+                              },
+                              child: TextButton.icon(
+                                key: const ValueKey(
+                                    'player-subtitle-timing-open'),
+                                onPressed: () => showSubtitleTimingPicker(
+                                    context, cubit.player),
+                                icon: const Icon(Icons.timer_outlined),
+                                label: Text(locals.subtitleTiming),
+                              ),
+                            ),
                           TextButton.icon(
                             key: const ValueKey('player-video-display-open'),
                             onPressed: () =>
@@ -292,16 +321,28 @@ class _TvPlayerSettingsState extends State<TvPlayerSettings> {
                                       textAlign: TextAlign.center,
                                     ),
                                   ),
-                                SizedBox(
-                                  height: 90,
-                                  child: ListView(
-                                    shrinkWrap: true,
-                                    scrollDirection: Axis.horizontal,
-                                    children: getContent(context)
-                                        .map((e) => Center(child: e))
-                                        .toList(),
+                                if (playerState.selected != Tabs.captions ||
+                                    cubit.availableCaptions.isNotEmpty)
+                                  SizedBox(
+                                    height: 90,
+                                    child: ListView(
+                                      shrinkWrap: true,
+                                      scrollDirection: Axis.horizontal,
+                                      children: getContent(context)
+                                          .map((e) => Center(child: e))
+                                          .toList(),
+                                    ),
                                   ),
-                                ),
+                                if (playerState.selected == Tabs.captions &&
+                                    cubit.player.canManageLocalSubtitles)
+                                  WatchLocalSubtitleActions(
+                                    key: ValueKey(player.state.currentQueueId),
+                                    video: cubit.player,
+                                    isCurrent: captureWatchLocalSubtitleScope(
+                                        cubit.player),
+                                    onChanged: () => setState(() {}),
+                                    television: true,
+                                  ),
                               ],
                             ),
                           ),

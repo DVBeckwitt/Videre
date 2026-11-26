@@ -39,6 +39,7 @@ mixin _$PlayerState {
   List<DownloadedVideo> get offlineVideos; // playlist controls
   List<String> get playedVideos;
   ListQueue<String> get playQueue;
+  bool? get musicQueueShuffled;
   bool get isAudio; // playing video data
   bool get isPip;
   Offset get offset;
@@ -113,6 +114,8 @@ mixin _$PlayerState {
             const DeepCollectionEquality()
                 .equals(other.playedVideos, playedVideos) &&
             const DeepCollectionEquality().equals(other.playQueue, playQueue) &&
+            (identical(other.musicQueueShuffled, musicQueueShuffled) ||
+                other.musicQueueShuffled == musicQueueShuffled) &&
             (identical(other.isAudio, isAudio) || other.isAudio == isAudio) &&
             (identical(other.isPip, isPip) || other.isPip == isPip) &&
             (identical(other.offset, offset) || other.offset == offset) &&
@@ -142,8 +145,7 @@ mixin _$PlayerState {
                 other.totalFastForward == totalFastForward) &&
             const DeepCollectionEquality()
                 .equals(other.totalRewind, totalRewind) &&
-            (identical(other.orientation, orientation) ||
-                other.orientation == orientation));
+            (identical(other.orientation, orientation) || other.orientation == orientation));
   }
 
   @override
@@ -173,6 +175,7 @@ mixin _$PlayerState {
         const DeepCollectionEquality().hash(offlineVideos),
         const DeepCollectionEquality().hash(playedVideos),
         const DeepCollectionEquality().hash(playQueue),
+        musicQueueShuffled,
         isAudio,
         isPip,
         offset,
@@ -195,7 +198,7 @@ mixin _$PlayerState {
 
   @override
   String toString() {
-    return 'PlayerState(isMini: $isMini, hasTimer: $hasTimer, sleepTracksRemaining: $sleepTracksRemaining, top: $top, isDragging: $isDragging, selectedFullScreenIndex: $selectedFullScreenIndex, isHidden: $isHidden, isClosing: $isClosing, dragDistance: $dragDistance, showMiniPlaceholder: $showMiniPlaceholder, dragStartMini: $dragStartMini, height: $height, fullScreenState: $fullScreenState, muted: $muted, aspectRatio: $aspectRatio, currentlyPlaying: $currentlyPlaying, requestedBackend: $requestedBackend, backendRecovery: $backendRecovery, recoveringPlayback: $recoveringPlayback, offlineCurrentlyPlaying: $offlineCurrentlyPlaying, videos: $videos, offlineVideos: $offlineVideos, playedVideos: $playedVideos, playQueue: $playQueue, isAudio: $isAudio, isPip: $isPip, offset: $offset, startAt: $startAt, position: $position, bufferedPosition: $bufferedPosition, isPlaying: $isPlaying, speed: $speed, pitchSemitones: $pitchSemitones, mediaCommand: $mediaCommand, mediaEvent: $mediaEvent, sponsorSegments: $sponsorSegments, nextSegment: $nextSegment, forwardStep: $forwardStep, rewindStep: $rewindStep, totalFastForward: $totalFastForward, totalRewind: $totalRewind, orientation: $orientation)';
+    return 'PlayerState(isMini: $isMini, hasTimer: $hasTimer, sleepTracksRemaining: $sleepTracksRemaining, top: $top, isDragging: $isDragging, selectedFullScreenIndex: $selectedFullScreenIndex, isHidden: $isHidden, isClosing: $isClosing, dragDistance: $dragDistance, showMiniPlaceholder: $showMiniPlaceholder, dragStartMini: $dragStartMini, height: $height, fullScreenState: $fullScreenState, muted: $muted, aspectRatio: $aspectRatio, currentlyPlaying: $currentlyPlaying, requestedBackend: $requestedBackend, backendRecovery: $backendRecovery, recoveringPlayback: $recoveringPlayback, offlineCurrentlyPlaying: $offlineCurrentlyPlaying, videos: $videos, offlineVideos: $offlineVideos, playedVideos: $playedVideos, playQueue: $playQueue, musicQueueShuffled: $musicQueueShuffled, isAudio: $isAudio, isPip: $isPip, offset: $offset, startAt: $startAt, position: $position, bufferedPosition: $bufferedPosition, isPlaying: $isPlaying, speed: $speed, pitchSemitones: $pitchSemitones, mediaCommand: $mediaCommand, mediaEvent: $mediaEvent, sponsorSegments: $sponsorSegments, nextSegment: $nextSegment, forwardStep: $forwardStep, rewindStep: $rewindStep, totalFastForward: $totalFastForward, totalRewind: $totalRewind, orientation: $orientation)';
   }
 }
 
@@ -230,6 +233,7 @@ abstract mixin class $PlayerStateCopyWith<$Res> {
       List<DownloadedVideo> offlineVideos,
       List<String> playedVideos,
       ListQueue<String> playQueue,
+      bool? musicQueueShuffled,
       bool isAudio,
       bool isPip,
       Offset offset,
@@ -289,6 +293,7 @@ class _$PlayerStateCopyWithImpl<$Res> implements $PlayerStateCopyWith<$Res> {
     Object? offlineVideos = null,
     Object? playedVideos = null,
     Object? playQueue = null,
+    Object? musicQueueShuffled = freezed,
     Object? isAudio = null,
     Object? isPip = null,
     Object? offset = null,
@@ -405,6 +410,10 @@ class _$PlayerStateCopyWithImpl<$Res> implements $PlayerStateCopyWith<$Res> {
           ? _self.playQueue
           : playQueue // ignore: cast_nullable_to_non_nullable
               as ListQueue<String>,
+      musicQueueShuffled: freezed == musicQueueShuffled
+          ? _self.musicQueueShuffled
+          : musicQueueShuffled // ignore: cast_nullable_to_non_nullable
+              as bool?,
       isAudio: null == isAudio
           ? _self.isAudio
           : isAudio // ignore: cast_nullable_to_non_nullable
@@ -538,6 +547,7 @@ class _PlayerState extends PlayerState {
       final List<DownloadedVideo> offlineVideos = const [],
       final List<String> playedVideos = const [],
       required this.playQueue,
+      this.musicQueueShuffled,
       this.isAudio = false,
       this.isPip = false,
       this.offset = Offset.zero,
@@ -649,6 +659,8 @@ class _PlayerState extends PlayerState {
 
   @override
   final ListQueue<String> playQueue;
+  @override
+  final bool? musicQueueShuffled;
   @override
   @JsonKey()
   final bool isAudio;
@@ -770,6 +782,8 @@ class _PlayerState extends PlayerState {
             const DeepCollectionEquality()
                 .equals(other._playedVideos, _playedVideos) &&
             const DeepCollectionEquality().equals(other.playQueue, playQueue) &&
+            (identical(other.musicQueueShuffled, musicQueueShuffled) ||
+                other.musicQueueShuffled == musicQueueShuffled) &&
             (identical(other.isAudio, isAudio) || other.isAudio == isAudio) &&
             (identical(other.isPip, isPip) || other.isPip == isPip) &&
             (identical(other.offset, offset) || other.offset == offset) &&
@@ -799,8 +813,7 @@ class _PlayerState extends PlayerState {
                 other.totalFastForward == totalFastForward) &&
             const DeepCollectionEquality()
                 .equals(other.totalRewind, totalRewind) &&
-            (identical(other.orientation, orientation) ||
-                other.orientation == orientation));
+            (identical(other.orientation, orientation) || other.orientation == orientation));
   }
 
   @override
@@ -830,6 +843,7 @@ class _PlayerState extends PlayerState {
         const DeepCollectionEquality().hash(_offlineVideos),
         const DeepCollectionEquality().hash(_playedVideos),
         const DeepCollectionEquality().hash(playQueue),
+        musicQueueShuffled,
         isAudio,
         isPip,
         offset,
@@ -852,7 +866,7 @@ class _PlayerState extends PlayerState {
 
   @override
   String toString() {
-    return 'PlayerState(isMini: $isMini, hasTimer: $hasTimer, sleepTracksRemaining: $sleepTracksRemaining, top: $top, isDragging: $isDragging, selectedFullScreenIndex: $selectedFullScreenIndex, isHidden: $isHidden, isClosing: $isClosing, dragDistance: $dragDistance, showMiniPlaceholder: $showMiniPlaceholder, dragStartMini: $dragStartMini, height: $height, fullScreenState: $fullScreenState, muted: $muted, aspectRatio: $aspectRatio, currentlyPlaying: $currentlyPlaying, requestedBackend: $requestedBackend, backendRecovery: $backendRecovery, recoveringPlayback: $recoveringPlayback, offlineCurrentlyPlaying: $offlineCurrentlyPlaying, videos: $videos, offlineVideos: $offlineVideos, playedVideos: $playedVideos, playQueue: $playQueue, isAudio: $isAudio, isPip: $isPip, offset: $offset, startAt: $startAt, position: $position, bufferedPosition: $bufferedPosition, isPlaying: $isPlaying, speed: $speed, pitchSemitones: $pitchSemitones, mediaCommand: $mediaCommand, mediaEvent: $mediaEvent, sponsorSegments: $sponsorSegments, nextSegment: $nextSegment, forwardStep: $forwardStep, rewindStep: $rewindStep, totalFastForward: $totalFastForward, totalRewind: $totalRewind, orientation: $orientation)';
+    return 'PlayerState(isMini: $isMini, hasTimer: $hasTimer, sleepTracksRemaining: $sleepTracksRemaining, top: $top, isDragging: $isDragging, selectedFullScreenIndex: $selectedFullScreenIndex, isHidden: $isHidden, isClosing: $isClosing, dragDistance: $dragDistance, showMiniPlaceholder: $showMiniPlaceholder, dragStartMini: $dragStartMini, height: $height, fullScreenState: $fullScreenState, muted: $muted, aspectRatio: $aspectRatio, currentlyPlaying: $currentlyPlaying, requestedBackend: $requestedBackend, backendRecovery: $backendRecovery, recoveringPlayback: $recoveringPlayback, offlineCurrentlyPlaying: $offlineCurrentlyPlaying, videos: $videos, offlineVideos: $offlineVideos, playedVideos: $playedVideos, playQueue: $playQueue, musicQueueShuffled: $musicQueueShuffled, isAudio: $isAudio, isPip: $isPip, offset: $offset, startAt: $startAt, position: $position, bufferedPosition: $bufferedPosition, isPlaying: $isPlaying, speed: $speed, pitchSemitones: $pitchSemitones, mediaCommand: $mediaCommand, mediaEvent: $mediaEvent, sponsorSegments: $sponsorSegments, nextSegment: $nextSegment, forwardStep: $forwardStep, rewindStep: $rewindStep, totalFastForward: $totalFastForward, totalRewind: $totalRewind, orientation: $orientation)';
   }
 }
 
@@ -889,6 +903,7 @@ abstract mixin class _$PlayerStateCopyWith<$Res>
       List<DownloadedVideo> offlineVideos,
       List<String> playedVideos,
       ListQueue<String> playQueue,
+      bool? musicQueueShuffled,
       bool isAudio,
       bool isPip,
       Offset offset,
@@ -950,6 +965,7 @@ class __$PlayerStateCopyWithImpl<$Res> implements _$PlayerStateCopyWith<$Res> {
     Object? offlineVideos = null,
     Object? playedVideos = null,
     Object? playQueue = null,
+    Object? musicQueueShuffled = freezed,
     Object? isAudio = null,
     Object? isPip = null,
     Object? offset = null,
@@ -1066,6 +1082,10 @@ class __$PlayerStateCopyWithImpl<$Res> implements _$PlayerStateCopyWith<$Res> {
           ? _self.playQueue
           : playQueue // ignore: cast_nullable_to_non_nullable
               as ListQueue<String>,
+      musicQueueShuffled: freezed == musicQueueShuffled
+          ? _self.musicQueueShuffled
+          : musicQueueShuffled // ignore: cast_nullable_to_non_nullable
+              as bool?,
       isAudio: null == isAudio
           ? _self.isAudio
           : isAudio // ignore: cast_nullable_to_non_nullable

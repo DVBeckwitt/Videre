@@ -9,18 +9,24 @@ import '../../../l10n/generated/app_localizations.dart';
 import '../../../utils/motion.dart';
 import '../../services/music_history_transfer.dart';
 import '../../services/music_listening_history.dart';
+import '../../services/spotify_music_history_candidates.dart';
+import '../../services/spotify_music_history_import.dart';
 import 'music_library_actions.dart';
+import 'music_spotify_history_preview.dart';
 
-enum _Transfer { import, export }
+enum _Transfer { import, export, importSpotify, exportCsv }
 
 Future<void> showMusicHistoryTransfer(BuildContext context) async {
   final session = MusicLibrarySession(context.read<AppCubit>());
   if (!session.isCurrent) return;
-  final history = MusicListeningHistory.forProfile(db, db.profileId);
+  final database = db;
+  final owner = database.forProfile(database.profileId);
+  final history = MusicListeningHistory.forProfile(database, owner.profileId);
   final locals = AppLocalizations.of(context)!;
   final route = ModalRoute.of(context);
+  bool sessionCurrent() => identical(db, database) && session.isCurrent;
   bool active() =>
-      context.mounted && session.isCurrent && (route?.isCurrent ?? true);
+      context.mounted && sessionCurrent() && (route?.isCurrent ?? true);
 
   final action = await showDialog<_Transfer>(
     context: context,
@@ -34,9 +40,19 @@ Future<void> showMusicHistoryTransfer(BuildContext context) async {
           onTap: () => Navigator.pop(context, _Transfer.import),
         ),
         ListTile(
+          leading: const Icon(Icons.file_upload_outlined),
+          title: Text(locals.musicSpotifyHistoryImport),
+          onTap: () => Navigator.pop(context, _Transfer.importSpotify),
+        ),
+        ListTile(
           leading: const Icon(Icons.file_download_outlined),
           title: Text(locals.musicHistoryExport),
           onTap: () => Navigator.pop(context, _Transfer.export),
+        ),
+        ListTile(
+          leading: const Icon(Icons.file_download_outlined),
+          title: Text(locals.musicHistoryExportPlayCounts),
+          onTap: () => Navigator.pop(context, _Transfer.exportCsv),
         ),
       ],
     ),
@@ -53,20 +69,63 @@ Future<void> showMusicHistoryTransfer(BuildContext context) async {
 
   const files = MethodChannel('videre/files');
   try {
-    if (action == _Transfer.export) {
-      final text = await compute(MusicHistoryTransfer.encode, history.events());
+    if (action == _Transfer.export || action == _Transfer.exportCsv) {
+      final isCsv = action == _Transfer.exportCsv;
+      final text = await compute(
+        isCsv
+            ? MusicHistoryTransfer.encodePlayCountsCsv
+            : MusicHistoryTransfer.encode,
+        history.events(),
+      );
       if (!active()) return;
       final date = DateTime.now().toIso8601String().split('T').first;
       final saved = await files.invokeMethod<bool>('save', {
-        'name': 'videre-music-history-$date.json',
+        'name': isCsv
+            ? 'videre-music-play-counts-$date.csv'
+            : 'videre-music-history-$date.json',
         'text': text,
+        if (isCsv) 'mimeType': 'text/csv',
       });
-      if (saved == true) notify(locals.musicHistoryExported);
+      if (saved == true) {
+        notify(
+          isCsv
+              ? locals.musicHistoryPlayCountsExported
+              : locals.musicHistoryExported,
+        );
+      }
       return;
     }
 
     final text = await files.invokeMethod<String>('open');
-    if (text == null || !active()) return;
+    if (!context.mounted || text == null || !active()) return;
+    if (action == _Transfer.importSpotify) {
+      Future<SpotifyMusicHistoryPreview> preparePreview() async {
+        final events = history.events();
+        final candidates = await spotifyMusicHistoryCandidates(
+          owner,
+          session.library,
+          events: events,
+          isCurrent: sessionCurrent,
+        );
+        if (!sessionCurrent()) throw StateError('The active profile changed.');
+        return compute(SpotifyMusicHistoryImport.preview, (
+          text: text,
+          candidates: candidates,
+          existingEventIds: events.map((event) => event.id).toSet(),
+        ));
+      }
+
+      final approved = await showMusicSpotifyHistoryPreview(
+        context,
+        session.app,
+        sessionCurrent,
+        preparePreview,
+      );
+      if (approved == null || !active()) return;
+      final added = await history.merge(approved);
+      notify(locals.musicHistoryImported(added, approved.length - added));
+      return;
+    }
     final events = await compute(MusicHistoryTransfer.decode, text);
     if (!context.mounted || !active()) return;
     if (events.isEmpty) {
@@ -101,7 +160,9 @@ Future<void> showMusicHistoryTransfer(BuildContext context) async {
   } on PlatformException catch (error) {
     notify(switch (error.code) {
       'FILE_TOO_LARGE' => locals.musicHistoryFileTooLarge,
-      'INVALID_UTF8' => locals.musicHistoryFileInvalid,
+      'INVALID_UTF8' => action == _Transfer.importSpotify
+          ? locals.musicSpotifyHistoryInvalidFile
+          : locals.musicHistoryFileInvalid,
       _ => locals.musicHistoryTransferFailed,
     });
   } catch (_) {

@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="music_lyrics_widget_name">Videre Lyrics</string>
+    <string name="music_lyrics_widget_description">Follow and seek synced lyrics</string>
+    <string name="music_lyrics_widget_idle">Play a song and open Lyrics in Videre</string>
+    <string name="music_lyrics_widget_unavailable">Open Lyrics in Videre to load synced lines</string>
+    <string name="music_lyrics_widget_seek">Seek to lyric. %1$s</string>
+    <string name="music_lyrics_widget_seek_current">Seek to current lyric. %1$s</string>
+
+    <color name="music_lyrics_widget_active">#F8F3FF</color>
+    <color name="music_lyrics_widget_cue">#E3D4F0</color>
+
+    <style name="MusicLyricsWidgetCue">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">48dp</item>
+        <item name="android:background">?android:attr/selectableItemBackground</item>
+        <item name="android:ellipsize">end</item>
+        <item name="android:focusable">true</item>
+        <item name="android:gravity">start|center_vertical</item>
+        <item name="android:importantForAccessibility">yes</item>
+        <item name="android:includeFontPadding">false</item>
+        <item name="android:maxLines">2</item>
+        <item name="android:paddingStart">8dp</item>
+        <item name="android:paddingEnd">8dp</item>
+        <item name="android:textColor">@color/music_lyrics_widget_cue</item>
+        <item name="android:textSize">16sp</item>
+        <item name="android:visibility">gone</item>
+    </style>
+</resources>

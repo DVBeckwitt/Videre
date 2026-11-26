@@ -15,6 +15,7 @@ import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
 import androidx.media3.datasource.cache.SimpleCache
 import java.io.File
 import java.io.IOException
+import java.util.WeakHashMap
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
@@ -43,6 +44,8 @@ object PlaybackMediaCache {
     private val accountGenerations = mutableMapOf<String, Long>()
     private var cache: SimpleCache? = null
     private val readers = mutableSetOf<GuardedSource>()
+    // Guarded by lock. Decoder callbacks may outlive their readers.
+    private val pendingMusicProofs = WeakHashMap<MusicProof, String>()
     private val musicProofWriter = ThreadPoolExecutor(0, 1, 15L, TimeUnit.SECONDS,
         ArrayBlockingQueue(32), { task -> Thread(task, "Videre Music cache proof") },
         ThreadPoolExecutor.DiscardPolicy())
@@ -136,11 +139,14 @@ object PlaybackMediaCache {
         initialize(context)
         val selection = CachedMusicSelection.parse(value as? Map<*, *> ?: throw CachedMusicUnavailable(), sourceUri)
         val admission = ReaderAdmission(selection.owner.profileKey, selection.owner.gateway)
-        return DataSource.Factory {
-            GuardedSource(null, null, admission, sourceUri, PlaybackCacheRequest.PROGRESSIVE, null, null,
+        return cachedMusicFactory(selection, admission)
+    }
+
+    private fun cachedMusicFactory(selection: CachedMusicSelection, admission: ReaderAdmission): DataSource.Factory =
+        DataSource.Factory {
+            GuardedSource(null, null, admission, selection.uri, PlaybackCacheRequest.PROGRESSIVE, null, null,
                 cachedMusic = selection)
         }
-    }
 
     internal fun cachedMusicSongs(values: Map<*, *>): List<Map<String, Any>> {
         val owner = PlaybackCacheOwner.parse(values)
@@ -154,6 +160,75 @@ object PlaybackMediaCache {
             current.keys.asSequence().filter { it.startsWith(prefix) }.sorted()
                 .mapNotNull { CachedMusicSong.complete(current, owner, it) }
                 .distinctBy { it.selection.contentId }.map(CachedMusicSong::toMap).toList()
+        }
+    }
+
+    internal fun removeCachedMusicSong(values: Map<*, *>): String {
+        val selection = CachedMusicSelection.parse(values)
+        val admission = ReaderAdmission(selection.owner.profileKey, selection.owner.gateway)
+        admission.requireCurrent()
+        return synchronized(lock) {
+            admission.requireEpochLocked()
+            if (!enabled) return@synchronized "missing"
+            val current = cacheLocked()
+            val key = selection.key
+            if (!CachedMusicSong.hasCatalogEntry(current, selection) ||
+                current.getCachedSpans(key).isEmpty()) return@synchronized "missing"
+            if (readers.any { it.cacheKeyInUse == key }) return@synchronized "inUse"
+            current.removeResource(key)
+            pendingMusicProofs.entries.removeAll { it.value == key }
+            "removed"
+        }
+    }
+
+    /** Creates a private staging file from the exact, complete cache-only source. */
+    internal fun copyCachedMusicSong(values: Map<*, *>): String? {
+        val rendition = values["rendition"] as? String ?: return null
+        val selection = try {
+            CachedMusicSelection.parse(values, "videre-cache://music/$rendition")
+        } catch (_: CachedMusicUnavailable) {
+            return null
+        }
+        val admission = ReaderAdmission(selection.owner.profileKey, selection.owner.gateway)
+        admission.requireCurrent()
+        val length = synchronized(lock) {
+            admission.requireEpochLocked()
+            if (!enabled) return null
+            CachedMusicSong.complete(cacheLocked(), selection.owner, selection.key)?.byteLength
+        } ?: return null
+        val request = DataSpec.Builder().setUri(selection.uri).setLength(length).build()
+        val destination = File.createTempFile("videre-cached-song-", ".part", checkNotNull(application).cacheDir)
+        var complete = false
+        try {
+            val source = cachedMusicFactory(selection, admission).createDataSource()
+            try {
+                val opened = try {
+                    source.open(request)
+                } catch (_: IOException) {
+                    return null
+                }
+                if (opened != length) return null
+                destination.outputStream().use { output ->
+                    val buffer = ByteArray(64 * 1024)
+                    var remaining = length
+                    while (remaining > 0L) {
+                        val count = try {
+                            source.read(buffer, 0, minOf(remaining, buffer.size.toLong()).toInt())
+                        } catch (_: IOException) {
+                            return null
+                        }
+                        if (count <= 0) return null
+                        output.write(buffer, 0, count)
+                        remaining -= count
+                    }
+                }
+            } finally {
+                source.close()
+            }
+            complete = true
+            return destination.absolutePath
+        } finally {
+            if (!complete) destination.delete()
         }
     }
 
@@ -296,7 +371,11 @@ object PlaybackMediaCache {
             private set
 
         fun openedFrom(sourceCache: SimpleCache, key: String) {
-            if (key == song.selection.key) opened = sourceCache
+            if (key != song.selection.key) return
+            synchronized(lock) {
+                opened = sourceCache
+                if (!recorded) pendingMusicProofs[this] = key
+            }
         }
 
         // The ordinary player is unaffected by optional catalog persistence.
@@ -307,9 +386,10 @@ object PlaybackMediaCache {
                 admission.requireCurrent()
                 synchronized(lock) {
                     admission.requireEpochLocked()
-                    if (enabled && usedCache === cache) {
+                    if (enabled && usedCache === cache && this in pendingMusicProofs) {
                         song.recordIn(usedCache)
                         recorded = true
+                        pendingMusicProofs.remove(this)
                     }
                 }
             } catch (_: Exception) {}
@@ -329,6 +409,9 @@ object PlaybackMediaCache {
     ) : DataSource {
         val profileKey: String? get() = admission.profileKey
         val accountKey: String? get() = admission.accountKey
+        // Guarded by lock, from source admission through completion of close.
+        var cacheKeyInUse: String? = null
+            private set
         @Volatile private var delegate: DataSource? = null
         private val listeners = mutableListOf<TransferListener>()
 
@@ -365,7 +448,7 @@ object PlaybackMediaCache {
                 admission.requireEpochLocked()
                 readers.add(this)
                 if (cachedMusic != null) {
-                    cachedSource(cachedMusic, dataSpec)
+                    cachedSource(cachedMusic, dataSpec).also { cacheKeyInUse = cachedMusic.key }
                 } else if (downloaded != null) {
                     // A muxed saved rendition has its own byte offsets. It is
                     // always a complete progressive source, never cache spans
@@ -383,16 +466,16 @@ object PlaybackMediaCache {
                                 .setFragmentSize(2L * 1024 * 1024))
                             .setCacheKeyFactory { key }
                             .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
-                            .createDataSource()
+                            .createDataSource().also { cacheKeyInUse = key }
                     }
                 } else checkNotNull(upstream).createDataSource()
             } } catch (error: Exception) {
-                synchronized(lock) { readers.remove(this) }
+                releaseReader()
                 throw error
             }
-            listeners.forEach(selected::addTransferListener)
             delegate = selected
             return try {
+                listeners.forEach(selected::addTransferListener)
                 admit()
                 val length = selected.open(if (selected is CacheDataSource && cachedMusic == null) dataSpec.buildUpon()
                     .setFlags(dataSpec.flags or DataSpec.FLAG_ALLOW_CACHE_FRAGMENTATION).build() else dataSpec)
@@ -427,7 +510,12 @@ object PlaybackMediaCache {
         @Synchronized override fun close() {
             val previous = delegate
             delegate = null
-            try { previous?.close() } finally { synchronized(lock) { readers.remove(this) } }
+            try { previous?.close() } finally { releaseReader() }
+        }
+
+        private fun releaseReader() = synchronized(lock) {
+            cacheKeyInUse = null
+            readers.remove(this)
         }
     }
 }

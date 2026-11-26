@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:crypto/crypto.dart';
 
 import 'replay_gain.dart';
+import 'music_content_advisory.dart';
 
 /// One exact folder or verified ancestor in the authorized device source.
 class LocalMusicFolderLocation {
@@ -35,15 +36,26 @@ class LocalMusicTrack {
   final String? albumArtistSort;
   final String? genre;
   final ReplayGain? replayGain;
+  final List<String>? _artists;
+  final List<String>? _albumArtists;
+  final List<String>? _genres;
+
+  /// Indexed credits, with a scalar fallback for tracks from older callers.
+  List<String> get artists => _artists ?? _singleTag(artist);
+  List<String> get albumArtists => _albumArtists ?? _singleTag(albumArtist);
+  List<String> get genres => _genres ?? _singleTag(genre);
 
   /// Identifies an album grouping only within the authorized device catalog.
   final String? albumKey;
   final int? discNumber;
+  final String? discSubtitle;
   final int? trackNumber;
 
   /// Embedded music date at its original precision (year, month, or day).
   final String? releaseDate;
   final String? originalReleaseDate;
+  final MusicContentAdvisory? contentAdvisory;
+  final LocalMusicReleaseKind? releaseKind;
   final int durationMs;
   final int? sizeBytes;
 
@@ -62,6 +74,8 @@ class LocalMusicTrack {
   final DateTime? dateModified;
   final bool firstSeen;
   final bool canRename;
+  final bool isDocumentProvider;
+  final bool canEditTags;
 
   /// Android positively identified this track as a recording.
   final bool isRecording;
@@ -72,6 +86,11 @@ class LocalMusicTrack {
   final String? documentVisibilityKey;
   final String? _identityUri;
   final String? _identityKey;
+
+  String? get genreKey {
+    final key = genre?.trim().toLowerCase();
+    return key == null || key.isEmpty || key == '<unknown>' ? null : key;
+  }
 
   const LocalMusicTrack({
     required this.uri,
@@ -87,11 +106,17 @@ class LocalMusicTrack {
     this.albumArtistSort,
     this.genre,
     this.replayGain,
+    List<String>? artists,
+    List<String>? albumArtists,
+    List<String>? genres,
     this.albumKey,
     this.discNumber,
+    this.discSubtitle,
     this.trackNumber,
     this.releaseDate,
     this.originalReleaseDate,
+    this.contentAdvisory,
+    this.releaseKind,
     this.durationMs = 0,
     this.sizeBytes,
     this.cueStartUs,
@@ -103,13 +128,18 @@ class LocalMusicTrack {
     this.dateModified,
     this.firstSeen = false,
     this.canRename = false,
+    this.isDocumentProvider = false,
+    this.canEditTags = false,
     this.isRecording = false,
     this.folderLocations = const [],
     this.visibilityKey,
     this.documentVisibilityKey,
     String? identityUri,
     String? identityKey,
-  })  : _identityUri = identityUri,
+  })  : _artists = artists,
+        _albumArtists = albumArtists,
+        _genres = genres,
+        _identityUri = identityUri,
         _identityKey = identityKey;
 
   String get playbackId =>
@@ -117,7 +147,8 @@ class LocalMusicTrack {
 
   bool get isCueTrack => cueStartUs != null;
 
-  static LocalMusicTrack? fromDocument(dynamic value, Uri source) {
+  static LocalMusicTrack? fromDocument(dynamic value, Uri source,
+      {bool isDocumentProvider = false}) {
     if (value is! Map) return null;
     final uri = value['uri'];
     final title = value['title'];
@@ -169,23 +200,32 @@ class LocalMusicTrack {
       albumArtist: value['albumArtist'] is String
           ? value['albumArtist'] as String
           : null,
-      titleSort: _sortTag(value['titleSort']),
-      artistSort: _sortTag(value['artistSort']),
-      albumSort: _sortTag(value['albumSort']),
-      albumArtistSort: _sortTag(value['albumArtistSort']),
+      titleSort: _metadataTag(value['titleSort']),
+      artistSort: _metadataTag(value['artistSort']),
+      albumSort: _metadataTag(value['albumSort']),
+      albumArtistSort: _metadataTag(value['albumArtistSort']),
       genre: genre is String &&
               genre.trim().isNotEmpty &&
               genre.trim().toLowerCase() != '<unknown>'
           ? genre.trim()
           : null,
       replayGain: _parseReplayGain(value['replayGain']),
+      artists: _indexedTags(value['artists']),
+      albumArtists: _indexedTags(value['albumArtists']),
+      genres: _indexedTags(value['genres']),
       albumKey: albumKey is String && _identityPattern.hasMatch(albumKey)
           ? albumKey
           : null,
       discNumber: _albumPosition(value['discNumber']),
+      discSubtitle: _metadataTag(value['discSubtitle']),
       trackNumber: _albumPosition(value['trackNumber']),
       releaseDate: _releaseDate(value['releaseDate']),
       originalReleaseDate: _releaseDate(value['originalReleaseDate']),
+      contentAdvisory:
+          MusicContentAdvisory.fromPlatformCode(value['contentAdvisory']),
+      releaseKind: LocalMusicReleaseKind.values
+          .where((kind) => kind.tag == value['releaseKind'])
+          .firstOrNull,
       durationMs: duration is int && duration > 0 ? duration : 0,
       sizeBytes: cueStart == null && size is int && size >= 0 ? size : null,
       cueStartUs: cueStart as int?,
@@ -200,7 +240,12 @@ class LocalMusicTrack {
       dateAdded: _date(value['addedMs']),
       dateModified: _date(value['modifiedMs']),
       firstSeen: value['firstSeen'] == true,
-      canRename: cueStart == null && value['canRename'] == true,
+      canRename:
+          cueStart == null && !isDocumentProvider && value['canRename'] == true,
+      isDocumentProvider: isDocumentProvider,
+      canEditTags: cueStart == null &&
+          !isDocumentProvider &&
+          value['canEditTags'] == true,
       isRecording: source == systemSource && value['isRecording'] == true,
       folderLocations: _parseFolderLocations(value['folderLocations']),
       visibilityKey: validVisibilityKey,
@@ -289,7 +334,20 @@ class LocalMusicTrack {
     return DateTime.utc(year, month, day).month == month ? value : null;
   }
 
-  static String? _sortTag(Object? value) {
+  static List<String> _singleTag(String? value) {
+    final tag = _metadataTag(value);
+    return tag == null ? const [] : [tag];
+  }
+
+  static List<String>? _indexedTags(Object? value) {
+    if (value is! List) return null;
+    return List.unmodifiable([
+      for (final entry in value)
+        if (_metadataTag(entry) case final tag?) tag,
+    ]);
+  }
+
+  static String? _metadataTag(Object? value) {
     if (value is! String ||
         value.length > 1024 ||
         _metadataControls.hasMatch(value)) {
@@ -357,4 +415,21 @@ class LocalMusicTrack {
         parts[2] == 'document' &&
         parts[3].isNotEmpty;
   }
+}
+
+enum LocalMusicReleaseKind {
+  album('album'),
+  ep('ep'),
+  single('single'),
+  live('live'),
+  compilation('compilation'),
+  remix('remix'),
+  soundtrack('soundtrack'),
+  djMix('dj-mix'),
+  mixtape('mixtape'),
+  demo('demo');
+
+  const LocalMusicReleaseKind(this.tag);
+
+  final String tag;
 }

@@ -4,7 +4,9 @@ import 'package:clipious/app/states/app.dart';
 import 'package:clipious/globals.dart' show db;
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/music/models/local_music_artist.dart';
+import 'package:clipious/music/models/music_artist_identity.dart';
 import 'package:clipious/music/services/local_music_library.dart';
+import 'package:clipious/music/services/music_library_service.dart';
 import 'package:clipious/player/models/local_music_playback.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/player/views/components/player_modal_back_handler.dart';
@@ -53,12 +55,13 @@ class MusicPlayingDeviceArtists extends StatelessWidget {
     final app = context.watch<AppCubit>();
     final player = context.watch<PlayerCubit>();
     final library = LocalMusicLibrary.instance;
+    final aliases = MusicLibraryService.forProfile(db, db.profileId);
     final locals = AppLocalizations.of(context)!;
     final theme = Theme.of(context);
     final style = theme.textTheme.titleMedium
         ?.copyWith(color: theme.colorScheme.onSurfaceVariant);
     return ListenableBuilder(
-      listenable: library,
+      listenable: Listenable.merge([library, aliases.changes]),
       builder: (context, _) {
         final session = app.state;
         final selection = library.selectionId;
@@ -104,17 +107,21 @@ class MusicPlayingDeviceArtists extends StatelessWidget {
           alignment: AlignmentDirectional.centerStart,
           foregroundColor: theme.colorScheme.onSurfaceVariant,
         );
+        String displayName(LocalMusicArtistCredit credit) =>
+            aliases.artistDisplayName(
+                MusicArtistIdentity.device(credit.key), credit.name);
         final first = credits.first;
+        final firstName = displayName(first);
         final multiple = credits.length > 1;
         final label = Row(mainAxisSize: MainAxisSize.min, children: [
           Flexible(
-              child: Text(first.name,
+              child: Text(firstName,
                   maxLines: 1, overflow: TextOverflow.ellipsis, style: style)),
           const SizedBox(width: 4),
           Icon(multiple ? Icons.expand_more : Icons.chevron_right, size: 18),
         ]);
         if (!multiple) {
-          final tooltip = locals.musicOpenNamedArtist(first.name);
+          final tooltip = locals.musicOpenNamedArtist(firstName);
           return Tooltip(
             message: tooltip,
             child: TextButton(
@@ -139,10 +146,12 @@ class MusicPlayingDeviceArtists extends StatelessWidget {
                   priority: 5,
                   child: ListTile(
                     contentPadding: EdgeInsets.zero,
-                    title: Text(credit.name),
-                    subtitle: Text(credit.roles
-                        .map((role) => localMusicArtistRoleLabel(locals, role))
-                        .join(' · ')),
+                    title: Text(displayName(credit)),
+                    subtitle: Text([
+                      if (displayName(credit) != credit.name) credit.name,
+                      ...credit.roles.map(
+                          (role) => localMusicArtistRoleLabel(locals, role)),
+                    ].join(' · ')),
                   ),
                 ),
               ),

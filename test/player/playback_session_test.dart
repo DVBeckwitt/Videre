@@ -12,11 +12,12 @@ import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/main.dart' as app_main;
 import 'package:clipious/media_handler.dart';
+import 'package:clipious/music/models/device_playlist_track.dart';
+import 'package:clipious/music/models/local_music_browse.dart';
 import 'package:clipious/music/models/local_music_track.dart';
 import 'package:clipious/music/models/music_song_tap_queue_scope.dart';
 import 'package:clipious/music/models/music_background_playback.dart';
 import 'package:clipious/music/models/on_device_music_entry.dart';
-import 'package:clipious/music/models/replay_gain.dart';
 import 'package:clipious/music/models/song_transition.dart';
 import 'package:clipious/music/services/local_music_library.dart';
 import 'package:clipious/music/services/music_listening_history.dart';
@@ -113,7 +114,13 @@ class _RecordingHistoryService extends _GuestService {
 }
 
 class _SessionPlayer extends TestPlayerCubit {
-  _SessionPlayer(super.initialState, super.settings);
+  _SessionPlayer(super.initialState, super.settings,
+      {super.learningTimeMicroseconds, this.startupGate});
+
+  final Future<void>? startupGate;
+
+  @override
+  Future<void> onReady() => startupGate ?? super.onReady();
 
   void seedState(PlayerState snapshot) => emit(snapshot);
 
@@ -190,7 +197,8 @@ class _RemoteLoadPlayer extends _SessionPlayer {
           String? queueTitle,
           PlaylistReference? recommendationSource,
           bool fromMusic = false,
-          bool songTap = false}) =>
+          bool songTap = false,
+          bool collectionDetail = false}) =>
       super.playVideo([],
           audio: audio,
           startAt: startAt,
@@ -252,13 +260,18 @@ Future<List<LocalMusicTrack>> openDeviceFolder(
     {bool legacy = false,
     bool withExclusionFolder = false,
     bool withCueTracks = false,
+    Map<String, Map<String, Object>>? catalog,
     bool Function()? canRead,
-    String? Function(String)? renamedFile}) async {
+    String? Function(String)? renamedFile,
+    Set<String> Function()? missingFiles,
+    Map<String, String> Function()? movedFiles}) async {
   const channel = MethodChannel('com.github.dvbeckwitt.videre/local_music');
   const tree =
       'content://com.android.externalstorage.documents/tree/primary%3AMusic';
   String uri(String filename) =>
       '$tree/document/primary%3AMusic%2F${Uri.encodeComponent(filename)}';
+  String playbackId(String filename) =>
+      LocalMusicTrack(uri: uri(filename), title: filename).playbackId;
   var selection = 0;
   Map<String, String> folder() => {
         'uri': tree,
@@ -281,15 +294,33 @@ Future<List<LocalMusicTrack>> openDeviceFolder(
       case 'listTracks':
         expect(granted, isTrue);
         expect(call.arguments['treeUri'], tree);
-        return ['First', 'Second'].map((name) {
+        if (catalog != null) {
+          return [
+            for (final entry in catalog.entries)
+              {
+                'uri': uri('${entry.key}.mp3'),
+                'title': entry.key,
+                'durationMs': 60000,
+                ...entry.value,
+              },
+          ];
+        }
+        final missing = missingFiles?.call() ?? const <String>{};
+        final moved = movedFiles?.call() ?? const <String, String>{};
+        return ['First', 'Second']
+            .where((name) => !missing.contains(name))
+            .map((name) {
           final originalFilename = '$name.mp3';
+          final renamed = renamedFile?.call(name);
           final filename = withCueTracks
               ? 'Concert.flac'
-              : renamedFile?.call(name) ?? originalFilename;
+              : moved[name] ?? renamed ?? originalFilename;
           return {
             'uri': uri(filename),
             'fileName': filename,
-            if (!withCueTracks && filename != originalFilename)
+            if (!withCueTracks &&
+                filename != originalFilename &&
+                renamed == filename)
               'identityUri': uri(originalFilename),
             'title': name,
             'artist': 'Local artist',
@@ -310,6 +341,30 @@ Future<List<LocalMusicTrack>> openDeviceFolder(
               ],
           };
         }).toList();
+      case 'listMovedFileRepairs':
+        expect(call.arguments['treeUri'], tree);
+        final missing = missingFiles?.call() ?? const <String>{};
+        final moved = movedFiles?.call() ?? const <String, String>{};
+        return {
+          'missing': [
+            for (final name in missing)
+              {
+                'id': playbackId('$name.mp3'),
+                'title': name,
+                'fileName': '$name.mp3',
+                'artist': 'Local artist',
+                'album': 'Local album',
+                'durationMs': name == 'First' ? 0 : 60000,
+                'folder': 'Music / Old',
+                'candidates': [],
+              },
+          ],
+          'aliases': {
+            for (final MapEntry(key: name, value: file) in moved.entries)
+              playbackId('$name.mp3'): playbackId(file),
+          },
+          'missingAliases': <String, String>{},
+        };
       case 'forgetFolder':
         granted = false;
         return null;
@@ -325,7 +380,8 @@ Future<List<LocalMusicTrack>> openDeviceFolder(
   await library.initialize();
   await library.chooseFolder();
   if (!library.loaded) await library.refresh();
-  expect(library.tracks.map((track) => track.title), ['First', 'Second']);
+  expect(library.tracks.map((track) => track.title),
+      catalog?.keys ?? ['First', 'Second']);
   return library.tracks.toList();
 }
 
@@ -354,6 +410,22 @@ void main() {
     expect(decoded.played, ['first']);
     expect(decoded.audio, isTrue);
     expect(decoded.queueTitle, 'Late Night Mix');
+  });
+
+  test('session restores a suggested occurrence beside a manual copy', () {
+    const song = Video(videoId: 'song', title: 'Song');
+    final suggested = markMusicQueueSuggestion(song);
+    final session = PlaybackSession(
+        videos: [song, suggested],
+        currentId: playbackQueueId(song),
+        seconds: 42,
+        next: [playbackQueueId(suggested)],
+        audio: true);
+    final restored = PlaybackSession.decode(session.encode())!;
+    expect(restored.videos.map(isMusicQueueSuggestion), [false, true]);
+    expect(restored.currentId, playbackQueueId(song));
+    expect(restored.seconds, 42);
+    expect(restored.next, [playbackQueueId(suggested)]);
   });
 
   test('invalid or future session data is ignored', () {
@@ -481,17 +553,68 @@ void main() {
     }
   });
 
+  test('mixed offline collection retains cache, download and device proofs',
+      () {
+    final cache = CachedMusicPlayback('1' * 64, '2' * 64);
+    final fingerprint = 'v2:${'3' * 64}:${'4' * 64}';
+    final deviceId = 'device:playlist:${'5' * 64}';
+    const music = MusicMetadata(title: 'Song', artist: 'Artist');
+    final session = PlaybackSession(
+      videos: [
+        Video(videoId: 'cached', musicMetadata: music, playbackSourceId: cache),
+        Video(
+            videoId: 'downloaded',
+            queueEntryId: 'downloaded#2',
+            musicMetadata: music,
+            explicitMusicDownload: fingerprint),
+        Video(videoId: deviceId, musicMetadata: music),
+      ],
+      currentId: 'downloaded#2',
+      seconds: 7,
+      audio: true,
+      localSelectionId: 'selected-library',
+      played: ['cached'],
+      next: [deviceId],
+    );
+
+    final encoded = session.encode();
+    final decoded = PlaybackSession.decode(encoded)!;
+    expect(decoded.videos.map(playbackQueueId),
+        ['cached', 'downloaded#2', deviceId]);
+    expect(
+        CachedMusicPlayback.of(decoded.videos.first)?.toJson(), cache.toJson());
+    expect(decoded.videos[1].explicitMusicDownload, fingerprint);
+    expect(decoded.deviceTrackIds, [deviceId]);
+    expect(decoded.localSelectionId, session.localSelectionId);
+    expect(decoded.currentId, session.currentId);
+    expect(decoded.played, session.played);
+    expect(decoded.next, session.next);
+    expect(PlaybackSession.decode(encoded.replaceFirst(fingerprint, 'v2:bad')),
+        isNull);
+  });
+
   group('restoration', () {
     late _SessionPlayer player;
     late TestSettingsCubit settings;
     late TestAppCubit app;
+    late int playbackMicroseconds;
+
+    void samplePlayback(int timeSeconds, int positionSeconds) {
+      playbackMicroseconds = timeSeconds * Duration.microsecondsPerSecond;
+      player.setEvent(MediaEvent(
+          type: MediaEventType.playbackSample,
+          state: MediaState.playing,
+          value: Duration(seconds: positionSeconds)));
+    }
 
     setUp(() async {
       db = await SembastSqfDb.createInMemory();
       service = _GuestService();
       app = TestAppCubit(AppState(0, null, HomeLayout()));
       settings = TestSettingsCubit(SettingsState.init(), app);
-      player = _SessionPlayer(PlayerState.init(null), settings);
+      playbackMicroseconds = 0;
+      player = _SessionPlayer(PlayerState.init(null), settings,
+          learningTimeMicroseconds: () => playbackMicroseconds);
     });
 
     tearDown(() async {
@@ -970,6 +1093,174 @@ void main() {
       expect((service as _GuestService).requestedCategories, isNull);
     });
 
+    test(
+        'detail album override keeps its duplicate in the visible release order',
+        () async {
+      final albumKey = 'a' * 64;
+      Map<String, Object> track(int disc, int number) => {
+            'album': 'Shared title',
+            'albumKey': albumKey,
+            'discNumber': disc,
+            'trackNumber': number,
+          };
+      final songs = await openDeviceFolder(catalog: {
+        'Disc two': track(2, 1),
+        'Other release': {...track(1, 1), 'albumKey': 'b' * 64},
+        'Later on disc one': track(1, 2),
+        'Hidden file': {...track(1, 3), 'visibilityKey': 'c' * 64},
+        'Start of disc one': track(1, 1),
+      });
+      final library = LocalMusicLibrary.instance;
+      expect(await library.hideTrack(songs[3]), isNotNull);
+      player.audioSession = await AudioSession.instance;
+      app_main.mediaHandler = MediaHandler(player);
+      await settings.setMusicSongTapQueueScope(MusicSongTapQueueScope.songOnly);
+      await settings.setMusicCollectionDetailSongTapQueueScope(
+          MusicSongTapQueueScope.album);
+      final tapped = songs[2];
+      final displayed = [tapped, songs[1], tapped];
+
+      await player.playLocalMusic(displayed,
+          startIndex: 2, queueTitle: 'Displayed list', songTap: true);
+      expect(player.state.offlineVideos.map((entry) => entry.storageUri),
+          [tapped.uri]);
+
+      await player.playLocalMusic(displayed,
+          startIndex: 2,
+          queueTitle: 'Displayed list',
+          songTap: true,
+          collectionDetail: true);
+
+      final entries = player.state.offlineVideos;
+      expect(entries.map((entry) => entry.storageUri),
+          [songs.last.uri, tapped.uri, songs.first.uri]);
+      expect(player.state.currentQueueId, startsWith('${tapped.playbackId}#'));
+      expect(player.state.currentQueueId, playbackQueueId(entries[1]));
+      expect(player.state.playedVideos, [songs.last.playbackId]);
+      expect(player.state.playQueue, [songs.first.playbackId]);
+      expect(player.musicQueueTitle, 'Shared title');
+    });
+
+    test('all songs uses the device sort and retains shuffle on a row tap',
+        () async {
+      final songs = await openDeviceFolder();
+      final library = LocalMusicLibrary.instance;
+      player.audioSession = await AudioSession.instance;
+      app_main.mediaHandler = MediaHandler(player);
+      final source = localMusicBrowseSourceKey(
+          enabled: true,
+          selectionId: library.selectionId,
+          system: library.isSystem);
+      await settings.setMusicCollectionPreference(
+          localMusicSortSetting(source), 'title:descending');
+      await settings.setMusicSongTapQueueScope(MusicSongTapQueueScope.allSongs);
+      await settings.setMusicRetainShuffleOnSongTap(true);
+      await settings.setShuffle(true);
+
+      await player.playOnDeviceMusic([OnDeviceMusicEntry.device(songs.first)],
+          songTap: true);
+
+      expect(player.state.offlineVideos.map(playbackQueueId),
+          [songs.last.playbackId, songs.first.playbackId]);
+      expect(player.state.currentQueueId, songs.first.playbackId);
+      expect(player.state.playedVideos, isEmpty);
+      expect(player.state.playQueue, [songs.last.playbackId]);
+      expect(settings.state.playerShuffleMode, isTrue);
+    });
+
+    test('artist tap uses existing credits and catalog order', () async {
+      final songs = await openDeviceFolder(catalog: {
+        'Zulu': {'artist': 'Band'},
+        'Different credit': {'artist': 'Band featuring Guest'},
+        'Selected': {'artist': '<unknown>', 'albumArtist': 'band'},
+        'Alpha': {'artist': 'Guest', 'albumArtist': 'BAND'},
+      });
+      player.audioSession = await AudioSession.instance;
+      app_main.mediaHandler = MediaHandler(player);
+      await settings.setMusicSongTapQueueScope(MusicSongTapQueueScope.artist);
+
+      await player.playLocalMusic([songs[2]], songTap: true);
+
+      expect(player.state.offlineVideos.map(playbackQueueId),
+          [songs.first.playbackId, songs[2].playbackId, songs.last.playbackId]);
+      expect(player.state.currentQueueId, songs[2].playbackId);
+      expect(player.musicQueueTitle, 'Band');
+    });
+
+    test('an unverified album falls back to the selected list occurrence',
+        () async {
+      final songs = await openDeviceFolder();
+      player.audioSession = await AudioSession.instance;
+      app_main.mediaHandler = MediaHandler(player);
+      await settings.setMusicSongTapQueueScope(MusicSongTapQueueScope.album);
+      final tapped = songs.last;
+
+      await player.playLocalMusic([tapped, songs.first, tapped],
+          startIndex: 2, queueTitle: 'Displayed list', songTap: true);
+
+      final entries = player.state.offlineVideos;
+      expect(entries.map((entry) => entry.storageUri),
+          [tapped.uri, songs.first.uri, tapped.uri]);
+      expect(player.state.currentQueueId, playbackQueueId(entries.last));
+      expect(
+          player.state.currentQueueId, isNot(playbackQueueId(entries.first)));
+      expect(player.musicQueueTitle, 'Displayed list');
+    });
+
+    test('genre song tap resumes the chosen device copy from a saved playlist',
+        () async {
+      final songs = await openDeviceFolder(catalog: {
+        'Intro': {'genre': 'Soul'},
+        'Unrelated': {'genre': 'Jazz'},
+        'Repeated': {'genre': 'Soul', 'visibilityKey': 'd' * 64},
+        'Outro': {'genre': 'SOUL'},
+      });
+      final tapped = songs[2];
+      final device = devicePlaylistVideo(tapped)!;
+      const online = Video(
+          videoId: 'catalog0001',
+          musicMetadata: MusicMetadata(title: 'Online song', artist: 'Band'));
+      final playlistId = await service.createLocalPlaylistWithEntries(
+          'Saved playlist', [device, online, device, device]);
+      final playlist = service
+          .getLocalPlaylists()
+          .singleWhere((row) => row.playlistId == playlistId);
+      player.audioSession = await AudioSession.instance;
+      app_main.mediaHandler = MediaHandler(player);
+      await settings.setMusicSongTapQueueScope(MusicSongTapQueueScope.genre);
+
+      await player.playPlaylist(playlist.videos,
+          reference: PlaylistReference.forPlaylist(playlist, db),
+          startIndex: 3,
+          audio: true,
+          fromMusic: true,
+          songTap: true);
+
+      final selected = '${tapped.playbackId}#2';
+      final queue = [songs.first.playbackId, selected, songs.last.playbackId];
+      expect(player.state.videos, isEmpty);
+      expect(player.state.offlineVideos.map(playbackQueueId), queue);
+      expect(player.state.currentQueueId, selected);
+      expect(player.state.offlineCurrentlyPlaying?.storageUri, tapped.uri);
+      expect(player.playlistReference, isNull);
+      expect(player.musicQueueTitle, 'Soul');
+
+      const position = Duration(seconds: 17);
+      await player.onProgress(position);
+      player.didChangeAppLifecycleState(AppLifecycleState.paused);
+      await waitForSavedPosition(position.inSeconds, videoId: selected);
+      await player.close();
+      player = _SessionPlayer(PlayerState.init(null), settings);
+      player.audioSession = await AudioSession.instance;
+      app_main.mediaHandler = MediaHandler(player);
+      await player.resumeSession();
+
+      expect(player.state.offlineVideos.map(playbackQueueId), queue);
+      expect(player.state.currentQueueId, selected);
+      expect(player.state.startAt, position);
+      expect(player.playlistReference, isNull);
+    });
+
     for (final insertNext in [false, true]) {
       test('enqueue local audio when idle (playNext=$insertNext)', () async {
         final songs = await openDeviceFolder();
@@ -1159,6 +1450,45 @@ void main() {
       });
     }
 
+    test('launcher shuffle starts and preserves its one-time local queue order',
+        () async {
+      final songs = await openDeviceFolder();
+      await player.close();
+      final started = Completer<void>();
+      player = _SessionPlayer(PlayerState.init(null), settings,
+          startupGate: started.future);
+      var admitted = true;
+      final stale = player.shuffleLocalMusic(songs,
+          queueTitle: 'On this device', isCurrent: () => admitted);
+      final shuffle = player.shuffleLocalMusic(songs,
+          queueTitle: 'On this device', isCurrent: () => true);
+      expect(player.state.offlineVideos, isEmpty);
+      admitted = false;
+      player.audioSession = await AudioSession.instance;
+      app_main.mediaHandler = MediaHandler(player);
+      await settings.setShuffle(true);
+
+      started.complete();
+      await stale;
+      await shuffle;
+      final order = player.state.offlineVideos.map(playbackQueueId).toList();
+      expect(order, unorderedEquals(songs.map((track) => track.playbackId)));
+      expect(player.state.currentQueueId, order.first);
+      expect(player.state.playQueue, order.skip(1));
+      expect(player.intendsPlayback, isTrue);
+      expect(settings.state.playerShuffleMode, isTrue);
+
+      final library = LocalMusicLibrary.instance;
+      expect(await library.hideTrack(songs.first), isNotNull);
+      player.pause();
+      expect(player.intendsPlayback, isFalse);
+      await player.shuffleLocalMusic(library.visibleTracks,
+          queueTitle: 'On this device', isCurrent: () => true);
+      expect(player.state.offlineVideos.map(playbackQueueId),
+          [songs.last.playbackId]);
+      expect(player.intendsPlayback, isTrue);
+    });
+
     test('shuffled local duplicates survive reorder, rename and restore',
         () async {
       final newNames = <String, String>{};
@@ -1211,8 +1541,11 @@ void main() {
       player = reopened;
       reopened.audioSession = await AudioSession.instance;
       app_main.mediaHandler = MediaHandler(reopened);
+      await settings.setShuffle(false);
+      expect(reopened.savedSession!.musicQueueShuffled, isTrue);
       await reopened.resumeSession();
 
+      expect(reopened.musicQueueShuffled, isTrue);
       expect(reopened.state.currentQueueId, current);
       expect(
           reopened.state.offlineCurrentlyPlaying?.storageUri, renamedFirst.uri);
@@ -1360,6 +1693,101 @@ void main() {
       expect((service as _GuestService).requestedVideoIds, isEmpty);
     });
 
+    test('repair restores a missing current occurrence and its saved playhead',
+        () async {
+      var missing = <String>{};
+      var moves = <String, String>{};
+      final songs = await openDeviceFolder(
+          missingFiles: () => missing, movedFiles: () => moves);
+      final first = songs.first;
+      final second = songs.last;
+      final library = LocalMusicLibrary.instance;
+      player.audioSession = await AudioSession.instance;
+      app_main.mediaHandler = MediaHandler(player);
+      await player.playLocalMusic([first, second, second],
+          startIndex: 1, queueTitle: 'Repaired queue');
+      final ids = player.state.offlineVideos.map(playbackQueueId).toList();
+      await player.onProgress(const Duration(seconds: 17));
+      var stopped = false;
+      player.addBeforeProfileSwitch(() async => stopped = true);
+
+      missing = {'Second'};
+      await library.refresh();
+      expect(stopped, isTrue);
+      expect(player.state.offlineCurrentlyPlaying, isNull);
+      expect(player.state.offlineVideos.map(playbackQueueId), ids);
+      expect(player.state.offlineVideos.map((song) => song.storageUri),
+          [first.uri, null, null]);
+      await waitForSavedPosition(17, videoId: ids[1]);
+      expect(player.savedSession?.offlineIds, ids);
+      expect(player.savedSession?.played, [ids.first]);
+      expect(player.savedSession?.next, [ids.last]);
+
+      await player.close();
+      player = _SessionPlayer(PlayerState.init(null), settings);
+      player.audioSession = await AudioSession.instance;
+      app_main.mediaHandler = MediaHandler(player);
+      await player.resumeSession();
+      expect(player.state.offlineCurrentlyPlaying, isNull);
+      expect(player.state.offlineVideos.map(playbackQueueId), ids);
+      expect(player.state.offlineVideos[1].title, second.title);
+      expect(player.state.offlineVideos[1].storageUri, isNull);
+
+      missing = {};
+      moves = {'Second': 'Moved Second.mp3'};
+      await library.refresh();
+      final moved = library.tracks.last;
+      expect(moved.playbackId, isNot(second.playbackId));
+      expect(player.state.offlineVideos.map((song) => song.storageUri),
+          [first.uri, moved.uri, moved.uri]);
+      await player.resumeSession();
+      expect(player.state.currentQueueId, ids[1]);
+      expect(player.state.startAt, const Duration(seconds: 17));
+      expect(player.state.offlineVideos.map(playbackQueueId), ids);
+      expect(player.state.playQueue, [ids.last]);
+      expect(player.musicQueueTitle, 'Repaired queue');
+      expect((service as _GuestService).requestedVideoIds, isEmpty);
+    });
+
+    test('transport skips missing occurrences until their file is repaired',
+        () async {
+      var missing = <String>{};
+      var moves = <String, String>{};
+      final songs = await openDeviceFolder(
+          missingFiles: () => missing, movedFiles: () => moves);
+      final first = songs.first;
+      final second = songs.last;
+      player.audioSession = await AudioSession.instance;
+      app_main.mediaHandler = MediaHandler(player);
+      await player.playLocalMusic([first, second, first, second]);
+      final ids = player.state.offlineVideos.map(playbackQueueId).toList();
+
+      missing = {'Second'};
+      await LocalMusicLibrary.instance.refresh();
+      await player.selectQueueOccurrence(ids[1]);
+      expect(player.state.currentQueueId, ids.first);
+      expect(player.state.playQueue, ids.skip(1));
+      expect(
+          playbackQueueId(player.adjacentMusicEntry(previous: false)!), ids[2]);
+
+      final skipped =
+          player.stream.firstWhere((state) => state.currentQueueId == ids[2]);
+      player.playNext();
+      await skipped.timeout(const Duration(seconds: 3));
+      expect(player.state.playQueue, [ids[1], ids[3]]);
+
+      missing = {};
+      moves = {'Second': 'Moved Second.mp3'};
+      await LocalMusicLibrary.instance.refresh();
+      final resumed =
+          player.stream.firstWhere((state) => state.currentQueueId == ids[1]);
+      player.playNext();
+      await resumed.timeout(const Duration(seconds: 3));
+      expect(player.state.offlineVideos.map(playbackQueueId), ids);
+      expect(player.state.playQueue, [ids.last]);
+      expect((service as _GuestService).requestedVideoIds, isEmpty);
+    });
+
     test(
         'hiding the current device file preserves its duplicate and resume point',
         () async {
@@ -1432,7 +1860,7 @@ void main() {
       expect(first.child.uri.toString(), songs.first.uri);
       expect(first.start, const Duration(microseconds: 13333));
       expect(first.end, const Duration(microseconds: 5026666));
-      expect((first.tag as ReplayGain).trackGainDb, -3.0);
+      expect((first.tag as LocalMusicSourceTag).replayGain?.trackGainDb, -3.0);
       expect(player.duration, const Duration(microseconds: 5013333));
 
       await player.skipToVideo(2);
@@ -1596,6 +2024,60 @@ void main() {
       expect(player.state.offlineCurrentlyPlaying, isNull);
       expect(player.state.offlineVideos, isEmpty);
       expect((service as _GuestService).requestedVideoIds, isEmpty);
+    });
+
+    test('Search and album detail queue different songs after the same tap',
+        () async {
+      const reference = PlaylistReference(
+          kind: PlaylistSourceKind.public,
+          playlistId: 'album:tap-scope',
+          profileId: 'default',
+          displayTitle: 'Album');
+      const first = Video(
+          videoId: 'track-one',
+          title: 'First',
+          musicMetadata: MusicMetadata(title: 'First', artist: 'Band'),
+          formatStreams: [],
+          adaptiveFormats: []);
+      final second = first.copyWith(videoId: 'track-two', title: 'Second');
+      final songs = [first, second];
+
+      player.audioSession = await AudioSession.instance;
+      app_main.mediaHandler = MediaHandler(player);
+      await settings.setMusicSongTapQueueScope(MusicSongTapQueueScope.songOnly);
+      await settings.setMusicCollectionDetailSongTapQueueScope(
+          MusicSongTapQueueScope.collection);
+
+      await player.playVideo(songs,
+          audio: true, fromMusic: true, songTap: true);
+      expect(player.state.currentlyPlaying?.videoId, first.videoId);
+      expect(player.state.videos.map((song) => song.videoId), [first.videoId]);
+      expect(player.state.playQueue, isEmpty);
+
+      await player.playPlaylist(songs,
+          reference: reference,
+          audio: true,
+          fromMusic: true,
+          songTap: true,
+          collectionDetail: true);
+      expect(player.state.currentlyPlaying?.videoId, first.videoId);
+      expect(
+          player.state.playQueue, [playbackQueueId(player.state.videos.last)]);
+      final next = player.stream.firstWhere(
+          (state) => state.currentlyPlaying?.videoId == second.videoId);
+      player.playNext();
+      await next.timeout(const Duration(seconds: 3));
+
+      await settings.setMusicCollectionDetailSongTapQueueScope(null);
+      await player.playPlaylist(songs,
+          reference: reference,
+          audio: true,
+          fromMusic: true,
+          songTap: true,
+          collectionDetail: true);
+      expect(player.state.currentlyPlaying?.videoId, first.videoId);
+      expect(player.state.videos.map((song) => song.videoId), [first.videoId]);
+      expect(player.state.playQueue, isEmpty);
     });
 
     test('a single-song playlist tap resumes the chosen duplicate', () async {
@@ -2322,6 +2804,103 @@ void main() {
       player.reportDecoderPlay();
       await waitForMusicEvents(listening, 2);
       expect(listening.events(trackId: song.videoId), hasLength(2));
+    });
+
+    test('Music history ranks fully heard short songs above a skipped song',
+        () async {
+      player.audioSession = await AudioSession.instance;
+      app_main.mediaHandler = MediaHandler(player);
+      const metadata = MusicMetadata(title: 'Song', artist: 'Artist');
+      const longSong =
+          Video(videoId: 'long', lengthSeconds: 600, musicMetadata: metadata);
+      const shortSong =
+          Video(videoId: 'short', lengthSeconds: 4, musicMetadata: metadata);
+      const lastSong =
+          Video(videoId: 'last', lengthSeconds: 5, musicMetadata: metadata);
+      final history = MusicListeningHistory.forProfile(db, db.profileId);
+
+      await player.playVideo([longSong, shortSong, lastSong],
+          audio: true, fromMusic: true);
+      player.seedVideo(
+          player.state.currentlyPlaying!.copyWith(lengthSeconds: 600));
+      player.reportDecoderPlay();
+      samplePlayback(0, 0);
+      samplePlayback(1, 1);
+      player.seek(const Duration(seconds: 500));
+      samplePlayback(2, 500);
+      player.pause();
+      samplePlayback(302, 500);
+      player.play();
+      player.reportDecoderPlay();
+      samplePlayback(303, 500);
+      samplePlayback(304, 501);
+
+      await player.skipToVideo(1);
+      player.reportDecoderPlay();
+      samplePlayback(305, 0);
+      samplePlayback(309, 4);
+
+      await player.skipToVideo(2);
+      player.reportDecoderPlay();
+      samplePlayback(310, 0);
+      samplePlayback(315, 5);
+      player.setEvent(const MediaEvent(state: MediaState.completed));
+
+      await player.close();
+      expect(history.events(), hasLength(3));
+      expect(history.listenedTimeByTrack(), {
+        'long': const Duration(seconds: 2),
+        'short': const Duration(seconds: 4),
+        'last': const Duration(seconds: 5),
+      });
+    });
+
+    test('manual replay at the end adds time to the same Music listen',
+        () async {
+      player.audioSession = await AudioSession.instance;
+      app_main.mediaHandler = MediaHandler(player);
+      const song = Video(
+          videoId: 'manual-replay',
+          musicMetadata: MusicMetadata(title: 'Song', artist: 'Artist'));
+      final history = MusicListeningHistory.forProfile(db, db.profileId);
+
+      await player.playVideo([song], audio: true, fromMusic: true);
+      player.reportDecoderPlay();
+      samplePlayback(0, 0);
+      samplePlayback(8, 8);
+      player.setEvent(const MediaEvent(state: MediaState.completed));
+
+      player.play();
+      player.reportDecoderPlay();
+      samplePlayback(30, 0);
+      samplePlayback(38, 8);
+      await player.close();
+
+      expect(history.events().single.elapsed, const Duration(seconds: 16));
+    });
+
+    test('pausing Music history cancels elapsed writes for the active listen',
+        () async {
+      player.audioSession = await AudioSession.instance;
+      app_main.mediaHandler = MediaHandler(player);
+      const song = Video(
+          videoId: 'elapsed-privacy',
+          musicMetadata: MusicMetadata(title: 'Song', artist: 'Artist'));
+      final history = MusicListeningHistory.forProfile(db, db.profileId);
+
+      await player.playVideo([song], audio: true, fromMusic: true);
+      player.reportDecoderPlay();
+      await waitForMusicEvents(history, 1);
+      samplePlayback(0, 0);
+      samplePlayback(10, 10);
+
+      await history.setRecordingPaused(true);
+      samplePlayback(20, 20);
+      await history.setRecordingPaused(false);
+      samplePlayback(30, 30);
+      await player.close();
+
+      expect(history.events().single.elapsed, Duration.zero);
     });
 
     test('restoring a repeated final song retains its occurrence and real ID',

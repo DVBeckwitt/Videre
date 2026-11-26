@@ -16,6 +16,7 @@ import '../../states/settings.dart';
 import '../components/music_provider_settings.dart';
 import 'network_proxy.dart';
 import 'release_notes.dart';
+import 'settings_search.dart';
 
 settingsTheme(ColorScheme colorScheme) => SettingsThemeData(
     settingsSectionBackground: colorScheme.surface,
@@ -68,6 +69,15 @@ class SettingsScreen extends StatelessWidget {
             bottomNavigationBar: const SizedBox.shrink(),
             appBar: AppBar(
               title: Text(locals.settings),
+              actions: [
+                IconButton(
+                  key: const ValueKey('open-settings-search'),
+                  tooltip: locals.settingsSearch,
+                  onPressed: () =>
+                      openSettingsSearch(context, television: false),
+                  icon: const Icon(Icons.search),
+                ),
+              ],
             ),
             backgroundColor: colorScheme.surface,
             body: SafeArea(

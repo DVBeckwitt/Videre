@@ -97,6 +97,23 @@ enum LocalMusicTrackSortField {
   size,
 }
 
+const legacyLocalMusicSortSetting = 'local-music-sort';
+
+String localMusicBrowseSourceKey(
+    {required bool enabled,
+    required String? selectionId,
+    required bool system}) {
+  return switch ((enabled, selectionId, system)) {
+    (false, _, _) => 'downloads',
+    (_, final String id, _) => 'selection:$id',
+    (_, _, true) => 'legacy-system',
+    _ => 'legacy-folder',
+  };
+}
+
+String localMusicSortSetting(String sourceKey) =>
+    'music-collection-device-sort-v1:$sourceKey';
+
 class LocalMusicTrackSort {
   const LocalMusicTrackSort(this.field, this.descending);
 
@@ -255,5 +272,56 @@ enum LocalMusicCategorySort {
     if (comparison != 0) return comparison;
     final names = compareLocalMusicSortNames(firstName, secondName);
     return names != 0 ? names : firstKey.compareTo(secondKey);
+  }
+}
+
+class LocalMusicCategoryOrder {
+  const LocalMusicCategoryOrder(this.field, this.descending);
+
+  static const fields = [
+    LocalMusicCategorySort.name,
+    LocalMusicCategorySort.trackCount,
+    LocalMusicCategorySort.duration,
+  ];
+
+  factory LocalMusicCategoryOrder.fromValue(String? value) {
+    final parts = value?.split(':');
+    final field = fields.firstWhere(
+      (field) => field.name == parts?.first,
+      orElse: () => LocalMusicCategorySort.name,
+    );
+    return LocalMusicCategoryOrder(field, parts?.last == 'descending');
+  }
+
+  final LocalMusicCategorySort field;
+  final bool descending;
+
+  String get value =>
+      '${field.name}:${descending ? 'descending' : 'ascending'}';
+
+  List<T> order<T>(
+    Iterable<T> groups, {
+    required String Function(T) name,
+    required String Function(T) key,
+    required Iterable<LocalMusicTrack> Function(T) tracks,
+  }) {
+    final rows = [
+      for (final group in groups)
+        (
+          group: group,
+          name: localMusicSortName(name(group)),
+          key: key(group),
+          totals: LocalMusicTotals.fromTracks(tracks(group)),
+        ),
+    ]..sort((a, b) => field.compare(
+          a.totals,
+          b.totals,
+          firstName: a.name,
+          secondName: b.name,
+          firstKey: a.key,
+          secondKey: b.key,
+          descending: descending,
+        ));
+    return [for (final row in rows) row.group];
   }
 }

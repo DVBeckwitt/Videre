@@ -4,17 +4,39 @@ import 'package:clipious/network/network_proxy.dart';
 import 'package:clipious/network/socks_proxy.dart';
 import 'package:flutter/material.dart';
 
+enum NetworkProxyControl {
+  enable('network-proxy-enabled'),
+  orbot('network-proxy-orbot');
+
+  const NetworkProxyControl(this.id);
+
+  final String id;
+}
+
 class NetworkProxySettingsScreen extends StatefulWidget {
   final SocksProxyConfig? initialConfig;
   final Future<void> Function(SocksProxyConfig)? onApply;
   final Future<void> Function(SocksProxyConfig)? onTest;
+  final NetworkProxyControl? _target;
+  final FocusNode? _targetFocus;
 
   const NetworkProxySettingsScreen({
     super.key,
     this.initialConfig,
     this.onApply,
     this.onTest,
-  });
+  })  : _target = null,
+        _targetFocus = null;
+
+  const NetworkProxySettingsScreen.focused(
+    NetworkProxyControl target,
+    FocusNode focusNode, {
+    super.key,
+  })  : _target = target,
+        _targetFocus = focusNode,
+        initialConfig = null,
+        onApply = null,
+        onTest = null;
 
   @override
   State<NetworkProxySettingsScreen> createState() =>
@@ -118,13 +140,17 @@ class _NetworkProxySettingsScreenState
             constraints: const BoxConstraints(maxWidth: 720),
             child: Form(
               key: _formKey,
-              child: ListView(
+              child: SingleChildScrollView(
                 padding: const EdgeInsets.all(24),
-                children: [
+                child: ListBody(children: [
                   Text(locals.networkProxyDescription),
                   const SizedBox(height: 16),
                   SwitchListTile(
-                    autofocus: true,
+                    key: ValueKey(NetworkProxyControl.enable.id),
+                    focusNode: widget._target == NetworkProxyControl.enable
+                        ? widget._targetFocus
+                        : null,
+                    autofocus: widget._target == null,
                     contentPadding: EdgeInsets.zero,
                     title: Text(locals.networkProxyEnable),
                     value: _enabled,
@@ -178,6 +204,10 @@ class _NetworkProxySettingsScreenState
                   Align(
                     alignment: Alignment.centerLeft,
                     child: OutlinedButton.icon(
+                      key: ValueKey(NetworkProxyControl.orbot.id),
+                      focusNode: widget._target == NetworkProxyControl.orbot
+                          ? widget._targetFocus
+                          : null,
                       onPressed: _busy ? null : _useOrbot,
                       icon: const Icon(Icons.settings_suggest_outlined),
                       label: Text(locals.networkProxyOrbotPreset),
@@ -220,7 +250,7 @@ class _NetworkProxySettingsScreenState
                               TextStyle(color: _failed ? colors.error : null)),
                     ),
                   ],
-                ],
+                ]),
               ),
             ),
           ),

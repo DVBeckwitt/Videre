@@ -1,4 +1,5 @@
 import 'package:clipious/channels/models/channel_videos.dart';
+import 'package:clipious/content_filter/community_models.dart';
 import 'package:clipious/utils/extensions/list_unique.dart';
 import 'package:clipious/utils/models/item_with_continuation.dart';
 import 'package:clipious/videos/models/user_feed.dart';
@@ -136,23 +137,46 @@ class FixedItemList<T> extends PaginatedList<T> {
   }
 }
 
-/// User subscription_management
+typedef SubscriptionChannelFilter = ({Set<String> channelIds, bool exclude});
+
+/// The account feed and on-device subscriptions share the same page cursors.
 class SubscriptionVideoList extends PaginatedList<Video> {
+  final ValueListenable<SubscriptionChannelFilter?>? channelFilter;
   final maxResults = 50;
   int page = 1;
   bool hasMoreOnline = true;
   Map<String, String> continuations = {};
 
-  @override
-  Listenable get changes => playbackHistoryRevision;
+  SubscriptionVideoList({this.channelFilter});
 
   @override
-  List<Video> visibleItems(List<Video> items) =>
-      db.getSettings(hideWatchedSubscriptionsSettingName)?.value == 'true'
-          ? items
-              .where((video) => !service.isVideoWatched(video.videoId))
-              .toList()
-          : items;
+  late final Listenable changes =
+      Listenable.merge([playbackHistoryRevision, channelFilter]);
+
+  static String? _channelId(Video video) {
+    final authorId = video.authorId;
+    return authorId != null && authorId.isNotEmpty
+        ? authorId
+        : channelIdFromAuthorUrl(video.authorUrl);
+  }
+
+  @override
+  List<Video> visibleItems(List<Video> items) {
+    final filter = channelFilter?.value;
+    final hideWatched =
+        db.getSettings(hideWatchedSubscriptionsSettingName)?.value == 'true';
+    if (filter == null && !hideWatched) return items;
+
+    // Keep the unfiltered results in ItemListCubit. Hidden items still count
+    // toward the source's page size and can reappear when a chip changes.
+    return items.where((video) {
+      if (filter != null &&
+          filter.channelIds.contains(_channelId(video)) == filter.exclude) {
+        return false;
+      }
+      return !hideWatched || !service.isVideoWatched(video.videoId);
+    }).toList();
+  }
 
   @override
   Future<List<Video>> getItems() async {
@@ -193,7 +217,10 @@ class SubscriptionVideoList extends PaginatedList<Video> {
     if (futures.isNotEmpty) {
       final offlineSubVideos = await Future.wait(futures);
       for (final result in offlineSubVideos) {
-        videos.addAll(result.response.videos);
+        videos.addAll(result.response.videos.map((video) =>
+            _channelId(video) == null
+                ? video.copyWith(authorId: result.channelId)
+                : video));
         nextContinuations[result.channelId] =
             result.response.continuation ?? _done;
       }

@@ -10,6 +10,39 @@ import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
+final _onlineId = RegExp(r'^[A-Za-z0-9_-]{11}$');
+
+Iterable<String> _seedIds(Playlist playlist) sync* {
+  for (final video in playlist.videos) {
+    if (video.musicMetadata != null && _onlineId.hasMatch(video.videoId)) {
+      yield video.videoId;
+    }
+  }
+}
+
+bool hasMusicPlaylistSuggestionSeeds(Playlist playlist) =>
+    _seedIds(playlist).isNotEmpty;
+
+Future<List<MusicTrack>> loadMusicPlaylistSuggestions(
+        Playlist playlist, MusicCatalogService catalog,
+        {required bool Function() isCurrent}) =>
+    catalog.getRelatedSongs(_seedIds(playlist).toSet().take(3),
+        isCurrent: isCurrent);
+
+List<MusicTrack> eligibleMusicPlaylistSuggestions(
+    Playlist playlist, String profileId, Iterable<MusicTrack> candidates,
+    {Set<String> dismissed = const {}}) {
+  final excluded = {
+    for (final video in playlist.videos) video.videoId,
+    ...dismissed,
+  };
+  return RecommendationService.forProfile(db, profileId)
+      .eligibleMusic(
+          candidates.where((track) => !excluded.contains(track.videoId)))
+      .take(5)
+      .toList();
+}
+
 /// A manually requested catalog shelf, scoped to an open local playlist.
 class MusicPlaylistSuggestions extends StatefulWidget {
   final Playlist playlist;
@@ -22,18 +55,6 @@ class MusicPlaylistSuggestions extends StatefulWidget {
     required this.profileId,
     required this.visible,
   });
-
-  static final _onlineId = RegExp(r'^[A-Za-z0-9_-]{11}$');
-
-  static Iterable<String> _seedIds(Playlist playlist) sync* {
-    for (final video in playlist.videos) {
-      if (video.musicMetadata != null && _onlineId.hasMatch(video.videoId)) {
-        yield video.videoId;
-      }
-    }
-  }
-
-  static bool hasSeeds(Playlist playlist) => _seedIds(playlist).isNotEmpty;
 
   @override
   State<MusicPlaylistSuggestions> createState() =>
@@ -77,10 +98,6 @@ class _MusicPlaylistSuggestionsState extends State<MusicPlaylistSuggestions> {
     if (!mounted || _loading) return;
     final session = MusicLibrarySession(context.read<AppCubit>());
     if (!_canEdit(session)) return;
-    final seeds = MusicPlaylistSuggestions._seedIds(widget.playlist)
-        .toSet()
-        .take(3)
-        .toList();
     final catalog = musicCatalogService;
     bool current() =>
         _isActive(session) && identical(musicCatalogService, catalog);
@@ -90,7 +107,9 @@ class _MusicPlaylistSuggestionsState extends State<MusicPlaylistSuggestions> {
       _loadFailed = false;
     });
     try {
-      final tracks = await catalog.getRelatedSongs(seeds, isCurrent: current);
+      final tracks = await loadMusicPlaylistSuggestions(
+          widget.playlist, catalog,
+          isCurrent: current);
       if (current() && _canEdit(session)) setState(() => _candidates = tracks);
     } catch (_) {
       if (current()) setState(() => _loadFailed = true);
@@ -140,17 +159,11 @@ class _MusicPlaylistSuggestionsState extends State<MusicPlaylistSuggestions> {
   Widget build(BuildContext context) {
     if (!widget.visible) return const SizedBox.shrink();
     final locals = AppLocalizations.of(context)!;
-    final excluded = {
-      for (final video in widget.playlist.videos) video.videoId,
-      ..._hidden,
-    };
     final tracks = _candidates == null
         ? const <MusicTrack>[]
-        : _recommendations
-            .eligibleMusic(_candidates!
-                .where((track) => !excluded.contains(track.videoId)))
-            .take(5)
-            .toList();
+        : eligibleMusicPlaylistSuggestions(
+            widget.playlist, widget.profileId, _candidates!,
+            dismissed: _hidden);
 
     return Padding(
       padding: const EdgeInsets.only(top: 12, bottom: 12),

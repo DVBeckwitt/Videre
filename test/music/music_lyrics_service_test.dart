@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:clipious/music/models/music_lyrics.dart';
@@ -58,6 +59,52 @@ void main() {
     expect(lyrics.cues.map((cue) => cue.start.inMilliseconds), [10000, 151500]);
     expect(
         lyrics.cues.map((cue) => cue.text), ['Example line', 'Example line']);
+  });
+
+  test('uses word timing only where it fits the provider cue', () async {
+    final service = LrclibMusicLyricsService(
+        createClient: () => MockClient((_) async => _record(changes: {
+              'syncedLyrics': '[00:10]  <00:10>First <00:12>line\n'
+                  ' Translation  \n'
+                  '[02:31.50]<02:31.50>Last <03:00>line',
+            })));
+    final lyrics = await service.load(_song, 180, isCurrent: () => true);
+    expect(lyrics.cues.map((cue) => cue.text), ['First line', 'Last line']);
+    expect(lyrics.displayTextByCue, {0: '  First line\n Translation  '});
+    expect(lyrics.wordsByCue.keys, [0]);
+    expect(lyrics.wordsByCue[0]!.last.start, const Duration(seconds: 12));
+  });
+
+  test('applies the provider offset once to both cues and words', () async {
+    final service = LrclibMusicLyricsService(
+        createClient: () => MockClient((_) async => _record(changes: {
+              'syncedLyrics': '[offset:+500]\n'
+                  '[00:00.100]<00:00.100>First <00:00.400>line\n'
+                  '[03:00.250]Last line',
+            })));
+    final lyrics = await service.load(_song, 180, isCurrent: () => true);
+    expect(lyrics.kind, MusicLyricsKind.synced);
+    expect(lyrics.cues.map((cue) => cue.start.inMilliseconds), [-400, 179750]);
+    expect(lyrics.wordsByCue[0]!.map((word) => word.start.inMilliseconds),
+        [-400, -100]);
+  });
+
+  test('malformed or conflicting offsets retain readable provider lyrics',
+      () async {
+    for (final offset in ['[offset:broken]', '[offset:+500]\n[offset:-500]']) {
+      for (final plain in ['Provider plain text', null]) {
+        final service = LrclibMusicLyricsService(
+            createClient: () => MockClient((_) async => _record(changes: {
+                  'syncedLyrics': '$offset\n[00:10]<00:10>First line\n'
+                      '[00:20]Second line',
+                  'plainLyrics': plain,
+                })));
+        final lyrics = await service.load(_song, 180, isCurrent: () => true);
+        expect(lyrics.kind, MusicLyricsKind.plain);
+        expect(lyrics.text, plain ?? 'First line\nSecond line');
+        expect(lyrics.wordsByCue, isEmpty);
+      }
+    }
   });
 
   test('mismatched versions and durations are unavailable', () async {
@@ -166,6 +213,40 @@ void main() {
     expect((await service.load(_song, 180, isCurrent: () => active)).kind,
         MusicLyricsKind.unavailable);
     expect(calls, 1);
+  });
+
+  test('retiring a held lookup lets the next current song request lyrics',
+      () async {
+    final firstResponse = Completer<http.Response>();
+    final firstStarted = Completer<void>();
+    final retired = Completer<void>();
+    final skipped = Completer<void>();
+    var calls = 0;
+    final service = LrclibMusicLyricsService(
+        createClient: () => MockClient((_) async {
+              calls++;
+              if (calls == 1) {
+                firstStarted.complete();
+                return firstResponse.future;
+              }
+              return _record();
+            }));
+
+    final first = service.load(_song, 180,
+        isCurrent: () => !retired.isCompleted, retired: retired.future);
+    await firstStarted.future;
+    final superseded = service.load(_song, 180,
+        isCurrent: () => !skipped.isCompleted, retired: skipped.future);
+    final next = service.load(_song, 180,
+        isCurrent: () => true, retired: Completer<void>().future);
+    expect(calls, 1);
+    skipped.complete();
+    retired.complete();
+    expect((await first).kind, MusicLyricsKind.unavailable);
+    expect((await superseded).kind, MusicLyricsKind.unavailable);
+    expect((await next).kind, MusicLyricsKind.synced);
+    expect(calls, 2);
+    firstResponse.complete(_record());
   });
 
   test('429 respects provider cooldown and 404 is a normal miss', () async {

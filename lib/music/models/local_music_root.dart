@@ -7,12 +7,14 @@ class LocalMusicRoot {
     required this.name,
     required this.selectionId,
     this.needsReapproval = false,
+    this.isDocumentProvider = false,
   });
 
   final Uri uri;
   final String name;
   final String? selectionId;
   final bool needsReapproval;
+  final bool isDocumentProvider;
 
   bool get isSystem => uri == LocalMusicTrack.systemSource;
 }

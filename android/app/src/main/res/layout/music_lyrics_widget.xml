@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@android:id/background"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/music_widget_background"
+    android:orientation="vertical"
+    android:padding="8dp">
+
+    <TextView
+        android:id="@+id/music_lyrics_widget_title"
+        android:layout_width="match_parent"
+        android:layout_height="36dp"
+        android:accessibilityHeading="true"
+        android:ellipsize="end"
+        android:fontFamily="sans-serif-medium"
+        android:gravity="start|center_vertical"
+        android:includeFontPadding="false"
+        android:maxLines="1"
+        android:paddingStart="8dp"
+        android:paddingEnd="8dp"
+        android:text="@string/music_lyrics_widget_name"
+        android:textColor="@color/music_lyrics_widget_active"
+        android:textSize="15sp" />
+
+    <TextView
+        android:id="@+id/music_lyrics_widget_status"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:gravity="start|center_vertical"
+        android:paddingStart="8dp"
+        android:paddingEnd="8dp"
+        android:text="@string/music_lyrics_widget_idle"
+        android:textColor="@color/music_lyrics_widget_cue"
+        android:textSize="16sp" />
+
+    <TextView
+        android:id="@+id/music_lyrics_widget_first"
+        style="@style/MusicLyricsWidgetCue" />
+
+    <TextView
+        android:id="@+id/music_lyrics_widget_second"
+        style="@style/MusicLyricsWidgetCue" />
+
+    <TextView
+        android:id="@+id/music_lyrics_widget_third"
+        style="@style/MusicLyricsWidgetCue" />
+</LinearLayout>

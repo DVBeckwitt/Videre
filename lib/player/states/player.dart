@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
 import 'dart:io' show Platform;
+import 'dart:math' as math;
 
 import 'package:audio_service/audio_service.dart';
 import 'package:audio_session/audio_session.dart';
@@ -9,6 +10,7 @@ import 'package:back_button_interceptor/back_button_interceptor.dart';
 import 'package:bloc/bloc.dart';
 import 'package:clipious/player/models/sleep_timer.dart';
 import 'package:clipious/videos/models/ided_video.dart';
+import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:easy_debounce/easy_throttle.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
@@ -18,8 +20,10 @@ import 'package:freezed_annotation/freezed_annotation.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/l10n/app_languages.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
+import 'package:clipious/music/models/music_card_origin.dart';
 import 'package:clipious/music/models/song_artwork.dart';
 import 'package:clipious/music/services/music_media_save.dart';
+import 'package:clipious/music/services/android_music_output.dart';
 import 'package:clipious/music/services/music_sound_controller.dart';
 import 'package:clipious/network/network_proxy.dart';
 import 'package:clipious/recommendations/music_playlist_recommendation_exclusions.dart';
@@ -37,22 +41,36 @@ import 'package:logging/logging.dart';
 import 'package:simple_pip_mode/simple_pip.dart';
 import 'package:uuid/uuid.dart';
 
+import '../../content_filter/community_models.dart' show normalizeChannelId;
+import '../../app/states/app.dart';
 import '../../downloads/models/downloaded_video.dart';
 import '../../downloads/services/download_playback_source.dart';
+import '../../downloads/services/download_storage.dart';
 import '../../downloads/services/explicit_music_download.dart';
 import '../../music/models/device_playlist_track.dart';
+import '../../music/models/device_music_artwork_preferences.dart';
+import '../../music/models/device_song_tap_queue.dart';
+import '../../music/models/local_music_browse.dart';
 import '../../music/models/local_music_track.dart';
 import '../../music/models/music_background_playback.dart';
+import '../../music/models/music_artist.dart';
 import '../../music/models/music_content_advisory.dart';
 import '../../music/models/music_song_tap_queue_scope.dart';
 import '../../music/models/music_mix.dart';
 import '../../music/models/music_track.dart';
+import '../../music/models/music_library_entry.dart';
+import '../../music/models/music_current_cue.dart';
+import '../../music/models/music_lyrics.dart';
 import '../../music/models/on_device_music_entry.dart';
 import '../../music/models/song_transition.dart';
+import '../../music/services/android_auto_music.dart';
 import '../../music/services/local_music_library.dart';
+import '../../music/services/music_home_widget.dart';
+import '../../music/services/music_library_service.dart';
+import '../../music/services/music_catalog_service.dart';
+import '../../music/services/music_lyrics_widget.dart';
 import '../../music/services/music_listening_history.dart';
 import '../../music/services/cached_music.dart';
-import '../../music/services/music_home_widget.dart';
 import '../../playlists/models/playlist.dart';
 import '../../playlists/models/playlist_reference.dart';
 import '../../playlists/services/playlist_load_session.dart';
@@ -72,6 +90,7 @@ import '../../videos/models/db/history_video_cache.dart';
 import '../../videos/models/sponsor_segment.dart';
 import '../../videos/models/sponsor_segment_types.dart';
 import '../../videos/models/video.dart';
+import '../models/android_music_resumption.dart';
 import '../models/playback_session.dart';
 import '../models/playback_queue.dart';
 import '../models/named_music_queue.dart';
@@ -83,15 +102,27 @@ import '../models/playback_recovery.dart';
 import '../models/playback_learning_clock.dart';
 import '../models/music_audio_quality.dart';
 import '../models/music_passage_target.dart';
+import '../models/music_ab_repeat.dart';
 import '../models/local_music_playback.dart';
 import '../models/music_queue_shuffle.dart';
 import '../models/watch_audio_track.dart';
+import 'audio_player.dart';
+import 'runtime_audio_player.dart';
+import '../notification_artwork_cache.dart';
 
 export '../../videos/models/db/progress.dart' show playbackHistoryRevision;
 
 part 'player.freezed.dart';
 part 'adjacent_music.dart';
 part 'music_requests.dart';
+part 'android_music_resumption.dart';
+
+typedef _WiredHeadsetResume = ({
+  int transportRevision,
+  int focusRevision,
+  int sessionRevision,
+  (int, String?, String, bool) playbackOwner,
+});
 
 typedef _PreparedMusicSelection = ({
   IdedVideo entry,
@@ -120,6 +151,15 @@ typedef _MusicHandoff = ({
   Stopwatch elapsed,
 });
 
+typedef _VolumePauseOwner = ({
+  int intentRevision,
+  int selectionRevision,
+  int positionGeneration,
+  int sessionRevision,
+  (int, String?, String, bool) playback,
+  Object? source,
+});
+
 class _PlaybackRefreshRequest {
   final Video video;
   final int generation;
@@ -144,6 +184,148 @@ class _RecommendationPlayback {
   _RecommendationPlayback(
       this.video, this.domain, this.service, this.id, this.clickPending)
       : generation = service.generation(domain);
+}
+
+/// A single, short-lived removal from the current live queue.
+class MusicQueueRemovalUndo {
+  static const duration = Duration(seconds: 10);
+
+  final int count;
+  final Object _token;
+  final int _generation;
+  final List<_QueueRemovalRun<Video>> _videos;
+  final List<_QueueRemovalRun<DownloadedVideo>> _offline;
+  final List<_QueueRemovalRun<_QueueTraversalEntry>> _traversal;
+  final Map<String, String> _recommendationSources;
+  final Set<String> _shuffleAnchors;
+  final _age = Stopwatch()..start();
+
+  MusicQueueRemovalUndo._(
+    this.count,
+    this._token,
+    this._generation,
+    this._videos,
+    this._offline,
+    this._traversal,
+    this._recommendationSources,
+    this._shuffleAnchors,
+  );
+}
+
+typedef _QueueTraversalEntry = ({String id, bool current});
+typedef _QueuePositionKey = (String, int);
+
+/// Traversal history can contain repeat visits to the same occurrence.
+Iterable<_QueuePositionKey> _queuePositionKeys<T>(
+    List<T> entries, String Function(T) idOf) sync* {
+  final visits = <String, int>{};
+  for (final entry in entries) {
+    final id = idOf(entry);
+    yield (id, visits.update(id, (count) => count + 1, ifAbsent: () => 0));
+  }
+}
+
+class _QueueRemovalRun<T> {
+  final List<T> entries;
+  final _QueuePositionKey? previous;
+  final _QueuePositionKey? next;
+  final int retainedBefore;
+
+  _QueueRemovalRun(this.entries, this.previous, this.next, this.retainedBefore);
+
+  static List<_QueueRemovalRun<T>> capture<T>(
+      List<T> entries, String Function(T) idOf, Set<String> removed) {
+    final keys = _queuePositionKeys(entries, idOf).toList();
+    final runs = <_QueueRemovalRun<T>>[];
+    var retained = 0;
+    var index = 0;
+    while (index < keys.length) {
+      if (!removed.contains(keys[index].$1)) {
+        index++;
+        retained++;
+        continue;
+      }
+      final start = index++;
+      while (index < keys.length && removed.contains(keys[index].$1)) {
+        index++;
+      }
+      runs.add(_QueueRemovalRun(
+        entries.sublist(start, index),
+        start == 0 ? null : keys[start - 1],
+        index == keys.length ? null : keys[index],
+        retained,
+      ));
+    }
+    return runs;
+  }
+
+  static List<T> restore<T>(List<T> entries, String Function(T) idOf,
+      List<_QueueRemovalRun<T>> runs) {
+    if (runs.isEmpty) return entries;
+    final positions = {
+      for (final (index, key) in _queuePositionKeys(entries, idOf).indexed)
+        key: index,
+    };
+    final insertions = <int, List<T>>{};
+    for (final run in runs) {
+      final previous = positions[run.previous];
+      final slot = positions[run.next] ??
+          (previous == null
+              ? run.retainedBefore.clamp(0, entries.length)
+              : previous + 1);
+      insertions.putIfAbsent(slot, () => []).addAll(run.entries);
+    }
+    return [
+      for (var i = 0; i <= entries.length; i++) ...[
+        ...?insertions[i],
+        if (i < entries.length) entries[i],
+      ],
+    ];
+  }
+}
+
+class _MusicListeningPlayback {
+  _MusicListeningPlayback(this.write, this.started);
+
+  final PlaybackHistoryWrite write;
+  final Future<void> started;
+  final clock = PlaybackLearningClock();
+  Duration lastCheckpoint = Duration.zero;
+  Future<void>? pendingCheckpoint;
+
+  Future<void>? checkpoint({required Duration interval}) {
+    final played = clock.played;
+    final previous = lastCheckpoint;
+    if (played <= previous || played - previous < interval) {
+      return pendingCheckpoint;
+    }
+    lastCheckpoint = played;
+    final pending =
+        write.recordListeningTime(played).catchError((Object error) {
+      if (lastCheckpoint == played) lastCheckpoint = previous;
+      log.fine('Could not save Music listening time (${error.runtimeType})');
+    });
+    pendingCheckpoint = pending;
+    return pending;
+  }
+}
+
+typedef _BluetoothRoute = ({String id, int? portId});
+typedef _BluetoothPlaybackOwner = ({
+  String profileId,
+  String? queueId,
+  int sourceGeneration,
+  int positionGeneration,
+  int intentRevision,
+});
+
+class _BluetoothReconnectPause {
+  final _BluetoothRoute route;
+  final _BluetoothPlaybackOwner owner;
+  bool disconnected;
+
+  _BluetoothReconnectPause(this.route, this.owner,
+      {required this.disconnected});
 }
 
 class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
@@ -196,16 +378,31 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   static Future<MediaHandler>? _sharedMediaInitialization;
   ({String id, bool music, bool live})? _tuningSource;
   int _nextLocalOccurrence = 1;
+  ({String id, LocalMusicTrack track})? _pendingOpenedAudio;
+  ({String id, LocalMusicTrack track})? _currentOpenedAudio;
   String? _queuedDeviceSelectionId;
   static Future<void> _sessionWrite = Future.value();
   final _namedMusicQueuesRevision = ValueNotifier(0);
   String? _activeNamedMusicQueueId;
   String? _namedMusicQueuesValue;
   List<NamedMusicQueue> _namedMusicQueues = const [];
-  static const _learningCheckpointInterval = Duration(seconds: 15);
+  static const _playbackCheckpointInterval = Duration(seconds: 15);
   final SettingsCubit settings;
   final musicSound = MusicSoundController();
   MusicAudioQualityMenu? musicAudioQuality;
+  final _musicAbRepeat = ValueNotifier<MusicAbRepeatControls?>(null);
+  ValueListenable<MusicAbRepeatControls?> get musicAbRepeat => _musicAbRepeat;
+
+  void reportMusicAbRepeatControls(MusicAbRepeatControls? controls) {
+    if (_isDisposing ||
+        isClosed ||
+        (controls != null &&
+            controls.generation != backendPlaybackGeneration)) {
+      return;
+    }
+    _musicAbRepeat.value = controls;
+  }
+
   final _musicContentAdvisory =
       ValueNotifier<PlayingMusicContentAdvisory?>(null);
   ValueListenable<PlayingMusicContentAdvisory?> get musicContentAdvisory =>
@@ -228,29 +425,38 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   final bool? _initialPlaylistAudio;
   final bool _initialPlaylistShuffleOnce;
   final String? _initialQueueTitle;
+  final MusicCardOrigin? _initialMusicCardOrigin;
   final ({
     String title,
+    int? startIndex,
     bool Function() isCurrent,
     List<PlaylistReference?>? recommendationSources,
   })? _initialMusicCollection;
   final Future<bool?> Function(PlayerCubit)? _initialMusicMix;
   final bool _initialFromMusic;
   final bool _initialSongTap;
+  final bool _initialCollectionDetail;
   // Origin follows the queue occurrence across mode switches and decoder retries.
   final _musicHistoryEntries = <String>{};
   final _musicRecommendationSources = <String, String>{};
   bool _musicHistoryPlaylist = false;
   PlaybackHistoryWrite? _activeHistoryWrite;
   PlaybackHistoryWrite? _preparingHistoryWrite;
+  _MusicListeningPlayback? _musicListeningPlayback;
+  Future<void>? _musicListeningFinish;
   final List<LocalMusicTrack>? _initialLocalMusic;
   final List<OnDeviceMusicEntry>? _initialOnDeviceMusic;
   final bool Function()? _initialOnDeviceMusicIsCurrent;
+  final bool _retainInitialOnDeviceQueueOrder;
   PlaylistReference? _playlistReference;
   String? _musicQueueTitle;
   MusicMix? _musicMix;
+  MusicMixSteering _musicMixSteering = MusicMixSteering.balanced;
+  MusicMixFamiliarity _musicMixFamiliarity = MusicMixFamiliarity.balanced;
   Object? _musicMixRequest;
   final _musicMixGenerated = <String>{};
   final _musicMixRemoved = <String>{};
+  MusicCardOrigin? _musicCardOrigin;
   PlaylistLoadSession? _playlistLoader;
   StreamSubscription<PlaylistLoadSnapshot>? _playlistLoadSubscription;
   final _playlistEntries = LinkedHashMap<String, Video>();
@@ -262,6 +468,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   bool _waitingForPlaylistUserSkip = false;
   bool _playlistSourceComplete = true;
   bool _sessionTransitionPending = false;
+  Object? _queueRemovalToken;
   String? _playlistCheckpointSignature;
   final playlistLoadingRevision = ValueNotifier(0);
 
@@ -355,7 +562,17 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   int? _watchRevision;
   bool _switchingProfile = false;
   MediaHandler? _mediaSessionHandler;
+  RuntimeAudioPlayer? _runtimeAudio;
+  bool get ownsAudioDecoder => _runtimeAudio != null;
+  AudioPlayerCubit? get runtimeAudioDecoder => _runtimeAudio?.decoder;
+  AndroidMusicResumption? _androidResumeSource;
+  String? _androidRemoteOccurrence;
+  int _androidResumeRevision = 0;
+  bool _androidResumeSuppressed = false;
+  bool _androidResumeStarting = false;
+  Timer? _androidResumeStartupTimer;
   StreamSubscription<Object?>? _carBrowseSubscription;
+  StreamSubscription<bool>? _carQueueLockSubscription;
 
   Object? get androidAutoSession {
     final app = settings.appCubit.state;
@@ -371,6 +588,105 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       return null;
     }
     return (db, app.profileId, app.sessionRevision, app.server, proxy.config);
+  }
+
+  Object? get androidAutoQueueOwner {
+    final scope = androidAutoSession;
+    if (scope == null || _sessionOwner != this || activePodcast != null) {
+      return null;
+    }
+    return (this, scope, _playlistGeneration);
+  }
+
+  Object? get androidAutoEditableQueue {
+    if (settings.state.musicQueueLocked ||
+        _sessionTransitionPending ||
+        _backendSwitchPending ||
+        _preparingSelectedSong ||
+        _hasPendingMusicHandoff ||
+        hasOpeningMusicCrossfade?.call() == true ||
+        !state.isAudio ||
+        !state.hasVideo ||
+        state.isHidden ||
+        state.isClosing ||
+        !_isMusicEntry(
+          state.currentlyPlaying ?? state.offlineCurrentlyPlaying,
+        )) {
+      return null;
+    }
+    return androidAutoQueueOwner;
+  }
+
+  Set<String> get _androidAutoMusicIds =>
+      (state.videos.isNotEmpty ? state.videos : state.offlineVideos)
+          .where(_isMusicEntry)
+          .map(playbackQueueId)
+          .toSet();
+
+  Map<String, Set<AndroidAutoQueueAction>> androidAutoQueueActions(
+    Iterable<String> occurrences,
+  ) {
+    if (androidAutoEditableQueue == null) return const {};
+    final music = _androidAutoMusicIds;
+    final upcoming = state.playQueue.where(music.contains).toList();
+    final indices = {for (final (i, id) in upcoming.indexed) id: i};
+    return {
+      for (final id in occurrences)
+        if (id != state.currentQueueId && music.contains(id))
+          id: {
+            AndroidAutoQueueAction.removeFromQueue,
+            if ((indices[id] ?? 0) > 0) AndroidAutoQueueAction.moveQueueEarlier,
+            if (indices.containsKey(id) && indices[id]! + 1 < upcoming.length)
+              AndroidAutoQueueAction.moveQueueLater,
+          },
+    };
+  }
+
+  bool editAndroidAutoQueue(
+    Object owner,
+    String occurrence,
+    AndroidAutoQueueAction action,
+  ) {
+    if (androidAutoEditableQueue != owner ||
+        androidAutoQueueActions([occurrence])[occurrence]?.contains(action) !=
+            true) {
+      return false;
+    }
+    if (action == AndroidAutoQueueAction.removeFromQueue) {
+      return removeInactiveQueueOccurrences({occurrence}) != null;
+    }
+    final order = state.playQueue.toList();
+    final music = _androidAutoMusicIds;
+    final upcoming = order.where(music.contains).toList();
+    final index = upcoming.indexOf(occurrence);
+    if (action == AndroidAutoQueueAction.moveQueueEarlier) {
+      moveQueueOccurrence(occurrence, beforeId: upcoming[index - 1]);
+    } else {
+      // The car omits non-Music rows. Move past the next visible song while
+      // leaving any hidden rows in their existing relative order.
+      final after = order.indexOf(upcoming[index + 1]) + 1;
+      moveQueueOccurrence(
+        occurrence,
+        beforeId: after < order.length ? order[after] : null,
+      );
+    }
+    return true;
+  }
+
+  Future<bool> addToAndroidAutoQueue(
+    Object owner, {
+    Video? video,
+    OnDeviceMusicEntry? device,
+  }) {
+    bool current() => androidAutoEditableQueue == owner;
+    if (!current()) return Future.value(false);
+    if (video != null && state.videos.isNotEmpty) {
+      return enqueueMusicSongs([video], next: false);
+    }
+    if (device != null && state.offlineVideos.isNotEmpty) {
+      return enqueueOnDeviceMusic([device], next: false, isCurrent: current);
+    }
+    return Future.value(false);
   }
 
   PodcastPlayer? _podcasts;
@@ -407,6 +723,39 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   ManualMusicPreparer? manualMusicPreparer;
   // The audio decoder reserves a successor before a crossfade starts.
   ValueGetter<bool>? hasOpeningMusicCrossfade;
+  ({String id, int generation, String uri})? _seekableProviderMedia;
+
+  bool get canSeekCurrentMedia {
+    final entry = state.offlineCurrentlyPlaying ?? state.currentlyPlaying;
+    if (entry == null || !isLocalMusicPlaybackId(entry.videoId)) return true;
+    final track = _authorizedLocalTrack(entry.videoId);
+    if (track == null) return false;
+    if (!track.isDocumentProvider) return true;
+    final occurrence = state.currentQueueId;
+    return occurrence != null &&
+        state.mediaEvent.state != MediaState.error &&
+        _seekableProviderMedia ==
+            (
+              id: occurrence,
+              generation: _videoSwitchGeneration,
+              uri: track.uri
+            );
+  }
+
+  void reportProviderSeekability(String id, int generation, String uri,
+      {required bool canSeek}) {
+    final entry = state.offlineCurrentlyPlaying ?? state.currentlyPlaying;
+    if (isClosed ||
+        _isDisposing ||
+        generation != _videoSwitchGeneration ||
+        id != state.currentQueueId ||
+        uri != providerMusicTrackForPlayback(entry?.videoId)?.uri) {
+      return;
+    }
+    _seekableProviderMedia =
+        canSeek ? (id: id, generation: generation, uri: uri) : null;
+  }
+
   bool _preparingSelectedSong = false;
   _MusicEndWait? _musicEndWait;
   int _musicSelectionRequestRevision = 0;
@@ -462,9 +811,101 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   StreamSubscription<SettingsState>? _gapSettings;
   String? _sleepAtEndQueueId;
   DateTime? _sleepDeadline;
+  static const _sleepFadeWindow = Duration(minutes: 1);
+  static const _sleepFadeInterval = Duration(milliseconds: 200);
+  final _sleepTimerGain = ValueNotifier<double>(1);
+  ValueListenable<double> get sleepTimerGain => _sleepTimerGain;
+  bool _sleepFadeEnabled = false;
+  Timer? _sleepFadeTicker;
+  Duration? _sleepTrackFadeInitialRemaining;
+  Object? _sleepFadePause;
   Duration? _backendProgressPosition;
   (int, String?, String, bool)? _playbackStatusOwner;
   MediaEvent _lastPlaybackEvent = const MediaEvent(state: MediaState.idle);
+  final _currentMusicLyric = ValueNotifier<String?>(null);
+  MusicCurrentCue? _musicCurrentCue;
+  Duration? _musicLyricDecoderPosition;
+  ({
+    MusicLyrics lyrics,
+    Duration delay,
+    (int, String?, String, bool) owner,
+    bool Function() mayRead,
+    Listenable sourceChanges,
+  })? _resolvedMusicLyrics;
+  StreamSubscription<AppState>? _musicLyricsSession;
+
+  /// A passive view of the resolved lyric for the active queue occurrence.
+  /// Listeners are notified when the displayed text changes.
+  ValueListenable<String?> get currentMusicLyric => _currentMusicLyric;
+
+  void publishResolvedMusicLyrics(
+    MusicLyrics? lyrics,
+    Duration delay, {
+    required bool Function() mayRead,
+    required Listenable sourceChanges,
+  }) {
+    if (isClosed || _isDisposing || !mayRead()) return;
+    if (lyrics == null || lyrics.kind != MusicLyricsKind.synced) {
+      _clearResolvedMusicLyrics();
+      _musicLyricsWidget?.refresh();
+      return;
+    }
+    if (!identical(_resolvedMusicLyrics?.sourceChanges, sourceChanges)) {
+      _resolvedMusicLyrics?.sourceChanges.removeListener(_refreshMusicLyric);
+      sourceChanges.addListener(_refreshMusicLyric);
+    }
+    _musicLyricsSession ??=
+        settings.appCubit.stream.listen((_) => _refreshMusicLyric());
+    _resolvedMusicLyrics = (
+      lyrics: lyrics,
+      delay: delay,
+      owner: _statusOwner(state),
+      mayRead: mayRead,
+      sourceChanges: sourceChanges,
+    );
+    _refreshMusicLyric();
+  }
+
+  void _clearResolvedMusicLyrics() {
+    _resolvedMusicLyrics?.sourceChanges.removeListener(_refreshMusicLyric);
+    _resolvedMusicLyrics = null;
+    unawaited(_musicLyricsSession?.cancel());
+    _musicLyricsSession = null;
+    _musicCurrentCue = null;
+    _musicLyricDecoderPosition = null;
+    _currentMusicLyric.value = null;
+  }
+
+  void _refreshMusicLyric() {
+    _updateMusicLyric(state);
+    _musicLyricsWidget?.refresh();
+  }
+
+  /// Uses the admitted decoder's clock before the progress UI throttles it.
+  void reportMusicLyricPosition(Duration position) {
+    if (_resolvedMusicLyrics == null) return;
+    _musicLyricDecoderPosition = position;
+    final previous = _musicCurrentCue;
+    _updateMusicLyric(state);
+    if (_musicCurrentCue != previous) _musicLyricsWidget?.refresh();
+  }
+
+  void _updateMusicLyric(PlayerState snapshot) {
+    final resolved = _resolvedMusicLyrics;
+    if (resolved == null) return;
+    if (resolved.owner != _statusOwner(snapshot) ||
+        _switchingProfile ||
+        snapshot.isClosing ||
+        snapshot.isHidden ||
+        !resolved.mayRead()) {
+      _clearResolvedMusicLyrics();
+      return;
+    }
+    final current = currentMusicCueAt(resolved.lyrics,
+        _musicLyricDecoderPosition ?? snapshot.position, resolved.delay);
+    _musicCurrentCue = current;
+    _currentMusicLyric.value = current?.text;
+  }
 
   /// Decoder status survives presentation events such as minimizing the player.
   /// It belongs only to this queue occurrence, source generation and person.
@@ -550,6 +991,14 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
 
   void attachMediaHandler(MediaHandler handler) {
     _mediaSessionHandler = handler;
+    if (handler.controller == this &&
+        !kIsWeb &&
+        defaultTargetPlatform == TargetPlatform.android) {
+      _carQueueLockSubscription ??= settings.stream
+          .map((state) => state.musicQueueLocked)
+          .distinct()
+          .listen((_) => _mediaSessionHandler?.refreshCarQueueBrowseActions());
+    }
     _podcasts?.publishMediaSession();
   }
 
@@ -568,36 +1017,59 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   bool _isDisposing = false;
   bool _playerDragActive = false;
   StreamSubscription<void>? _becomingNoisySubscription;
+  StreamSubscription<MusicBluetoothOutputEvent>? _bluetoothOutputSubscription;
+  StreamSubscription<bool>? _bluetoothSettingsSubscription;
+  _BluetoothRoute? _selectedBluetoothOutput;
+  _BluetoothReconnectPause? _bluetoothReconnectPause;
   StreamSubscription<double>? _mediaVolumeSubscription;
   double? _lastMediaVolume;
+  _VolumePauseOwner? _mediaVolumePause;
+  StreamSubscription<int>? _wiredHeadsetInsertionSubscription;
+  StreamSubscription<int>? _wiredHeadsetRemovalSubscription;
+  _WiredHeadsetResume? _wiredHeadsetResume;
+  ({
+    _WiredHeadsetResume stamp,
+    Stopwatch age,
+    bool isRemoval
+  })? _pendingWiredDisconnect;
+  // Android can broadcast becoming-noisy one second before it removes
+  // an output. Allow for delivery on separate channels in either order.
+  static const _wiredDisconnectWindow = Duration(seconds: 2);
   final bool _resumeOnReady;
   late final Future<void> _playerReady;
   static const _pipChannel = MethodChannel('videre/pip');
   SimplePip? _pip;
   MusicHomeWidget? _musicHomeWidget;
+  MusicLibraryService? _musicHomeWidgetLibrary;
+  MusicLyricsWidget? _musicLyricsWidget;
   void Function(IdedVideo entry, bool Function() isCurrent)?
       saveMusicHomeWidgetSong;
 
   PlayerCubit(super.initialState, this.settings,
       {bool resume = false,
+      bool ownAudioDecoder = false,
       PlaylistReference? playlistReference,
       PlaylistReference? initialRecommendationSource,
       PlaylistLoadSession? playlistLoader,
       List<LocalMusicTrack>? initialLocalMusic,
       List<OnDeviceMusicEntry>? initialOnDeviceMusic,
       bool Function()? initialOnDeviceMusicIsCurrent,
+      bool retainInitialOnDeviceQueueOrder = false,
       int startIndex = 0,
       bool? playlistAudio,
       bool playlistShuffleOnce = false,
       String? initialQueueTitle,
+      MusicCardOrigin? initialMusicCardOrigin,
       ({
         String title,
+        int? startIndex,
         bool Function() isCurrent,
         List<PlaylistReference?>? recommendationSources,
       })? initialMusicCollection,
       Future<bool?> Function(PlayerCubit)? initialMusicMix,
       bool fromMusic = false,
       bool initialSongTap = false,
+      bool initialCollectionDetail = false,
       Future<void> Function(Duration)? playbackRecoveryDelay,
       Future<bool> Function()? videoFocusActivation,
       int Function()? learningTimeMicroseconds})
@@ -605,6 +1077,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         _initialLocalMusic = initialLocalMusic,
         _initialOnDeviceMusic = initialOnDeviceMusic,
         _initialOnDeviceMusicIsCurrent = initialOnDeviceMusicIsCurrent,
+        _retainInitialOnDeviceQueueOrder = retainInitialOnDeviceQueueOrder,
         _learningTimeMicroseconds = learningTimeMicroseconds,
         _activateVideoFocus = videoFocusActivation,
         _waitForPlaybackRecovery =
@@ -614,11 +1087,13 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         _initialPlaylistLoader = playlistLoader,
         _initialPlaylistIndex = startIndex,
         _initialQueueTitle = initialQueueTitle,
+        _initialMusicCardOrigin = initialMusicCardOrigin,
         _initialMusicCollection = initialMusicCollection,
         _initialMusicMix = initialMusicMix,
         _initialFromMusic = fromMusic,
         _initialPlaylistShuffleOnce = playlistShuffleOnce,
         _initialSongTap = initialSongTap,
+        _initialCollectionDetail = initialCollectionDetail,
         _initialPlaylistAudio = playlistAudio {
     _profileDatabase = db.forProfile(db.profileId);
     _initializeNamedMusicQueues();
@@ -635,12 +1110,27 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       unawaited(_updateAutoPip(state));
       final musicHomeWidget = MusicHomeWidget(
         readPlayback: _musicHomeWidgetPlayback,
+        resolveArtwork: _resolveMusicHomeWidgetArtwork,
         onAction: _handleMusicHomeWidgetAction,
+        readShuffle: () => (
+          enabled: canToggleMusicQueueShuffle,
+          selected: musicQueueShuffled,
+          generation: _playlistGeneration,
+          selectionRevision: _musicSelectionRequestRevision,
+          sessionRevision: settings.appCubit.state.sessionRevision,
+        ),
         updates: [stream, settings.stream, settings.appCubit.stream],
       );
       _musicHomeWidget = musicHomeWidget;
       playlistLoadingRevision.addListener(musicHomeWidget.refresh);
+      _bindMusicHomeWidgetLibrary();
+      _musicLyricsWidget = MusicLyricsWidget(
+        readPlayback: _musicLyricsWidgetPlayback,
+        seek: _seekFromLyricsWidget,
+        updates: [stream, settings.appCubit.stream],
+      );
     }
+    if (ownAudioDecoder) _runtimeAudio = RuntimeAudioPlayer(this);
     _playerReady = onReady();
   }
 
@@ -650,7 +1140,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     _cancelMusicSelection();
     _adjacentMusic.reset();
     _clearSponsorPreparation();
-    await _finishLearning();
+    await Future.wait([_finishLearning(), _finishMusicListening()]);
     final podcast = activePodcast;
     if (podcast != null) await podcast.stop();
     if (state.isHidden && !state.hasVideo) {
@@ -674,11 +1164,31 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     return cached.every((song) => song.owner == owner) ? saved : null;
   }
 
+  bool _deviceRepairPending(String id) {
+    final library = LocalMusicLibrary.instance;
+    return library.enabled &&
+        !library.unavailable &&
+        isLocalMusicPlaybackId(id) &&
+        (library.repairCatalogUnavailable ||
+            library.missingTrackById(localMusicTrackId(id)) != null);
+  }
+
   void _checkDevicePlaylistQueue() {
+    final current = state.currentlyPlaying ?? openingMusicEntry;
+    if (current is Video &&
+        _deviceRepairPending(current.videoId) &&
+        localMusicTrackForPlayback(current.videoId) == null) {
+      _hide(preserveQueue: true);
+      _sessionTransitionPending = true;
+      _stopLocalDecoder();
+      emit(state.copyWith(currentlyPlaying: null, isPlaying: false));
+      return;
+    }
     final removed = {
       for (final entry in state.videos)
         if (isLocalMusicPlaybackId(entry.videoId) &&
-            localMusicTrackForPlayback(entry.videoId) == null)
+            localMusicTrackForPlayback(entry.videoId) == null &&
+            !_deviceRepairPending(entry.videoId))
           playbackQueueId(entry),
     };
     if (removed.isEmpty) return;
@@ -866,19 +1376,29 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     if (isClosed || _isDisposing || _switchingProfile || state.isClosing) {
       return;
     }
+    final library = LocalMusicLibrary.instance;
     if (state.videos.any((entry) => isLocalMusicPlaybackId(entry.videoId))) {
-      _checkDevicePlaylistQueue();
+      if (!library.scanning || library.unavailable) _checkDevicePlaylistQueue();
       return;
     }
     final entries = state.offlineVideos;
-    if (!entries.any((entry) => isLocalMusicPlaybackId(entry.videoId))) return;
-    final library = LocalMusicLibrary.instance;
+    if (!entries.any((entry) =>
+        isLocalMusicPlaybackId(entry.videoId) &&
+        !isOpenedAudioPlaybackId(entry.videoId))) {
+      return;
+    }
     final authorized =
         library.acceptsSessionSelection(_queuedDeviceSelectionId);
+    if (authorized && library.scanning) return;
+    bool pending(String id) => authorized && _deviceRepairPending(id);
+
     final removed = entries
         .where((entry) =>
             isLocalMusicPlaybackId(entry.videoId) &&
-            (!authorized || localMusicTrackForPlayback(entry.videoId) == null))
+            !isOpenedAudioPlaybackId(entry.videoId) &&
+            (!authorized ||
+                (localMusicTrackForPlayback(entry.videoId) == null &&
+                    !pending(entry.videoId))))
         .map((entry) => entry.videoId)
         .toSet();
     if (removed.isNotEmpty &&
@@ -890,13 +1410,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       // A forgotten folder must not become the resumable session again.
       _sessionTransitionPending = true;
       hide();
-      for (final stop in List.of(_beforeProfileSwitch)) {
-        unawaited(stop());
-      }
-      final handler = _mediaSessionHandler;
-      if (handler != null && _sessionOwner == this) {
-        unawaited(handler.clearSession());
-      }
+      _stopLocalDecoder();
       emit(state.copyWith(
           offlineVideos: [],
           offlineCurrentlyPlaying: null,
@@ -917,7 +1431,11 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     }
     DownloadedVideo refresh(DownloadedVideo entry) {
       final track = localMusicTrackForPlayback(entry.videoId);
-      if (track == null) return entry;
+      if (track == null) {
+        return pending(entry.videoId)
+            ? entry.copyWith(storageUri: null)
+            : entry;
+      }
       final updated = localMusicPlaybackEntry(track, entry.profileId,
           occurrenceId: entry.videoId);
       return updated.lengthSeconds == 0 && entry.lengthSeconds != 0
@@ -931,6 +1449,23 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     ];
     final current = state.offlineCurrentlyPlaying;
     final updated = current == null ? null : refresh(current);
+    if (current != null &&
+        pending(current.videoId) &&
+        updated?.storageUri == null) {
+      // Save the playhead and the full queue before dropping the reader.
+      emit(state.copyWith(
+        offlineVideos: refreshed,
+        playedVideos:
+            state.playedVideos.where((id) => !removed.contains(id)).toList(),
+        playQueue:
+            ListQueue.of(state.playQueue.where((id) => !removed.contains(id))),
+      ));
+      _hide(preserveQueue: true);
+      _sessionTransitionPending = true;
+      _stopLocalDecoder();
+      emit(state.copyWith(offlineCurrentlyPlaying: null, isPlaying: false));
+      return;
+    }
     if (!listEquals(refreshed, entries) || updated != current) {
       // Publish better labels and newly authorized URIs. The mounted decoder
       // keeps its open descriptor. The next open resolves the current URI.
@@ -946,6 +1481,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
                 state.playQueue.where((id) => !removed.contains(id))),
       ));
     }
+    _musicHomeWidget?.refresh();
     final handler = _mediaSessionHandler;
     final item = handler?.mediaItem.value;
     if (handler != null &&
@@ -956,8 +1492,21 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       final track = localMusicTrackForPlayback(updated.videoId);
       if (track != null) {
         final refreshedItem = _localMediaItem(updated, track);
-        if (refreshedItem != item) handler.mediaItem.add(refreshedItem);
+        // MediaItem equality only compares IDs.
+        if (refreshedItem != item || refreshedItem.artUri != item.artUri) {
+          handler.mediaItem.add(refreshedItem);
+        }
       }
+    }
+  }
+
+  void _stopLocalDecoder() {
+    for (final stop in List.of(_beforeProfileSwitch)) {
+      unawaited(stop());
+    }
+    final handler = _mediaSessionHandler;
+    if (handler != null && _sessionOwner == this) {
+      unawaited(handler.clearSession());
     }
   }
 
@@ -967,9 +1516,13 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       bool membershipKnown = true,
       bool complete = true,
       String? queueTitle,
-      String? passageQueueId}) {
+      String? passageQueueId,
+      MusicCardOrigin? cardOrigin}) {
+    if (!_isDisposing) _retireSleepFade();
     _mediaSessionHandler?.clearCarQueue();
     _musicMix = null;
+    _musicMixSteering = MusicMixSteering.balanced;
+    _musicMixFamiliarity = MusicMixFamiliarity.balanced;
     _musicMixGenerated.clear();
     _musicMixRemoved.clear();
     _adjacentMusic.reset();
@@ -984,6 +1537,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     _passageQueueId = passageQueueId ?? const Uuid().v4();
     _playlistMembershipKnown = reference != null && membershipKnown;
     _musicQueueTitle = normalizedQueueTitle(queueTitle);
+    _musicCardOrigin = cardOrigin;
     _playlistCheckpointSignature = null;
     _playlistEntries
       ..clear()
@@ -1076,7 +1630,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       if (!video.filtered &&
           !video.filterHide &&
           video.isUpcoming != true &&
-          (!device || localMusicTrackForPlayback(video.videoId) != null)) {
+          (!device || _localTrackForNewQueue(video.videoId) != null)) {
         additions.add(video);
       }
     }
@@ -1085,7 +1639,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       if (_musicHistoryPlaylist) _musicHistoryEntries.addAll(next);
       _assignMusicRecommendationSource(
           next, _musicHistoryPlaylist ? reference : null);
-      if (settings.state.playerShuffleMode) next.shuffle();
+      if (musicQueueShuffled) next.shuffle();
       emit(state.copyWith(
           videos: [...state.videos, ...additions],
           playQueue: ListQueue.of([...state.playQueue, ...next])));
@@ -1169,6 +1723,11 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     if (before.currentQueueId != after.currentQueueId) {
       _musicMixGenerated.remove(after.currentQueueId);
     }
+    if (before.mediaCommand != after.mediaCommand &&
+        after.mediaCommand?.type == MediaCommandType.seek) {
+      _musicLyricDecoderPosition = null;
+    }
+    _updateMusicLyric(after);
     final handoff = _musicHandoff;
     if (handoff != null &&
         handoff.generation == _videoSwitchGeneration &&
@@ -1179,7 +1738,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
                 handoff.to != null &&
                 !(handoff.to == _musicRequestsBoundary &&
                     hasMusicRequestSuccessor &&
-                    after.playQueue.isEmpty) &&
+                    _firstPlayableUpcomingId(after) == null) &&
                 _nextMusicQueueId(after) != handoff.to))) {
       _clearMusicHandoff(endAudioWait: true);
     }
@@ -1228,10 +1787,11 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
                         after.offlineCurrentlyPlaying?.videoId)
                     ?.isCueTrack ==
                 true) ||
-        (_activeNamedMusicQueueId != null &&
+        ((_activeNamedMusicQueueId != null || _androidResumeSource != null) &&
             ((before.isPlaying && !after.isPlaying) ||
                 (before.mediaCommand != after.mediaCommand &&
                     after.mediaCommand?.type == MediaCommandType.seek))) ||
+        before.musicQueueShuffled != after.musicQueueShuffled ||
         before.position.inSeconds ~/ 5 != after.position.inSeconds ~/ 5) {
       unawaited(_saveSession(after));
     }
@@ -1249,11 +1809,24 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     final database = _profileDatabase;
     final watchRepository = _watchRepository;
     final watchRevision = _watchRevision;
-    final setting = SettingsValue(playbackSessionSetting,
-        _musicRequests.encodeWithSession(saved.encode()));
+    final encoded = _musicRequests.encodeWithSession(saved.encode());
+    final source = _androidResumeSource;
+    final resumeRevision = _androidResumeRevision;
     // An older TV screen may close after its replacement has begun playing.
     return _queueSessionWrite(() async {
       if (_sessionOwner != this) return;
+      var value = encoded;
+      if (saved.audio &&
+          source != null &&
+          _isMusicEntry(
+              snapshot.currentlyPlaying ?? snapshot.offlineCurrentlyPlaying) &&
+          source.occurrence == saved.currentId &&
+          resumeRevision == _androidResumeRevision) {
+        final json = jsonDecode(encoded) as Map<String, dynamic>;
+        json['androidResumption'] = source.toJson();
+        value = jsonEncode(json);
+      }
+      final setting = SettingsValue(playbackSessionSetting, value);
       final namedId = saved.namedQueueId;
       if (namedId != null) {
         final queues = _readNamedMusicQueues(database);
@@ -1281,6 +1854,8 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     final id = snapshot.currentlyPlaying?.videoId ??
         snapshot.offlineCurrentlyPlaying?.videoId;
     if (id == null ||
+        snapshot.offlineVideos
+            .any((entry) => isOpenedAudioPlaybackId(entry.videoId)) ||
         ![
           ...snapshot.videos,
           ...snapshot.offlineVideos
@@ -1290,13 +1865,22 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     final queueId = snapshot.currentQueueId!;
     final localTrack = localMusicTrackForPlayback(id);
     if (isLocalMusicPlaybackId(id) && localTrack == null) {
-      return null;
+      final library = LocalMusicLibrary.instance;
+      final accepted = devicePlaylistFileProof(localMusicTrackId(id)) != null ||
+          library.acceptsSessionSelection(_queuedDeviceSelectionId);
+      if (!accepted || !_deviceRepairPending(id)) {
+        return null;
+      }
     }
     return PlaybackSession(
       videos: snapshot.videos
           .map((v) => playbackQueueId(v) == queueId
-              ? (snapshot.currentlyPlaying ?? v)
-                  .copyWith(index: v.index, indexId: v.indexId)
+              ? (snapshot.currentlyPlaying ?? v).copyWith(
+                  index: v.index,
+                  indexId: v.indexId,
+                  // Cold playback may pin an opportunistic download for the
+                  // running decoder. Keep the queue entry's original policy.
+                  explicitMusicDownload: v.explicitMusicDownload)
               : v)
           .toList(),
       offlineIds: snapshot.offlineVideos.map(playbackQueueId).toList(),
@@ -1320,6 +1904,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       namedQueueId: namedQueueId,
       ownerProfileId: _profileDatabase.profileId,
       audio: snapshot.isAudio,
+      musicQueueShuffled: snapshot.musicQueueShuffled,
       musicHistoryEntries: {
         for (final entry in [...snapshot.videos, ...snapshot.offlineVideos])
           if (_musicHistoryEntries.contains(playbackQueueId(entry)))
@@ -1352,8 +1937,9 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     final namedId = saved.namedQueueId;
     _setActiveNamedMusicQueue(
         namedMusicQueues.any((queue) => queue.id == namedId) ? namedId : null);
-    final deviceAccepted = LocalMusicLibrary.instance
-        .acceptsSessionSelection(saved.localSelectionId);
+    final library = LocalMusicLibrary.instance;
+    final deviceAccepted =
+        library.acceptsSessionSelection(saved.localSelectionId);
     final deviceId = saved.currentDeviceId;
     if (deviceId != null &&
         devicePlaylistFileProof(localMusicTrackId(deviceId)) == null &&
@@ -1398,10 +1984,28 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
             }
             if (!deviceAccepted) return null;
             final track = localMusicTrackForPlayback(id);
-            return track == null
-                ? null
-                : localMusicPlaybackEntry(track, _profileDatabase.profileId,
-                    occurrenceId: id);
+            if (track != null) {
+              return localMusicPlaybackEntry(track, _profileDatabase.profileId,
+                  occurrenceId: id);
+            }
+            final library = LocalMusicLibrary.instance;
+            final missing = library.missingTrackById(localMusicTrackId(id));
+            if (missing == null && !library.repairCatalogUnavailable) {
+              return null;
+            }
+            final title = missing?.title ?? '';
+            return DownloadedVideo(
+                videoId: id,
+                title: title,
+                author: missing?.artist,
+                profileId: _profileDatabase.profileId,
+                musicMetadata: MusicMetadata(
+                    title: title,
+                    artist: missing?.artist ?? '',
+                    album: missing?.album),
+                lengthSeconds: (missing?.durationMs ?? 0) ~/ 1000,
+                audioOnly: true,
+                quality: '');
           })
           .whereType<DownloadedVideo>()
           .where((v) => isLocalMusicPlaybackId(v.videoId) || v.downloadComplete)
@@ -1412,7 +2016,8 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     final videos = saved.videos
         .where((video) =>
             !isLocalMusicPlaybackId(video.videoId) ||
-            localMusicTrackForPlayback(video.videoId) != null)
+            localMusicTrackForPlayback(video.videoId) != null ||
+            _deviceRepairPending(video.videoId))
         .toList();
     final ids = {
       ...videos.map(playbackQueueId),
@@ -1424,7 +2029,8 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         playedVideos: saved.played.where(ids.contains).toList(),
         playQueue: ListQueue.from(saved.next.where(ids.contains)),
         startAt: saved.position,
-        isAudio: saved.audio);
+        isAudio: saved.audio,
+        musicQueueShuffled: saved.musicQueueShuffled);
   }
 
   void _bindRestoredSession(PlaybackSession saved, bool deviceAccepted,
@@ -1527,7 +2133,11 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       String? namedId,
       bool Function()? canCommit,
       VoidCallback? onCommit,
-      bool expandPlayer = true}) async {
+      bool expandPlayer = true,
+      Future<({IdedVideo entry, Video? resolved})?> Function(
+              IdedVideo entry, bool Function() current)?
+          resolveSystemSource}) async {
+    final systemResume = resolveSystemSource != null;
     if (!_canEditNamedMusicQueues ||
         state.isClosing ||
         !saved.audio ||
@@ -1569,12 +2179,19 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
           library.acceptsSessionSelection(saved.localSelectionId);
       final offline = _sessionOfflineEntries(saved, deviceAccepted);
       final entries = saved.videos.isEmpty ? offline : saved.videos;
-      final entry = entries
+      var entry = entries
           .where((item) => playbackQueueId(item) == saved.currentId)
           .firstOrNull;
       if (entry == null) return false;
+      Video? systemVideo;
+      if (resolveSystemSource != null) {
+        final source = await resolveSystemSource(entry, current);
+        if (!current() || source == null) return false;
+        entry = source.entry;
+        systemVideo = source.resolved;
+      }
 
-      final shouldPrepare = _canPrepareMusicSelection;
+      final shouldPrepare = !systemResume && _canPrepareMusicSelection;
       final fromMusic =
           saved.musicHistoryEntries?.contains(saved.currentId) ?? true;
       final prepared = shouldPrepare
@@ -1586,13 +2203,14 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         return false;
       }
       var sponsors = const <SponsorSegment>[];
-      final resolved = prepared == null && entry is Video
-          ? await _resolvePlaybackVideo(entry,
-              audio: true,
-              active: current,
-              onPrepared: (source) =>
-                  sponsors = source.download.sponsorSegments)
-          : null;
+      final resolved = systemVideo ??
+          (prepared == null && entry is Video
+              ? await _resolvePlaybackVideo(entry,
+                  audio: true,
+                  active: current,
+                  onPrepared: (source) =>
+                      sponsors = source.download.sponsorSegments)
+              : null);
       await _playerReady;
       bool sourceStillAvailable() {
         if (!allowed()) return false;
@@ -1638,6 +2256,8 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         installed = true;
         return _installSessionQueue(base, saved, offline).copyWith(
             isClosing: false,
+            isHidden: systemResume ? false : base.isHidden,
+            isMini: systemResume ? true : base.isMini,
             mediaEvent: const MediaEvent(state: MediaState.loading));
       });
       return installed;
@@ -1693,6 +2313,11 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         if (await _musicRequests
             .resumeCollectionAfterUnavailableRequest(saved)) {
           return;
+        }
+        if ((persistentDevice ||
+                library.acceptsSessionSelection(saved.localSelectionId)) &&
+            _deviceRepairPending(deviceId)) {
+          restoreSession();
         }
         setEvent(const MediaEvent(state: MediaState.error));
         return;
@@ -2141,7 +2766,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         selectedByUser && domain == RecommendationDomain.video);
   }
 
-  void _observeLearning(MediaEvent event) {
+  void _observePlaybackClocks(MediaEvent event) {
     if (event.type == MediaEventType.playbackSample &&
         event.value is Duration) {
       if (_sessionTransitionPending) return;
@@ -2151,15 +2776,22 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       if (event.state == MediaState.playing &&
           requestedPlaying &&
           !playbackInterrupted) {
-        _learningPlayback?.clock.sample(
-            event.value as Duration,
-            _learningTimeMicroseconds?.call() ??
-                _learningTime.elapsedMicroseconds,
-            speed: state.speed);
+        final position = event.value as Duration;
+        final now = _learningTimeMicroseconds?.call() ??
+            _learningTime.elapsedMicroseconds;
+        _learningPlayback?.clock.sample(position, now, speed: state.speed);
         _recordConfirmedWatchClick();
         _checkpointLearning();
+        final listening = _musicListeningPlayback;
+        if (_sessionTransitionPending) {
+          listening?.clock.interrupt();
+        } else if (listening != null) {
+          listening.clock.sample(position, now, speed: state.speed);
+          unawaited(
+              listening.checkpoint(interval: _playbackCheckpointInterval));
+        }
       } else {
-        _learningPlayback?.clock.interrupt();
+        _interruptPlaybackClocks();
       }
     } else if (event.type != MediaEventType.progress &&
         (event.state != MediaState.playing ||
@@ -2167,9 +2799,39 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
             event.type == MediaEventType.seek ||
             event.type == MediaEventType.speedChanged ||
             event.type == MediaEventType.backendRetry)) {
-      _learningPlayback?.clock.interrupt();
-      if (event.type == MediaEventType.pause) _checkpointLearning(force: true);
+      _interruptPlaybackClocks();
+      if (event.type == MediaEventType.pause) _checkpointPlayback();
     }
+  }
+
+  void _interruptPlaybackClocks() {
+    _learningPlayback?.clock.interrupt();
+    _musicListeningPlayback?.clock.interrupt();
+  }
+
+  void _checkpointPlayback() {
+    _checkpointLearning(force: true);
+    unawaited(_musicListeningPlayback?.checkpoint(interval: Duration.zero));
+  }
+
+  Future<void> _finishMusicListening() {
+    final listening = _musicListeningPlayback;
+    _musicListeningPlayback = null;
+    final previous = _musicListeningFinish;
+    if (listening == null) return previous ?? Future<void>.value();
+    final checkpoint = listening.checkpoint(interval: Duration.zero);
+    final pending = Future.wait([
+      if (previous != null) previous,
+      listening.started,
+      if (checkpoint != null) checkpoint,
+    ]).then((_) => listening.write.cancel());
+    _musicListeningFinish = pending;
+    unawaited(pending.whenComplete(() {
+      if (identical(_musicListeningFinish, pending)) {
+        _musicListeningFinish = null;
+      }
+    }));
+    return pending;
   }
 
   void _recordConfirmedWatchClick() {
@@ -2195,7 +2857,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     final played = session.clock.played;
     if (played <= session.lastCheckpoint ||
         (!force &&
-            played - session.lastCheckpoint < _learningCheckpointInterval)) {
+            played - session.lastCheckpoint < _playbackCheckpointInterval)) {
       return;
     }
     final previous = session.lastCheckpoint;
@@ -2264,12 +2926,13 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       return;
     }
     if (event.type == MediaEventType.playbackSample) {
-      _observeLearning(event);
+      _observePlaybackClocks(event);
       return;
     }
     if (event.state == MediaState.error ||
         event.state == MediaState.completed) {
       _clearPlaybackRecovery();
+      _mediaVolumePause = null;
     }
     final handoff = _musicHandoff;
     if (event.type == MediaEventType.play ||
@@ -2307,7 +2970,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       _backendProgressPosition = null;
       _recoveryProgressPosition = null;
     }
-    _observeLearning(event);
+    _observePlaybackClocks(event);
     handleMediaEvent(event);
     mapMediaEventToMediaHandler(event);
 
@@ -2342,7 +3005,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         unawaited(service.syncHistory());
       }
     } else {
-      _checkpointLearning(force: true);
+      _checkpointPlayback();
       unawaited(_saveSession(state));
       final podcast = activePodcast;
       if (podcast != null) unawaited(podcast.saveProgress());
@@ -2380,7 +3043,14 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     if (!isTv && event.type != MediaEventType.progress) {
       log.fine("Event state: ${event.state}, ${event.type}");
       final handoff = _musicHandoff;
-      final waitingForSong = (_musicEndWait != null ||
+      if (event.type == MediaEventType.play ||
+          event.type == MediaEventType.pause ||
+          event.state == MediaState.error ||
+          event.state == MediaState.completed) {
+        _finishAndroidMusicResumeStart();
+      }
+      final waitingForSong = (_androidResumeStarting ||
+              _musicEndWait != null ||
               (handoff != null && settings.state.autoplayQueue)) &&
           state.isAudio &&
           !state.isHidden &&
@@ -2414,26 +3084,38 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
           ? null
           : _activeMusicMediaSaveControl(state);
       final carQueueId = mediaHandler.carQueueItemId(state.currentQueueId);
-      var playbackState = PlaybackState(
-        controls: [
+      final canSeek = canSeekCurrentMedia;
+      final hasPrevious = state.hasQueue || canSeek;
+      final hasNext = state.hasQueue || hasMusicRequestSuccessor || canSeek;
+      final controls = [
+        if (hasPrevious)
           state.hasQueue ? MediaControl.skipToPrevious : MediaControl.rewind,
-          if (playing) MediaControl.pause else MediaControl.play,
-          // Android 13+ uses the order of the custom actions for its slots.
-          if (save != null) save,
-          MediaControl.stop,
-          state.hasQueue || hasMusicRequestSuccessor
-              ? MediaControl.skipToNext
-              : MediaControl.fastForward,
-        ],
+        if (playing) MediaControl.pause else MediaControl.play,
+        // Android 13+ uses the order of the custom actions for its slots.
+        if (save != null) save,
+        MediaControl.stop,
+        if (state.hasQueue || hasMusicRequestSuccessor)
+          MediaControl.skipToNext
+        else if (canSeek)
+          MediaControl.fastForward,
+      ];
+      var playbackState = PlaybackState(
+        controls: controls,
         systemActions: {
-          MediaAction.seek,
-          MediaAction.seekForward,
-          MediaAction.seekBackward,
+          if (canSeek) ...{
+            MediaAction.seek,
+            MediaAction.seekForward,
+            MediaAction.seekBackward,
+          },
           MediaAction.setShuffleMode,
           MediaAction.setRepeatMode,
           if (carQueueId != null) MediaAction.skipToQueueItem,
         },
-        androidCompactActionIndices: const [0, 1, 3],
+        androidCompactActionIndices: [
+          if (hasPrevious) 0,
+          hasPrevious ? 1 : 0,
+          if (hasNext) controls.length - 1,
+        ],
         // Android uses a spinner for BUFFERING even when playing is false.
         // Publish PAUSED through ready/false so the lock screen offers Play.
         processingState:
@@ -2610,24 +3292,30 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   }
 
   void _publishCarQueue(
-      MediaHandler handler, PlayerState snapshot, String? current) {
-    final scope = androidAutoSession;
-    if (scope == null) return;
+    MediaHandler handler,
+    PlayerState snapshot,
+    String? current,
+  ) {
+    final owner = androidAutoQueueOwner;
+    if (owner == null) return;
     final items = _musicQueueTimeline(snapshot).where(_isMusicEntry).toList();
-    final active =
-        items.indexWhere((entry) => playbackQueueId(entry) == current);
+    final active = items.indexWhere(
+      (entry) => playbackQueueId(entry) == current,
+    );
     if (active < 0) return;
     // Bound the media-session transaction while keeping the active row and
     // nearby items accessible even in a very large queue.
-    final first =
-        (active - 50).clamp(0, (items.length - 100).clamp(0, items.length));
-    handler.publishCarQueue((
-      this,
-      scope,
-      _playlistGeneration
-    ), [
-      for (final entry in items.skip(first).take(100)) _carQueueRow(entry),
-    ], musicQueueTitle ?? 'Music');
+    final first = (active - 50).clamp(
+      0,
+      (items.length - 100).clamp(0, items.length),
+    );
+    handler.publishCarQueue(
+        owner,
+        [
+          for (final entry in items.skip(first).take(100)) _carQueueRow(entry),
+        ],
+        musicQueueTitle ?? 'Music',
+        current: current);
   }
 
   CarQueueRow _carQueueRow(IdedVideo entry) {
@@ -2660,6 +3348,9 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   Future<MediaHandler> _initializeMediaHandler() async {
     final handler = await (_sharedMediaInitialization ??= AudioService.init(
       builder: () => MediaHandler(this),
+      cacheManager: !kIsWeb && defaultTargetPlatform == TargetPlatform.android
+          ? notificationArtworkCache.manager
+          : null,
       config: const AudioServiceConfig(
         androidNotificationChannelId:
             'com.github.dvbeckwitt.videre.channel.audio',
@@ -2707,6 +3398,11 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     _interruptionSubscription =
         audioSession.interruptionEventStream.listen(handleAudioInterruption);
     if (!kIsWeb && Platform.isAndroid) {
+      _watchBluetoothOutput(settings.state.musicResumeOnBluetoothReconnect);
+      _bluetoothSettingsSubscription = settings.stream
+          .map((updated) => updated.musicResumeOnBluetoothReconnect)
+          .distinct()
+          .listen(_watchBluetoothOutput);
       _mediaVolumeSubscription =
           FlutterVolumeController.addListener(handleMediaVolumeChange)
             ..onError((Object error) {
@@ -2715,10 +3411,19 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     }
     WidgetsBinding.instance.addObserver(this);
     if (!isTv) {
-      _becomingNoisySubscription =
-          audioSession.becomingNoisyEventStream.listen((event) {
-        pause();
-      });
+      _becomingNoisySubscription = audioSession.becomingNoisyEventStream
+          .listen((_) => handleBecomingNoisy());
+      if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+        _wiredHeadsetInsertionSubscription =
+            androidWiredHeadsetInsertions.listen(
+          (_) => onWiredHeadsetInserted(),
+          onError: _onWiredObserverError,
+        );
+        _wiredHeadsetRemovalSubscription = androidWiredHeadsetRemovals.listen(
+          (_) => onWiredHeadsetRemoved(),
+          onError: _onWiredObserverError,
+        );
+      }
 
       final handler = await _initializeMediaHandler();
       if (_isDisposing || isClosed) return;
@@ -2735,12 +3440,15 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
           startIndex: _initialPlaylistIndex,
           queueTitle: _initialQueueTitle,
           songTap: _initialSongTap,
+          collectionDetail: _initialCollectionDetail,
+          retainQueueOrder: _retainInitialOnDeviceQueueOrder,
           isCurrent: _initialOnDeviceMusicIsCurrent);
     } else if (_initialLocalMusic != null && startupActive()) {
       await playLocalMusic(_initialLocalMusic,
           startIndex: _initialPlaylistIndex,
           queueTitle: _initialQueueTitle,
-          songTap: _initialSongTap);
+          songTap: _initialSongTap,
+          collectionDetail: _initialCollectionDetail);
     } else if (startDownload != null && startupActive()) {
       final owned = db.profileId == startDownload.profileId &&
           _profileDatabase.profileId == startDownload.profileId;
@@ -2767,30 +3475,49 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       }
       await playMusicCollectionQueue(startVideos,
           queueTitle: collection.title,
+          startIndex: collection.startIndex,
           isCurrent: collection.isCurrent,
+          songTap: _initialSongTap,
+          collectionDetail: _initialCollectionDetail,
           recommendationSources: collection.recommendationSources);
     } else if (_initialMusicMix case final startMix? when startupActive()) {
       await startInitialMusicMix(startMix);
     } else if (startVideos.isNotEmpty && startupActive()) {
       final reference = _initialPlaylistReference;
-      final switching = reference == null
-          ? playVideo(startVideos,
-              fromMusic: _initialFromMusic,
-              songTap: _initialSongTap,
-              startAt: state.startAt,
-              queueTitle: _initialQueueTitle,
-              recommendationSource: _initialRecommendationSource,
-              startIndex:
-                  _initialPlaylistIndex == 0 ? null : _initialPlaylistIndex)
-          : playPlaylist(startVideos,
-              fromMusic: _initialFromMusic,
-              songTap: _initialSongTap,
-              reference: reference,
-              startIndex: _initialPlaylistIndex,
-              startAt: state.startAt,
-              audio: _initialPlaylistAudio,
-              shuffleOnce: _initialPlaylistShuffleOnce,
-              playlistLoader: _initialPlaylistLoader);
+      final origin = _initialMusicCardOrigin;
+      final startIndex =
+          _initialPlaylistIndex == 0 ? null : _initialPlaylistIndex;
+      final Future<void> switching;
+      if (reference != null) {
+        switching = playPlaylist(startVideos,
+            fromMusic: _initialFromMusic,
+            songTap: _initialSongTap,
+            collectionDetail: _initialCollectionDetail,
+            reference: reference,
+            startIndex: _initialPlaylistIndex,
+            startAt: state.startAt,
+            audio: _initialPlaylistAudio,
+            shuffleOnce: _initialPlaylistShuffleOnce,
+            playlistLoader: _initialPlaylistLoader);
+      } else if (origin != null) {
+        switching = playMusicFromCard(startVideos,
+            origin: origin,
+            songTap: _initialSongTap,
+            collectionDetail: _initialCollectionDetail,
+            startAt: state.startAt,
+            queueTitle: _initialQueueTitle,
+            recommendationSource: _initialRecommendationSource,
+            startIndex: startIndex);
+      } else {
+        switching = playVideo(startVideos,
+            fromMusic: _initialFromMusic,
+            songTap: _initialSongTap,
+            collectionDetail: _initialCollectionDetail,
+            startAt: state.startAt,
+            queueTitle: _initialQueueTitle,
+            recommendationSource: _initialRecommendationSource,
+            startIndex: startIndex);
+      }
       startupGeneration = _videoSwitchGeneration;
       await switching;
       if (!startupActive()) return;
@@ -2861,6 +3588,8 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
           if (replay != null) _watchSongWaitSettings();
         }
         unawaited(_finishLearning(completed: true));
+        // Manual Play can rewind the same decoder without a new history start.
+        unawaited(_musicListeningPlayback?.checkpoint(interval: Duration.zero));
         if (stopAtEnd) {
           cancelSleep();
           pause();
@@ -2895,7 +3624,13 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         _setPlaying(_requestedPlaying != false);
         // Source setup can autoplay after a notification or PiP pause request.
         if (_requestedPlaying == false) {
-          pause();
+          if (_mediaVolumePause == _volumePauseOwner) {
+            // Reassert the existing volume pause if a decoder starts late.
+            emit(state.copyWith(
+                mediaCommand: MediaCommand(MediaCommandType.pause)));
+          } else {
+            pause();
+          }
         } else if (event.state == MediaState.playing && !playbackInterrupted) {
           _recordMusicListeningStart();
         }
@@ -2977,19 +3712,24 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   @override
   close() async {
     _isDisposing = true;
+    _stopSleepFadeClock();
+    _sleepFadePause = null;
     final musicHomeWidget = _musicHomeWidget;
     Future<void>? closingWidget;
     if (musicHomeWidget != null) {
       playlistLoadingRevision.removeListener(musicHomeWidget.refresh);
+      _musicHomeWidgetLibrary?.changes.removeListener(musicHomeWidget.refresh);
       closingWidget = musicHomeWidget.close();
     }
     musicMediaSave.dispose();
+    final closingLyricsWidget = _musicLyricsWidget?.close();
+    _clearResolvedMusicLyrics();
     _activeHistoryWrite?.cancel();
     _cancelMusicSelection();
     _clearMusicHandoff();
     _adjacentMusic.dispose();
     LocalMusicLibrary.instance.removeListener(_localLibraryChanged);
-    await _finishLearning();
+    await Future.wait([_finishLearning(), _finishMusicListening()]);
     _runtimePlayers.remove(this);
     if (identical(_podcastOwner, _podcasts)) _podcastOwner = null;
     if (_podcasts != null) await _podcasts!.close();
@@ -3002,12 +3742,19 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     _progressGeneration++;
     _videoSwitchGeneration++;
     _requestedBackendVideoId = null;
+    cancelPendingAndroidMusicResumption();
+    await _runtimeAudio?.close();
     await musicSound.resetSession();
     musicSound.dispose();
     await _becomingNoisySubscription?.cancel();
+    await _bluetoothOutputSubscription?.cancel();
+    await _bluetoothSettingsSubscription?.cancel();
     await _mediaVolumeSubscription?.cancel();
+    await _wiredHeadsetInsertionSubscription?.cancel();
+    await _wiredHeadsetRemovalSubscription?.cancel();
     await _interruptionSubscription?.cancel();
     await _carBrowseSubscription?.cancel();
+    await _carQueueLockSubscription?.cancel();
     await _updateAutoPip(state, disable: true);
     _pip?.onPipEntered = null;
     _pip?.onPipExited = null;
@@ -3016,13 +3763,17 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     playlistLoadingRevision.dispose();
     musicSelectionFailureRevision.dispose();
     _musicRequests.revision.dispose();
+    _sleepTimerGain.dispose();
     _musicContentAdvisory.dispose();
     _namedMusicQueuesRevision.dispose();
+    _musicAbRepeat.dispose();
+    _currentMusicLyric.dispose();
     if (_sessionOwner == this) _sessionOwner = null;
     playbackHistoryRevision.value++;
     BackButtonInterceptor.removeByName('miniPlayer');
     WidgetsBinding.instance.removeObserver(this);
     await closingWidget;
+    await closingLyricsWidget;
     await super.close();
   }
 
@@ -3031,7 +3782,8 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       setFullScreen(FullScreenState.notFullScreen);
       return true;
     } else if (!state.isMini) {
-      // we block the backbutton behavior and we make the player small
+      // A pending replacement could take over playback after we minimize.
+      if (_preparingSelectedSong) _cancelMusicSelection();
       showMiniPlayer();
       return true;
     } else {
@@ -3055,20 +3807,30 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   }
 
   void setAudio(bool? newValue) {
-    if (state.isAudio && newValue != true) _cancelMusicSelection();
+    if (state.isAudio && newValue != true) {
+      _cancelMusicSelection();
+      _retireSleepFade();
+    }
     emit(state.copyWith(isAudio: newValue ?? false));
   }
 
-  void hide() {
+  void hide() => _hide();
+
+  void _hide({bool preserveQueue = false}) {
     if (isClosed || state.isClosing) return;
+    unawaited(revokeAndroidMusicResumption());
+    _pendingOpenedAudio = null;
+    _currentOpenedAudio = null;
     _playerDragActive = false;
     _exitFullscreenOnStop();
     _activeHistoryWrite?.cancel();
     _cancelMusicSelection();
     unawaited(_finishLearning());
+    unawaited(_finishMusicListening());
     unawaited(musicSound.resetSession());
     _clearPlaybackRecovery(resetBudget: true);
     _clearMetadataRetry();
+    _musicCardOrigin = null;
     // Background playback must stop before the closing animation can run.
     pause();
     _tuningSource = null;
@@ -3096,16 +3858,20 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
             top: null,
             height: targetHeight,
             isHidden: true,
-            videos: [],
-            playedVideos: [],
+            videos: preserveQueue ? state.videos : [],
+            playedVideos: preserveQueue ? state.playedVideos : [],
             currentlyPlaying: null,
             requestedBackend: null,
             offlineCurrentlyPlaying: null,
-            offlineVideos: [],
+            offlineVideos: preserveQueue ? state.offlineVideos : [],
             isClosing: false));
-        _playlistReference = null;
-        _musicQueueTitle = null;
-        _musicRecommendationSources.clear();
+        if (preserveQueue) {
+          _localLibraryChanged();
+        } else {
+          _playlistReference = null;
+          _musicQueueTitle = null;
+          _musicRecommendationSources.clear();
+        }
         setEvent(const MediaEvent(state: MediaState.idle));
       },
     );
@@ -3146,6 +3912,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     if (state.hasVideo || _backendSwitchPending || !state.isHidden) {
       hide();
     } else {
+      await revokeAndroidMusicResumption();
       _progressGeneration++;
       _videoSwitchGeneration++;
     }
@@ -3242,6 +4009,9 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   Future<void> _retirePlaybackSession({required bool changingProfile}) async {
     if (isClosed) return;
     musicMediaSave.clear();
+    final revoked = revokeAndroidMusicResumption();
+    _pendingOpenedAudio = null;
+    _currentOpenedAudio = null;
     _exitFullscreenOnStop();
     _activeHistoryWrite?.cancel();
     _cancelMusicSelection();
@@ -3249,6 +4019,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     _clearSponsorPreparation();
     _selectedWatchVideoId = null;
     final learning = _finishLearning();
+    final listening = _finishMusicListening();
     // A pending takeover has its own controller before becoming the global
     // podcast owner. On task removal, each player must stop its own controller.
     final podcast = changingProfile ? activePodcast : _podcasts;
@@ -3282,9 +4053,12 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     final clearingSession =
         changingProfile ? _mediaSessionHandler?.clearSession() : null;
     emit(PlayerState.init(null));
+    _musicHomeWidget?.refresh();
     await Future.wait([
       learning,
+      listening,
       saved,
+      revoked,
       stopping,
       clearingSound,
       if (stoppingPodcast != null) stoppingPodcast,
@@ -3304,10 +4078,13 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   Future<void> reloadForProfile() async {
     if (isClosed) return;
     _profileDatabase = db.forProfile(db.profileId);
+    await revokeAndroidMusicResumption();
+    if (isClosed) return;
     _watchBinding = Future.value();
     _switchingProfile = false;
     _setActiveNamedMusicQueue(null);
     _initializeNamedMusicQueues();
+    _bindMusicHomeWidgetLibrary();
     _recoverLearning();
     restoreSession();
     _notifyNamedMusicQueues(_profileDatabase);
@@ -3517,6 +4294,17 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     return state.isAudio && _isMusicEntry(current);
   }
 
+  void _bindMusicHomeWidgetLibrary() {
+    final widget = _musicHomeWidget;
+    if (widget == null) return;
+    _musicHomeWidgetLibrary?.changes.removeListener(widget.refresh);
+    final library =
+        MusicLibraryService.forProfile(db, _profileDatabase.profileId);
+    _musicHomeWidgetLibrary = library;
+    library.changes.addListener(widget.refresh);
+    widget.refresh();
+  }
+
   MusicHomeWidgetPlayback? _musicHomeWidgetPlayback() {
     final app = settings.appCubit;
     if (isClosed ||
@@ -3552,6 +4340,10 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
           : MusicHomeWidgetStatus.paused,
     };
     final canSkip = !_sessionTransitionPending && !_backendSwitchPending;
+    final onDevice = isLocalMusicPlaybackId(current.videoId);
+    final likeId = onDevice
+        ? localMusicTrackForPlayback(current.videoId)?.playbackId
+        : current.videoId;
     return (
       owner: (
         _profileDatabase.profileId,
@@ -3566,7 +4358,81 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
           (state.playQueue.isNotEmpty ||
               !playlistComplete ||
               settings.state.playerRepeatMode != PlayerRepeat.noRepeat),
-      canSave: canSkip && !isLocalMusicPlaybackId(current.videoId),
+      canSave: canSkip && !onDevice,
+      liked: canSkip && likeId != null
+          ? _musicHomeWidgetLibrary?.isLiked(likeId)
+          : null,
+      deviceArtworkPath: localMusicTrackForPlayback(current.videoId)?.artPath,
+    );
+  }
+
+  Future<String?> _resolveMusicHomeWidgetArtwork(
+    MusicHomeWidgetPlayback playback,
+  ) async {
+    if (kIsWeb || !Platform.isAndroid) return null;
+    if (isLocalMusicPlaybackId(playback.owner.$2)) {
+      return playback.deviceArtworkPath;
+    }
+    final index = currentIndex;
+    if (index < 0) return null;
+
+    final item = await getMediaItem(index);
+    if (_musicHomeWidgetPlayback()?.owner != playback.owner) return null;
+    final uri = item?.artUri;
+    if (uri == null) return null;
+    if (uri.scheme == 'file') return uri.toFilePath();
+    if (uri.scheme != 'http' && uri.scheme != 'https') return null;
+
+    final file = await notificationArtworkCache.manager.getSingleFile(
+      uri.toString(),
+      headers: item?.artHeaders ?? const {},
+    );
+    return file.path;
+  }
+
+  MusicLyricsWidgetPlayback? _musicLyricsWidgetPlayback() {
+    final playback = _musicHomeWidgetPlayback();
+    if (playback == null ||
+        _sessionTransitionPending ||
+        _backendSwitchPending ||
+        _preparingSelectedSong) {
+      return null;
+    }
+    final owner = (
+      playback.owner,
+      settings.appCubit.state.sessionRevision,
+      playbackPositionGeneration,
+    );
+    final resolved = _resolvedMusicLyrics;
+    final cue = _musicCurrentCue;
+    final seekLimit = _lyricsWidgetSeekLimit;
+    if (resolved == null ||
+        cue == null ||
+        resolved.owner != _statusOwner(state) ||
+        !resolved.mayRead() ||
+        state.currentlyPlaying?.liveNow == true ||
+        seekLimit <= Duration.zero ||
+        playbackStatus == MediaState.idle ||
+        playbackStatus == MediaState.loading ||
+        playback.status == MusicHomeWidgetStatus.unavailable) {
+      return (
+        owner: owner,
+        timeline: null,
+        title: playback.title,
+        rows: const []
+      );
+    }
+    return (
+      owner: owner,
+      timeline: (resolved.lyrics, resolved.delay, seekLimit),
+      title: playback.title,
+      rows: musicLyricsWidgetRows(
+        resolved.lyrics.cues,
+        anchor: cue.index,
+        active: cue.text != null,
+        delay: resolved.delay,
+        seekLimit: seekLimit,
+      ),
     );
   }
 
@@ -3580,6 +4446,9 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         playPrevious();
       case MusicHomeWidgetAction.next:
         playNext();
+      case MusicHomeWidgetAction.shuffle:
+        unawaited(
+            toggleMusicQueueShuffle(expectedShuffled: musicQueueShuffled));
       case MusicHomeWidgetAction.save:
         final current = state.currentlyPlaying ?? state.offlineCurrentlyPlaying;
         final owner = _musicHomeWidgetPlayback()?.owner;
@@ -3589,6 +4458,39 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
             return playback?.owner == owner && playback?.canSave == true;
           });
         }
+      case MusicHomeWidgetAction.like:
+      case MusicHomeWidgetAction.unlike:
+        unawaited(
+            _setMusicHomeWidgetLiked(action == MusicHomeWidgetAction.like));
+    }
+  }
+
+  Future<void> _setMusicHomeWidgetLiked(bool liked) async {
+    final library = _musicHomeWidgetLibrary;
+    final playback = _musicHomeWidgetPlayback();
+    final current = state.currentlyPlaying ?? state.offlineCurrentlyPlaying;
+    if (library == null ||
+        playback == null ||
+        current == null ||
+        playback.liked != !liked) {
+      return;
+    }
+
+    final track = localMusicTrackForPlayback(current.videoId);
+    final catalog = catalogMusicVideoForPlayback(current);
+    final song = switch ((track, catalog)) {
+      (final track?, _) => MusicLibraryEntry.deviceSong(track),
+      (_, final catalog?) => MusicLibraryEntry.song(catalog),
+      _ => null,
+    };
+    if (song == null) return;
+    try {
+      await library.setSongLiked(song, liked: liked, isCurrent: () {
+        final live = _musicHomeWidgetPlayback();
+        return live?.owner == playback.owner && live?.liked == !liked;
+      });
+    } catch (error, stackTrace) {
+      log.warning('Could not update the Music widget Like', error, stackTrace);
     }
   }
 
@@ -3607,16 +4509,18 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     final current = openingMusicEntry;
     final activeId =
         current == null ? state.currentQueueId : playbackQueueId(current);
-    final id =
-        previous ? state.playedVideos.lastOrNull : _nextMusicQueueId(state);
+    final id = previous
+        ? state.playedVideos.where(_canOpenQueueId).lastOrNull
+        : _nextMusicQueueId(state);
     if (id == null || id == activeId) return null;
     final target = _queueEntry(id);
     return _isMusicEntry(target) ? target : null;
   }
 
-  IdedVideo? _queueEntry(String id) {
+  IdedVideo? _queueEntry(String id, [PlayerState? snapshot]) {
+    final queue = snapshot ?? state;
     final entries =
-        state.videos.isNotEmpty ? state.videos : state.offlineVideos;
+        queue.videos.isNotEmpty ? queue.videos : queue.offlineVideos;
     return entries.where((entry) => playbackQueueId(entry) == id).firstOrNull;
   }
 
@@ -3624,18 +4528,35 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       ? PlayerRepeat.noRepeat
       : settings.state.playerRepeatMode;
 
+  bool _canOpenQueueId(String id, [PlayerState? snapshot]) {
+    final mediaId = _queueEntry(id, snapshot)?.videoId;
+    return mediaId != null &&
+        (!isLocalMusicPlaybackId(mediaId) ||
+            _authorizedLocalTrack(mediaId) != null);
+  }
+
+  String? _firstPlayableQueueId(PlayerState snapshot) =>
+      (snapshot.videos.isNotEmpty ? snapshot.videos : snapshot.offlineVideos)
+          .map(playbackQueueId)
+          .where((id) => _canOpenQueueId(id, snapshot))
+          .firstOrNull;
+
+  String? _firstPlayableUpcomingId(PlayerState snapshot) => snapshot.playQueue
+      .where((id) => _canOpenQueueId(id, snapshot))
+      .firstOrNull;
+
   String? _nextMusicQueueId(PlayerState snapshot) {
-    if (snapshot.playQueue.isNotEmpty) return snapshot.playQueue.first;
+    final next = _firstPlayableUpcomingId(snapshot);
+    if (next != null) return next;
     if (!playlistComplete || _queueRepeatMode != PlayerRepeat.repeatAll) {
       return null;
     }
-    final first =
-        snapshot.videos.firstOrNull ?? snapshot.offlineVideos.firstOrNull;
-    return first == null ? null : playbackQueueId(first);
+    return _firstPlayableQueueId(snapshot);
   }
 
   bool get _musicPreviousRestartsCurrent =>
       _inMusicQueue &&
+      canSeekCurrentMedia &&
       openingMusicEntry == null &&
       settings.state.musicPreviousTrackPolicy ==
           MusicPreviousTrackPolicy.restartCurrentAfterThreshold &&
@@ -3647,9 +4568,9 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   bool get _pauseAtMusicRepeat =>
       _inMusicQueue &&
       settings.state.musicPauseAtRepeat &&
-      (settings.state.playerRepeatMode == PlayerRepeat.repeatOne ||
-          (settings.state.playerRepeatMode == PlayerRepeat.repeatAll &&
-              state.playQueue.isEmpty &&
+      (_queueRepeatMode == PlayerRepeat.repeatOne ||
+          (_queueRepeatMode == PlayerRepeat.repeatAll &&
+              _firstPlayableUpcomingId(state) == null &&
               playlistComplete));
 
   bool get _hasAutomaticAudioIntent =>
@@ -3690,7 +4611,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     if (!state.isAudio || _queueRepeatMode == PlayerRepeat.repeatOne) {
       return null;
     }
-    if (hasMusicRequestSuccessor && state.playQueue.isEmpty) {
+    if (hasMusicRequestSuccessor && _firstPlayableUpcomingId(state) == null) {
       return _musicRequestsBoundary;
     }
     final next = _nextMusicQueueId(state);
@@ -3716,6 +4637,39 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       state.isPlaying && state.sleepTracksRemaining != 1
           ? _automaticMusicTarget
           : null;
+
+  static ({bool device, String id})? _musicAlbumIdentity(IdedVideo? entry) {
+    if (entry == null) return null;
+    if (isLocalMusicPlaybackId(entry.videoId)) {
+      final key = localMusicTrackForPlayback(entry.videoId)?.albumKey;
+      return key == null ? null : (device: true, id: key);
+    }
+    final id = switch (entry) {
+      Video() => entry.musicMetadata?.albumPlaylistId,
+      DownloadedVideo() => entry.musicMetadata?.albumPlaylistId,
+      _ => null,
+    };
+    return id == null ? null : (device: false, id: id);
+  }
+
+  SongTransitionMode musicTransitionModeTo(IdedVideo target) {
+    final preferences = settings.state;
+    final mode = preferences.songTransitionMode;
+    if (mode == SongTransitionMode.seamless ||
+        !preferences.preserveAlbumTransitions) {
+      return mode;
+    }
+    final handoff = _musicHandoff;
+    final outgoing = handoff != null &&
+            handoff.to == playbackQueueId(target) &&
+            handoff.from != state.currentQueueId
+        ? _queueEntry(handoff.from)
+        : state.currentlyPlaying ?? state.offlineCurrentlyPlaying;
+    final album = _musicAlbumIdentity(outgoing);
+    return album != null && album == _musicAlbumIdentity(target)
+        ? SongTransitionMode.seamless
+        : mode;
+  }
 
   /// Remains valid across EOF accounting and the incoming decoder's takeover.
   /// A manual selection, even of this same occurrence, starts another handoff.
@@ -3832,9 +4786,12 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     }
     _songGap?.cancel();
     _songGap = null;
-    if (settings.state.songTransitionMode == SongTransitionMode.pause &&
-        (_automaticMusicTarget != null ||
-            handoff.to == _musicRequestsBoundary)) {
+    final successor = _automaticMusicTarget;
+    final pauseBetweenSongs = handoff.to == _musicRequestsBoundary
+        ? settings.state.songTransitionMode == SongTransitionMode.pause
+        : successor != null &&
+            musicTransitionModeTo(successor) == SongTransitionMode.pause;
+    if (pauseBetweenSongs) {
       final remaining =
           Duration(seconds: settings.state.songTransitionSeconds) -
               handoff.elapsed.elapsed;
@@ -3888,7 +4845,11 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
                 state.offlineCurrentlyPlaying?.videoId)) return;
     log.fine("video progress event");
 
-    if (state.sponsorSegments.isNotEmpty) {
+    final loop = _musicAbRepeat.value;
+    final repeatingPassage = state.isAudio &&
+        loop?.generation == backendPlaybackGeneration &&
+        loop?.isActive == true;
+    if (!repeatingPassage && state.sponsorSegments.isNotEmpty) {
       final positionInMs = newPosition.inMilliseconds;
       Pair<int> nextSegment = state.sponsorSegments.firstWhere(
           (e) => e.first <= positionInMs && positionInMs < e.last,
@@ -3907,7 +4868,8 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   }
 
   Future<void> _playNextNow({bool userInitiated = false}) async {
-    if (hasMusicRequestSuccessor && state.playQueue.isEmpty) {
+    final next = _firstPlayableUpcomingId(state);
+    if (hasMusicRequestSuccessor && next == null) {
       final generation = _videoSwitchGeneration;
       final advanced =
           await _musicRequests.advance(userInitiated: userInitiated);
@@ -3918,9 +4880,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       return;
     }
     final repeat = _queueRepeatMode;
-    if (repeat != PlayerRepeat.repeatOne &&
-        state.playQueue.isEmpty &&
-        !playlistComplete) {
+    if (repeat != PlayerRepeat.repeatOne && next == null && !playlistComplete) {
       // The end of a loaded page is not the end of the playlist. Keep the
       // current item until more metadata arrives or the user retries a failure.
       _waitingForPlaylist = true;
@@ -3928,18 +4888,19 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       playlistLoadingRevision.value++;
       return;
     }
-    if (state.playQueue.isEmpty && repeat == PlayerRepeat.noRepeat) return;
+    if (next == null && repeat == PlayerRepeat.noRepeat) return;
     final skipped = userInitiated || _waitingForPlaylistUserSkip;
     _waitingForPlaylistUserSkip = false;
     final pauseAtRepeat = !skipped && _pauseAtMusicRepeat;
     final keepPaused = skipped && _keepMusicPausedOnSkip;
     final repeatsCurrent = repeat == PlayerRepeat.repeatOne &&
-        (!skipped || !_inMusicQueue || state.playQueue.isEmpty);
+        (!skipped || !_inMusicQueue || next == null);
     if (repeatsCurrent || (pauseAtRepeat && _musicReplayMode != null)) {
       if (pauseAtRepeat) pause();
       final IdedVideo? entry =
           state.currentlyPlaying ?? state.offlineCurrentlyPlaying;
       if (entry != null && _isMusicHistoryEntry(entry)) {
+        unawaited(_finishMusicListening());
         _activeHistoryWrite?.cancel();
         _activeHistoryWrite = _beginHistoryWrite(entry, fromMusic: true);
       }
@@ -3947,7 +4908,11 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       if (!pauseAtRepeat && !keepPaused) play();
     } else if (state.videos.isNotEmpty || state.offlineVideos.isNotEmpty) {
       unawaited(_finishLearning(skipped: skipped));
-      if (state.playQueue.isNotEmpty || repeat == PlayerRepeat.repeatAll) {
+      final toPlay = next ??
+          (repeat == PlayerRepeat.repeatAll
+              ? _firstPlayableQueueId(state)
+              : null);
+      if (toPlay != null) {
         _sessionTransitionPending = true;
       }
       //moving current video to played list
@@ -3960,20 +4925,14 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         emit(state.copyWith(playedVideos: newPlayedVideos));
       }
 
-      if (state.playQueue.isNotEmpty) {
-        final remaining = ListQueue.of(state.playQueue);
-        final toPlay = remaining.removeFirst();
+      if (next != null) {
+        final remaining = ListQueue.of(state.playQueue)..remove(next);
         emit(state.copyWith(playQueue: remaining));
-        final entries =
-            state.videos.isNotEmpty ? state.videos : state.offlineVideos;
-        await _switchQueueSuccessor(
-            entries.firstWhere((entry) => playbackQueueId(entry) == toPlay),
-            automatic: !skipped,
-            playing: keepPaused ? false : null);
-      } else if (repeat == PlayerRepeat.repeatAll) {
+        await _switchQueueSuccessor(_queueEntry(next)!,
+            automatic: !skipped, playing: keepPaused ? false : null);
+      } else if (repeat == PlayerRepeat.repeatAll && toPlay != null) {
         emit(state.copyWith(playedVideos: [], playQueue: ListQueue.from([])));
-        final switching = _switchQueueSuccessor(
-            state.videos.isNotEmpty ? state.videos[0] : state.offlineVideos[0],
+        final switching = _switchQueueSuccessor(_queueEntry(toPlay)!,
             automatic: !skipped && !pauseAtRepeat,
             playing: pauseAtRepeat || keepPaused ? false : null);
         final generation = _videoSwitchGeneration;
@@ -4007,7 +4966,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
 
   void playNext({bool userInitiated = true}) {
     if (hasMusicRequestSuccessor &&
-        state.playQueue.isEmpty &&
+        _firstPlayableUpcomingId(state) == null &&
         _musicRequests._transitioning) {
       return;
     }
@@ -4031,7 +4990,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     if (!settings.state.musicSkipAfterRetryExhaustion ||
         !_mayAdvanceMusic ||
         _preparingSelectedSong ||
-        state.playQueue.isEmpty ||
+        _firstPlayableUpcomingId(state) == null ||
         _nextMusicBoundaryId == null) {
       return false;
     }
@@ -4044,7 +5003,8 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     _clearMusicHandoff();
     Future<void> previous() async {
       final keepPaused = _keepMusicPausedOnSkip;
-      if (state.playedVideos.isNotEmpty && !_musicPreviousRestartsCurrent) {
+      final toPlay = state.playedVideos.where(_canOpenQueueId).lastOrNull;
+      if (toPlay != null && !_musicPreviousRestartsCurrent) {
         unawaited(_finishLearning(skipped: true));
         _sessionTransitionPending = true;
         // putting back current video in play queue
@@ -4056,8 +5016,8 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
           playQueue.addFirst(currentVideoId);
         }
 
-        var playedVideos = List<String>.from(state.playedVideos);
-        String toPlay = playedVideos.removeLast();
+        final playedVideos = List<String>.from(state.playedVideos);
+        playedVideos.removeAt(playedVideos.lastIndexOf(toPlay));
         emit(state.copyWith(playQueue: playQueue, playedVideos: playedVideos));
         await _switchQueueSuccessor(_queueEntry(toPlay)!,
             automatic: false, playing: keepPaused ? false : null);
@@ -4093,6 +5053,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       _releaseMusicEndWait();
     }
     manualMusicPreparer?.cancelMusicSelection();
+    _musicHomeWidget?.refresh();
   }
 
   void _cancelMusicSelection({bool keepEndWait = false}) {
@@ -4149,10 +5110,13 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     final playlist = _playlistEntries.containsKey(state.currentQueueId)
         ? _playlistReference
         : null;
-    unawaited(
-        write.record(entry, playlist: playlist).catchError((Object error) {
+    unawaited(_finishMusicListening());
+    final started = write
+        .record(entry, playlist: playlist, trackElapsed: true)
+        .catchError((Object error) {
       log.fine('Could not record Music history (${error.runtimeType})');
-    }));
+    });
+    _musicListeningPlayback = _MusicListeningPlayback(write, started);
   }
 
   Future<_PreparedMusicSelection?> _prepareMusicSelection(
@@ -4162,6 +5126,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       bool Function()? canCommit}) async {
     _preparingHistoryWrite = _beginHistoryWrite(entry, fromMusic: fromMusic);
     _preparingSelectedSong = true;
+    _musicHomeWidget?.refresh();
     final request = _musicSelectionRequestRevision;
     final preparer = manualMusicPreparer!;
     final database = _profileDatabase;
@@ -4200,7 +5165,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
           throw StateError('This audio file belongs to another profile');
         }
         if (isLocalMusicPlaybackId(entry.videoId)) {
-          final track = localMusicTrackForPlayback(entry.videoId);
+          final track = _authorizedLocalTrack(entry.videoId);
           if (track == null) throw StateError('Local music file unavailable');
           entry = localMusicPlaybackEntry(track, database.profileId,
               occurrenceId: entry.videoId);
@@ -4240,8 +5205,9 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
           }
           if (entry is DownloadedVideo &&
               isLocalMusicPlaybackId(entry.videoId) &&
-              (!library.acceptsSessionSelection(localSelection) ||
-                  localMusicTrackForPlayback(entry.videoId)?.uri !=
+              ((!isOpenedAudioPlaybackId(entry.videoId) &&
+                      !library.acceptsSessionSelection(localSelection)) ||
+                  _authorizedLocalTrack(entry.videoId)?.uri !=
                       entry.storageUri)) {
             throw StateError('Local music file unavailable');
           }
@@ -4288,9 +5254,11 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
 
   Future<void> _playVideos(List<IdedVideo> vids,
       {Duration? startAt,
+      bool? playing,
       int startIndex = 0,
       bool fromMusic = false,
       bool songTap = false,
+      bool collectionDetail = false,
       bool selectedByUser = false,
       bool shuffleOnce = false,
       bool retainQueueOrder = false,
@@ -4316,8 +5284,36 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
             playbackQueueId(entry): sourceKey,
     };
     if (shuffleOnce) entries.shuffle();
-    final selected = entries[startIndex];
-    if (_playsOnlyTappedSong(songTap)) {
+    final scope = _songTapQueueScope(songTap, collectionDetail);
+    final tappedEntry = entries[startIndex];
+    var selected = tappedEntry;
+    final library = LocalMusicLibrary.instance;
+    final deviceSelection = library.selectionId;
+    final scoped = scope.usesDeviceLibrary && audio && !shuffleOnce
+        ? _deviceSongTapQueue(scope, tappedEntry, deviceSelection)
+        : null;
+    if (scoped != null) {
+      final tapped = scoped.tracks[scoped.startIndex];
+      // Keep the tapped occurrence even when the target group lists its file
+      // once. Saved playlists use a separate ID format from device queues.
+      final scopedEntry = tappedEntry is DownloadedVideo
+          ? tappedEntry
+          : localMusicPlaybackEntry(tapped, _profileDatabase.profileId,
+              occurrenceId: devicePlaylistQueueOccurrenceId(tapped.playbackId,
+                  tappedEntry.videoId, entries.take(startIndex)));
+      startIndex = scoped.startIndex;
+      offlineVideos = [
+        for (final (index, track) in scoped.tracks.indexed)
+          if (index == startIndex)
+            scopedEntry
+          else
+            localMusicPlaybackEntry(track, _profileDatabase.profileId),
+      ];
+      entries = offlineVideos;
+      videos = [];
+      selected = entries[startIndex];
+    }
+    if (scope == MusicSongTapQueueScope.songOnly) {
       // Keep the occurrence ID assigned within the original collection.
       videos = selected is Video ? [selected] : <Video>[];
       offlineVideos =
@@ -4336,7 +5332,15 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
           fromMusic: fromMusic);
       if (prepared == null || request != _musicSelectionRequestRevision) return;
     }
-    if (canCommit?.call() == false) {
+    if (canCommit?.call() == false ||
+        (scoped != null &&
+            (!library.acceptsSessionSelection(deviceSelection) ||
+                !identical(
+                    library.visibleCatalogTrack(
+                        localMusicTrackId(tappedEntry.videoId)),
+                    scoped.tracks[scoped.startIndex]) ||
+                scoped.tracks.any((track) => !identical(
+                    library.visibleTrackById(track.playbackId), track))))) {
       if (prepared != null) _abandonMusicSelection();
       return;
     }
@@ -4345,13 +5349,27 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       unawaited(_saveSession(state));
       _setActiveNamedMusicQueue(null);
     }
-    bindQueue();
+    if (scoped == null) {
+      bindQueue();
+    } else {
+      final locale = parseSavedLocale(settings.state.locale) ??
+          basicLocaleListResolution(
+              WidgetsBinding.instance.platformDispatcher.locales,
+              AppLocalizations.supportedLocales);
+      _bindOfflineQueue(
+          queueTitle: scoped.title ?? lookupAppLocalizations(locale).onDevice,
+          deviceSelectionId: deviceSelection);
+      _requestedPlaying = playing;
+    }
     _musicHistoryEntries.clear();
     if (fromMusic) _musicHistoryEntries.addAll(entries.map(playbackQueueId));
     _musicHistoryPlaylist = fromMusic && _playlistReference != null;
     _musicRecommendationSources.clear();
     if (fromMusic) {
-      if (recommendationSources == null) {
+      if (scoped != null) {
+        _assignMusicRecommendationSource(
+            [playbackQueueId(selected)], recommendationSource);
+      } else if (recommendationSources == null) {
         _assignMusicRecommendationSource(
             entries.map(playbackQueueId), recommendationSource);
       } else {
@@ -4390,6 +5408,8 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         mediaEvent: const MediaEvent(state: MediaState.loading),
         playedVideos: previous,
         playQueue: ListQueue.of(next),
+        musicQueueShuffled:
+            audio && _isMusicEntry(selected) ? shuffleUpcoming : null,
         selectedFullScreenIndex: entries.length > 1 ? 3 : 0,
         top: 500);
 
@@ -4407,9 +5427,31 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         expandPlayer: prepared != null);
   }
 
-  bool _playsOnlyTappedSong(bool songTap) =>
-      songTap &&
-      settings.state.musicSongTapQueueScope == MusicSongTapQueueScope.songOnly;
+  MusicSongTapQueueScope _songTapQueueScope(
+          bool songTap, bool collectionDetail) =>
+      songTap
+          ? settings.state
+              .resolveMusicSongTapQueueScope(collectionDetail: collectionDetail)
+          : MusicSongTapQueueScope.collection;
+
+  DeviceSongTapQueue? _deviceSongTapQueue(
+      MusicSongTapQueueScope scope, IdedVideo selected, String? selection) {
+    final id = localMusicTrackId(selected.videoId);
+    if (!isLocalMusicPlaybackId(id)) return null;
+    final library = LocalMusicLibrary.instance;
+    if (!library.acceptsSessionSelection(selection)) return null;
+    final track = library.visibleCatalogTrack(id);
+    if (track == null) return null;
+    final sortKey = localMusicSortSetting(localMusicBrowseSourceKey(
+        enabled: true, selectionId: selection, system: library.isSystem));
+    final values = settings.state.settings;
+    return deviceSongTapQueue(
+        scope,
+        track,
+        library.visibleTracks,
+        LocalMusicTrackSort.fromValue(
+            (values[sortKey] ?? values[legacyLocalMusicSortSetting])?.value));
+  }
 
   /// skip to queue video of index
   /// if we're not shuffling, we also rebuild the playnext and played previously queue
@@ -4423,7 +5465,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     final selectedId = playbackQueueId(selected);
     var currentId = state.currentQueueId;
     final switching = selectedId != currentId;
-    var shuffled = settings.state.playerShuffleMode;
+    var shuffled = musicQueueShuffled;
     _cancelMusicSelection();
     if (!switching && shuffled) return;
     final request = _musicSelectionRequestRevision;
@@ -4434,7 +5476,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       listToCheckAgainst =
           state.videos.isNotEmpty ? state.videos : state.offlineVideos;
       currentId = state.currentQueueId;
-      shuffled = settings.state.playerShuffleMode;
+      shuffled = musicQueueShuffled;
       index = listToCheckAgainst
           .indexWhere((entry) => playbackQueueId(entry) == selectedId);
       if (index < 0 || currentId == selectedId) {
@@ -4481,6 +5523,15 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     }
   }
 
+  Video _normalizeExplicitDownloadQueueId(Video video) {
+    if (video.explicitMusicDownload != null &&
+        savedDownloadSourceId(playbackQueueId(video)) != video.videoId) {
+      // The session stores explicit copies as the underlying ID or ID#ordinal.
+      return video.copyWith(queueEntryId: null);
+    }
+    return video;
+  }
+
   DownloadedVideo? _explicitDownload(Video video) {
     final fingerprint = video.explicitMusicDownload;
     return fingerprint == null
@@ -4503,9 +5554,11 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       VoidCallback? onRetry}) async {
     if (isLocalMusicPlaybackId(video.videoId)) {
       if (!active()) return null;
-      final track = audio ? localMusicTrackForPlayback(video.videoId) : null;
+      final track = audio
+          ? LocalMusicLibrary.instance.playlistTrackById(video.videoId)
+          : null;
       final current = track == null ? null : devicePlaylistVideo(track);
-      if (current == null || current.videoId != video.videoId) {
+      if (current == null) {
         throw StateError('Device music file unavailable');
       }
       return video.copyWith(
@@ -4613,7 +5666,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     if (!preserveMusicHandoff && !stagedQueue) _clearMusicHandoff();
     final device = isLocalMusicPlaybackId(video.videoId);
     if (device) {
-      final track = localMusicTrackForPlayback(video.videoId);
+      final track = _authorizedLocalTrack(video.videoId);
       if (track == null ||
           (video is DownloadedVideo
               ? video.profileId != _profileDatabase.profileId
@@ -4644,13 +5697,15 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         }
       }
     }
-    if (_sleepAtEndQueueId != null &&
-        _sleepAtEndQueueId != playbackQueueId(video)) {
-      // Muzza SleepTimer.kt pauses on a media-item transition. Recovery of the
-      // same queue occurrence keeps the timer even if its source URL changes.
-      cancelSleep();
-      pause();
-      playing = false;
+    final queueId = playbackQueueId(video);
+    if (_pauseForSleepTrackChange(queueId)) playing = false;
+    if (_sleepFadeEnabled && !_isMusicEntry(video)) {
+      _retireSleepFade();
+    } else if (_sleepFadeEnabled &&
+        _sleepDeadline == null &&
+        state.currentQueueId != queueId) {
+      _sleepTrackFadeInitialRemaining = null;
+      _sleepTimerGain.value = 1;
     }
     if (backendRequest == null && !retainOnFailure) {
       _activeHistoryWrite?.cancel();
@@ -4659,8 +5714,9 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
           : _preparingHistoryWrite;
       _preparingHistoryWrite = null;
       unawaited(_finishLearning());
+      unawaited(_finishMusicListening());
     } else {
-      _learningPlayback?.clock.interrupt();
+      _interruptPlaybackClocks();
     }
     _waitingForPlaylist = false;
     _sessionTransitionPending = true;
@@ -4692,6 +5748,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     _openingSong = music == null
         ? null
         : (generation: generation, entry: video, title: music.title);
+    _clearResolvedMusicLyrics();
     _clearPlaybackRecovery(resetBudget: true);
     bool active() => !isClosed && generation == _videoSwitchGeneration;
     final sponsorTypes = _enabledSponsorTypes;
@@ -4878,9 +5935,22 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       }
       // A drag can also begin while the replacement metadata is loading.
       videoDragCancelled();
+      // The deadline can attach to the old occurrence during source setup.
+      _pauseForSleepTrackChange(queueId);
       // Persist only coherent queue/current/context snapshots. A new request
       // may have changed playlist ownership or audio mode before metadata arrived.
       _sessionTransitionPending = false;
+      if (!retainOnFailure && backendRequest == null) {
+        _androidResumeSource = null;
+        _androidRemoteOccurrence = null;
+      }
+      if (isOpenedAudioPlaybackId(video.videoId)) {
+        if (_pendingOpenedAudio?.id == video.videoId) {
+          _currentOpenedAudio = _pendingOpenedAudio;
+        }
+      } else {
+        _currentOpenedAudio = null;
+      }
       final snapshot = installQueue?.call(state) ?? state;
       committedQueue = true;
       if (preparedMusic != null) {
@@ -4996,7 +6066,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
           retainOnFailure ||
           (video is Video &&
               (state.backendRecovery != null || video.musicMetadata != null))) {
-        pause();
+        if (!_pauseForSleepTrackChange(queueId)) pause();
         videoDragCancelled();
         _sessionTransitionPending = false;
         // Retry belongs to this selection, even when metadata never arrived.
@@ -5245,9 +6315,38 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   /// Play the visible library order from the requested row. Both source types
   /// share the offline queue, but retain separate playback identities.
   Future<void> playOnDeviceMusic(List<OnDeviceMusicEntry> tracks,
-      {int startIndex = 0,
+          {int startIndex = 0,
+          String? queueTitle,
+          bool songTap = false,
+          bool collectionDetail = false,
+          bool retainQueueOrder = false,
+          bool Function()? isCurrent}) =>
+      _playOnDeviceMusic(tracks,
+          startIndex: startIndex,
+          queueTitle: queueTitle,
+          songTap: songTap,
+          collectionDetail: collectionDetail,
+          retainQueueOrder: retainQueueOrder,
+          isCurrent: isCurrent);
+
+  Future<void> shuffleLocalMusic(List<LocalMusicTrack> tracks,
+      {required String queueTitle, required bool Function() isCurrent}) async {
+    // A cold launcher request can arrive while Android audio is starting.
+    await _playerReady;
+    await _playOnDeviceMusic(tracks.map(OnDeviceMusicEntry.device).toList(),
+        startIndex: 0,
+        queueTitle: queueTitle,
+        isCurrent: isCurrent,
+        shuffleOnce: true);
+  }
+
+  Future<void> _playOnDeviceMusic(List<OnDeviceMusicEntry> tracks,
+      {required int startIndex,
       String? queueTitle,
       bool songTap = false,
+      bool collectionDetail = false,
+      bool retainQueueOrder = false,
+      bool shuffleOnce = false,
       bool Function()? isCurrent}) async {
     if (startIndex < 0 || startIndex >= tracks.length) return;
     final requested = List.of(tracks);
@@ -5267,6 +6366,9 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         audio: true,
         fromMusic: true,
         songTap: songTap,
+        collectionDetail: collectionDetail,
+        retainQueueOrder: retainQueueOrder,
+        shuffleOnce: shuffleOnce,
         canCommit: () => resolve() != null,
         bindQueue: () => _bindOfflineQueue(
             queueTitle: queueTitle,
@@ -5380,15 +6482,26 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     }
   }
 
+  LocalMusicTrack? _localTrackForNewQueue(String id) {
+    final track = localMusicTrackForPlayback(id);
+    return track == null ||
+            LocalMusicLibrary.instance.isExplicitTrackHidden(track)
+        ? null
+        : track;
+  }
+
   Future<void> playLocalMusic(List<LocalMusicTrack> tracks,
-      {int startIndex = 0, String? queueTitle, bool songTap = false}) async {
+      {int startIndex = 0,
+      String? queueTitle,
+      bool songTap = false,
+      bool collectionDetail = false}) async {
     if (isClosed ||
         _isDisposing ||
         _switchingProfile ||
         _profileDatabase.profileId != db.profileId) return;
     final entries = <DownloadedVideo>[];
     for (final requested in tracks) {
-      final track = localMusicTrackForPlayback(requested.playbackId);
+      final track = _localTrackForNewQueue(requested.playbackId);
       if (track == null) {
         _reportUnavailableLocalMusic();
         return;
@@ -5403,9 +6516,63 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         startIndex: startIndex,
         audio: true,
         songTap: songTap,
+        collectionDetail: collectionDetail,
+        canCommit: () => entries
+            .every((entry) => _localTrackForNewQueue(entry.videoId) != null),
         bindQueue: () => _bindOfflineQueue(
             queueTitle: queueTitle,
             deviceSelectionId: LocalMusicLibrary.instance.selectionId));
+  }
+
+  LocalMusicTrack? openedAudioTrack(String id) {
+    final pending = _pendingOpenedAudio;
+    if (pending?.id == id) return pending?.track;
+    final current = _currentOpenedAudio;
+    return current?.id == id ? current?.track : null;
+  }
+
+  LocalMusicTrack? _authorizedLocalTrack(String id) =>
+      isOpenedAudioPlaybackId(id)
+          ? openedAudioTrack(id)
+          : localMusicTrackForPlayback(id);
+
+  Future<void> playOpenedAudio(OpenedMusicFile file,
+      {required bool Function() isCurrent}) async {
+    if (!isCurrent() || isClosed) return;
+    if (!_hasAudioSession) {
+      final session = await AudioSession.instance;
+      if (!isClosed && !_hasAudioSession) audioSession = session;
+    }
+    if (isClosed ||
+        _isDisposing ||
+        _switchingProfile ||
+        _profileDatabase.profileId != db.profileId ||
+        !isCurrent()) {
+      return;
+    }
+    final previous = _sessionOwner;
+    if (previous != null &&
+        !identical(previous, this) &&
+        !previous.isClosed &&
+        previous.state.hasVideo) {
+      previous.pause();
+    }
+    if (file.indexedTrack case final track?) {
+      await playOnDeviceMusic([OnDeviceMusicEntry.device(track)],
+          isCurrent: isCurrent);
+      return;
+    }
+    final id = 'device:open:${_nextLocalOccurrence++}';
+    final track = LocalMusicTrack(uri: file.uri.toString(), title: file.title);
+    _pendingOpenedAudio = (id: id, track: track);
+    try {
+      await _playVideos([
+        localMusicPlaybackEntry(track, _profileDatabase.profileId,
+            occurrenceId: id),
+      ], audio: true, canCommit: isCurrent, bindQueue: _bindOfflineQueue);
+    } finally {
+      if (_pendingOpenedAudio?.id == id) _pendingOpenedAudio = null;
+    }
   }
 
   String _newLocalOccurrence(String trackId, bool Function(String) isUsed) {
@@ -5445,7 +6612,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         isOtherPlaybackSession) {
       return;
     }
-    final track = localMusicTrackForPlayback(requested.playbackId);
+    final track = _localTrackForNewQueue(requested.playbackId);
     if (track != null) await playLocalMusic([track]);
   }
 
@@ -5467,7 +6634,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     if (index < 0) return false;
     final resolved = <LocalMusicTrack>[];
     for (final requested in tracks) {
-      final track = localMusicTrackForPlayback(requested.playbackId);
+      final track = _localTrackForNewQueue(requested.playbackId);
       if (track == null) return false;
       resolved.add(track);
     }
@@ -5535,7 +6702,8 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
           String? queueTitle,
           PlaylistReference? recommendationSource,
           bool fromMusic = false,
-          bool songTap = false}) =>
+          bool songTap = false,
+          bool collectionDetail = false}) =>
       _playVideoSelection(v,
           audio: audio,
           startAt: startAt,
@@ -5544,7 +6712,8 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
           queueTitle: queueTitle,
           recommendationSource: recommendationSource,
           fromMusic: fromMusic,
-          songTap: songTap);
+          songTap: songTap,
+          collectionDetail: collectionDetail);
 
   Future<void> playAndroidAutoMusic(List<Video> entries, int index,
           String? title, bool Function() current) =>
@@ -5555,6 +6724,27 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
           fromMusic: true,
           isCurrent: current);
 
+  /// Starts a Music queue from a card, binding the origin when the queue is
+  /// admitted. Transport from that card then operates on the live queue.
+  Future<void> playMusicFromCard(List<Video> videos,
+          {required MusicCardOrigin origin,
+          Duration? startAt,
+          int? startIndex,
+          String? queueTitle,
+          PlaylistReference? recommendationSource,
+          bool songTap = false,
+          bool collectionDetail = false}) =>
+      _playVideoSelection(videos,
+          audio: true,
+          startAt: startAt,
+          startIndex: startIndex,
+          queueTitle: queueTitle,
+          fromMusic: true,
+          recommendationSource: recommendationSource,
+          songTap: songTap,
+          collectionDetail: collectionDetail,
+          cardOrigin: origin);
+
   Future<void> _playVideoSelection(List<Video> v,
       {bool? audio,
       Duration? startAt,
@@ -5564,6 +6754,8 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       required bool fromMusic,
       PlaylistReference? recommendationSource,
       bool songTap = false,
+      bool collectionDetail = false,
+      MusicCardOrigin? cardOrigin,
       bool Function()? isCurrent}) async {
     if (isCurrent?.call() == false) return;
     final selected = _selectedWatchVideoId;
@@ -5576,7 +6768,9 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         (!isLocalMusicPlaybackId(entry.videoId) ||
             (fromMusic &&
                 audio != false &&
-                library.playlistTrackById(entry.videoId) != null));
+                library.playlistTrackById(entry.videoId,
+                        excludeExplicit: true) !=
+                    null));
     if (startIndex != null) {
       RangeError.checkValidIndex(startIndex, v, 'startIndex');
       if (!playable(v[startIndex])) return;
@@ -5593,8 +6787,10 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     await _playVideos(videos,
         fromMusic: fromMusic,
         songTap: songTap,
+        collectionDetail: collectionDetail,
         recommendationSource: recommendationSource,
         startAt: startAt,
+        playing: playing,
         startIndex: index,
         canCommit: () =>
             isCurrent?.call() != false &&
@@ -5606,17 +6802,24 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         bindQueue: () {
           _sessionTransitionPending = true;
           _queuedDeviceSelectionId = deviceEntries.isEmpty ? null : selection;
-          _bindPlaylist(null, [], queueTitle: fromMusic ? queueTitle : null);
+          _bindPlaylist(null, [],
+              queueTitle: fromMusic ? queueTitle : null,
+              cardOrigin: cardOrigin);
           _requestedPlaying = playing;
         });
   }
 
   /// Starts a queue with no single collection's playback reference.
+  /// An explicit [startIndex] selects an input occurrence before filtering
+  /// and plays the collection in order.
   /// Each optional [recommendationSources] item identifies the playlist of the
   /// input row at the same index, including separate copies of a song.
   Future<void> playMusicCollectionQueue(List<Video> tracks,
       {required String queueTitle,
+      int? startIndex,
       bool shuffle = false,
+      bool songTap = false,
+      bool collectionDetail = false,
       bool Function()? isCurrent,
       List<PlaylistReference?>? recommendationSources}) async {
     bool current() =>
@@ -5633,33 +6836,50 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     final library = LocalMusicLibrary.instance;
     final selection = library.selectionId;
     bool authorized(Video video) =>
-        !isLocalMusicPlaybackId(video.videoId) ||
-        library.playlistTrackById(video.videoId) != null;
+        !library.isPlaylistTrackHiddenByAdvisory(video.videoId) &&
+        (!isLocalMusicPlaybackId(video.videoId) ||
+            library.playlistTrackById(video.videoId, excludeExplicit: true) !=
+                null);
+    bool isPlayable(Video video) =>
+        !video.filtered &&
+        !video.filterHide &&
+        video.isUpcoming != true &&
+        authorized(video);
+    if (startIndex != null) {
+      RangeError.checkValidIndex(startIndex, tracks, 'startIndex');
+      if (!isPlayable(tracks[startIndex])) return;
+    }
     final playableRows = [
       for (final (index, video) in tracks.indexed)
-        if (!video.filtered &&
-            !video.filterHide &&
-            video.isUpcoming != true &&
-            authorized(video))
-          (video, recommendationSources?[index]),
+        if (isPlayable(video))
+          (
+            _normalizeExplicitDownloadQueueId(video),
+            recommendationSources?[index]
+          ),
     ];
+    final admittedIndex = startIndex == null
+        ? 0
+        : tracks.take(startIndex).where(isPlayable).length;
     final playable = [for (final (video, _) in playableRows) video];
     final deviceEntries =
         playable.where((video) => isLocalMusicPlaybackId(video.videoId));
     await _playVideos(playable,
         fromMusic: true,
+        songTap: songTap,
+        collectionDetail: collectionDetail,
         startAt: Duration.zero,
+        startIndex: admittedIndex,
         audio: true,
-        shuffleOnce: shuffle,
+        shuffleOnce: shuffle && startIndex == null,
         retainQueueOrder: true,
         recommendationSources: recommendationSources == null
             ? null
             : [for (final (_, source) in playableRows) source],
         canCommit: () =>
             current() &&
+            playable.every(authorized) &&
             (deviceEntries.isEmpty ||
-                (library.acceptsSessionSelection(selection) &&
-                    deviceEntries.every(authorized))),
+                library.acceptsSessionSelection(selection)),
         bindQueue: () {
           _selectedWatchVideoId = null;
           _sessionTransitionPending = true;
@@ -5677,16 +6897,52 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       required Future<List<MusicTrack>> Function(bool Function() isCurrent)
           loadCandidates,
       required bool Function() isCurrent}) async {
-    if (isClosed ||
-        _isDisposing ||
-        _switchingProfile ||
-        seed.musicMetadata == null ||
+    if (seed.musicMetadata == null ||
         seed.filtered ||
         seed.filterHide ||
         seed.downloadPlaybackOnly ||
         seed.explicitMusicDownload != null ||
-        isLocalMusicPlaybackId(seed.videoId) ||
-        !isCurrent()) {
+        isLocalMusicPlaybackId(seed.videoId)) {
+      return false;
+    }
+    return _playSeededMusicMix(
+      (candidates) => MusicMix(
+          seed, candidates.where((track) => track.videoId != seed.videoId)),
+      songSeed: seed,
+      queueTitle: queueTitle,
+      loadCandidates: loadCandidates,
+      isCurrent: isCurrent,
+    );
+  }
+
+  Future<bool?> playArtistMusicMix(List<MusicArtist> artists,
+      {required String queueTitle,
+      required Future<List<MusicTrack>> Function(bool Function() isCurrent)
+          loadCandidates,
+      required bool Function() isCurrent}) async {
+    final seeds = <String>{};
+    for (final artist in artists) {
+      final id = normalizeChannelId(artist.id);
+      if (id != null) seeds.add(id);
+      if (seeds.length == MusicCatalogService.artistMixSeedLimit) break;
+    }
+    if (seeds.isEmpty) return false;
+    return _playSeededMusicMix(
+      (candidates) => MusicMix.fromArtists(seeds, candidates),
+      queueTitle: queueTitle,
+      loadCandidates: loadCandidates,
+      isCurrent: isCurrent,
+    );
+  }
+
+  Future<bool?> _playSeededMusicMix(
+      MusicMix Function(List<MusicTrack>) buildMix,
+      {Video? songSeed,
+      required String queueTitle,
+      required Future<List<MusicTrack>> Function(bool Function() isCurrent)
+          loadCandidates,
+      required bool Function() isCurrent}) async {
+    if (isClosed || _isDisposing || _switchingProfile || !isCurrent()) {
       return false;
     }
     final request = Object();
@@ -5721,17 +6977,26 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         rethrow;
       }
       if (!loading()) return null;
-      final mix = MusicMix(
-          seed, candidates.where((track) => track.videoId != seed.videoId));
-      final initial = recommendations
-          .eligibleMusic(mix.candidates)
-          .take(MusicMix.upcomingLimit)
-          .toList();
-      if (initial.isEmpty) return false;
+      final mix = buildMix(candidates);
+      final eligible = recommendations.eligibleMusic(mix.candidates);
+      final initialTracks = <MusicTrack>[];
+      final Video first;
+      if (songSeed != null) {
+        if (eligible.isEmpty) return false;
+        first = songSeed.copyWith(queueEntryId: null);
+      } else {
+        final anchorIndex = eligible.indexWhere(mix.isSeedTrack);
+        if (anchorIndex < 0) return false;
+        final anchor = eligible.removeAt(anchorIndex);
+        first = anchor.toVideo();
+        initialTracks.add(anchor);
+      }
+      final upcoming = eligible.take(MusicMix.upcomingLimit).toList();
+      initialTracks.addAll(upcoming);
       var started = false;
       await _playVideos([
-        seed.copyWith(queueEntryId: null),
-        ...initial.map((track) => track.toVideo()),
+        first,
+        ...upcoming.map((track) => track.toVideo()),
       ],
           audio: true,
           fromMusic: true,
@@ -5739,12 +7004,13 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
           retainQueueOrder: true,
           canCommit: () =>
               current() &&
-              recommendations.eligibleMusic(initial).length == initial.length,
+              recommendations.eligibleMusic(initialTracks).length ==
+                  initialTracks.length,
           bindQueue: () {
             _sessionTransitionPending = true;
             _bindPlaylist(null, [], queueTitle: queueTitle);
             _musicMix = mix;
-            _musicMixGenerated.addAll(initial.map((track) => track.videoId));
+            _musicMixGenerated.addAll(upcoming.map((track) => track.videoId));
             _requestedPlaying = true;
             started = true;
           });
@@ -5764,6 +7030,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       {required PlaylistReference reference,
       bool fromMusic = false,
       bool songTap = false,
+      bool collectionDetail = false,
       int startIndex = 0,
       Duration? startAt,
       bool? audio,
@@ -5792,7 +7059,9 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         (!isLocalMusicPlaybackId(video.videoId) ||
             (audioMode &&
                 reference.kind == PlaylistSourceKind.local &&
-                library.playlistTrackById(video.videoId) != null));
+                library.playlistTrackById(video.videoId,
+                        excludeExplicit: true) !=
+                    null));
     final videos = assigned.where(playable).toList();
     final index = shuffleOnce
         ? 0
@@ -5804,15 +7073,20 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     if (videos.isEmpty) return;
     final deviceEntries =
         videos.where((video) => isLocalMusicPlaybackId(video.videoId));
-    final loader = _playsOnlyTappedSong(songTap) ? null : playlistLoader;
+    final loader = _songTapQueueScope(songTap, collectionDetail) ==
+            MusicSongTapQueueScope.songOnly
+        ? null
+        : playlistLoader;
     int? boundGeneration;
     loader?.retain();
     try {
       await _playVideos(videos,
           fromMusic: fromMusic,
           songTap: songTap,
+          collectionDetail: collectionDetail,
           recommendationSource: reference,
           startAt: startAt,
+          playing: playing,
           startIndex: index,
           shuffleOnce: shuffleOnce,
           canCommit: () =>
@@ -5904,18 +7178,183 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     return result;
   }
 
+  /// True while playing, false while paused, and null for any other queue.
+  bool? musicCardPlaying(MusicCardOrigin origin) {
+    if (!_ownsMusicCard(origin) ||
+        _sessionTransitionPending ||
+        state.isHidden ||
+        state.mediaEvent.state == MediaState.error ||
+        !_inMusicQueue) {
+      return null;
+    }
+    return state.isPlaying;
+  }
+
+  bool _ownsMusicCard(MusicCardOrigin origin) =>
+      _musicCardOrigin == origin &&
+      !isClosed &&
+      !_isDisposing &&
+      !_switchingProfile &&
+      _profileDatabase.profileId == db.profileId &&
+      activePodcast == null &&
+      !state.isClosing;
+
+  bool toggleMusicCard(MusicCardOrigin origin) {
+    // The live queue can be between occurrences. Do not let a second
+    // activation rebuild it while the new occurrence is mounting.
+    if (_sessionTransitionPending) return _ownsMusicCard(origin);
+    if (musicCardPlaying(origin) == null) return false;
+    togglePlaying();
+    return true;
+  }
+
   void togglePlaying() {
     state.isPlaying ? pause() : play();
+  }
+
+  _VolumePauseOwner get _volumePauseOwner => (
+        intentRevision: _transportIntentRevision,
+        selectionRevision: _musicSelectionRequestRevision,
+        positionGeneration: _progressGeneration,
+        sessionRevision: settings.appCubit.state.sessionRevision,
+        playback: _statusOwner(state),
+        source: state.currentlyPlaying?.playbackSourceId,
+      );
+
+  bool get _canResumeVolumePause =>
+      _sessionOwner == this &&
+      !_backendSwitchPending &&
+      !_sessionTransitionPending &&
+      !_preparingSelectedSong &&
+      !_manualSelectionPending &&
+      !playbackInterrupted &&
+      playbackStatus != MediaState.error &&
+      playbackStatus != MediaState.completed &&
+      settings.state.musicResumeOnVolumeRise;
+
+  void _watchBluetoothOutput(bool enabled) {
+    if (isClosed || _isDisposing) return;
+    if (!enabled) {
+      unawaited(_bluetoothOutputSubscription?.cancel());
+      _bluetoothOutputSubscription = null;
+      _selectedBluetoothOutput = null;
+      _bluetoothReconnectPause = null;
+      return;
+    }
+    _bluetoothOutputSubscription ??= androidMusicBluetoothOutputs.listen(
+      handleBluetoothOutput,
+      onError: (Object error) {
+        _selectedBluetoothOutput = null;
+        _bluetoothReconnectPause = null;
+        log.fine('Music output listener failed (${error.runtimeType})');
+      },
+    );
+  }
+
+  bool get _canTrackBluetoothReconnect =>
+      !isClosed &&
+      !_isDisposing &&
+      !_switchingProfile &&
+      !_sessionTransitionPending &&
+      !_backendSwitchPending &&
+      !_preparingSelectedSong &&
+      !NetworkProxy.instance.isChanging &&
+      _sessionOwner == this &&
+      db.profileId == _profileDatabase.profileId &&
+      settings.state.musicResumeOnBluetoothReconnect &&
+      !state.isHidden &&
+      !state.isClosing &&
+      state.isAudio &&
+      state.currentQueueId != null &&
+      activePodcast == null &&
+      isMusicAudio &&
+      playbackStatus != MediaState.error &&
+      playbackStatus != MediaState.completed;
+
+  _BluetoothPlaybackOwner get _bluetoothPlaybackOwner => (
+        profileId: _profileDatabase.profileId,
+        queueId: state.currentQueueId,
+        sourceGeneration: _videoSwitchGeneration,
+        positionGeneration: _progressGeneration,
+        intentRevision: _transportIntentRevision,
+      );
+
+  _BluetoothReconnectPause? get _currentBluetoothPause {
+    final pending = _bluetoothReconnectPause;
+    if (pending == null) return null;
+    if (!_canTrackBluetoothReconnect ||
+        pending.owner != _bluetoothPlaybackOwner) {
+      _bluetoothReconnectPause = null;
+      return null;
+    }
+    return pending;
+  }
+
+  bool _pauseForBluetooth(_BluetoothRoute route, {required bool disconnected}) {
+    // just_audio may already have published a decoder pause for the same
+    // unplug. Default autoplay has no explicit Play command to fall back to.
+    if (!_canTrackBluetoothReconnect || !intendsPlayback) return false;
+    pause();
+    _bluetoothReconnectPause = _BluetoothReconnectPause(
+      route,
+      _bluetoothPlaybackOwner,
+      disconnected: disconnected,
+    );
+    return true;
+  }
+
+  @visibleForTesting
+  void handleBecomingNoisy() {
+    if (isClosed || _isDisposing) return;
+    if (_currentBluetoothPause != null) return;
+    final route = _selectedBluetoothOutput;
+    // Android can deliver the noisy event before its device-removal callback.
+    // Require physical removal before this provisional pause can resume.
+    if (route != null && _pauseForBluetooth(route, disconnected: false)) return;
+    pauseForAudioOutputDisconnect();
+  }
+
+  @visibleForTesting
+  void handleBluetoothOutput(MusicBluetoothOutputEvent event) {
+    if (isClosed || _isDisposing) return;
+    final id = event.outputId;
+    final route = id == null ? null : (id: id, portId: event.portId);
+    if (!event.isDisconnect) {
+      _selectedBluetoothOutput = route;
+      _resumeMusicOnBluetoothReconnect();
+      return;
+    }
+    if (route == null) return;
+    final wasSelected = _selectedBluetoothOutput == route;
+    if (wasSelected) _selectedBluetoothOutput = null;
+    final pending = _currentBluetoothPause;
+    if (pending != null && pending.route == route) {
+      pending.disconnected = true;
+      _resumeMusicOnBluetoothReconnect();
+    } else if (wasSelected) {
+      _pauseForBluetooth(route, disconnected: true);
+    }
+  }
+
+  void _resumeMusicOnBluetoothReconnect() {
+    final pending = _currentBluetoothPause;
+    if (pending == null ||
+        !pending.disconnected ||
+        playbackInterrupted ||
+        _selectedBluetoothOutput?.id != pending.route.id) {
+      return;
+    }
+    _bluetoothReconnectPause = null;
+    play();
   }
 
   @visibleForTesting
   void handleMediaVolumeChange(double volume) {
     final previous = _lastMediaVolume;
     _lastMediaVolume = volume;
-    if (volume != 0 ||
-        previous == null ||
-        previous <= 0 ||
-        isClosed ||
+    final heldPause = _mediaVolumePause;
+    if (volume > 0) _mediaVolumePause = null;
+    if (isClosed ||
         _isDisposing ||
         _switchingProfile ||
         db.profileId != _profileDatabase.profileId ||
@@ -5923,19 +7362,35 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         state.isClosing ||
         activePodcast != null ||
         !isMusicAudio ||
-        !intendsPlayback ||
         !settings.state.musicPauseAtZeroVolume) {
       return;
     }
-    pause();
+    if (previous == 0 && volume > 0) {
+      if (_canResumeVolumePause &&
+          !intendsPlayback &&
+          heldPause == _volumePauseOwner) {
+        play();
+      }
+    } else if (volume == 0 &&
+        previous != null &&
+        previous > 0 &&
+        intendsPlayback) {
+      final rememberPause = state.isPlaying && _canResumeVolumePause;
+      pause();
+      if (rememberPause) _mediaVolumePause = _volumePauseOwner;
+    }
   }
 
   void handleAudioInterruption(AudioInterruptionEvent event) {
     if (isClosed || _isDisposing) return;
     if (event.begin) {
       if (_playbackInterrupted && _audioInterruptionType == event.type) return;
-      _learningPlayback?.clock.interrupt();
-      _checkpointLearning(force: true);
+      if (event.type == AudioInterruptionType.pause &&
+          !settings.state.musicResumeAfterAudioFocusLoss) {
+        _mediaVolumePause = null;
+      }
+      _interruptPlaybackClocks();
+      _checkpointPlayback();
       _audioFocusRevision++;
       // Permanent loss abandons focus and has no promised end event. Cancel
       // automatic playback, while allowing a later explicit Play to ask again.
@@ -6037,11 +7492,108 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         emit(state.copyWith(mediaCommand: MediaCommand(MediaCommandType.play)));
       }
     }
+    if (event.type != AudioInterruptionType.unknown) {
+      _resumeMusicOnBluetoothReconnect();
+    }
+  }
+
+  _WiredHeadsetResume? _wiredHeadsetResumeStamp() {
+    final app = settings.appCubit.state;
+    if (!settings.state.musicWiredHeadsetAutoplay ||
+        _sessionOwner != this ||
+        isClosed ||
+        _isDisposing ||
+        _switchingProfile ||
+        app.globalLoading ||
+        app.sessionRecoveryRequired ||
+        app.profileId != _profileDatabase.profileId ||
+        db.profileId != _profileDatabase.profileId ||
+        state.isHidden ||
+        state.isClosing ||
+        _sessionTransitionPending ||
+        _backendSwitchPending ||
+        _playbackInterrupted ||
+        activePodcast != null ||
+        !_inMusicQueue ||
+        playbackStatus == MediaState.error ||
+        playbackStatus == MediaState.completed) {
+      return null;
+    }
+    return (
+      transportRevision: _transportIntentRevision,
+      focusRevision: _audioFocusRevision,
+      sessionRevision: app.sessionRevision,
+      playbackOwner: _statusOwner(state),
+    );
+  }
+
+  @visibleForTesting
+  void pauseForAudioOutputDisconnect() {
+    if (isClosed || _isDisposing) return;
+    final beforePause = _wiredHeadsetResumeStamp();
+    final wasPlaying = state.isPlaying && requestedPlaying;
+    final pending = _pendingWiredDisconnect;
+    final confirmed = _wiredHeadsetResume;
+    _pendingWiredDisconnect = null;
+    _wiredHeadsetResume = null;
+    pause();
+    if (beforePause == null) return;
+    final afterPause = _wiredHeadsetResumeStamp();
+    if (afterPause == null) return;
+    if (confirmed == beforePause ||
+        (wasPlaying &&
+            pending != null &&
+            pending.isRemoval &&
+            pending.stamp == beforePause &&
+            pending.age.elapsed <= _wiredDisconnectWindow)) {
+      _wiredHeadsetResume = afterPause;
+    } else if (wasPlaying) {
+      _pendingWiredDisconnect = (
+        stamp: afterPause,
+        age: Stopwatch()..start(),
+        isRemoval: false,
+      );
+    }
+  }
+
+  @visibleForTesting
+  void onWiredHeadsetRemoved() {
+    final stamp = _wiredHeadsetResumeStamp();
+    if (stamp == null) return;
+    final pending = _pendingWiredDisconnect;
+    if (pending != null &&
+        !pending.isRemoval &&
+        pending.stamp == stamp &&
+        pending.age.elapsed <= _wiredDisconnectWindow) {
+      _wiredHeadsetResume = stamp;
+      _pendingWiredDisconnect = null;
+    } else if (state.isPlaying && requestedPlaying) {
+      _pendingWiredDisconnect = (
+        stamp: stamp,
+        age: Stopwatch()..start(),
+        isRemoval: true,
+      );
+    }
+  }
+
+  @visibleForTesting
+  void onWiredHeadsetInserted() {
+    final resume = _wiredHeadsetResume;
+    _wiredHeadsetResume = null;
+    _pendingWiredDisconnect = null;
+    if (resume != null && resume == _wiredHeadsetResumeStamp()) play();
+  }
+
+  void _onWiredObserverError(Object error, StackTrace stackTrace) {
+    _wiredHeadsetResume = null;
+    _pendingWiredDisconnect = null;
+    log.fine('Wired headset observation failed', error, stackTrace);
   }
 
   void play() {
     if (_switchingProfile || isClosed || _isDisposing) return;
     _clearMusicHandoff();
+    _mediaVolumePause = null;
     _transportIntentRevision++;
     _requestedPlaying = true;
     if (!state.isAudio &&
@@ -6102,10 +7654,11 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   }
 
   void pause() {
+    _mediaVolumePause = null;
     _releaseMusicEndWait();
     _clearMusicHandoff(endAudioWait: true);
-    _learningPlayback?.clock.interrupt();
-    _checkpointLearning(force: true);
+    _interruptPlaybackClocks();
+    _checkpointPlayback();
     _transportIntentRevision++;
     _waitingForPlaylist = false;
     _waitingForPlaylistUserSkip = false;
@@ -6132,7 +7685,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     if (_inMusicQueue) _musicShuffleAnchors.add(movedId);
 
     List<T> applyOrder<T extends IdedVideo>(List<T> source) {
-      if (settings.state.playerShuffleMode || source.isEmpty) return source;
+      if (musicQueueShuffled || source.isEmpty) return source;
       final byId = {for (final item in source) playbackQueueId(item): item};
       if (!upcoming.every(byId.containsKey)) return source;
       var index = 0;
@@ -6160,6 +7713,36 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       current: queue.currentQueueId,
       upcoming: queue.playQueue,
     );
+  }
+
+  bool get musicQueueShuffled =>
+      state.musicQueueShuffled ?? settings.state.playerShuffleMode;
+
+  bool get canToggleMusicQueueShuffle {
+    final app = settings.appCubit;
+    return _canEditMusicUpcoming &&
+        _inMusicQueue &&
+        state.hasQueue &&
+        (_sessionOwner == null || _sessionOwner == this) &&
+        activePodcast == null &&
+        !settings.isClosed &&
+        !app.isClosed &&
+        !app.state.globalLoading &&
+        !app.state.sessionRecoveryRequired;
+  }
+
+  Future<void> toggleMusicQueueShuffle({required bool expectedShuffled}) async {
+    if (!canToggleMusicQueueShuffle || musicQueueShuffled != expectedShuffled) {
+      return;
+    }
+    final shuffled = !expectedShuffled;
+    _generatePlayQueue(shuffled, musicQueueShuffled: shuffled);
+    _musicHomeWidget?.refresh();
+    try {
+      await settings.setShuffle(shuffled);
+    } catch (error) {
+      log.warning('Could not save the Music shuffle preference', error);
+    }
   }
 
   bool get _canEditMusicUpcoming =>
@@ -6190,7 +7773,50 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       _canEditMusicUpcoming &&
       state.playQueue.any(_musicMixGenerated.contains);
 
-  bool steerMusicMix(MusicMixSteering steering) {
+  MusicMixSteering get musicMixSteering => _musicMixSteering;
+
+  MusicMixFamiliarity get musicMixFamiliarity => _musicMixFamiliarity;
+
+  RecommendationService get _musicMixRecommendations =>
+      RecommendationService.forProfile(db, _profileDatabase.profileId);
+
+  bool get musicMixLearningEnabled =>
+      _musicMixRecommendations.learningEnabled(RecommendationDomain.music);
+
+  bool steerMusicMix(MusicMixSteering steering) =>
+      _updateMusicMix(steering, _musicMixFamiliarity);
+
+  bool steerMusicMixFamiliarity(MusicMixFamiliarity familiarity) {
+    if (familiarity != MusicMixFamiliarity.balanced &&
+        !musicMixLearningEnabled) {
+      return false;
+    }
+    return _updateMusicMix(_musicMixSteering, familiarity);
+  }
+
+  Set<String> _familiarMusicMixSongIds(List<MusicTrack> candidates) {
+    final library =
+        MusicLibraryService.forProfile(db, _profileDatabase.profileId);
+    final ids = {
+      for (final track in candidates)
+        if (library.savedSong(track.videoId) != null) track.videoId,
+    };
+    if (!_profileDatabase.musicHistoryRecordingPaused) {
+      try {
+        final candidateIds = candidates.map((track) => track.videoId).toSet();
+        ids.addAll(_profileDatabase
+            .getPlaybackHistory(PlaybackHistoryOrigin.music)
+            .map((entry) => entry.videoId)
+            .where(candidateIds.contains));
+      } on UnsupportedError {
+        // Some database implementations only supply saved songs.
+      }
+    }
+    return ids;
+  }
+
+  bool _updateMusicMix(
+      MusicMixSteering steering, MusicMixFamiliarity familiarity) {
     final mix = _musicMix;
     if (mix == null || !canSteerMusicMix) return false;
     final upcoming = state.playQueue;
@@ -6205,11 +7831,20 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       for (final entry in state.videos)
         if (!replaceableIds.contains(playbackQueueId(entry))) entry.videoId,
     };
-    final recommendations =
-        RecommendationService.forProfile(db, _profileDatabase.profileId);
+    final recommendations = _musicMixRecommendations;
     final candidates = recommendations.eligibleMusic(
         mix.candidates.where((track) => !excluded.contains(track.videoId)));
-    final ordered = mix.order(candidates, steering).take(slots.length).toList();
+    _musicMixSteering = steering;
+    _musicMixFamiliarity = familiarity;
+    final ordered = mix
+        .order(candidates, steering,
+            familiarity: familiarity,
+            familiarSongIds: familiarity != MusicMixFamiliarity.balanced &&
+                    recommendations.learningEnabled(RecommendationDomain.music)
+                ? _familiarMusicMixSongIds(candidates)
+                : const {})
+        .take(slots.length)
+        .toList();
     if (listEquals(slots, ordered.map((track) => track.videoId).toList())) {
       return false;
     }
@@ -6367,7 +8002,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     destination.insert(slot < 0 ? destination.length : slot, movedId);
     final entry = timeline.removeAt(from);
     timeline.insert(to > from ? to - 1 : to, entry);
-    final shuffled = settings.state.playerShuffleMode;
+    final shuffled = musicQueueShuffled;
     final online = state.videos.isNotEmpty;
     _musicShuffleAnchors.add(movedId);
     _musicMixGenerated.removeAll([movedId, if (beforeId != null) beforeId]);
@@ -6536,7 +8171,8 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     if (isClosed ||
         _switchingProfile ||
         _sessionTransitionPending ||
-        state.currentQueueId == null) {
+        state.currentQueueId == null ||
+        !_canOpenQueueId(id)) {
       return false;
     }
     _cancelMusicSelection();
@@ -6620,33 +8256,118 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     }
   }
 
-  void removeInactiveQueueOccurrences(Set<String> occurrenceIds) {
-    if (isClosed || _isDisposing || _switchingProfile || state.isClosing)
-      return;
-    final current = state.currentQueueId;
-    if (current == null) return;
-    bool retain(IdedVideo video) {
-      final occurrence = playbackQueueId(video);
-      return occurrence == current || !occurrenceIds.contains(occurrence);
+  List<_QueueTraversalEntry> _queueTraversalWithCurrent(String current) => [
+        for (final id in state.playedVideos) (id: id, current: false),
+        (id: current, current: true),
+        for (final id in state.playQueue) (id: id, current: false),
+      ];
+
+  MusicQueueRemovalUndo? removeInactiveQueueOccurrences(
+      Set<String> occurrenceIds) {
+    if (isClosed ||
+        _isDisposing ||
+        _switchingProfile ||
+        _sessionTransitionPending ||
+        state.isClosing) {
+      return null;
     }
+    final current = state.currentQueueId;
+    if (current == null) return null;
+    final opening = openingMusicEntry;
+    final removed = occurrenceIds.difference({
+      current,
+      if (opening != null) playbackQueueId(opening),
+    });
+    bool retain(IdedVideo video) => !removed.contains(playbackQueueId(video));
 
     final videos = state.videos.where(retain).toList();
     final offline = state.offlineVideos.where(retain).toList();
-    if (videos.length == state.videos.length &&
-        offline.length == state.offlineVideos.length) return;
-    _musicRecommendationSources
-        .removeWhere((id, _) => id != current && occurrenceIds.contains(id));
-    _rememberMusicMixRemovals(occurrenceIds.difference({current}));
+    final count = state.videos.length -
+        videos.length +
+        state.offlineVideos.length -
+        offline.length;
+    if (count == 0) return null;
+    final token = _queueRemovalToken = Object();
+    final undo = MusicQueueRemovalUndo._(
+      count,
+      token,
+      _playlistGeneration,
+      _QueueRemovalRun.capture(state.videos, playbackQueueId, removed),
+      _QueueRemovalRun.capture(state.offlineVideos, playbackQueueId, removed),
+      _QueueRemovalRun.capture(
+          _queueTraversalWithCurrent(current), (entry) => entry.id, removed),
+      {
+        for (final entry in _musicRecommendationSources.entries)
+          if (removed.contains(entry.key)) entry.key: entry.value,
+      },
+      removed.intersection(_musicShuffleAnchors),
+    );
+    _musicRecommendationSources.removeWhere((id, _) => removed.contains(id));
+    _rememberMusicMixRemovals(removed);
     emit(state.copyWith(
       videos: videos,
       offlineVideos: offline,
-      playedVideos: state.playedVideos
-          .where((id) => id == current || !occurrenceIds.contains(id))
-          .toList(),
-      playQueue: ListQueue.of(state.playQueue.where(
-        (id) => id == current || !occurrenceIds.contains(id),
-      )),
+      playedVideos:
+          state.playedVideos.where((id) => !removed.contains(id)).toList(),
+      playQueue:
+          ListQueue.of(state.playQueue.where((id) => !removed.contains(id))),
     ));
+    return undo;
+  }
+
+  /// Restores the latest removal without replacing the mounted occurrence or
+  /// changing transport state. The traversal split follows the current song.
+  bool undoQueueRemoval(MusicQueueRemovalUndo undo) {
+    final current = state.currentQueueId;
+    if (isClosed ||
+        _isDisposing ||
+        _switchingProfile ||
+        _sessionTransitionPending ||
+        state.isClosing ||
+        state.isHidden ||
+        current == null ||
+        _profileDatabase.profileId != db.profileId ||
+        settings.state.musicQueueLocked ||
+        undo._token != _queueRemovalToken ||
+        undo._generation != _playlistGeneration ||
+        (undo._videos.isNotEmpty && state.videos.isEmpty) ||
+        (undo._offline.isNotEmpty && state.videos.isNotEmpty) ||
+        undo._age.elapsed >= MusicQueueRemovalUndo.duration) {
+      return false;
+    }
+    final ids = {
+      ...state.videos.map(playbackQueueId),
+      ...state.offlineVideos.map(playbackQueueId),
+    };
+    if (!ids.contains(current)) return false;
+    // A later enqueue can allocate an ID previously held by a removed copy.
+    if (<_QueueRemovalRun<IdedVideo>>[...undo._videos, ...undo._offline]
+        .expand<IdedVideo>((run) => run.entries)
+        .any((entry) => ids.contains(playbackQueueId(entry)))) {
+      return false;
+    }
+    final traversal = _QueueRemovalRun.restore(
+      _queueTraversalWithCurrent(current),
+      (entry) => entry.id,
+      undo._traversal,
+    );
+    final active = traversal.indexWhere((entry) => entry.current);
+    _queueRemovalToken = null;
+    _musicRecommendationSources.addAll(undo._recommendationSources);
+    _musicShuffleAnchors.addAll(traversal
+        .skip(active + 1)
+        .map((entry) => entry.id)
+        .where(undo._shuffleAnchors.contains));
+    emit(state.copyWith(
+      videos:
+          _QueueRemovalRun.restore(state.videos, playbackQueueId, undo._videos),
+      offlineVideos: _QueueRemovalRun.restore(
+          state.offlineVideos, playbackQueueId, undo._offline),
+      playedVideos: traversal.take(active).map((entry) => entry.id).toList(),
+      playQueue:
+          ListQueue.of(traversal.skip(active + 1).map((entry) => entry.id)),
+    ));
+    return true;
   }
 
   void _rememberMusicMixRemovals(Set<String> occurrenceIds) {
@@ -6689,10 +8410,14 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       for (final entry in _playlistEntries.entries)
         if (!currentIds.contains(entry.key)) entry.value,
     ];
-    final combined =
-        assignPlaybackQueueIds([...reserved, ...state.videos, ...selection])
-            .skip(reserved.length)
-            .toList();
+    final combined = assignPlaybackQueueIds([
+      ...reserved,
+      ...state.videos,
+      for (final video in selection)
+        isMusicQueueSuggestion(video)
+            ? video.copyWith(queueEntryId: null)
+            : _normalizeExplicitDownloadQueueId(video),
+    ]).skip(reserved.length).toList();
     final copies = combined.skip(originalLength).toList();
     final ids = copies.map(playbackQueueId);
     _musicHistoryEntries.addAll(ids);
@@ -6721,6 +8446,10 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       !state.isClosing &&
       !state.isHidden &&
       selection.isNotEmpty &&
+      (state.isAudio ||
+          selection.whereType<Video>().every((entry) =>
+              entry.explicitMusicDownload == null &&
+              CachedMusicPlayback.of(entry) == null)) &&
       _profileDatabase.profileId == db.profileId &&
       state.currentQueueId != null;
 
@@ -6777,7 +8506,11 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     }
     final result = <DownloadedVideo>[];
     for (final song in selection) {
-      final saved = _readySavedDownload(song.videoId);
+      if (CachedMusicPlayback.of(song) != null) return null;
+      final fingerprint = song.explicitMusicDownload;
+      final saved = fingerprint == null
+          ? _readySavedDownload(song.videoId)
+          : _explicitDownload(song);
       if (saved == null) return null;
       if (downloads != null) {
         final requested = explicit[song.videoId];
@@ -6787,7 +8520,9 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
           return null;
         }
       }
-      result.add(saved);
+      result.add(fingerprint == null
+          ? saved
+          : saved.copyWith(explicitMusicDownload: fingerprint));
     }
     return result;
   }
@@ -7061,7 +8796,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     final currentId = state.currentQueueId;
     final current =
         listToUpdate.indexWhere((video) => playbackQueueId(video) == currentId);
-    if (!settings.state.playerShuffleMode && current >= 0) {
+    if (!musicQueueShuffled && current >= 0) {
       // Queue order determines previous/next playback outside shuffle mode.
       playedVideos = listToUpdate.take(current).map(playbackQueueId).toList();
     }
@@ -7069,7 +8804,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         playedVideos: playedVideos,
         videos: videos,
         offlineVideos: offlineVideos));
-    if (settings.state.playerShuffleMode) {
+    if (musicQueueShuffled) {
       // Move only the requested upcoming occurrence. Preserve the relative
       // shuffled order of every other song and the actual playback history.
       final movedId = playbackQueueId(movedItem);
@@ -7274,11 +9009,43 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     return merged;
   }
 
-  void seek(Duration position) {
+  void seek(Duration position) => _seek(position);
+
+  Duration get _lyricsWidgetSeekLimit {
+    final offline = state.offlineCurrentlyPlaying;
+    final track = localMusicTrackForPlayback(offline?.videoId);
+    if (track != null &&
+        track.uri == offline?.storageUri &&
+        track.durationMs > 0) {
+      return Duration(milliseconds: track.durationMs);
+    }
+    return duration;
+  }
+
+  bool _seekFromLyricsWidget(Duration position, bool Function() isCurrent) {
+    final limit = _lyricsWidgetSeekLimit;
+    if (!canSeekCurrentMedia ||
+        position.isNegative ||
+        position > limit ||
+        !isCurrent()) {
+      return false;
+    }
+    _seek(position, canExecute: isCurrent, seekLimit: limit);
+    return true;
+  }
+
+  void _seek(Duration position,
+      {bool Function()? canExecute, Duration? seekLimit}) {
+    if (!canSeekCurrentMedia) return;
     _clearMusicHandoff(endAudioWait: true);
-    _learningPlayback?.clock.interrupt();
+    _interruptPlaybackClocks();
     _recoveryProgressPosition = null;
-    final end = duration;
+    final preparer = manualMusicPreparer;
+    final end = seekLimit ??
+        (preparer is AudioPlayerCubit
+            ? preparer.mountedMusicWaveform?.duration
+            : null) ??
+        duration;
     if (position.isNegative || end.isNegative) {
       position = Duration.zero;
     } else if (position > end) {
@@ -7287,10 +9054,12 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
 
     emit(state.copyWith(
         position: position,
-        mediaCommand: MediaCommand(MediaCommandType.seek, value: position)));
+        mediaCommand: MediaCommand(MediaCommandType.seek,
+            value: position, canExecute: canExecute)));
   }
 
   void fastForward() {
+    if (!canSeekCurrentMedia) return;
     var newPosition = state.position + Duration(seconds: state.forwardStep);
     seek(newPosition);
     log.info('fast forward $newPosition - step: ${state.forwardStep}');
@@ -7309,6 +9078,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   }
 
   void rewind() {
+    if (!canSeekCurrentMedia) return;
     seek(state.position - Duration(seconds: state.rewindStep));
     emit(state.copyWith(
       totalRewind: state.totalRewind + state.rewindStep,
@@ -7399,7 +9169,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       final e = state.offlineVideos[index];
       if (e.musicMetadata != null && e.profileId != profile) return null;
       if (isLocalMusicPlaybackId(e.videoId)) {
-        final track = localMusicTrackForPlayback(e.videoId);
+        final track = _authorizedLocalTrack(e.videoId);
         if (track == null) return null;
         return _localMediaItem(e, track);
       }
@@ -7427,7 +9197,10 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
               (track.durationMs > 0
                   ? Duration(milliseconds: track.durationMs)
                   : Duration(seconds: entry.lengthSeconds)),
-          artUri: track.artPath == null ? null : Uri.file(track.artPath!));
+          artUri: DeviceMusicArtworkPreferences.loadsCovers(_profileDatabase) &&
+                  track.artPath != null
+              ? Uri.file(track.artPath!)
+              : null);
 
   /// The document provider can omit duration tags on an otherwise seekable
   /// audio file. Publish the decoder's duration only for the admitted song.
@@ -7451,7 +9224,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   }
 
   void reportLocalMusicDuration(String id, Duration duration) {
-    final track = localMusicTrackForPlayback(id);
+    final track = _authorizedLocalTrack(id);
     final current = state.offlineCurrentlyPlaying;
     if (isClosed ||
         _switchingProfile ||
@@ -7479,6 +9252,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   }
 
   void setSpeed(double d) {
+    _musicListeningPlayback?.clock.interrupt();
     emit(state.copyWith(
         speed: d,
         mediaCommand: MediaCommand(MediaCommandType.speed, value: d)));
@@ -7631,7 +9405,9 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     }
   }
 
-  void generatePlayQueue() {
+  void generatePlayQueue() => _generatePlayQueue(musicQueueShuffled);
+
+  void _generatePlayQueue(bool shuffled, {bool? musicQueueShuffled}) {
     final played = state.playedVideos.toSet();
     final currentId = state.currentQueueId;
     if (currentId != null) played.add(currentId);
@@ -7641,13 +9417,11 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
             .map(playbackQueueId)
             .toList();
 
-    // if we're in shuffle mode, we shuffle the collection
-    if (settings.state.playerShuffleMode) {
-      videos.shuffle();
-    }
+    if (shuffled) videos.shuffle();
 
-    ListQueue<String> playQueue = ListQueue.from(videos);
-    emit(state.copyWith(playQueue: playQueue));
+    emit(state.copyWith(
+        playQueue: ListQueue.of(videos),
+        musicQueueShuffled: musicQueueShuffled ?? state.musicQueueShuffled));
   }
 
   void onOrientationChange() {
@@ -7670,17 +9444,40 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     }
   }
 
-  void sleep(SleepTimer sleepTimer) {
+  void sleep(SleepTimer sleepTimer,
+      {bool finishSong = false, bool fadeOut = false}) {
+    _retireSleepFade();
     _sleepAtEndQueueId = null;
     _sleepDeadline = DateTime.now().add(sleepTimer.duration);
+    _sleepFadeEnabled = fadeOut && _hasMountedMusicTrack;
+    if (_sleepFadeEnabled && !finishSong) {
+      _scheduleTimedSleepFade(sleepTimer.duration);
+    }
     emit(state.copyWith(hasTimer: true, sleepTracksRemaining: null));
 
     _debounce(
       'video-sleep-timer',
       sleepTimer.duration,
       () {
-        _sleepDeadline = null;
-        emit(state.copyWith(hasTimer: false));
+        if (finishSong &&
+            state.isPlaying &&
+            intendsPlayback &&
+            !_hasPendingMusicHandoff &&
+            canSleepAfterTracks &&
+            playbackStatus != MediaState.error) {
+          _armSleepAtEndOfTrack(state.currentQueueId!,
+              fadeOut: _sleepFadeEnabled);
+          return;
+        }
+        if (!finishSong && _sleepFadeEnabled && _hasMountedMusicTrack) {
+          _stopSleepFadeClock();
+          _sleepFadeEnabled = false;
+          _sleepFadePause = Object();
+          _sleepTimerGain.value = 0;
+          _clearSleepTimer();
+        } else {
+          cancelSleep();
+        }
         pause();
         if (sleepTimer.stopVideo && !isClosed) {
           hide();
@@ -7691,7 +9488,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
 
   /// Muzza's alternate sleep mode is tied to a real item transition or end,
   /// rather than a timer derived from playback position.
-  void sleepAtEndOfTrack() {
+  void sleepAtEndOfTrack({bool fadeOut = false}) {
     final occurrence = state.currentQueueId;
     if (isClosed ||
         _isDisposing ||
@@ -7703,10 +9500,26 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         occurrence == null) {
       return;
     }
+    _armSleepAtEndOfTrack(occurrence, fadeOut: fadeOut);
+  }
+
+  void _armSleepAtEndOfTrack(String occurrence, {required bool fadeOut}) {
+    _retireSleepFade();
+    _sleepFadeEnabled = fadeOut && _hasMountedMusicTrack;
+    if (_sleepFadeEnabled) _captureSleepTrackFadeStart();
     _timers.remove('video-sleep-timer')?.cancel();
     _sleepDeadline = null;
     _sleepAtEndQueueId = occurrence;
     emit(state.copyWith(hasTimer: true, sleepTracksRemaining: null));
+  }
+
+  bool _pauseForSleepTrackChange(String nextQueueId) {
+    final occurrence = _sleepAtEndQueueId;
+    // Recovering the same occurrence keeps the timer even if its URL changes.
+    if (occurrence == null || occurrence == nextQueueId) return false;
+    cancelSleep();
+    pause();
+    return true;
   }
 
   bool get _hasMountedMusicTrack =>
@@ -7726,8 +9539,11 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
 
   /// Count each playback that reaches EOF, including repeats of the same
   /// occurrence. Manual navigation leaves the countdown armed.
-  void sleepAfterTracks(int tracks) {
+  void sleepAfterTracks(int tracks, {bool fadeOut = false}) {
     if (tracks <= 0 || !canSleepAfterTracks) return;
+    _retireSleepFade();
+    _sleepFadeEnabled = fadeOut;
+    if (_sleepFadeEnabled && tracks == 1) _captureSleepTrackFadeStart();
     _timers.remove('video-sleep-timer')?.cancel();
     _sleepDeadline = null;
     _sleepAtEndQueueId = null;
@@ -7754,10 +9570,73 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   }
 
   void cancelSleep() {
+    _retireSleepFade();
+    _clearSleepTimer();
+  }
+
+  void _clearSleepTimer() {
     _sleepAtEndQueueId = null;
     _sleepDeadline = null;
     emit(state.copyWith(hasTimer: false, sleepTracksRemaining: null));
     _timers.remove('video-sleep-timer')?.cancel();
+  }
+
+  void _scheduleTimedSleepFade(Duration duration) {
+    if (duration <= Duration.zero) return;
+    final span = duration < _sleepFadeWindow ? duration : _sleepFadeWindow;
+    _debounce('music-sleep-fade', duration - span, () {
+      _sleepFadeTicker = Timer.periodic(_sleepFadeInterval, (timer) {
+        final elapsed = _sleepFadeInterval.inMicroseconds * timer.tick;
+        _sleepTimerGain.value =
+            (1 - elapsed / span.inMicroseconds).clamp(0.0, 1.0);
+      });
+    });
+  }
+
+  void _captureSleepTrackFadeStart() {
+    final remaining = duration - state.position;
+    if (remaining > Duration.zero) _sleepTrackFadeInitialRemaining = remaining;
+  }
+
+  /// The final counted track and the end-of-song timer use decoder time.
+  void updateSleepTrackFade(
+      Duration position, Duration duration, double speed) {
+    if (!_sleepFadeEnabled ||
+        _sleepDeadline != null ||
+        !_hasMountedMusicTrack ||
+        (_sleepAtEndQueueId != state.currentQueueId &&
+            state.sleepTracksRemaining != 1) ||
+        duration <= Duration.zero) {
+      return;
+    }
+    final initialRemaining = _sleepTrackFadeInitialRemaining ?? duration;
+    final span = math.min(initialRemaining.inMicroseconds,
+        _sleepFadeWindow.inMicroseconds * speed);
+    final remaining = (duration - position).inMicroseconds;
+    _sleepTimerGain.value = (remaining / span).clamp(0.0, 1.0);
+  }
+
+  /// Keep the decoder at zero until its pause has reached the platform.
+  VoidCallback? get completeSleepFadePause {
+    final pending = _sleepFadePause;
+    if (pending == null) return null;
+    return () {
+      if (identical(pending, _sleepFadePause)) _retireSleepFade();
+    };
+  }
+
+  void _stopSleepFadeClock() {
+    _timers.remove('music-sleep-fade')?.cancel();
+    _sleepFadeTicker?.cancel();
+    _sleepFadeTicker = null;
+  }
+
+  void _retireSleepFade() {
+    _stopSleepFadeClock();
+    _sleepFadeEnabled = false;
+    _sleepTrackFadeInitialRemaining = null;
+    _sleepFadePause = null;
+    _sleepTimerGain.value = 1;
   }
 
   void _debounce(String name, Duration delay, VoidCallback callback) {
@@ -7803,6 +9682,7 @@ sealed class PlayerState with _$PlayerState {
       // playlist controls
       @Default([]) List<String> playedVideos,
       required ListQueue<String> playQueue,
+      bool? musicQueueShuffled,
       @Default(false) bool isAudio,
 
       // playing video data

@@ -11,6 +11,8 @@ import '../extensions.dart';
 import '../globals.dart';
 import '../music/models/device_playlist_track.dart';
 import '../music/services/cached_music.dart';
+import '../music/models/replay_gain.dart';
+import '../music/models/local_music_track.dart';
 import '../network/media_companion.dart';
 import '../network/network_proxy.dart';
 import '../videos/models/adaptive_format.dart';
@@ -21,7 +23,10 @@ import 'models/backend_playback.dart';
 import 'models/local_music_playback.dart';
 import 'models/music_audio_quality.dart';
 import 'models/playback_cache_identity.dart';
+import 'models/playback_queue.dart';
 import 'models/watch_audio_track.dart';
+
+typedef LocalMusicSourceTag = ({String occurrenceId, ReplayGain? replayGain});
 
 /// The same ordered, admitted renditions are used for playback and preloading.
 typedef AudioPlaybackSources = ({
@@ -89,6 +94,7 @@ Future<AudioPlaybackSources?> resolveAudioPlaybackSources({
   required DownloadedVideo? offlineVideo,
   required String sessionId,
   required bool Function() isCurrent,
+  LocalMusicTrack? Function(String)? openedAudioTrack,
   MusicAudioQuality? qualityPreference,
   MusicStreamingQuality? streamingQualityOverride,
   BackendPlayback? qualityRoute,
@@ -148,7 +154,10 @@ Future<AudioPlaybackSources?> resolveAudioPlaybackSources({
     sources.add(ProgressiveAudioSource(uri));
   } else if (isLocalMusicPlaybackId(entry?.videoId)) {
     if (!isCurrent()) return null;
-    final track = localMusicTrackForPlayback(entry!.videoId);
+    final id = entry!.videoId;
+    final track = isOpenedAudioPlaybackId(id)
+        ? openedAudioTrack?.call(id)
+        : localMusicTrackForPlayback(id);
     if (track == null ||
         (offlineVideo != null && offlineVideo.profileId != db.profileId) ||
         (offlineVideo == null &&
@@ -157,8 +166,9 @@ Future<AudioPlaybackSources?> resolveAudioPlaybackSources({
     }
     // A provider's document name is opaque. Even a misleading suffix
     // must never select a playlist decoder that opens nested URLs.
-    final gain = track.replayGain;
-    final source = ProgressiveAudioSource(Uri.parse(track.uri), tag: gain);
+    final tag =
+        (occurrenceId: playbackQueueId(entry), replayGain: track.replayGain);
+    final source = ProgressiveAudioSource(Uri.parse(track.uri), tag: tag);
     final start = track.cueStartUs;
     final end = track.cueEndUs;
     sources.add(start == null
@@ -167,7 +177,7 @@ Future<AudioPlaybackSources?> resolveAudioPlaybackSources({
             child: source,
             start: Duration(microseconds: start),
             end: end == null ? null : Duration(microseconds: end),
-            tag: gain));
+            tag: tag));
   } else if (offlineVideo != null) {
     // The local library can rename a managed document while this queue still
     // holds the previous provider URI. Resolve the current owned download on

@@ -6,6 +6,7 @@ import 'package:clipious/music/services/music_media_save.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:logging/logging.dart';
+import 'package:uuid/uuid.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/l10n/app_languages.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
@@ -21,15 +22,34 @@ typedef CarQueueRow = ({String occurrence, MediaItem item});
 class MediaHandler extends BaseAudioHandler with SeekHandler {
   final PlayerCubit controller;
   static const _carChannel = MethodChannel('videre/car_media');
+  static const _systemRecentRoot = 'system-resume-recent';
+  Future<void>? _androidResume;
+
+  static Future<bool> hasMediaActivity() async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return true;
+    try {
+      return await _carChannel.invokeMethod<bool>('hasMediaActivity') ?? true;
+    } on MissingPluginException {
+      return true;
+    }
+  }
+
   static final _log = Logger('MediaHandler');
   static const _firstCarId = 1000000000;
   static int _nextCarId = _firstCarId;
+  static const _queueBrowsePrefix = 'car-queue-browse:';
+  static const _queueBrowseRoot = '${_queueBrowsePrefix}root';
+  late final _queueBrowseRowPrefix = '$_queueBrowsePrefix${const Uuid().v4()}:';
   Object? _browseSession;
   Object? _carQueueOwner;
   List<CarQueueRow> _carRows = const [];
   Map<String, int> _carIds = const {};
   bool _carQueueReady = false;
   int _carQueueRevision = 0;
+  bool _queueBrowseUsed = false;
+  String? _queueBrowseCurrent;
+  bool? _browseAddOnDevice;
+  Future<void> _carQueueMutations = Future.value();
 
   late final carMusic = AndroidAutoMusic(
     session: () => controller.androidAutoSession,
@@ -41,18 +61,24 @@ class MediaHandler extends BaseAudioHandler with SeekHandler {
     playDevice: (entries, index, title, current) =>
         controller.playOnDeviceMusic(entries,
             startIndex: index, queueTitle: title, isCurrent: current),
-    labels: () {
-      final saved = parseSavedLocale(controller.settings.state.locale);
-      final locale = saved ?? PlatformDispatcher.instance.locale;
-      return lookupAppLocalizations(
-          AppLocalizations.delegate.isSupported(locale)
-              ? locale
-              : const Locale('en'));
-    },
+    labels: _labels,
   );
 
   MediaHandler(this.controller) {
     controller.attachMediaHandler(this);
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+      _carChannel.setMethodCallHandler(_handleCarCall);
+    }
+  }
+
+  AppLocalizations _labels() {
+    final saved = parseSavedLocale(controller.settings.state.locale);
+    final locale = saved ?? PlatformDispatcher.instance.locale;
+    return lookupAppLocalizations(
+      AppLocalizations.delegate.isSupported(locale)
+          ? locale
+          : const Locale('en'),
+    );
   }
 
   Future<List<OnDeviceMusicEntry>> _loadDevice() async {
@@ -116,10 +142,172 @@ class MediaHandler extends BaseAudioHandler with SeekHandler {
     }
   }
 
+  Future<Object?> _handleCarCall(MethodCall call) async {
+    switch (call.method) {
+      case 'getQueueBrowseChildren':
+        _beginQueueBrowse();
+        return _getQueueBrowseChildren(call.arguments as String);
+      case 'getQueueBrowseItem':
+        _beginQueueBrowse();
+        final id = call.arguments as String;
+        final row = _findCarRow(id);
+        if (row != null) {
+          final actions = controller.androidAutoQueueActions([row.occurrence]);
+          return _encodeCarRow(_browseQueueRow(row),
+              queueActions: actions[row.occurrence] ?? const {});
+        }
+        final item = switch (id) {
+          _queueBrowseRoot => _currentCarRows.isEmpty ? null : _queueFolder,
+          _ => await carMusic.getMediaItem(id),
+        };
+        return item == null ? null : _encodeCarRow(item);
+      case 'searchQueueBrowse':
+        _beginQueueBrowse();
+        final rows = await carMusic.search(call.arguments as String);
+        return rows.map(_encodeCarRow).toList();
+      case 'mutateMusicQueue':
+        final args = call.arguments as Map;
+        final action = AndroidAutoQueueAction.values
+            .where((value) => value.name == args['action'])
+            .firstOrNull;
+        final id = args['mediaId'];
+        return action != null && id is String
+            ? _mutateCarQueue(action, id)
+            : false;
+      default:
+        throw MissingPluginException();
+    }
+  }
+
+  void _beginQueueBrowse() {
+    if (_queueBrowseUsed) return;
+    _queueBrowseUsed = true;
+    _browseAddOnDevice = _canAddOnDevice;
+  }
+
+  List<CarQueueRow> get _currentCarRows => _carQueueOwner != null &&
+          _carQueueOwner == controller.androidAutoQueueOwner
+      ? _carRows
+      : const [];
+
+  MediaItem get _queueFolder => MediaItem(
+        id: _queueBrowseRoot,
+        title: _labels().musicQueue,
+        playable: false,
+      );
+
+  MediaItem _browseQueueRow(CarQueueRow row) =>
+      row.item.copyWith(id: '$_queueBrowseRowPrefix${_carIds[row.occurrence]}');
+
+  CarQueueRow? _findCarRow(String id) {
+    if (!id.startsWith(_queueBrowseRowPrefix)) return null;
+    final number = int.tryParse(id.substring(_queueBrowseRowPrefix.length));
+    if (number == null) return null;
+    return _currentCarRows
+        .where((row) => _carIds[row.occurrence] == number)
+        .firstOrNull;
+  }
+
+  Future<List<Map<String, Object?>>> _getQueueBrowseChildren(
+    String parent,
+  ) async {
+    if (parent == _queueBrowseRoot) {
+      final rows = _currentCarRows;
+      final actions =
+          controller.androidAutoQueueActions(rows.map((row) => row.occurrence));
+      return [
+        for (final row in rows)
+          _encodeCarRow(_browseQueueRow(row),
+              queueActions: actions[row.occurrence] ?? const {}),
+      ];
+    }
+    final children = await carMusic.getChildren(parent);
+    return [
+      for (final child in children) _encodeCarRow(child),
+      if (parent == AudioService.browsableRootId && _currentCarRows.isNotEmpty)
+        _encodeCarRow(_queueFolder),
+    ];
+  }
+
+  bool? get _canAddOnDevice => controller.androidAutoEditableQueue == null
+      ? null
+      : controller.state.videos.isEmpty;
+
+  Map<String, Object?> _encodeCarRow(MediaItem item,
+      {Set<AndroidAutoQueueAction>? queueActions}) {
+    final device =
+        queueActions == null ? carMusic.isOnDeviceSong(item.id) : null;
+    final actions = queueActions ??
+        {
+          if (device != null && _canAddOnDevice == device)
+            AndroidAutoQueueAction.addToQueue,
+        };
+    return {
+      'id': item.id,
+      'title': item.title,
+      'artist': item.artist,
+      'album': item.album,
+      'durationMs': item.duration?.inMilliseconds,
+      'playable': item.playable != false,
+      'actions': actions.map((action) => action.name).toList(),
+    };
+  }
+
+  Future<bool> _mutateCarQueue(AndroidAutoQueueAction action, String id) {
+    final owner = controller.androidAutoEditableQueue;
+    final occurrence = _findCarRow(id)?.occurrence;
+    final onDevice = carMusic.isOnDeviceSong(id);
+    if (owner == null ||
+        (action == AndroidAutoQueueAction.addToQueue
+            ? onDevice == null || onDevice != _canAddOnDevice
+            : occurrence == null)) {
+      return Future.value(false);
+    }
+    final edit = _carQueueMutations.then((_) async {
+      if (controller.androidAutoEditableQueue != owner) return false;
+      if (action != AndroidAutoQueueAction.addToQueue) {
+        if (_findCarRow(id)?.occurrence != occurrence) return false;
+        return controller.editAndroidAutoQueue(owner, occurrence!, action);
+      }
+      final song = await carMusic.resolveQueueSong(id);
+      if (song == null) return false;
+      return controller.addToAndroidAutoQueue(
+        owner,
+        video: song.video,
+        device: song.device,
+      );
+    });
+    // A failed source lookup must not prevent subsequent car requests.
+    _carQueueMutations = edit.then<void>(
+      (_) {},
+      onError: (Object error) {
+        _log.fine('Could not edit the car media queue (${error.runtimeType})');
+      },
+    );
+    return edit;
+  }
+
+  void refreshCarQueueBrowseActions() {
+    if (!_queueBrowseUsed) return;
+    final add = _canAddOnDevice;
+    if (add != _browseAddOnDevice) {
+      _browseAddOnDevice = add;
+      for (final parent in carMusic.loadedParents) {
+        unawaited(_refreshCarParent(parent));
+      }
+    }
+    unawaited(_refreshCarParent(_queueBrowseRoot));
+  }
+
   @override
   Future<List<MediaItem>> getChildren(String parentMediaId,
-          [Map<String, dynamic>? options]) =>
-      carMusic.getChildren(parentMediaId);
+      [Map<String, dynamic>? options]) async {
+    if (parentMediaId != _systemRecentRoot) {
+      return carMusic.getChildren(parentMediaId);
+    }
+    final recent = await controller.androidRecentMusic();
+    return recent == null ? [] : [recent];
+  }
 
   @override
   Future<MediaItem?> getMediaItem(String mediaId) =>
@@ -131,9 +319,17 @@ class MediaHandler extends BaseAudioHandler with SeekHandler {
       carMusic.search(query, extras);
 
   @override
-  Future<void> playFromMediaId(String mediaId,
-          [Map<String, dynamic>? extras]) =>
-      carMusic.playFromMediaId(mediaId);
+  Future<void> playFromMediaId(
+    String mediaId, [
+    Map<String, dynamic>? extras,
+  ]) async {
+    final row = _findCarRow(mediaId);
+    if (row != null) {
+      await controller.selectQueueOccurrence(row.occurrence);
+    } else {
+      await carMusic.playFromMediaId(mediaId);
+    }
+  }
 
   @override
   Future<void> playFromSearch(String query, [Map<String, dynamic>? extras]) =>
@@ -143,11 +339,25 @@ class MediaHandler extends BaseAudioHandler with SeekHandler {
   Future<void> playMediaItem(MediaItem mediaItem) =>
       playFromMediaId(mediaItem.id);
 
-  void publishCarQueue(Object? owner, List<CarQueueRow> rows, String title) {
+  void publishCarQueue(Object? owner, List<CarQueueRow> rows, String title,
+      {String? current}) {
     if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
     final sameOwner = owner == _carQueueOwner;
-    if (sameOwner && listEquals(rows, _carRows) && _carQueueReady) return;
-    if (rows.isEmpty && _carRows.isEmpty) return;
+    final sameRows = sameOwner && listEquals(rows, _carRows);
+    final visibilityChanged = rows.isEmpty != _carRows.isEmpty;
+    final activeChanged = current != _queueBrowseCurrent;
+    _queueBrowseCurrent = current;
+    if (_queueBrowseUsed && (!sameRows || activeChanged)) {
+      scheduleMicrotask(() {
+        if (visibilityChanged) {
+          unawaited(_refreshCarParent(AudioService.browsableRootId));
+        }
+        refreshCarQueueBrowseActions();
+      });
+    }
+    if ((sameRows && _carQueueReady) || (rows.isEmpty && _carRows.isEmpty)) {
+      return;
+    }
     final previous = sameOwner ? _carIds : const <String, int>{};
     _carQueueOwner = owner;
     _carRows = rows;
@@ -217,13 +427,58 @@ class MediaHandler extends BaseAudioHandler with SeekHandler {
   // The most common callbacks:
   @override
   Future<void> play() async {
-    // All 'play' requests from all origins route to here. Implement this
-    // callback to start playing audio appropriate to your app. e.g. music
+    if (controller.ownsAudioDecoder && controller.state.isClosing) return;
     final podcast = controller.activePodcast;
     if (podcast != null) {
       await podcast.resume();
-    } else {
+    } else if (!controller.ownsAudioDecoder ||
+        controller.state.hasVideo ||
+        !controller.state.isHidden) {
       controller.play();
+    } else {
+      await (_androidResume ??= _resumeAndroidMusic().whenComplete(() {
+        _androidResume = null;
+      }));
+    }
+  }
+
+  @override
+  Future<void> click([MediaButton button = MediaButton.media]) async {
+    // The legacy callback combines play, pause, toggle and headset commands.
+    // Native cold Play is dispatched separately after checking the raw key.
+    if (!controller.ownsAudioDecoder ||
+        controller.state.hasVideo ||
+        !controller.state.isHidden ||
+        controller.activePodcast != null) {
+      await super.click(button);
+    }
+  }
+
+  Future<void> _resumeAndroidMusic() async {
+    PlaybackState? provisional;
+    final restored = await controller.resumeMusicFromAndroid(() async {
+      final loading = PlaybackState(
+        controls: [MediaControl.pause, MediaControl.stop],
+        processingState: AudioProcessingState.loading,
+        playing: true,
+      );
+      provisional = loading;
+      playbackState.add(loading);
+      try {
+        return await _carChannel.invokeMethod<bool>('awaitResumeForeground') ??
+            false;
+      } on PlatformException catch (error) {
+        _log.fine('Android could not start media foreground (${error.code})');
+        return false;
+      } on MissingPluginException {
+        return false;
+      }
+    });
+    if (!restored &&
+        provisional != null &&
+        identical(playbackState.value, provisional)) {
+      // The failed request has no decoder to publish idle on its behalf.
+      await clearSession();
     }
   }
 
@@ -233,6 +488,9 @@ class MediaHandler extends BaseAudioHandler with SeekHandler {
     if (podcast != null) {
       await podcast.pause();
     } else {
+      if (_androidResume != null) {
+        controller.cancelPendingAndroidMusicResumption();
+      }
       controller.pause();
     }
   }
@@ -243,7 +501,7 @@ class MediaHandler extends BaseAudioHandler with SeekHandler {
     if (podcast != null) {
       await podcast.stop();
     } else {
-      controller.hide();
+      await controller.stopFromAndroidTransport();
     }
   }
 

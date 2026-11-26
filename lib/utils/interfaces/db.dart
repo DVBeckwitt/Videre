@@ -12,6 +12,7 @@ import '../../settings/models/db/person_profile.dart';
 import '../../settings/models/db/settings.dart';
 import '../../settings/models/db/video_filter.dart';
 import '../../settings/models/errors/no_server_selected.dart';
+import '../../subscription_management/models/subscription_group.dart';
 import '../../videos/models/db/dearrow_cache.dart';
 import '../../videos/models/db/history_video_cache.dart';
 import '../../videos/models/db/progress.dart';
@@ -176,8 +177,10 @@ abstract class IDbClient {
       PlaybackHistoryOrigin origin, String videoId) {
     final owner = forProfile(profileId);
     return PlaybackHistoryWrite(owner.profileId, origin, videoId,
-        (entry, _, current) async {
-      if (current()) await owner.recordPlaybackHistory(origin, entry);
+        (entry, _, __, current) async {
+      if (!current()) return false;
+      await owner.recordPlaybackHistory(origin, entry);
+      return true;
     });
   }
 
@@ -296,4 +299,14 @@ abstract class IDbClient {
   Future<bool> isOfflineSubscribed(String channelId);
 
   Future<List<OfflineSubscription>> getOfflineSubscriptions();
+
+  /// Observes the groups owned by the profile selected at the call site.
+  Stream<List<SubscriptionGroup>> watchSubscriptionGroups() =>
+      Stream.value(const []);
+
+  Future<void> saveSubscriptionGroup(SubscriptionGroup group) async =>
+      throw UnsupportedError('Subscription groups require the app database');
+
+  Future<void> deleteSubscriptionGroup(String id) async =>
+      throw UnsupportedError('Subscription groups require the app database');
 }

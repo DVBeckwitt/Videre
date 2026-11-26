@@ -9,6 +9,7 @@ import 'package:clipious/downloads/views/components/downloaded_video.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' show isTv;
+import 'package:clipious/music/models/music_artist_identity.dart';
 import 'package:clipious/music/models/music_collection_order.dart';
 import 'package:clipious/music/models/music_download_order.dart';
 import 'package:clipious/music/models/device_playlist_track.dart';
@@ -16,14 +17,17 @@ import 'package:clipious/music/models/music_library_entry.dart';
 import 'package:clipious/music/models/music_layout.dart';
 import 'package:clipious/music/models/music_playlist_selection.dart';
 import 'package:clipious/music/models/music_search_text.dart';
+import 'package:clipious/music/models/music_track.dart';
 import 'package:clipious/music/models/song_artwork.dart';
 import 'package:clipious/music/services/music_catalog_service.dart';
+import 'package:clipious/music/services/music_library_search.dart';
 import 'package:clipious/music/services/music_library_service.dart';
 import 'package:clipious/music/services/music_playlist_covers.dart';
 import 'package:clipious/music/views/components/community_music_artwork.dart';
 import 'package:clipious/music/services/music_playlist_folder_service.dart';
 import 'package:clipious/music/services/local_music_library.dart';
 import 'package:clipious/music/views/components/cached_music_library.dart';
+import 'package:clipious/music/services/music_visibility.dart';
 import 'package:clipious/music/views/components/music_collection_panes.dart';
 import 'package:clipious/music/views/components/music_collection_selection_bar.dart';
 import 'package:clipious/music/views/components/music_collection_sort_menu.dart';
@@ -33,6 +37,7 @@ import 'package:clipious/music/views/components/music_duration_label.dart';
 import 'package:clipious/music/views/components/music_fast_scroll.dart';
 import 'package:clipious/music/views/components/music_library_actions.dart';
 import 'package:clipious/music/views/components/music_song_row_swipe.dart';
+import 'package:clipious/music/views/components/music_offline_filter.dart';
 import 'package:clipious/music/views/components/local_music_folder.dart';
 import 'package:clipious/music/views/components/music_playlist_edit_actions.dart';
 import 'package:clipious/music/views/components/music_playlist_rename.dart';
@@ -40,11 +45,14 @@ import 'package:clipious/music/views/components/music_playlist_cover.dart';
 import 'package:clipious/music/views/components/music_playlist_recovery.dart';
 import 'package:clipious/music/views/components/music_playlist_folder_actions.dart';
 import 'package:clipious/music/views/components/music_playlist_recommendation_toggle.dart';
+import 'package:clipious/music/views/components/m3u_playlist_actions.dart';
 import 'package:clipious/music/views/components/music_playlist_resume.dart';
 import 'package:clipious/music/views/components/music_playlist_suggestions.dart';
 import 'package:clipious/music/views/components/music_playlist_offline.dart';
 import 'package:clipious/music/views/components/music_saved_queues.dart';
 import 'package:clipious/music/views/components/music_screen_privacy.dart';
+import 'package:clipious/music/views/components/music_playlist_hidden_songs.dart';
+import 'package:clipious/music/views/components/music_playlist_undo.dart';
 import 'package:clipious/music/views/components/music_song_selection_bar.dart';
 import 'package:clipious/music/views/components/music_status_title.dart';
 import 'package:clipious/music/views/components/takeout_import_dialog.dart';
@@ -53,6 +61,8 @@ import 'package:clipious/music/views/screens/music_history.dart';
 import 'package:clipious/music/views/screens/music_rule_playlists.dart';
 import 'package:clipious/music/views/screens/music_layout_editor.dart';
 import 'package:clipious/music/views/screens/music_listening_statistics.dart';
+import 'package:clipious/music/views/screens/music_automatic_collections.dart';
+import 'package:clipious/player/models/playback_queue.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/player/models/local_music_playback.dart';
 import 'package:clipious/podcasts/views/podcast_library.dart';
@@ -100,8 +110,9 @@ typedef _LibrarySelection = ({
 /// The Music home's Library body, or a standalone detail for a local source.
 class MusicLibraryPage extends StatefulWidget {
   final PlaylistReference? source;
+  final LocalMusicLibrary? deviceLibrary;
 
-  const MusicLibraryPage({super.key, this.source});
+  const MusicLibraryPage({super.key, this.source, this.deviceLibrary});
 
   @override
   State<MusicLibraryPage> createState() => _MusicLibraryPageState();
@@ -112,6 +123,7 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
   bool _grid = !isTv;
   String? _playlistId;
   String? _folderId;
+  Object? _suggestedShuffle;
   MusicLibrarySession? _sourceSession;
   final _playlistQuery = TextEditingController();
   final _playlistQueryFocus = FocusNode(debugLabel: 'Music playlist query');
@@ -304,6 +316,7 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
   }
 
   void _resetPlaylistSearch() {
+    _suggestedShuffle = null;
     _playlistSelectionScope = null;
     _playlistSelection.clear();
     _playlistSearching = false;
@@ -362,7 +375,10 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
     } else if (_playlistSearching) {
       _togglePlaylistSearch();
     } else {
-      setState(() => _playlistId = null);
+      setState(() {
+        _playlistId = null;
+        _suggestedShuffle = null;
+      });
     }
   }
 
@@ -399,7 +415,8 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
       int? startIndex,
       Duration startAt = Duration.zero,
       bool shuffleOnce = false,
-      bool songTap = false}) async {
+      bool songTap = false,
+      bool collectionDetail = false}) async {
     final session = MusicLibrarySession(context.read<AppCubit>());
     if (!session.isCurrent ||
         _sourceSession?.isCurrent == false ||
@@ -413,9 +430,123 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
           startIndex: startIndex,
           startAt: startAt,
           shuffleOnce: shuffleOnce,
-          songTap: songTap);
+          songTap: songTap,
+          collectionDetail: collectionDetail);
     } catch (_) {
       if (mounted && session.isCurrent) _error();
+    }
+  }
+
+  Future<void> _playOffline(List<Video> videos, MusicOfflineView offline,
+      {required String title,
+      int startIndex = 0,
+      PlaylistReference? reference}) async {
+    if (!offline.isCurrent() ||
+        videos.isEmpty ||
+        _sourceSession?.isCurrent == false) {
+      return;
+    }
+    try {
+      await MusicScreen.playCollectionTracks(context, videos,
+          queueTitle: title,
+          startIndex: startIndex,
+          recommendationSources: reference == null
+              ? null
+              : List<PlaylistReference?>.filled(videos.length, reference),
+          isCurrent: offline.isCurrent);
+    } catch (_) {
+      if (mounted && offline.isCurrent()) _error();
+    }
+  }
+
+  Future<void> _playSuggestedShuffle(
+      Playlist playlist, List<Video> songs, PlaylistReference reference) async {
+    if (_suggestedShuffle != null) return;
+    final source = widget.source;
+    final session = MusicLibrarySession(context.read<AppCubit>());
+    final player = context.read<PlayerCubit>();
+    final catalog = musicCatalogService;
+    final route = ModalRoute.of(context);
+    final tickerMode = TickerMode.getNotifier(context);
+    final request = Object();
+    bool current() =>
+        mounted &&
+        identical(_suggestedShuffle, request) &&
+        session.isCurrent &&
+        reference.profileId == session.library.profileId &&
+        _sourceSession?.isCurrent != false &&
+        widget.source == source &&
+        (source != null || _playlistId == playlist.playlistId) &&
+        !_playlistSelecting &&
+        !_playlistSearching &&
+        route?.isCurrent != false &&
+        tickerMode.value &&
+        identical(musicCatalogService, catalog);
+    final playlistContents = jsonEncode(playlist.videos);
+    bool samePlaylist() => session.playlists.any((latest) =>
+        latest.playlistId == playlist.playlistId &&
+        jsonEncode(latest.videos) == playlistContents);
+    final playbackRevision = player.musicSelectionRequestRevision;
+    bool stillRequesting() =>
+        current() &&
+        !player.isClosed &&
+        player.musicSelectionRequestRevision == playbackRevision;
+    final originals = assignPlaylistEntryIds(songs)
+        .where((song) =>
+            !song.filtered && !song.filterHide && song.isUpcoming != true)
+        .toList();
+    if (originals.isEmpty) return;
+
+    final locals = AppLocalizations.of(context)!;
+    void showMessage(String message) => ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(message)));
+
+    setState(() => _suggestedShuffle = request);
+    try {
+      if (!stillRequesting() || !samePlaylist()) return;
+      final List<MusicTrack> candidates;
+      try {
+        candidates = await loadMusicPlaylistSuggestions(playlist, catalog,
+            isCurrent: stillRequesting);
+      } catch (_) {
+        if (stillRequesting()) {
+          showMessage(locals.musicPlaylistSuggestionsUnavailable);
+        }
+        return;
+      }
+      if (!mounted || !stillRequesting() || !samePlaylist()) return;
+      final suggestions = eligibleMusicPlaylistSuggestions(
+          playlist, reference.profileId, candidates);
+      if (suggestions.isEmpty) {
+        showMessage(locals.musicPlaylistNoSuggestions);
+        return;
+      }
+
+      // Start with a playlist song and insert at most one suggestion per three
+      // originals. The normal shuffle toggle stays independent of this queue.
+      originals.shuffle();
+      final insertions = suggestions.iterator;
+      final queue = <Video>[];
+      final sources = <PlaylistReference?>[];
+      for (final (index, song) in originals.indexed) {
+        queue.add(song);
+        sources.add(reference);
+        if (((index + 1) % 3 == 0 || index == originals.length - 1) &&
+            insertions.moveNext()) {
+          queue.add(markMusicQueueSuggestion(insertions.current.toVideo()));
+          sources.add(null);
+        }
+      }
+      await MusicScreen.playCollectionTracks(context, queue,
+          queueTitle: playlist.title,
+          recommendationSources: sources,
+          isCurrent: () => current() && samePlaylist());
+    } catch (_) {
+      if (current()) _error();
+    } finally {
+      if (mounted && identical(_suggestedShuffle, request)) {
+        setState(() => _suggestedShuffle = null);
+      }
     }
   }
 
@@ -487,7 +618,8 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
   }
 
   Widget _bookmarkActions(
-      MusicLibraryEntry entry, Future<void> Function() onOpen) {
+      MusicLibraryEntry entry, Future<void> Function() onOpen,
+      {Video? offlineSong}) {
     final locals = AppLocalizations.of(context)!;
     final removeLabel = switch (entry.kind) {
       MusicLibraryKind.song => locals.musicRemoveSong,
@@ -496,7 +628,8 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
       MusicLibraryKind.playlist => locals.musicRemovePlaylist,
     };
     return entry.kind == MusicLibraryKind.song
-        ? MusicLibraryActions(videos: [entry.toVideo()], onPlay: onOpen)
+        ? MusicLibraryActions(
+            videos: [offlineSong ?? entry.toVideo()], onPlay: onOpen)
         : IconButton(
             tooltip: removeLabel,
             onPressed: () => _removeBookmark(entry),
@@ -532,10 +665,30 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
             kind: entry.kind, id: entry.id, child: title);
   }
 
-  Widget _bookmark(_LibraryItem item, Future<void> Function() onOpen,
-      Future<void> Function() onPlay, MusicLayout layout,
-      {Widget? movePlaylist}) {
+  String _bookmarkDisplayTitle(
+          MusicLibraryEntry entry, MusicLibraryService library) =>
+      entry.kind == MusicLibraryKind.artist
+          ? library.artistDisplayName(
+              MusicArtistIdentity.catalog(entry.id), entry.title)
+          : entry.displayTitle;
+
+  String _bookmarkDisplaySubtitle(MusicLibraryEntry entry, String displayTitle,
+          MusicLibraryService library) =>
+      entry.kind == MusicLibraryKind.artist && displayTitle != entry.title
+          ? entry.title
+          : library.catalogArtistByline(entry.subtitle, entry.artistCredits);
+
+  Widget _bookmark(
+      _LibraryItem item,
+      Future<void> Function() onOpen,
+      Future<void> Function() onPlay,
+      MusicLayout layout,
+      MusicLibraryService library,
+      {Widget? movePlaylist,
+      Video? offlineSong}) {
     final entry = item.bookmark!;
+    final title = _bookmarkDisplayTitle(entry, library);
+    final subtitle = _bookmarkDisplaySubtitle(entry, title, library);
     final selected =
         _collectionSelected(item) ?? _savedSongsSelection?.contains(entry.id);
     final enabled = _collectionSelection == null || selected != null;
@@ -558,33 +711,31 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                     _bookmarkArtwork(entry, _artwork(entry.displayThumbnails))),
         title: _bookmarkTitle(
             entry,
-            Text(entry.displayTitle,
+            Text(title,
                 maxLines: entry.kind == MusicLibraryKind.song
                     ? layout.titleLines(2)
                     : 2,
                 overflow: TextOverflow.ellipsis)),
-        subtitle: entry.subtitle.isEmpty
+        subtitle: subtitle.isEmpty
             ? null
-            : Text(entry.subtitle,
-                maxLines: 1, overflow: TextOverflow.ellipsis),
+            : Text(subtitle, maxLines: 1, overflow: TextOverflow.ellipsis),
         trailing: selected != null
             ? ExcludeSemantics(
                 child: Icon(
                     selected ? Icons.check_box : Icons.check_box_outline_blank))
             : enabled
-                ? _playlistRowActions(
-                    movePlaylist, _bookmarkActions(entry, onPlay))
+                ? _playlistRowActions(movePlaylist,
+                    _bookmarkActions(entry, onPlay, offlineSong: offlineSong))
                 : null,
         onLongPress: _itemLongPress(item, onPlay),
         onTap: enabled ? onOpen : null);
     return MusicSongRowSwipe(
       key: _itemKey(item),
-      onAction: enabled &&
-              selected == null &&
-              entry.kind == MusicLibraryKind.song
-          ? (action) =>
-              MusicLibraryActions.queueSong(context, entry.toVideo(), action)
-          : null,
+      onAction:
+          enabled && selected == null && entry.kind == MusicLibraryKind.song
+              ? (action) => MusicLibraryActions.queueSong(
+                  context, offlineSong ?? entry.toVideo(), action)
+              : null,
       child: tile,
     );
   }
@@ -736,7 +887,9 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
 
   Widget _playlistSelectionBar(List<String> visible, List<Video> selected,
       String title, PlaylistReference reference,
-      {required bool Function() isCurrent}) {
+      {required bool Function() isCurrent,
+      Future<void> Function(List<Video>)? onPlay,
+      Future<void> Function()? onRemoveFromPlaylist}) {
     final allSelected = selected.isNotEmpty &&
         visible.every(_playlistSelection.selected.contains);
     return MusicSongSelectionBar(
@@ -750,18 +903,22 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
       onClose: _exitPlaylistSelection,
       closeFocus: _playlistExitSelectionFocus,
       isCurrent: isCurrent,
+      onRemoveFromPlaylist: onRemoveFromPlaylist,
       recommendationSource: reference,
-      onPlay: (tracks) => MusicScreen.playTracks(context, tracks,
-          queueTitle: title, recommendationSource: reference),
+      onPlay: onPlay ??
+          (tracks) => MusicScreen.playTracks(context, tracks,
+              queueTitle: title, recommendationSource: reference),
     );
   }
 
   Widget _savedSongsSelectionBar(List<_LibraryItem> visible,
-      List<_LibraryItem> all, Set<String> scope, MusicCollectionOrder order) {
+      List<_LibraryItem> all, Set<String> scope, MusicCollectionOrder order,
+      {MusicOfflineView? offline, Map<String, Video> offlineSongs = const {}}) {
     final title = AppLocalizations.of(context)!.musicSavedSongs;
     final session = MusicLibrarySession(context.read<AppCubit>());
+    final offlineEnabled = offline?.enabled == true;
     final selected = [
-      for (final item in all)
+      for (final item in offlineEnabled ? visible : all)
         if (scope.contains(item.bookmark!.id)) item.bookmark!,
     ];
     final selectedIds = selected.map((entry) => entry.id).toList();
@@ -770,7 +927,8 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
     bool isCurrent() {
       if (!mounted ||
           !session.isCurrent ||
-          !identical(_savedSongsSelection, scope)) {
+          !identical(_savedSongsSelection, scope) ||
+          (offlineEnabled && !offline!.isCurrent())) {
         return false;
       }
       final settings = context.read<SettingsCubit?>();
@@ -780,7 +938,8 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
       final live = <_LibraryItem>[
         for (final entry in session.library.entries)
           if (entry.kind == MusicLibraryKind.song && scope.contains(entry.id))
-            (playlist: null, bookmark: entry),
+            if (!offlineEnabled || visibleIds.contains(entry.id))
+              (playlist: null, bookmark: entry),
       ];
       return listEquals(selectedIds, [
         for (final item in _sortedLibraryItems(live, order)) item.bookmark!.id,
@@ -788,7 +947,10 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
     }
 
     return MusicSongSelectionBar(
-      selected: [for (final entry in selected) entry.toVideo()],
+      selected: [
+        for (final entry in selected)
+          offlineEnabled ? offlineSongs[entry.id]! : entry.toVideo(),
+      ],
       allSelected: allSelected,
       onToggleAll: allSelected || visibleIds.isNotEmpty
           ? () => setState(() {
@@ -799,8 +961,9 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
       onClose: _exitLibrarySelection,
       closeFocus: _libraryExitSelectionFocus,
       isCurrent: isCurrent,
-      onPlay: (tracks) =>
-          MusicScreen.playTracks(context, tracks, queueTitle: title),
+      onPlay: (tracks) => offlineEnabled
+          ? _playOffline(tracks, offline!, title: title)
+          : MusicScreen.playTracks(context, tracks, queueTitle: title),
     );
   }
 
@@ -874,7 +1037,8 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
         final recommendationSources = <PlaylistReference?>[];
         final covers = library.coversBySongId;
         final catalog = musicCatalogService;
-        final devices = LocalMusicLibrary.instance;
+        final visibility = MusicVisibility.forProfile(db, library.profileId);
+        final devices = widget.deviceLibrary ?? LocalMusicLibrary.instance;
         if (supportsLocalMusicFolders &&
             !devices.loaded &&
             !devices.unavailable &&
@@ -894,6 +1058,9 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                   video.filtered ||
                   video.filterHide ||
                   video.isUpcoming == true ||
+                  devices.isPlaylistTrackHiddenByAdvisory(video.videoId) ||
+                  (source != null &&
+                      visibility.isHiddenInPlaylist(source, video.videoId)) ||
                   (isLocalMusicPlaybackId(video.videoId) &&
                       devices.playlistTrackById(video.videoId) == null)) {
                 continue;
@@ -914,6 +1081,10 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
             final collection = await catalog.getPlaylist(item.bookmark!.id);
             if (!ownerCurrent()) return unavailable;
             for (final track in collection.tracks) {
+              if (source != null &&
+                  visibility.isHiddenInPlaylist(source, track.videoId)) {
+                continue;
+              }
               tracks.add(track.toVideo());
               recommendationSources.add(source);
             }
@@ -926,17 +1097,16 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
 
   Widget _localPlaylist(BuildContext context, Playlist playlist,
       MusicLibraryService library, MusicLayout layout) {
-    final devices = LocalMusicLibrary.instance;
-    if (!supportsLocalMusicFolders ||
-        !playlist.videos
-            .any((video) => isLocalMusicPlaybackId(video.videoId))) {
-      return _localPlaylistContent(context, playlist, library, devices, layout);
-    }
+    final devices = widget.deviceLibrary ?? LocalMusicLibrary.instance;
+    final visibility = MusicVisibility.forProfile(db, library.profileId);
+    final hasDeviceEntries = supportsLocalMusicFolders &&
+        playlist.videos.any((video) => isLocalMusicPlaybackId(video.videoId));
     return ListenableBuilder(
-      listenable: devices,
-      builder: (_, __) {
+      listenable: Listenable.merge([visibility, if (hasDeviceEntries) devices]),
+      builder: (context, _) {
         final request = (playlist.playlistId, devices.selectionId);
-        if (!devices.loaded &&
+        if (hasDeviceEntries &&
+            !devices.loaded &&
             !devices.unavailable &&
             _playlistScan != request) {
           _playlistScan = request;
@@ -947,7 +1117,7 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
           });
         }
         return _localPlaylistContent(
-            context, playlist, library, devices, layout);
+            context, playlist, library, devices, layout, visibility);
       },
     );
   }
@@ -957,37 +1127,84 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
       Playlist playlist,
       MusicLibraryService library,
       LocalMusicLibrary devices,
-      MusicLayout layout) {
-    final locals = AppLocalizations.of(context)!;
-    final covers = MusicPlaylistCovers.forProfile(db, library.profileId);
-    final title = playlist.playlistId == localWatchLaterId
-        ? locals.watchLater
-        : playlist.title;
+      MusicLayout layout,
+      MusicVisibility visibility) {
     final savedCovers = library.coversBySongId;
-    final appState = context.read<AppCubit>().state;
-    final instanceUrl = appState.server?.url;
+    final reference = PlaylistReference.forPlaylist(
+        playlist, db.forProfile(library.profileId));
+    final hidden = <String, Video>{};
     final songs = <Video>[];
     final keys = <ValueKey<String>>[];
+    final hiddenIds = {
+      for (final video in playlist.videos)
+        if (devices.isPlaylistTrackHiddenByAdvisory(video.videoId))
+          video.videoId,
+    };
     final assignedEntries = _playlistSelection.reconcile(playlist.videos);
     for (final (index, video) in playlist.videos.indexed) {
       final music = video.musicMetadata;
-      if (music == null) continue;
+      if (music == null || hiddenIds.contains(video.videoId)) continue;
       final covers = savedCovers[video.videoId];
       // Identify rows by their source occurrence. Playback and saved progress
       // still use the same Music-only queue IDs used before filtering by text.
-      keys.add(ValueKey(assignedEntries[index].queueEntryId!));
+      final entry = assignedEntries[index];
       final track = devices.playlistTrackById(video.videoId);
       final current = track == null ? null : devicePlaylistVideo(track);
-      songs.add(current != null
-          ? video.copyWith(
+      final song = current != null
+          ? entry.copyWith(
               title: current.title,
               author: current.author,
               musicMetadata: current.musicMetadata,
               lengthSeconds: current.lengthSeconds)
           : covers == null
-              ? video
-              : video.copyWith(musicMetadata: music.withThumbnails(covers)));
+              ? entry
+              : entry.copyWith(musicMetadata: music.withThumbnails(covers));
+      if (visibility.isHiddenInPlaylist(reference, song.videoId)) {
+        hidden[song.videoId] = song;
+      } else {
+        keys.add(ValueKey(entry.queueEntryId!));
+        songs.add(song);
+      }
     }
+    return MusicOfflineFilter(
+      key: ValueKey((library.profileId, playlist.playlistId, 'offline-filter')),
+      videos: songs,
+      builder: (context, offline) => MusicPlaylistOrderBuilder(
+        reference: reference,
+        builder: (context, order, sortValue) => _localPlaylistTracks(
+            context, playlist, library, devices, songs, keys, offline,
+            layout: layout,
+            visibility: visibility,
+            hidden: hidden.values.toList(),
+            displayOrder: order,
+            sortValue: sortValue),
+      ),
+    );
+  }
+
+  Widget _localPlaylistTracks(
+    BuildContext context,
+    Playlist playlist,
+    MusicLibraryService library,
+    LocalMusicLibrary devices,
+    List<Video> songs,
+    List<ValueKey<String>> keys,
+    MusicOfflineView offline, {
+    required MusicLayout layout,
+    required MusicVisibility visibility,
+    required List<Video> hidden,
+    required MusicCollectionOrder displayOrder,
+    required MusicPlaylistSortValue sortValue,
+  }) {
+    final locals = AppLocalizations.of(context)!;
+    final covers = MusicPlaylistCovers.forProfile(db, library.profileId);
+    final title = playlist.playlistId == localWatchLaterId
+        ? locals.watchLater
+        : playlist.title;
+    final appState = context.read<AppCubit>().state;
+    final instanceUrl = appState.server?.url;
+    final reference = PlaylistReference.forPlaylist(
+        playlist, db.forProfile(library.profileId));
     bool available(Video song) =>
         !isLocalMusicPlaybackId(song.videoId) ||
         devices.playlistTrackById(song.videoId) != null;
@@ -998,19 +1215,31 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
     final playableSongs = [
       for (final index in playableIndexes) songs[index],
     ];
-    final reference = PlaylistReference.forPlaylist(
-        playlist, db.forProfile(library.profileId));
     String displayTitle(Video song) =>
         library.savedSong(song.videoId)?.savedTitle ??
         song.musicMetadata!.title;
     Object? displaySortValue(Video song, MusicCollectionSortField field) =>
-        field == MusicCollectionSortField.title
-            ? displayTitle(song)
-            : musicPlaylistTrackSortValue(song, field);
-    final displayOrder =
-        MusicCollectionSortMenu.playlistOrder(context, reference);
+        switch (field) {
+          MusicCollectionSortField.title => displayTitle(song),
+          MusicCollectionSortField.artist => library.catalogArtistByline(
+              song.musicMetadata!.artist, song.musicMetadata!.artistCredits),
+          _ => sortValue(song, field),
+        };
     final displayIndices =
         displayOrder.orderIndices(songs, sortValue: displaySortValue);
+    final offlineEntries = offline.entries;
+    final filteredIndices = offline.enabled
+        ? [
+            for (final index in displayIndices)
+              if (offlineEntries?[index] != null) index,
+          ]
+        : displayIndices;
+    List<Video> offlineQueue(Iterable<int> indices) => [
+          for (final index in indices)
+            offlineEntries![index]!.copyWith(queueEntryId: keys[index].value),
+        ];
+    final offlineButton = musicOfflineFilterButton(context, offline,
+        key: const ValueKey('music-local-playlist-offline-filter'));
     final sortMenu = MusicCollectionSortMenu.playlist(
       reference: reference,
       order: displayOrder,
@@ -1023,8 +1252,10 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
     List<(String?, String, bool, bool, bool?)> queueEntries(
             Iterable<Video> videos) =>
         [
-          for (final song in assignPlaylistEntryIds(
-              videos.where((v) => v.musicMetadata != null)))
+          for (final song in assignPlaylistEntryIds(videos.where((v) =>
+              v.musicMetadata != null &&
+              !visibility.isHiddenInPlaylist(reference, v.videoId) &&
+              !devices.isPlaylistTrackHiddenByAdvisory(v.videoId))))
             (
               song.queueEntryId,
               song.videoId,
@@ -1056,14 +1287,28 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
     final searchable = _playlistSearching
         ? [
             for (final song in songs)
-              normalizeMusicSearchText(
-                  '${displayTitle(song)} ${song.musicMetadata!.artist}'),
+              normalizeMusicSearchText([
+                displayTitle(song),
+                song.musicMetadata!.artist,
+                for (final credit in song.musicMetadata!.artistCredits)
+                  credit.name,
+              ].join(' ')),
           ]
         : const <String>[];
-    Future<void> playSong(int index, {bool songTap = false}) {
+    Future<void> playSong(int index, List<int> visible,
+        {bool songTap = false}) {
       _playlistQueryFocus.unfocus();
+      if (offline.enabled) {
+        return _playOffline(offlineQueue(visible), offline,
+            title: title,
+            startIndex: visible.indexOf(index),
+            reference: reference);
+      }
       return _play(songs,
-          reference: reference, startIndex: index, songTap: songTap);
+          reference: reference,
+          startIndex: index,
+          songTap: songTap,
+          collectionDetail: true);
     }
 
     final selectionScope = _playlistSelectionScope;
@@ -1075,11 +1320,16 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
     final session = selectionScope == null
         ? null
         : MusicLibrarySession(context.read<AppCubit>());
+    final selectedSongs = [
+      for (final (index, song) in songs.indexed)
+        if (selection.contains(keys[index].value)) song,
+    ];
     bool selectionIsCurrent() {
       if (!mounted ||
           session?.isCurrent != true ||
           _sourceSession?.isCurrent == false ||
-          !identical(_playlistSelectionScope, selectionScope)) {
+          !identical(_playlistSelectionScope, selectionScope) ||
+          (offline.enabled && !offline.isCurrent())) {
         return false;
       }
       final current = session!.playlists
@@ -1088,15 +1338,56 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
           .firstOrNull;
       if (current == null) return false;
       final assigned = _playlistSelection.reconcile(current.videos);
+
       return listEquals(selectedInOrder, [
         for (final song in assigned)
-          if (_playlistSelection.selected.contains(song.queueEntryId))
+          if (!visibility.isHiddenInPlaylist(reference, song.videoId) &&
+              !devices.isPlaylistTrackHiddenByAdvisory(song.videoId) &&
+              _playlistSelection.selected.contains(song.queueEntryId))
             song.queueEntryId!,
       ]);
     }
 
+    Future<void> removeSelected(Iterable<Video> entries) async {
+      final owner = session!;
+      final playlists = service;
+      final undo = await playlists.removeLocalPlaylistSongs(
+        reference,
+        entryIds: {for (final song in entries) song.indexId!},
+        isCurrent: selectionIsCurrent,
+      );
+      if (undo != null) owner.library.notifyChanged();
+      if (!mounted || !owner.isCurrent) return;
+      final sameSelection = identical(_playlistSelectionScope, selectionScope);
+      if (undo == null) {
+        if (sameSelection) _error();
+        return;
+      }
+      if (sameSelection) _exitPlaylistSelection();
+      showMusicPlaylistUndo(
+        this.context,
+        owner,
+        message: locals.musicPlaylistSongsRemoved,
+        undo: () => playlists.undoLocalPlaylistSongRemoval(
+          undo,
+          isCurrent: () => owner.isCurrent,
+        ),
+      );
+    }
+
     final canPin = widget.source == null || library.isMusicPlaylist(playlist);
     final pinned = library.pinnedLocalPlaylistIds.contains(playlist.playlistId);
+    final canSuggest = appState.server != null &&
+        playlist.playlistId != localWatchLaterId &&
+        hasMusicPlaylistSuggestionSeeds(playlist);
+    final visibleVideos = [
+      for (final song in playlist.videos)
+        if (!devices.isPlaylistTrackHiddenByAdvisory(song.videoId) &&
+            !visibility.isHiddenInPlaylist(reference, song.videoId))
+          song,
+    ];
+
+    final hasHiddenEntries = visibleVideos.length != playlist.videos.length;
 
     Widget details({bool showHeading = false}) => Column(children: [
           if (showHeading && widget.source == null)
@@ -1107,9 +1398,12 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: PlaylistInformation(
-              playlist: playlist,
+              playlist: !hasHiddenEntries
+                  ? playlist
+                  : playlist.copyWith(
+                      videos: visibleVideos, videoCount: visibleVideos.length),
               reference: reference,
-              showServerCopy: !_playlistSearching,
+              showServerCopy: !_playlistSearching && !hasHiddenEntries,
             ),
           ),
           if (!_playlistSelecting &&
@@ -1125,15 +1419,53 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
               padding: const EdgeInsets.symmetric(horizontal: 16),
               child: MusicPlaylistOffline(playlist: playlist),
             ),
+          if (supportsLocalMusicFolders &&
+              playlist.playlistId != localWatchLaterId &&
+              !_playlistSelecting &&
+              !_playlistSearching)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Align(
+                alignment: AlignmentDirectional.centerStart,
+                child: M3uPlaylistActions(playlist: playlist),
+              ),
+            ),
           if (!_playlistSelecting && !_playlistSearching)
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
               child: Wrap(spacing: 8, runSpacing: 8, children: [
-                if (playableIndexes.isNotEmpty) ...[
+                if (widget.source != null) offlineButton,
+                if (offline.enabled || playableIndexes.isNotEmpty)
                   FilledButton.icon(
-                      onPressed: () => playSong(playableIndexes.first),
+                      onPressed: offline.enabled
+                          ? filteredIndices.isEmpty
+                              ? null
+                              : () => playSong(
+                                  filteredIndices.first, filteredIndices)
+                          : () =>
+                              playSong(playableIndexes.first, playableIndexes),
                       icon: const Icon(Icons.play_arrow),
                       label: Text(locals.musicPlayAll)),
+                if (!offline.enabled && playableIndexes.isNotEmpty) ...[
+                  if (canSuggest &&
+                      playableSongs.any((song) =>
+                          !song.filtered &&
+                          !song.filterHide &&
+                          song.isUpcoming != true))
+                    OutlinedButton.icon(
+                      key: const ValueKey('music-playlist-suggested-shuffle'),
+                      onPressed: _suggestedShuffle == null
+                          ? () => _playSuggestedShuffle(
+                              playlist, playableSongs, reference)
+                          : null,
+                      icon: _suggestedShuffle == null
+                          ? const Icon(Icons.shuffle)
+                          : const SizedBox.square(
+                              dimension: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                      label: Text(locals.musicPlaylistSuggestedShuffle),
+                    ),
                   MusicPlaylistResume(
                       reference: reference,
                       videos: playableSongs,
@@ -1147,11 +1479,16 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                       recommendationSource: reference,
                       onPlay: (shuffle) => _play(playableSongs,
                           reference: reference, shuffleOnce: shuffle)),
+                ],
+                if (offline.enabled
+                    ? filteredIndices.isNotEmpty
+                    : playableIndexes.isNotEmpty)
                   MusicLibraryActions(
-                      videos: songs,
+                      videos: offline.enabled
+                          ? offlineQueue(filteredIndices)
+                          : songs,
                       compact: false,
                       recommendationSource: reference),
-                ],
                 if (playlist.playlistId != localWatchLaterId)
                   MusicPlaylistEditActions(
                     playlist: playlist,
@@ -1208,6 +1545,9 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
             ),
           if (!_playlistSelecting && !_playlistSearching)
             MusicPlaylistRecommendationToggle(reference: reference),
+          if (hidden.isNotEmpty && !_playlistSelecting && !_playlistSearching)
+            MusicPlaylistHiddenSongs(
+                playlist: reference, visibility: visibility, songs: hidden),
         ]);
 
     Widget tracks(BuildContext context, bool split) => ValueListenableBuilder(
@@ -1215,8 +1555,13 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
           builder: (_, input, __) {
             final terms = musicSearchTerms(input.text);
             final visible = [
-              for (final index in displayIndices)
-                if (terms.isEmpty || terms.every(searchable[index].contains))
+              for (final index in filteredIndices)
+                if (terms.isEmpty ||
+                    musicSearchMatchesWithArtistAliases(
+                        terms,
+                        searchable[index],
+                        catalogArtistSearchAliases(library,
+                            songs[index].musicMetadata!.artistCredits)))
                   index,
             ];
             final positions = {
@@ -1237,10 +1582,30 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                           ? _playlistSelectionBar([
                               for (final index in visible) keys[index].value
                             ], [
-                              for (final (index, song) in songs.indexed)
-                                if (selection.contains(keys[index].value)) song,
+                              if (offline.enabled)
+                                ...offlineQueue(visible.where((index) =>
+                                    selection.contains(keys[index].value)))
+                              else
+                                for (final (index, song) in songs.indexed)
+                                  if (selection.contains(keys[index].value))
+                                    song,
                             ], playlist.title, reference,
-                              isCurrent: selectionIsCurrent)
+                              isCurrent: selectionIsCurrent,
+                              onPlay: offline.enabled
+                                  ? (tracks) => _playOffline(tracks, offline,
+                                      title: title, reference: reference)
+                                  : null,
+                              onRemoveFromPlaylist: playlist.isEditLocked ||
+                                      playlist.playlistId == localWatchLaterId
+                                  ? null
+                                  : () => removeSelected(offline.enabled
+                                      ? [
+                                          for (final index in visible)
+                                            if (selection
+                                                .contains(keys[index].value))
+                                              songs[index],
+                                        ]
+                                      : selectedSongs))
                           : _playlistSearching
                               ? Row(children: [
                                   Expanded(child: _playlistSearchField()),
@@ -1248,6 +1613,7 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                                     _saveFilteredPlaylistButton(
                                         visible.map((index) => songs[index]),
                                         library.profileId),
+                                  offlineButton,
                                   if (widget.source == null)
                                     _playlistSelectButton(),
                                   if (widget.source == null)
@@ -1268,7 +1634,8 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                                   trailing: Row(
                                       mainAxisSize: MainAxisSize.min,
                                       children: [
-                                        if (songs.isNotEmpty)
+                                        offlineButton,
+                                        if (filteredIndices.isNotEmpty)
                                           _playlistSelectButton(),
                                         _playlistSearchButton(),
                                         if (songs.isNotEmpty) sortMenu,
@@ -1281,9 +1648,11 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                 if (visible.isEmpty)
                   SliverFillRemaining(
                     hasScrollBody: false,
-                    child: terms.isEmpty
-                        ? _empty()
-                        : Center(child: Text(locals.musicNoResults)),
+                    child: offline.enabled && filteredIndices.isEmpty
+                        ? musicOfflineCollectionEmpty(context, offline)
+                        : terms.isEmpty
+                            ? _empty()
+                            : Center(child: Text(locals.musicNoResults)),
                   )
                 else
                   SliverList.builder(
@@ -1291,7 +1660,7 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                       findChildIndexCallback: (key) => positions[key],
                       itemBuilder: (_, position) {
                         final index = visible[position];
-                        final song = songs[index];
+                        final song = offlineEntries?[index] ?? songs[index];
                         final music = song.musicMetadata!;
                         final device = isLocalMusicPlaybackId(song.videoId);
                         final playable = available(song);
@@ -1338,7 +1707,8 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                                         ? locals.onDevice
                                         : locals.localMusicHiddenFileUnavailable
                                   ].join(' • ')
-                                : music.artist),
+                                : library.catalogArtistByline(
+                                    music.artist, music.artistCredits)),
                             trailing: _playlistSelecting
                                 ? ExcludeSemantics(
                                     child: Icon(picked
@@ -1349,18 +1719,26 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                                     localPlaylistId: playlist.isEditLocked
                                         ? null
                                         : playlist.playlistId,
+                                    replacementPlaylist:
+                                        !playlist.isEditLocked &&
+                                                playlist.playlistId !=
+                                                    localWatchLaterId &&
+                                                !isLocalMusicPlaybackId(
+                                                    song.videoId)
+                                            ? reference
+                                            : null,
+                                    playlistVisibility: reference,
                                     recommendationSource: reference,
                                     onPlay: playable
-                                        ? () => playSong(index)
+                                        ? () => playSong(index, visible)
                                         : null),
                             onLongPress: _playlistSelecting
                                 ? null
                                 : () => _startPlaylistSelection(id),
                             onTap: _playlistSelecting
-                                ? () => setState(
-                                    () => _playlistSelection.toggle(id))
+                                ? () => setState(() => _playlistSelection.toggle(id))
                                 : playable
-                                    ? () => playSong(index, songTap: true)
+                                    ? () => playSong(index, visible, songTap: true)
                                     : null);
                         return MusicSongRowSwipe(
                           key: keys[index],
@@ -1372,9 +1750,7 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                           child: tile,
                         );
                       }),
-                if (appState.server != null &&
-                    playlist.playlistId != localWatchLaterId &&
-                    MusicPlaylistSuggestions.hasSeeds(playlist))
+                if (canSuggest)
                   SliverToBoxAdapter(
                     child: MusicPlaylistSuggestions(
                       key: ValueKey((
@@ -1396,6 +1772,7 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                 library.profileId,
                 playlist.playlistId,
                 displayOrder,
+                offline.enabled,
                 input.text
               ),
               sections: musicFastScrollSectionsFor<int>(context, visible,
@@ -1508,8 +1885,6 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
       List<_LibraryFilter> filters,
       MusicPlaylistFolderService folderService,
       MusicLayout layout) {
-    final theme = Theme.of(context);
-    final locals = AppLocalizations.of(context)!;
     final playlists = service
         .getLocalPlaylists(database: db.forProfile(library.profileId))
         .where(library.isMusicPlaylist)
@@ -1589,10 +1964,6 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
             folder?.id;
       });
     }
-    final folderSession =
-        hasPlaylists ? MusicLibrarySession(context.read<AppCubit>()) : null;
-    bool isCurrent() =>
-        mounted && folderSession?.isCurrent == true && _folderId == folder?.id;
     final sortedItems = _sortedLibraryItems(folderItems, order);
     final shortcuts = folder == null && _filter == _LibraryFilter.all
         ? filters
@@ -1612,9 +1983,69 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
             ...sortedItems
                 .where((item) => !pins.contains(item.playlist?.playlistId)),
           ];
+    if (filter == _LibraryFilter.songs) {
+      return MusicOfflineFilter(
+        key: ValueKey((library.profileId, 'saved-songs-offline-filter')),
+        videos: [for (final item in items) item.bookmark!.toVideo()],
+        builder: (context, offline) => _libraryItems(context, library, order,
+            items, shortcuts, pins, layout, folderService, folder, folders,
+            offline: offline),
+      );
+    }
+    return _libraryItems(context, library, order, items, shortcuts, pins,
+        layout, folderService, folder, folders);
+  }
+
+  Widget _libraryItems(
+      BuildContext context,
+      MusicLibraryService library,
+      MusicCollectionOrder order,
+      List<_LibraryItem> sourceItems,
+      List<_LibraryFilter> shortcuts,
+      Set<String> pins,
+      MusicLayout layout,
+      MusicPlaylistFolderService folderService,
+      MusicPlaylistFolder? folder,
+      List<MusicPlaylistFolder> folders,
+      {MusicOfflineView? offline}) {
+    final locals = AppLocalizations.of(context)!;
+    final theme = Theme.of(context);
+    final hasPlaylists =
+        _filter == _LibraryFilter.playlists || _filter == _LibraryFilter.all;
+    final folderSession =
+        hasPlaylists ? MusicLibrarySession(context.read<AppCubit>()) : null;
+    bool isCurrent() =>
+        mounted && folderSession?.isCurrent == true && _folderId == folder?.id;
     final selection = _savedSongsSelection;
-    selection?.retainAll(entries.map((entry) => entry.id));
+    selection?.retainAll(sourceItems.map((item) => item.bookmark!.id));
+    final offlineSongs = {
+      if (offline?.entries case final entries?)
+        for (final song in entries)
+          if (song != null) song.videoId: song,
+    };
+    final offlineEnabled = offline?.enabled == true;
+    final items = offlineEnabled
+        ? sourceItems
+            .where((item) => offlineSongs.containsKey(item.bookmark!.id))
+            .toList()
+        : sourceItems;
+    final empty = offlineEnabled
+        ? musicOfflineCollectionEmpty(context, offline!)
+        : _empty();
+    Future<void> playOfflineSong(
+        _LibraryItem item, List<_LibraryItem> visible) {
+      _libraryQueryFocus.unfocus();
+      final songs = [
+        for (final row in visible) offlineSongs[row.bookmark!.id]!
+      ];
+      final index = visible.indexOf(item);
+      return _playOffline(songs, offline!,
+          title: locals.musicSavedSongs, startIndex: index);
+    }
+
     final finding = _savedSongsFinding;
+    final filter = _filter;
+    final settingName = _libraryOrderSetting(filter);
     final searchButton = _libraryFindButton(
         const ValueKey('music-saved-songs-search'),
         _LibraryFilter.songs,
@@ -1626,7 +2057,7 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
           compact: compact,
           savedOrder: true,
           fields: filter == _LibraryFilter.songs
-              ? MusicCollectionSortField.values
+              ? MusicCollectionSortMenu.standardFields
               : const [
                   MusicCollectionSortField.source,
                   MusicCollectionSortField.title
@@ -1648,6 +2079,9 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
             final actions = <Widget>[
               if (saveResults != null) saveResults,
               if (finding) sortMenu(compact: true),
+              if (offline != null)
+                musicOfflineFilterButton(context, offline,
+                    key: const ValueKey('music-saved-songs-offline-filter')),
               if (hasPlaylists && folder == null)
                 const MusicRulePlaylistsButton(),
               if (hasPlaylists && folder == null)
@@ -1669,6 +2103,28 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                       context, folderService,
                       parentId: folder?.id, isCurrent: isCurrent),
                   icon: const Icon(Icons.create_new_folder_outlined),
+                ),
+              if (hasPlaylists && supportsLocalMusicFolders)
+                IconButton(
+                  key: const ValueKey('music-import-m3u'),
+                  tooltip: locals.musicM3uImport,
+                  onPressed: () async {
+                    final session =
+                        MusicLibrarySession(context.read<AppCubit>());
+                    final id = await importDevicePlaylist(context);
+                    if (!mounted || id == null || !session.isCurrent) return;
+                    setState(() {
+                      final tabs = _categoryFilters(layout);
+                      _filter = tabs.contains(_LibraryFilter.playlists)
+                          ? _LibraryFilter.playlists
+                          : _LibraryFilter.all;
+                      _folderId = null;
+                      _playlistId = id;
+                      _resetPlaylistSearch();
+                      _resetLibraryFind();
+                    });
+                  },
+                  icon: const Icon(Icons.playlist_add_check),
                 ),
               if (_filter == _LibraryFilter.songs && !finding) searchButton,
               if (_filter == _LibraryFilter.songs && items.isNotEmpty)
@@ -1722,8 +2178,11 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
     if (finding) {
       final searchable = [
         for (final item in items)
-          normalizeMusicSearchText(
-              '${item.bookmark!.displayTitle} ${item.bookmark!.subtitle}'),
+          normalizeMusicSearchText([
+            item.bookmark!.displayTitle,
+            item.bookmark!.subtitle,
+            for (final credit in item.bookmark!.artistCredits) credit.name,
+          ].join(' ')),
       ];
       return ValueListenableBuilder(
         valueListenable: _libraryQuery,
@@ -1731,10 +2190,19 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
           final terms = musicSearchTerms(input.text);
           final matches = [
             for (final (index, item) in items.indexed)
-              if (terms.every(searchable[index].contains)) item,
+              if (musicSearchMatchesWithArtistAliases(
+                  terms,
+                  searchable[index],
+                  catalogArtistSearchAliases(
+                      library, item.bookmark!.artistCredits)))
+                item,
           ];
           return _collection(matches, const [], library, order, layout,
               playbackItems: items,
+              offlineSongs: offlineSongs,
+              onOpenSong: offlineEnabled
+                  ? (item) => playOfflineSong(item, matches)
+                  : null,
               searchToolbar: selection == null
                   ? toolbar(
                       saveResults: terms.isNotEmpty && matches.isNotEmpty
@@ -1742,10 +2210,11 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                               matches.map((item) => item.bookmark!.toVideo()),
                               library.profileId)
                           : null)
-                  : _savedSongsSelectionBar(matches, items, selection, order),
+                  : _savedSongsSelectionBar(matches, items, selection, order,
+                      offline: offline, offlineSongs: offlineSongs),
               emptyResults: matches.isEmpty
-                  ? terms.isEmpty
-                      ? _empty()
+                  ? terms.isEmpty || items.isEmpty
+                      ? empty
                       : Center(child: Text(locals.musicNoResults))
                   : null);
         },
@@ -1770,18 +2239,21 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
       if (collectionSelection != null)
         _collectionSelectionBar(collections, collectionSelection, library)
       else if (selection != null)
-        _savedSongsSelectionBar(items, items, selection, order)
+        _savedSongsSelectionBar(items, items, selection, order,
+            offline: offline, offlineSongs: offlineSongs)
       else
         toolbar(),
       if (selection == null &&
+          !offlineEnabled &&
           _filter == _LibraryFilter.songs &&
-          entries.any((entry) => entry.needsSongDetails))
+          sourceItems.any((item) => item.bookmark!.needsSongDetails))
         Align(
           alignment: AlignmentDirectional.centerStart,
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: OutlinedButton.icon(
-              onPressed: () => showMusicDetailsDialog(context, entries),
+              onPressed: () => showMusicDetailsDialog(
+                  context, [for (final item in sourceItems) item.bookmark!]),
               icon: const Icon(Icons.auto_fix_high_outlined),
               label: Text(locals.musicLoadSongDetails),
             ),
@@ -1790,14 +2262,19 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
       Expanded(
         child: items.isEmpty && folders.isEmpty && shortcuts.isEmpty
             ? folder == null
-                ? _empty()
+                ? empty
                 : Center(child: Text(locals.musicPlaylistEmptyFolder))
             : _collection(items, shortcuts, library, order, layout,
                 pinnedPlaylistIds: pins,
+                offlineSongs: offlineSongs,
+                onOpenSong: offlineEnabled
+                    ? (item) => playOfflineSong(item, items)
+                    : null,
                 folders: folders,
                 folderMenu: (item) => MusicPlaylistFolderActions.folderMenu(
                     context, folderService, item, isCurrent: isCurrent),
-                movePlaylist: folderSession == null || allFolders.isEmpty
+                movePlaylist: folderSession == null ||
+                        folderService.snapshot.folders.isEmpty
                     ? null
                     : (item) =>
                         _movePlaylist(item, folderService, folderSession)),
@@ -1849,10 +2326,15 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
       : ValueKey(
           'music-saved-${item.bookmark!.kind.name}-${item.bookmark!.id}');
 
-  String _itemTitle(_LibraryItem item) =>
-      item.playlist?.playlistId == localWatchLaterId
+  String _itemTitle(_LibraryItem item) {
+    if (item.playlist case final playlist?) {
+      return playlist.playlistId == localWatchLaterId
           ? AppLocalizations.of(context)!.watchLater
-          : item.playlist?.title ?? item.bookmark!.displayTitle;
+          : playlist.title;
+    }
+    return _bookmarkDisplayTitle(
+        item.bookmark!, MusicLibraryService.forProfile(db, db.profileId));
+  }
 
   String _libraryOrderSetting(_LibraryFilter filter) =>
       'music-collection-library-order:${filter.name}';
@@ -1870,13 +2352,18 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
       switch (field) {
         MusicCollectionSortField.source => null,
         MusicCollectionSortField.title => _itemTitle(item),
-        MusicCollectionSortField.artist => item.bookmark?.subtitle,
+        MusicCollectionSortField.artist => switch (item.bookmark) {
+            final entry? => MusicLibraryService.forProfile(db, db.profileId)
+                .catalogArtistByline(entry.subtitle, entry.artistCredits),
+            _ => null,
+          },
         MusicCollectionSortField.album => item.bookmark?.album,
         MusicCollectionSortField.duration => switch (
               item.bookmark?.durationSeconds) {
             final int seconds when seconds > 0 => seconds,
             _ => null,
           },
+        MusicCollectionSortField.listeningTime => null,
       };
 
   bool _isCollection(_LibraryItem item) =>
@@ -1896,7 +2383,8 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
   }
 
   Future<void> _openItem(_LibraryItem item, List<_LibraryItem> items,
-      {bool songTap = false}) async {
+      {bool songTap = false,
+      Future<void> Function(_LibraryItem)? onOpenSong}) async {
     if (_collectionSelection != null) {
       if (_isCollection(item)) _toggleLibrarySelection(_itemKey(item).value);
       return;
@@ -1911,6 +2399,8 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
         _resetPlaylistSearch();
         _playlistId = playlist.playlistId;
       });
+    } else if (onOpenSong != null) {
+      await onOpenSong(item);
     } else {
       await _openBookmark(item.bookmark!, items, songTap: songTap);
     }
@@ -1923,8 +2413,16 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
 
   IconData _shortcutIcon(_LibraryFilter shortcut) =>
       shortcut == _LibraryFilter.songs
-          ? Icons.favorite_rounded
+          ? Icons.bookmark_rounded
           : Icons.cloud_download_rounded;
+
+  void _openAutomaticCollections({bool showLikes = false}) {
+    final session = MusicLibrarySession(context.read<AppCubit>());
+    if (!session.isCurrent) return;
+    unawaited(Navigator.of(context).push<void>(MaterialPageRoute(
+        builder: (_) => MusicAutomaticCollectionsPage(
+            session: session, showLikes: showLikes))));
+  }
 
   ValueKey<String> _shortcutKey(_LibraryFilter shortcut) =>
       ValueKey('music-library-shortcut-${shortcut.name}');
@@ -1944,6 +2442,8 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
       MusicCollectionOrder order,
       MusicLayout presentation,
       {List<_LibraryItem>? playbackItems,
+      Map<String, Video> offlineSongs = const {},
+      Future<void> Function(_LibraryItem)? onOpenSong,
       Set<String> pinnedPlaylistIds = const {},
       Widget? searchToolbar,
       Widget? emptyResults,
@@ -2029,11 +2529,18 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
         final item = items[index - itemStart];
         final move =
             _collectionSelection == null ? movePlaylist?.call(item) : null;
-        Future<void> open() => _openItem(item, allItems);
+        Future<void> open() =>
+            _openItem(item, allItems, onOpenSong: onOpenSong);
         if (item.bookmark != null) {
-          return _bookmark(item, () => _openItem(item, allItems, songTap: true),
-              open, presentation,
-              movePlaylist: move);
+          return _bookmark(
+              item,
+              () => _openItem(item, allItems,
+                  songTap: true, onOpenSong: onOpenSong),
+              open,
+              presentation,
+              library,
+              movePlaylist: move,
+              offlineSong: offlineSongs[item.bookmark!.id]);
         }
         final playlistId = item.playlist!.playlistId;
         final pin = pinnedPlaylistIds.contains(playlistId)
@@ -2129,7 +2636,9 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
           );
         }
         final item = items[index - itemStart];
-        return _gridItem(item, savedCovers, covers, allItems,
+        return _gridItem(item, savedCovers, covers, library, allItems,
+            onOpenSong: onOpenSong,
+            offlineSong: offlineSongs[item.bookmark?.id],
             songTitleLines: presentation.titleLines(2),
             pinned: pinnedPlaylistIds.contains(item.playlist?.playlistId),
             movePlaylist:
@@ -2171,12 +2680,15 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
       _LibraryItem item,
       Map<String, List<ImageObject>> savedCovers,
       MusicPlaylistCovers covers,
+      MusicLibraryService library,
       List<_LibraryItem> items,
       {required bool pinned,
       required int songTitleLines,
-      Widget? movePlaylist}) {
+      Widget? movePlaylist,
+      Future<void> Function(_LibraryItem)? onOpenSong,
+      Video? offlineSong}) {
     final entry = item.bookmark;
-    Future<void> play() => _openItem(item, items);
+    Future<void> play() => _openItem(item, items, onOpenSong: onOpenSong);
     final local = item.playlist;
     final song = local?.videos.firstOrNull;
     final music = song?.musicMetadata;
@@ -2214,12 +2726,17 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                 images: images,
                 instanceOnly: true,
                 decoration: const BoxDecoration()));
+    final title = entry == null
+        ? _itemTitle(item)
+        : _bookmarkDisplayTitle(entry, library);
     return _gridCard(
       key: _itemKey(item),
-      title: _itemTitle(item),
+      title: title,
       bookmark: entry,
       titleLines: plays ? songTitleLines : 2,
-      subtitle: entry?.subtitle ?? AppLocalizations.of(context)!.onDevice,
+      subtitle: entry == null
+          ? AppLocalizations.of(context)!.onDevice
+          : _bookmarkDisplaySubtitle(entry, title, library),
       artworkRadius: artist ? 300 : 7,
       artwork: local == null
           ? defaultArtwork
@@ -2231,12 +2748,14 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
           ? null
           : entry == null
               ? movePlaylist
-              : _playlistRowActions(
-                  movePlaylist, _bookmarkActions(entry, play)),
+              : _playlistRowActions(movePlaylist,
+                  _bookmarkActions(entry, play, offlineSong: offlineSong)),
       plays: plays,
       selected: selected,
       pinned: pinned,
-      onOpen: enabled ? () => _openItem(item, items, songTap: true) : null,
+      onOpen: enabled
+          ? () => _openItem(item, items, songTap: true, onOpenSong: onOpenSong)
+          : null,
       onLongPress: _itemLongPress(item, play),
     );
   }
@@ -2522,8 +3041,8 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
     );
   }
 
-  SliverChildBuilderDelegate _downloadRows(
-      DownloadManagerState state, List<DownloadedVideo> videos) {
+  SliverChildBuilderDelegate _downloadRows(DownloadManagerState state,
+      List<DownloadedVideo> videos, MusicLibraryService library) {
     final locals = AppLocalizations.of(context)!;
     ValueKey<(String, String)> rowKey(DownloadedVideo video) =>
         ValueKey((video.profileId, video.videoId));
@@ -2540,7 +3059,8 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
           video.storageFailed;
       final progress = state.downloadProgresses[video.videoId];
       final status = ready
-          ? video.musicMetadata!.artist
+          ? library.catalogArtistByline(
+              video.musicMetadata!.artist, video.musicMetadata!.artistCredits)
           : video.authenticationRequired
               ? locals.downloadSignInRequired
               : video.storageFailed
@@ -2785,6 +3305,7 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
           builder: (context, state) {
         final locals = AppLocalizations.of(context)!;
         final profileId = db.profileId;
+        final library = MusicLibraryService.forProfile(db, profileId);
         final settings = context.watch<SettingsCubit?>();
         final order =
             settings?.state.musicDownloadOrder ?? const MusicDownloadOrder();
@@ -2850,7 +3371,8 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                                 : order.sortValue),
                         child: ListView.custom(
                           key: PageStorageKey(('music-downloads', profileId)),
-                          childrenDelegate: _downloadRows(state, videos),
+                          childrenDelegate:
+                              _downloadRows(state, videos, library),
                           semanticChildCount: videos.length,
                         ),
                       ),
@@ -2887,9 +3409,16 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                   : videos.where((video) {
                       final music = video.musicMetadata!;
                       final text = _downloadSearchText[video] ??=
-                          normalizeMusicSearchText(
-                              '${music.title} ${music.artist}');
-                      return terms.every(text.contains);
+                          normalizeMusicSearchText([
+                        music.title,
+                        music.artist,
+                        for (final credit in music.artistCredits) credit.name,
+                      ].join(' '));
+                      return musicSearchMatchesWithArtistAliases(
+                          terms,
+                          text,
+                          catalogArtistSearchAliases(
+                              library, music.artistCredits));
                     }).toList();
               final readyMatches = matches.where(_downloadReady);
               return MusicFastScroll(
@@ -2918,7 +3447,8 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                               ? _empty()
                               : Center(child: Text(locals.musicNoResults)),
                         )
-                      : SliverList(delegate: _downloadRows(state, matches)),
+                      : SliverList(
+                          delegate: _downloadRows(state, matches, library)),
                 ),
               );
             },
@@ -3061,6 +3591,16 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                                     icon: const Icon(Icons.bookmarks_outlined),
                                   ),
                                 IconButton(
+                                  key: const ValueKey(
+                                      'music-library-automatic-collections'),
+                                  tooltip: locals.musicAutomaticCollections,
+                                  icon: const Icon(Icons.auto_awesome_outlined),
+                                  onPressed: state.globalLoading ||
+                                          state.sessionRecoveryRequired
+                                      ? null
+                                      : _openAutomaticCollections,
+                                ),
+                                IconButton(
                                   key: const ValueKey('music-library-history'),
                                   tooltip: locals.musicPlaybackHistory,
                                   icon: const Icon(Icons.history),
@@ -3100,7 +3640,15 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                                             final imported =
                                                 await showTakeoutImport(
                                                     context);
-                                            if (mounted && imported == true) {
+                                            if (!mounted) return;
+                                            if (imported ==
+                                                TakeoutImportDestination
+                                                    .likes) {
+                                              _openAutomaticCollections(
+                                                  showLikes: true);
+                                            } else if (imported ==
+                                                TakeoutImportDestination
+                                                    .savedSongs) {
                                               final layout = this
                                                   .context
                                                   .read<SettingsCubit?>()
@@ -3169,8 +3717,8 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                           ),
                         Expanded(
                           child: switch (_filter) {
-                            _LibraryFilter.onDevice =>
-                              const LocalMusicFolder.library(),
+                            _LibraryFilter.onDevice => LocalMusicFolder.library(
+                                library: widget.deviceLibrary),
                             _
                                 when state.globalLoading ||
                                     state.sessionRecoveryRequired =>

@@ -15,6 +15,7 @@ import 'caption.dart';
 import 'format_stream.dart';
 import 'music_metadata.dart';
 import 'storyboard.dart';
+import 'video_chapter.dart';
 
 part 'video.freezed.dart';
 part 'video.g.dart';
@@ -106,6 +107,9 @@ sealed class Video with _$Video implements ShareLinks, IdedVideo {
       @JsonKey(fromJson: Storyboard.parseList)
       @Default([])
       List<Storyboard> storyboards,
+      @JsonKey(fromJson: VideoChapter.parseList, toJson: VideoChapter.writeList)
+      @Default([])
+      List<VideoChapter> chapters,
       @Default([]) List<Video> recommendedVideos,
       String? title,
       int? lengthSeconds,
@@ -163,6 +167,18 @@ sealed class Video with _$Video implements ShareLinks, IdedVideo {
     return identical(music, restored)
         ? video
         : video.copyWith(musicMetadata: restored);
+  }
+
+  /// Select usable instance chapters, falling back to creator timestamps.
+  List<VideoChapter> chaptersFor(Duration duration) {
+    if (duration <= Duration.zero) return const [];
+    final playableChapters = [
+      for (final chapter in chapters)
+        if (chapter.start >= Duration.zero && chapter.start < duration) chapter,
+    ];
+    return playableChapters.isNotEmpty
+        ? playableChapters
+        : VideoChapter.fromDescription(description, duration);
   }
 
   /// Stock Invidious has no Art Track flag. Require the Topic channel and

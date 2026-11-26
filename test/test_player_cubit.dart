@@ -14,7 +14,8 @@ Future<SembastSqfDb> createPlayerTestDatabase() async {
 }
 
 class TestPlayerCubit extends PlayerCubit {
-  TestPlayerCubit(super.initialState, super.settings);
+  TestPlayerCubit(super.initialState, super.settings,
+      {super.learningTimeMicroseconds});
 
   @override
   Future<void> onReady() async {}

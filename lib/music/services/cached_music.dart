@@ -106,6 +106,17 @@ Future<List<CachedMusicSong>> listCachedMusicSongs(Server server) async {
   return songs.values.toList();
 }
 
+Future<CachedMusicRemoval> removeCachedMusicSong(
+    Server server, CachedMusicSong song) async {
+  final owner = _owner(server);
+  if (owner == null) return CachedMusicRemoval.missing;
+  return PlaybackCache.removeCachedMusicSong({
+    ...owner,
+    'contentId': song.videoId,
+    'rendition': song.rendition,
+  });
+}
+
 /// A cache-only occurrence retains its owner and rendition when copied or
 /// restored. The native cache separately checks the current disk bytes.
 class CachedMusicPlayback {

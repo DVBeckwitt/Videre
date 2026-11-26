@@ -10,6 +10,7 @@ import 'package:clipious/player/models/media_event.dart';
 import 'package:clipious/player/models/media_command.dart';
 import 'package:clipious/player/models/video_display_mode.dart';
 import 'package:clipious/player/models/watch_audio_track.dart';
+import 'package:clipious/player/services/watch_local_subtitles.dart';
 import 'package:clipious/player/states/audio_player.dart';
 import 'package:clipious/player/states/interfaces/media_player.dart';
 import 'package:clipious/player/states/player.dart';
@@ -56,6 +57,12 @@ class _SpeedBoostVideo extends VideoPlayerCubit {
   Completer<bool>? qualityPreparation;
   bool qualityPreparationResult = true;
   int qualityPreparationCalls = 0;
+  @override
+  bool canManageLocalSubtitles = false;
+  @override
+  String? localSubtitleName;
+  Completer<WatchLocalSubtitleResult>? subtitlePicker;
+  int subtitlePickerCalls = 0;
 
   @override
   bool get isOnionPlayback => onionPlayback;
@@ -74,6 +81,23 @@ class _SpeedBoostVideo extends VideoPlayerCubit {
 
   @override
   void selectSubtitle(int index) => selectedSubtitleTracks.add(index);
+
+  @override
+  Future<WatchLocalSubtitleResult> pickLocalSubtitle() async {
+    subtitlePickerCalls++;
+    final result =
+        await subtitlePicker?.future ?? WatchLocalSubtitleResult.done;
+    if (result == WatchLocalSubtitleResult.done) {
+      localSubtitleName = 'festival.srt';
+    }
+    return result;
+  }
+
+  @override
+  Future<WatchLocalSubtitleResult> removeLocalSubtitle() async {
+    localSubtitleName = null;
+    return WatchLocalSubtitleResult.done;
+  }
 
   @override
   Future<bool> prepareVideoTracks() async {
@@ -966,6 +990,102 @@ void main() {
 
   final watchAudioTrackMenu =
       find.byKey(const ValueKey('player-audio-track-open'));
+
+  testWidgets('phone caption menu attaches and removes a file without tracks',
+      (tester) async {
+    final videoPlayer = (await createPlayingVideo(tester))
+      ..canManageLocalSubtitles = true
+      ..subtitlePicker = Completer<WatchLocalSubtitleResult>();
+    await tester.pumpWidget(hostControls(SizedBox(
+      width: 390,
+      height: 220,
+      child: PlayerControls(mediaPlayerCubit: videoPlayer),
+    )));
+    await tester.pumpAndSettle();
+    final locals =
+        AppLocalizations.of(tester.element(find.byType(PlayerControls)))!;
+    final captions = find.byKey(const ValueKey('player-subtitles-open'));
+    final pick = find.byKey(const ValueKey('player-local-subtitle-pick'));
+    final remove = find.byKey(const ValueKey('player-local-subtitle-remove'));
+
+    Future<void> openCaptions() async {
+      final options = find.byIcon(Icons.more_vert);
+      if (options.evaluate().isEmpty) {
+        tester
+            .element(find.byType(LayoutBuilder).last)
+            .read<PlayerControlsCubit>()
+            .showControls();
+        await tester.pumpAndSettle();
+      }
+      await tester.tap(options);
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(captions);
+      await tester.tap(captions);
+      await tester.pumpAndSettle();
+    }
+
+    await openCaptions();
+    expect(find.text(locals.localSubtitleAttach), findsOneWidget);
+    await tester.tap(pick);
+    await tester.pump();
+    expect(tester.widget<ListTile>(pick).enabled, isFalse);
+    videoPlayer.subtitlePicker!.complete(WatchLocalSubtitleResult.invalidFile);
+    await tester.pumpAndSettle();
+    expect(find.text(locals.localSubtitleInvalidFile), findsOneWidget);
+
+    videoPlayer.subtitlePicker = null;
+    await tester.tap(pick);
+    await tester.pumpAndSettle();
+    expect(find.byType(BottomSheet), findsNothing);
+    await openCaptions();
+    expect(find.text(locals.localSubtitleRelink), findsOneWidget);
+    expect(find.text('festival.srt'), findsOneWidget);
+    await tester.tap(remove);
+    await tester.pumpAndSettle();
+    await openCaptions();
+    expect(find.text(locals.localSubtitleAttach), findsOneWidget);
+    expect(remove, findsNothing);
+    player.replaceOccurrence();
+    await tester.pump();
+    await tester.tap(pick);
+    await tester.pumpAndSettle();
+    expect(videoPlayer.subtitlePickerCalls, 2);
+    expect(player.state.isPlaying, isTrue);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('TV remote activates local subtitle actions in the caption tab',
+      (tester) async {
+    final videoPlayer = (await createPlayingVideo(tester))
+      ..canManageLocalSubtitles = true;
+    await tester.pumpWidget(hostControls(BlocProvider<VideoPlayerCubit>.value(
+      value: videoPlayer,
+      child: const TvPlayerSettings(),
+    )));
+    await tester.pumpAndSettle();
+    final locals =
+        AppLocalizations.of(tester.element(find.byType(TvPlayerSettings)))!;
+    Focus.of(tester.element(find.text(locals.subtitles))).requestFocus();
+    await tester.pumpAndSettle();
+
+    Future<void> activate(String label) async {
+      Focus.of(tester.element(find.text(label))).requestFocus();
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.select);
+      await tester.pumpAndSettle();
+    }
+
+    await activate(locals.localSubtitleAttach);
+    expect(find.text(locals.localSubtitleRelink), findsOneWidget);
+    expect(find.text('festival.srt'), findsOneWidget);
+    await activate(locals.localSubtitleRemove);
+    expect(find.text(locals.localSubtitleAttach), findsOneWidget);
+    expect(find.text('festival.srt'), findsNothing);
+    expect(player.state.isPlaying, isTrue);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
 
   Future<void> openAudioOptions(
       WidgetTester tester, _WatchTrackAudio audio) async {

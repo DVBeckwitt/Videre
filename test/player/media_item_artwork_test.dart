@@ -13,10 +13,15 @@ import 'package:clipious/downloads/services/download_playback_source.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/media_handler.dart';
+import 'package:clipious/music/models/device_music_artwork_preferences.dart';
 import 'package:clipious/music/models/music_library_entry.dart';
+import 'package:clipious/music/services/local_music_library.dart';
 import 'package:clipious/player/models/backend_playback.dart';
+import 'package:clipious/player/notification_artwork_cache.dart';
+import 'package:clipious/player/models/local_music_playback.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/settings/models/db/server.dart';
+import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/models/image_object.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
@@ -25,6 +30,10 @@ import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
+import 'package:file/file.dart' as fs;
+import 'package:file/local.dart';
+import 'package:http/http.dart' as http;
+import 'package:path/path.dart' as p;
 
 import '../test_app_cubit.dart';
 import '../test_player_cubit.dart';
@@ -34,6 +43,67 @@ class _UnusedArtworkCache implements BaseCacheManager {
   @override
   dynamic noSuchMethod(Invocation invocation) =>
       throw StateError('Content artwork must not access the file cache');
+}
+
+class _NotificationFiles implements FileSystem {
+  _NotificationFiles(this.directory);
+
+  final Directory directory;
+
+  @override
+  Future<fs.File> createFile(String name) async =>
+      const LocalFileSystem().file(p.join(directory.path, name));
+}
+
+class _NotificationFilesService extends FileService {
+  _NotificationFilesService(this.body);
+
+  final Stream<List<int>> Function(String url, Map<String, String>? headers)
+      body;
+
+  @override
+  Future<FileServiceResponse> get(
+    String url, {
+    Map<String, String>? headers,
+  }) async =>
+      HttpGetResponse(
+        http.StreamedResponse(
+          body(url, headers),
+          200,
+          headers: {
+            'cache-control': 'max-age=3600',
+            'content-type': 'image/jpeg'
+          },
+        ),
+      );
+}
+
+NotificationArtworkCache _notificationCache(
+  Directory root,
+  _NotificationFilesService service,
+  String Function() profileId, {
+  int limitBytes = 10,
+}) {
+  final cache = NotificationArtworkCache(
+    profileId: profileId,
+    limitBytes: limitBytes,
+    configFactory: (namespace) {
+      final directory = Directory(p.join(root.path, namespace))..createSync();
+      return Config(
+        namespace,
+        fileSystem: _NotificationFiles(directory),
+        repo: JsonCacheInfoRepository.withFile(
+          File(p.join(directory.path, 'index.json')),
+        ),
+        fileService: service,
+      );
+    },
+  );
+  addTearDown(() async {
+    await cache.manager.dispose();
+    await root.delete(recursive: true);
+  });
+  return cache;
 }
 
 void main() {
@@ -79,6 +149,47 @@ void main() {
         PlayerState.init([queued]).copyWith(currentlyPlaying: playing),
         settings);
   }
+
+  test('device media items respect the cover choice with a cached track',
+      () async {
+    const channel = MethodChannel('com.github.dvbeckwitt.videre/local_music');
+    const tree = 'content://documents/tree/primary%3AMusic';
+    const file = '/data/cache/music-cover.jpg';
+    final library = LocalMusicLibrary.instance;
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      switch (call.method) {
+        case 'getFolder':
+          return {'uri': tree, 'name': 'Music'};
+        case 'listTracks':
+          return [
+            {
+              'uri': '$tree/document/primary%3AMusic%2FSong.flac',
+              'title': 'Song',
+              'artPath': file,
+            }
+          ];
+        default:
+          return null;
+      }
+    });
+    addTearDown(() async {
+      await library.disable();
+      messenger.setMockMethodCallHandler(channel, null);
+    });
+    await library.refresh();
+    final entry = localMusicPlaybackEntry(library.tracks.single, db.profileId);
+    final controller = player = TestPlayerCubit(
+        PlayerState.init([]).copyWith(offlineVideos: [entry]), settings);
+    expect((await controller.getMediaItem(0))?.artUri, Uri.file(file));
+
+    await DeviceMusicArtworkPreferences.setLoadCovers(db, false);
+    expect(library.tracks.single.artPath, file);
+    final withoutCover = await controller.getMediaItem(0);
+    expect(withoutCover?.title, 'Song');
+    expect(withoutCover?.artUri, isNull);
+  });
 
   test('notification artwork uses the selected instance and its headers',
       () async {
@@ -460,4 +571,135 @@ void main() {
     expect(nativeState?['playing'], isFalse);
     expect(handler.mediaItem.value, isNull);
   });
+
+  test(
+    'notification storage trims its own files and can be reused after clear',
+    () async {
+      final root = await Directory.systemTemp.createTemp('notification-art-');
+      final downloadCover = await File(
+        p.join(root.path, 'download-cover.jpg'),
+      ).writeAsBytes([8]);
+      final deviceCover = File(
+          p.join(root.path, 'music-covers-${'a' * 64}', 'device-cover.jpg'));
+      await deviceCover.create(recursive: true);
+      await deviceCover.writeAsBytes([9]);
+      const selectedCoverKey = 'music-playlist-cover-v1:local:chosen';
+      const selectedCover = 'c2VsZWN0ZWQtY292ZXI=';
+      await db.saveSetting(SettingsValue(selectedCoverKey, selectedCover));
+      final cache = _notificationCache(
+        root,
+        _NotificationFilesService(
+          (_, __) => Stream.value(const [1, 2, 3, 4, 5, 6]),
+        ),
+        () => 'profile',
+      );
+      const first = 'https://instance.example/cover-a';
+      const second = 'https://instance.example/cover-b';
+      final manager = cache.manager;
+
+      final older = await manager.getSingleFile(first);
+      expect(await cache.read(), (
+        usedBytes: 6,
+        limitBytes: 10,
+        canClear: true,
+      ));
+      final newer = await manager.getSingleFile(second);
+      expect(await cache.read(), (
+        usedBytes: 6,
+        limitBytes: 10,
+        canClear: true,
+      ));
+      expect(await older.exists(), isFalse);
+      expect(await newer.exists(), isTrue);
+
+      expect(await cache.clear(), (
+        usedBytes: 0,
+        limitBytes: 10,
+        canClear: false,
+      ));
+      expect(await newer.exists(), isFalse);
+      expect(await downloadCover.readAsBytes(), [8]);
+      expect(await deviceCover.readAsBytes(), [9]);
+      expect(db.getSettings(selectedCoverKey)?.value, selectedCover);
+      expect(await (await manager.getSingleFile(second)).readAsBytes(), [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+      ]);
+    },
+  );
+
+  test(
+    'notification reuse includes the owning profile and request headers',
+    () async {
+      final root = await Directory.systemTemp.createTemp('notification-auth-');
+      var requests = 0;
+      var profile = 'first-profile';
+      final cache = _notificationCache(
+        root,
+        _NotificationFilesService((_, headers) {
+          expect(headers?['X-Instance-Access'], isNotEmpty);
+          return Stream.value([++requests]);
+        }),
+        () => profile,
+      );
+      const url = 'https://instance.example/same-cover';
+      const firstHeaders = {'X-Instance-Access': 'first'};
+      const secondHeaders = {'X-Instance-Access': 'second'};
+      Future<List<int>> load(Map<String, String> headers) async =>
+          (await cache.manager.getSingleFile(
+            url,
+            headers: headers,
+          ))
+              .readAsBytes();
+
+      expect(await load(firstHeaders), [1]);
+      expect(await load(firstHeaders), [1]);
+      expect(await load(secondHeaders), [2]);
+      profile = 'second-profile';
+      expect(await load(firstHeaders), [3]);
+      expect(requests, 3);
+      expect(await cache.manager.getFileFromMemory(url), isNull);
+    },
+  );
+
+  test(
+    'clearing notification storage fences an open artwork response',
+    () async {
+      final root = await Directory.systemTemp.createTemp('notification-clear-');
+      final subscribed = Completer<void>();
+      final body = StreamController<List<int>>(onListen: subscribed.complete);
+      addTearDown(body.close);
+      var requests = 0;
+      final cache = _notificationCache(
+        root,
+        _NotificationFilesService(
+          (_, __) => requests++ == 0 ? body.stream : Stream.value(const [7]),
+        ),
+        () => 'profile',
+      );
+      const url = 'https://instance.example/cover';
+      final fenced = expectLater(
+        cache.manager.getSingleFile(url),
+        throwsA(isA<HttpException>()),
+      );
+      await subscribed.future;
+      expect(await cache.read(), (
+        usedBytes: 0,
+        limitBytes: 10,
+        canClear: true,
+      ));
+      expect(await cache.clear(), (
+        usedBytes: 0,
+        limitBytes: 10,
+        canClear: false,
+      ));
+      await fenced;
+      final latest = await cache.manager.getSingleFile(url);
+      expect(await latest.readAsBytes(), [7]);
+    },
+  );
 }

@@ -9,7 +9,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 class MusicHistoryPrivacy extends StatelessWidget {
-  const MusicHistoryPrivacy({super.key});
+  final FocusNode? focusNode;
+
+  const MusicHistoryPrivacy({super.key, this.focusNode});
 
   @override
   Widget build(BuildContext context) {
@@ -25,6 +27,7 @@ class MusicHistoryPrivacy extends StatelessWidget {
       },
       child: ListTile(
         key: const ValueKey('music-history-privacy-setting'),
+        focusNode: focusNode,
         leading: const Icon(Icons.privacy_tip_outlined),
         title: Text(locals.musicHistoryPrivacy),
         enabled: active,

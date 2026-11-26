@@ -3,7 +3,6 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:river_player/river_player.dart';
-import 'package:river_player/src/subtitles/better_player_subtitles_factory.dart';
 
 const _validCaptions =
     'WEBVTT\n\n00:00:00.200 --> 00:00:05.000\nWorking captions\n\n';

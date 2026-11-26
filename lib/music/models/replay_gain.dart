@@ -1,6 +1,6 @@
 import 'dart:math' as math;
 
-enum ReplayGainMode { off, track, album }
+enum ReplayGainMode { off, track, album, contextual }
 
 const minimumMusicPreampDb = -12.0;
 const maximumMusicPreampDb = 12.0;
@@ -23,20 +23,29 @@ class ReplayGain {
   final double? albumPeak;
 }
 
-/// Calculates an independent decoder gain. The user's volume and transition
-/// envelope are still applied by the player downstream.
-double musicGainFactor(ReplayGainMode mode, double preampDb, ReplayGain? tags) {
-  final preamp = clampMusicPreampDb(preampDb);
-  if (mode == ReplayGainMode.off && preamp == 0) return 1;
-
+/// Calculates decoder gain using the preamp for the resolved adjustment.
+/// The player's volume and transition envelope are applied downstream.
+double musicGainFactor(
+  ReplayGainMode mode,
+  ReplayGain? tags, {
+  required double taggedPreampDb,
+  required double untaggedPreampDb,
+  bool albumContext = false,
+}) {
   final trackGain = tags?.trackGainDb;
   final albumGain = tags?.albumGainDb;
-  final useAlbum = mode == ReplayGainMode.album && albumGain?.isFinite == true;
+  final useAlbum = (mode == ReplayGainMode.album ||
+          (mode == ReplayGainMode.contextual && albumContext)) &&
+      albumGain?.isFinite == true;
   final gain = switch (mode) {
-    ReplayGainMode.off => 0.0,
-    ReplayGainMode.album when useAlbum => albumGain!,
-    _ => trackGain?.isFinite == true ? trackGain! : 0.0,
+    ReplayGainMode.off => null,
+    _ when useAlbum => albumGain!,
+    _ => trackGain?.isFinite == true ? trackGain : null,
   };
+  final preamp =
+      clampMusicPreampDb(gain == null ? untaggedPreampDb : taggedPreampDb);
+  if (mode == ReplayGainMode.off && preamp == 0) return 1;
+
   final trackPeak = _validPeak(tags?.trackPeak);
   final albumPeak = _validPeak(tags?.albumPeak);
   final peak = useAlbum
@@ -44,9 +53,9 @@ double musicGainFactor(ReplayGainMode mode, double preampDb, ReplayGain? tags) {
       : trackPeak ?? 1.0;
 
   // The ReplayGain peak is a sample amplitude, so 1 / peak is the largest
-  // scaling factor that fits below full scale. Untagged audio assumes 1.0.
+  // scaling factor that fits below full scale. Unknown peaks assume 1.0.
   // Limit exceptionally large factors from corrupt or unconventional tags.
-  final requested = math.pow(10, (gain + preamp) / 20).toDouble();
+  final requested = math.pow(10, ((gain ?? 0) + preamp) / 20).toDouble();
   return math.min(requested, math.min(1 / peak, 16.0));
 }
 

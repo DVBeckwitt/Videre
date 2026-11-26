@@ -29,11 +29,25 @@ import '../test_settings_cubit.dart';
 class _VideoWithoutNative extends VideoPlayerCubit {
   _VideoWithoutNative(super.initialState, super.player, super.settings);
 
+  WatchSubtitleTimingTarget? timingTarget;
+
   @override
   void onInit() {}
 
   @override
   void disposeControllers() => videoController = null;
+
+  @override
+  WatchSubtitleTimingTarget? get subtitleTimingTarget => timingTarget;
+
+  @override
+  Future<void> adjustSubtitleTiming(WatchSubtitleTimingTarget target,
+      {Duration? shift}) async {
+    final controller = videoController!;
+    controller.setSubtitleOffset(shift == null
+        ? Duration.zero
+        : controller.subtitleOffset.value + shift);
+  }
 }
 
 class _SettingsWithHeldSubtitleWrite extends TestSettingsCubit {
@@ -182,6 +196,33 @@ void main() {
         ),
       );
 
+  Widget watchControls({required bool television}) => MultiBlocProvider(
+        providers: [
+          BlocProvider<PlayerCubit>.value(value: player),
+          BlocProvider<VideoPlayerCubit>.value(value: video),
+          BlocProvider<SettingsCubit>.value(value: settings),
+        ],
+        child: host(
+          width: 790,
+          height: 390,
+          child: television
+              ? const TvPlayerSettings()
+              : PlayerControls(mediaPlayerCubit: video),
+        ),
+      );
+
+  bool hasFocus(Finder finder) {
+    final target = finder.evaluate().single;
+    final context = FocusManager.instance.primaryFocus?.context;
+    if (context == target) return true;
+    var focused = false;
+    context?.visitAncestorElements((element) {
+      focused = element == target;
+      return !focused;
+    });
+    return focused;
+  }
+
   testWidgets(
       'caption failure exposes retry and dismiss without stopping video',
       (tester) async {
@@ -205,41 +246,18 @@ void main() {
       app_main.darkColorScheme = const ColorScheme.dark();
       player.showBigPlayer();
       player.setEvent(const MediaEvent(state: MediaState.pause));
-      await tester.pumpWidget(MultiBlocProvider(
-        providers: [
-          BlocProvider<PlayerCubit>.value(value: player),
-          BlocProvider<VideoPlayerCubit>.value(value: video),
-          BlocProvider<SettingsCubit>.value(value: settings),
-        ],
-        child: host(
-          width: 790,
-          height: 390,
-          child: television
-              ? const TvPlayerSettings()
-              : PlayerControls(mediaPlayerCubit: video),
-        ),
-      ));
+      await tester.pumpWidget(watchControls(television: television));
       await tester.pumpAndSettle();
       final open = find.byKey(const ValueKey('player-subtitle-size-open'));
       if (television) {
         expect(open, findsOneWidget);
-        bool sizeButtonHasFocus() {
-          var hasFocus = false;
-          FocusManager.instance.primaryFocus?.context
-              ?.visitAncestorElements((element) {
-            hasFocus = element == open.evaluate().single;
-            return !hasFocus;
-          });
-          return hasFocus;
-        }
-
         await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
         await tester.pumpAndSettle();
-        if (!sizeButtonHasFocus()) {
+        if (!hasFocus(open)) {
           await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
           await tester.pumpAndSettle();
         }
-        expect(sizeButtonHasFocus(), isTrue);
+        expect(hasFocus(open), isTrue);
         await tester.sendKeyEvent(LogicalKeyboardKey.select);
       } else {
         await tester.tap(find.byIcon(Icons.more_vert));
@@ -293,6 +311,90 @@ void main() {
       expect(db.getSettings(subtitleSizeSettingName)?.value, '17.0');
       expect(player.state.mediaEvent.state, MediaState.pause);
       if (television) expect(find.text('17'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets(
+        '${television ? 'TV' : 'phone'} adjusts and resets Watch subtitle timing',
+        (tester) async {
+      app_main.darkColorScheme = const ColorScheme.dark();
+      player.showBigPlayer();
+      await tester.runAsync(loadAndRememberEnglish);
+      player.setEvent(const MediaEvent(state: MediaState.pause));
+      final pausedEvent = player.state.mediaEvent;
+      video.timingTarget = (
+        videoId: 'caption-test',
+        generation: 1,
+        profileId: db.profileId,
+        sessionRevision: app.state.sessionRevision,
+      );
+      await tester.pumpWidget(watchControls(television: television));
+      await tester.pumpAndSettle();
+
+      final open = find.byKey(const ValueKey('player-subtitle-timing-open'));
+      Future<void> remoteKey(LogicalKeyboardKey key) async {
+        await tester.sendKeyEvent(key);
+        await tester.pumpAndSettle();
+      }
+
+      if (television) {
+        final size = find.byKey(const ValueKey('player-subtitle-size-open'));
+        expect(open, findsOneWidget);
+        await remoteKey(LogicalKeyboardKey.arrowDown);
+        if (hasFocus(size)) await remoteKey(LogicalKeyboardKey.arrowRight);
+        expect(hasFocus(open), isTrue);
+        await remoteKey(LogicalKeyboardKey.select);
+      } else {
+        await tester.tap(find.byIcon(Icons.more_vert));
+        await tester.pumpAndSettle();
+        await tester.ensureVisible(open);
+        await tester.tap(open);
+        await tester.pumpAndSettle();
+      }
+
+      final dialog = find.byType(AlertDialog);
+      Finder action(String label) => find.descendant(
+            of: dialog,
+            matching: find.widgetWithText(TextButton, label),
+          );
+      final earlier = action('Earlier');
+      final later = action('Later');
+      final reset = action('Reset');
+      expect(
+          find.descendant(of: dialog, matching: find.text('Subtitle timing')),
+          findsOneWidget);
+      expect(find.text('0 ms'), findsOneWidget);
+      expect(tester.widget<TextButton>(reset).onPressed, isNull);
+
+      Future<void> activate(Finder button) async {
+        if (television) {
+          expect(hasFocus(button), isTrue);
+          await remoteKey(LogicalKeyboardKey.select);
+        } else {
+          await tester.tap(button);
+          await tester.pumpAndSettle();
+        }
+      }
+
+      await activate(earlier);
+      expect(find.text('-100 ms'), findsOneWidget);
+      expect(
+          controller.subtitleOffset.value, const Duration(milliseconds: -100));
+
+      if (television) await remoteKey(LogicalKeyboardKey.arrowRight);
+      await activate(later);
+      expect(find.text('0 ms'), findsOneWidget);
+      await activate(later);
+      expect(find.text('+100 ms'), findsOneWidget);
+      expect(
+          controller.subtitleOffset.value, const Duration(milliseconds: 100));
+
+      if (television) await remoteKey(LogicalKeyboardKey.arrowRight);
+      await activate(reset);
+      expect(find.text('0 ms'), findsOneWidget);
+      expect(controller.subtitleOffset.value, Duration.zero);
+      expect(controller.betterPlayerSubtitlesSource, same(english));
+      expect(player.state.mediaEvent, same(pausedEvent));
       expect(tester.takeException(), isNull);
     });
   }

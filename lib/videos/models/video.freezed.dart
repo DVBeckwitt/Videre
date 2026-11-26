@@ -49,6 +49,8 @@ mixin _$Video {
   List<Caption> get captions;
   @JsonKey(fromJson: Storyboard.parseList)
   List<Storyboard> get storyboards;
+  @JsonKey(fromJson: VideoChapter.parseList, toJson: VideoChapter.writeList)
+  List<VideoChapter> get chapters;
   List<Video> get recommendedVideos;
   String? get title;
   int? get lengthSeconds;
@@ -153,6 +155,7 @@ mixin _$Video {
             const DeepCollectionEquality().equals(other.captions, captions) &&
             const DeepCollectionEquality()
                 .equals(other.storyboards, storyboards) &&
+            const DeepCollectionEquality().equals(other.chapters, chapters) &&
             const DeepCollectionEquality()
                 .equals(other.recommendedVideos, recommendedVideos) &&
             (identical(other.title, title) || other.title == title) &&
@@ -228,6 +231,7 @@ mixin _$Video {
         const DeepCollectionEquality().hash(formatStreams),
         const DeepCollectionEquality().hash(captions),
         const DeepCollectionEquality().hash(storyboards),
+        const DeepCollectionEquality().hash(chapters),
         const DeepCollectionEquality().hash(recommendedVideos),
         title,
         lengthSeconds,
@@ -252,7 +256,7 @@ mixin _$Video {
 
   @override
   String toString() {
-    return 'Video(videoId: $videoId, viewCount: $viewCount, published: $published, index: $index, indexId: $indexId, publishedText: $publishedText, isUpcoming: $isUpcoming, premiereTimestamp: $premiereTimestamp, dashUrl: $dashUrl, description: $description, descriptionHtml: $descriptionHtml, keywords: $keywords, likeCount: $likeCount, dislikeCount: $dislikeCount, paid: $paid, premium: $premium, isFamilyFriendly: $isFamilyFriendly, allowedRegions: $allowedRegions, genre: $genre, genreUrl: $genreUrl, authorThumbnails: $authorThumbnails, subCountText: $subCountText, allowRatings: $allowRatings, rating: $rating, isListed: $isListed, liveNow: $liveNow, hlsUrl: $hlsUrl, adaptiveFormats: $adaptiveFormats, formatStreams: $formatStreams, captions: $captions, storyboards: $storyboards, recommendedVideos: $recommendedVideos, title: $title, lengthSeconds: $lengthSeconds, author: $author, authorId: $authorId, authorUrl: $authorUrl, videoThumbnails: $videoThumbnails, musicMetadata: $musicMetadata, queueEntryId: $queueEntryId, filtered: $filtered, matchedFilters: $matchedFilters, filterHide: $filterHide, deArrowed: $deArrowed, deArrowThumbnailUrl: $deArrowThumbnailUrl, backendPlayback: $backendPlayback, playbackConnection: $playbackConnection, playbackSourceId: $playbackSourceId, downloadPlaybackOnly: $downloadPlaybackOnly, explicitMusicDownload: $explicitMusicDownload, viewCountText: $viewCountText)';
+    return 'Video(videoId: $videoId, viewCount: $viewCount, published: $published, index: $index, indexId: $indexId, publishedText: $publishedText, isUpcoming: $isUpcoming, premiereTimestamp: $premiereTimestamp, dashUrl: $dashUrl, description: $description, descriptionHtml: $descriptionHtml, keywords: $keywords, likeCount: $likeCount, dislikeCount: $dislikeCount, paid: $paid, premium: $premium, isFamilyFriendly: $isFamilyFriendly, allowedRegions: $allowedRegions, genre: $genre, genreUrl: $genreUrl, authorThumbnails: $authorThumbnails, subCountText: $subCountText, allowRatings: $allowRatings, rating: $rating, isListed: $isListed, liveNow: $liveNow, hlsUrl: $hlsUrl, adaptiveFormats: $adaptiveFormats, formatStreams: $formatStreams, captions: $captions, storyboards: $storyboards, chapters: $chapters, recommendedVideos: $recommendedVideos, title: $title, lengthSeconds: $lengthSeconds, author: $author, authorId: $authorId, authorUrl: $authorUrl, videoThumbnails: $videoThumbnails, musicMetadata: $musicMetadata, queueEntryId: $queueEntryId, filtered: $filtered, matchedFilters: $matchedFilters, filterHide: $filterHide, deArrowed: $deArrowed, deArrowThumbnailUrl: $deArrowThumbnailUrl, backendPlayback: $backendPlayback, playbackConnection: $playbackConnection, playbackSourceId: $playbackSourceId, downloadPlaybackOnly: $downloadPlaybackOnly, explicitMusicDownload: $explicitMusicDownload, viewCountText: $viewCountText)';
   }
 }
 
@@ -294,6 +298,8 @@ abstract mixin class $VideoCopyWith<$Res> {
       @JsonKey(fromJson: _parseFormatStreams) List<FormatStream>? formatStreams,
       List<Caption> captions,
       @JsonKey(fromJson: Storyboard.parseList) List<Storyboard> storyboards,
+      @JsonKey(fromJson: VideoChapter.parseList, toJson: VideoChapter.writeList)
+      List<VideoChapter> chapters,
       List<Video> recommendedVideos,
       String? title,
       int? lengthSeconds,
@@ -367,6 +373,7 @@ class _$VideoCopyWithImpl<$Res> implements $VideoCopyWith<$Res> {
     Object? formatStreams = freezed,
     Object? captions = null,
     Object? storyboards = null,
+    Object? chapters = null,
     Object? recommendedVideos = null,
     Object? title = freezed,
     Object? lengthSeconds = freezed,
@@ -513,6 +520,10 @@ class _$VideoCopyWithImpl<$Res> implements $VideoCopyWith<$Res> {
           ? _self.storyboards
           : storyboards // ignore: cast_nullable_to_non_nullable
               as List<Storyboard>,
+      chapters: null == chapters
+          ? _self.chapters
+          : chapters // ignore: cast_nullable_to_non_nullable
+              as List<VideoChapter>,
       recommendedVideos: null == recommendedVideos
           ? _self.recommendedVideos
           : recommendedVideos // ignore: cast_nullable_to_non_nullable
@@ -634,6 +645,8 @@ class _Video extends Video implements ShareLinks, IdedVideo {
       final List<Caption> captions = const [],
       @JsonKey(fromJson: Storyboard.parseList)
       final List<Storyboard> storyboards = const [],
+      @JsonKey(fromJson: VideoChapter.parseList, toJson: VideoChapter.writeList)
+      final List<VideoChapter> chapters = const [],
       final List<Video> recommendedVideos = const [],
       this.title,
       this.lengthSeconds,
@@ -671,6 +684,7 @@ class _Video extends Video implements ShareLinks, IdedVideo {
         _formatStreams = formatStreams,
         _captions = captions,
         _storyboards = storyboards,
+        _chapters = chapters,
         _recommendedVideos = recommendedVideos,
         _videoThumbnails = videoThumbnails,
         _matchedFilters = matchedFilters,
@@ -793,6 +807,15 @@ class _Video extends Video implements ShareLinks, IdedVideo {
     if (_storyboards is EqualUnmodifiableListView) return _storyboards;
     // ignore: implicit_dynamic_type
     return EqualUnmodifiableListView(_storyboards);
+  }
+
+  final List<VideoChapter> _chapters;
+  @override
+  @JsonKey(fromJson: VideoChapter.parseList, toJson: VideoChapter.writeList)
+  List<VideoChapter> get chapters {
+    if (_chapters is EqualUnmodifiableListView) return _chapters;
+    // ignore: implicit_dynamic_type
+    return EqualUnmodifiableListView(_chapters);
   }
 
   final List<Video> _recommendedVideos;
@@ -945,6 +968,7 @@ class _Video extends Video implements ShareLinks, IdedVideo {
             const DeepCollectionEquality().equals(other._captions, _captions) &&
             const DeepCollectionEquality()
                 .equals(other._storyboards, _storyboards) &&
+            const DeepCollectionEquality().equals(other._chapters, _chapters) &&
             const DeepCollectionEquality()
                 .equals(other._recommendedVideos, _recommendedVideos) &&
             (identical(other.title, title) || other.title == title) &&
@@ -1020,6 +1044,7 @@ class _Video extends Video implements ShareLinks, IdedVideo {
         const DeepCollectionEquality().hash(_formatStreams),
         const DeepCollectionEquality().hash(_captions),
         const DeepCollectionEquality().hash(_storyboards),
+        const DeepCollectionEquality().hash(_chapters),
         const DeepCollectionEquality().hash(_recommendedVideos),
         title,
         lengthSeconds,
@@ -1044,7 +1069,7 @@ class _Video extends Video implements ShareLinks, IdedVideo {
 
   @override
   String toString() {
-    return 'Video(videoId: $videoId, viewCount: $viewCount, published: $published, index: $index, indexId: $indexId, publishedText: $publishedText, isUpcoming: $isUpcoming, premiereTimestamp: $premiereTimestamp, dashUrl: $dashUrl, description: $description, descriptionHtml: $descriptionHtml, keywords: $keywords, likeCount: $likeCount, dislikeCount: $dislikeCount, paid: $paid, premium: $premium, isFamilyFriendly: $isFamilyFriendly, allowedRegions: $allowedRegions, genre: $genre, genreUrl: $genreUrl, authorThumbnails: $authorThumbnails, subCountText: $subCountText, allowRatings: $allowRatings, rating: $rating, isListed: $isListed, liveNow: $liveNow, hlsUrl: $hlsUrl, adaptiveFormats: $adaptiveFormats, formatStreams: $formatStreams, captions: $captions, storyboards: $storyboards, recommendedVideos: $recommendedVideos, title: $title, lengthSeconds: $lengthSeconds, author: $author, authorId: $authorId, authorUrl: $authorUrl, videoThumbnails: $videoThumbnails, musicMetadata: $musicMetadata, queueEntryId: $queueEntryId, filtered: $filtered, matchedFilters: $matchedFilters, filterHide: $filterHide, deArrowed: $deArrowed, deArrowThumbnailUrl: $deArrowThumbnailUrl, backendPlayback: $backendPlayback, playbackConnection: $playbackConnection, playbackSourceId: $playbackSourceId, downloadPlaybackOnly: $downloadPlaybackOnly, explicitMusicDownload: $explicitMusicDownload, viewCountText: $viewCountText)';
+    return 'Video(videoId: $videoId, viewCount: $viewCount, published: $published, index: $index, indexId: $indexId, publishedText: $publishedText, isUpcoming: $isUpcoming, premiereTimestamp: $premiereTimestamp, dashUrl: $dashUrl, description: $description, descriptionHtml: $descriptionHtml, keywords: $keywords, likeCount: $likeCount, dislikeCount: $dislikeCount, paid: $paid, premium: $premium, isFamilyFriendly: $isFamilyFriendly, allowedRegions: $allowedRegions, genre: $genre, genreUrl: $genreUrl, authorThumbnails: $authorThumbnails, subCountText: $subCountText, allowRatings: $allowRatings, rating: $rating, isListed: $isListed, liveNow: $liveNow, hlsUrl: $hlsUrl, adaptiveFormats: $adaptiveFormats, formatStreams: $formatStreams, captions: $captions, storyboards: $storyboards, chapters: $chapters, recommendedVideos: $recommendedVideos, title: $title, lengthSeconds: $lengthSeconds, author: $author, authorId: $authorId, authorUrl: $authorUrl, videoThumbnails: $videoThumbnails, musicMetadata: $musicMetadata, queueEntryId: $queueEntryId, filtered: $filtered, matchedFilters: $matchedFilters, filterHide: $filterHide, deArrowed: $deArrowed, deArrowThumbnailUrl: $deArrowThumbnailUrl, backendPlayback: $backendPlayback, playbackConnection: $playbackConnection, playbackSourceId: $playbackSourceId, downloadPlaybackOnly: $downloadPlaybackOnly, explicitMusicDownload: $explicitMusicDownload, viewCountText: $viewCountText)';
   }
 }
 
@@ -1087,6 +1112,8 @@ abstract mixin class _$VideoCopyWith<$Res> implements $VideoCopyWith<$Res> {
       @JsonKey(fromJson: _parseFormatStreams) List<FormatStream>? formatStreams,
       List<Caption> captions,
       @JsonKey(fromJson: Storyboard.parseList) List<Storyboard> storyboards,
+      @JsonKey(fromJson: VideoChapter.parseList, toJson: VideoChapter.writeList)
+      List<VideoChapter> chapters,
       List<Video> recommendedVideos,
       String? title,
       int? lengthSeconds,
@@ -1160,6 +1187,7 @@ class __$VideoCopyWithImpl<$Res> implements _$VideoCopyWith<$Res> {
     Object? formatStreams = freezed,
     Object? captions = null,
     Object? storyboards = null,
+    Object? chapters = null,
     Object? recommendedVideos = null,
     Object? title = freezed,
     Object? lengthSeconds = freezed,
@@ -1306,6 +1334,10 @@ class __$VideoCopyWithImpl<$Res> implements _$VideoCopyWith<$Res> {
           ? _self._storyboards
           : storyboards // ignore: cast_nullable_to_non_nullable
               as List<Storyboard>,
+      chapters: null == chapters
+          ? _self._chapters
+          : chapters // ignore: cast_nullable_to_non_nullable
+              as List<VideoChapter>,
       recommendedVideos: null == recommendedVideos
           ? _self._recommendedVideos
           : recommendedVideos // ignore: cast_nullable_to_non_nullable

@@ -21,9 +21,12 @@ class MusicPlaylistOfflineProgress {
 
 /// Duplicate occurrences share one download. Device tracks have their own
 /// playback identity and already live outside the download manager.
-Map<String, Video> playlistOfflineSongs(Playlist playlist) {
+Map<String, Video> playlistOfflineSongs(Playlist playlist) =>
+    eligibleOfflineMusicSongs(playlist.videos);
+
+Map<String, Video> eligibleOfflineMusicSongs(Iterable<Video> videos) {
   final songs = <String, Video>{};
-  for (final video in playlist.videos) {
+  for (final video in videos) {
     if (video.musicMetadata?.title.trim().isNotEmpty == true &&
         !video.filterHide &&
         !video.downloadPlaybackOnly &&

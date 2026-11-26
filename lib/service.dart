@@ -132,6 +132,15 @@ class _InteractiveVideoRequest {
   }
 }
 
+/// The original positions and payloads needed to undo one bulk removal.
+class LocalPlaylistRemovalUndo {
+  final PlaylistReference _source;
+  final List<String> _originalOrder;
+  final Map<String, Video> _removed;
+
+  LocalPlaylistRemovalUndo._(this._source, this._originalOrder, this._removed);
+}
+
 class Service {
   final log = Logger('Service');
   final Client httpClient;
@@ -702,10 +711,12 @@ class Service {
     }
 
     await check();
-    final video = await _getVideoMetadata(videoId, server,
-        beforeRequest: isCurrent == null ? null : check);
-    await check();
-    return video;
+    try {
+      return await _getVideoMetadata(videoId, server,
+          beforeRequest: isCurrent == null ? null : check);
+    } finally {
+      await check();
+    }
   }
 
   /// Performs one metadata request for a format picker or queued download.
@@ -2863,6 +2874,57 @@ class Service {
     }
   }
 
+  Future<void> replaceLocalDevicePlaylistEntries(
+      String playlistId, List<Video> reviewed, List<Video> tracks,
+      {required IDbClient database,
+      required bool Function() isCurrent,
+      String? Function(String)? resolveDeviceId}) {
+    if (!playlistId.startsWith('local:') ||
+        playlistId == localWatchLaterId ||
+        tracks.isEmpty ||
+        [...reviewed, ...tracks]
+            .any((entry) => devicePlaylistFileProof(entry.videoId) == null)) {
+      throw ArgumentError('An editable device playlist is required');
+    }
+    final expected = [
+      for (final entry in reviewed) (entry.videoId, entry.indexId),
+    ];
+    final requested = List<Video>.of(tracks);
+    return _updateLocalPlaylists((playlists) {
+      if (!isCurrent()) throw StateError('The active device source changed');
+      final index = playlists.indexWhere((p) => p.playlistId == playlistId);
+      if (index < 0) throw StateError('Playlist no longer exists');
+      final playlist = playlists[index];
+      if (!listEquals(expected, [
+        for (final entry in playlist.videos) (entry.videoId, entry.indexId),
+      ])) {
+        throw StateError('Playlist entries changed during review');
+      }
+      final remaining = <String, Queue<Video>>{};
+      for (final entry in playlist.videos) {
+        final resolved = resolveDeviceId?.call(entry.videoId) ?? entry.videoId;
+        (remaining[resolved] ??= Queue()).add(entry);
+      }
+      final entries = <Video>[];
+      for (final track in requested) {
+        final earlier = remaining[track.videoId];
+        final matched =
+            earlier == null || earlier.isEmpty ? null : earlier.removeFirst();
+        final entry = _newLocalPlaylistEntry(track);
+        entries.add(matched == null
+            ? entry
+            : entry.copyWith(
+                videoId: matched.videoId,
+                indexId: matched.indexId ?? entry.indexId));
+      }
+      playlists[index] = playlist.copyWith(
+          videos: entries,
+          videoCount: entries.length,
+          updated: DateTime.now().millisecondsSinceEpoch ~/ 1000);
+      return true;
+    }, database: database);
+  }
+
   List<Playlist> getLocalPlaylists({IDbClient? database}) =>
       _localPlaylistsFromSetting(
           (database ?? db).getSettings(localPlaylistsSetting)?.value);
@@ -3152,6 +3214,98 @@ class Service {
     return moved;
   }
 
+  /// Remove the selected Music occurrences together, or leave the list intact.
+  /// When supplied, [expectedEntries] must still match the preview's ordered
+  /// occurrence and recording identities.
+  Future<LocalPlaylistRemovalUndo?> removeLocalPlaylistSongs(
+    PlaylistReference source, {
+    required Set<String> entryIds,
+    required bool Function() isCurrent,
+    List<Video>? expectedEntries,
+  }) async {
+    if (entryIds.isEmpty || !_canEditLocalPlaylist(source)) return null;
+    (String?, String, bool) entryIdentity(Video entry) =>
+        (entry.indexId, entry.videoId, entry.musicMetadata != null);
+    final expected = expectedEntries?.map(entryIdentity).toList();
+    final selected = Set.of(entryIds);
+    final owner = db.forProfile(source.profileId);
+    LocalPlaylistRemovalUndo? undo;
+    await _updateLocalPlaylists((playlists) {
+      if (!_canEditLocalPlaylist(source) || !isCurrent()) return false;
+      final index = playlists
+          .indexWhere((p) => p.isLocal && p.playlistId == source.playlistId);
+      if (index < 0) return false;
+      final playlist = playlists[index];
+      if (playlist.isEditLocked ||
+          (expected != null &&
+              !listEquals(
+                  expected, playlist.videos.map(entryIdentity).toList()))) {
+        return false;
+      }
+
+      final removed = <String, Video>{
+        for (final video in playlist.videos)
+          if (selected.contains(video.indexId) && video.musicMetadata != null)
+            video.indexId!: video,
+      };
+      if (removed.length != selected.length) return false;
+      final kept = playlist.videos
+          .where((video) => !removed.containsKey(video.indexId))
+          .toList();
+      playlists[index] = playlist.copyWith(
+        videos: kept,
+        videoCount: kept.length,
+        updated: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      );
+      undo = LocalPlaylistRemovalUndo._(
+        source,
+        [for (final video in playlist.videos) video.indexId!],
+        removed,
+      );
+      return true;
+    }, database: owner);
+    return undo;
+  }
+
+  /// Restore only if membership and order still match the removal's result.
+  Future<bool> undoLocalPlaylistSongRemoval(
+    LocalPlaylistRemovalUndo undo, {
+    required bool Function() isCurrent,
+  }) async {
+    final source = undo._source;
+    if (!_canEditLocalPlaylist(source)) return false;
+    final expected = undo._originalOrder
+        .where((id) => !undo._removed.containsKey(id))
+        .toList();
+    final owner = db.forProfile(source.profileId);
+    var restored = false;
+    await _updateLocalPlaylists((playlists) {
+      if (!_canEditLocalPlaylist(source) || !isCurrent()) return false;
+      final index = playlists
+          .indexWhere((p) => p.isLocal && p.playlistId == source.playlistId);
+      if (index < 0) return false;
+      final playlist = playlists[index];
+      if (playlist.isEditLocked ||
+          !listEquals(
+              expected, [for (final video in playlist.videos) video.indexId])) {
+        return false;
+      }
+
+      final byId = {
+        ...undo._removed,
+        for (final video in playlist.videos) video.indexId!: video,
+      };
+      playlists[index] = playlist.copyWith(
+        videos: [for (final id in undo._originalOrder) byId[id]!],
+        videoCount: undo._originalOrder.length,
+        updated: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      );
+      restored = true;
+      return true;
+    }, database: owner);
+    return restored;
+  }
+
   bool _canEditLocalPlaylist(PlaylistReference source) =>
       source.kind == PlaylistSourceKind.local &&
       source.playlistId != localWatchLaterId &&
@@ -3278,8 +3432,54 @@ class Service {
     return added;
   }
 
+  /// Apply only the requested memberships against the latest local playlists.
+  /// An addition admits one copy if absent. A removal deletes every copy.
+  Future<({int changed, int skipped})> updateLocalPlaylistMemberships(
+      Video song, Map<String, bool> memberships,
+      {required IDbClient database, required bool Function() isCurrent}) async {
+    final requested = Map<String, bool>.of(memberships);
+    if (requested.isEmpty) return (changed: 0, skipped: 0);
+
+    final profileId = database.profileId;
+    bool current() => db.profileId == profileId && isCurrent();
+    if (!current()) return (changed: 0, skipped: requested.length);
+    final owner = database.forProfile(profileId);
+
+    var changed = 0;
+    var skipped = 0;
+    await _updateLocalPlaylists((playlists) {
+      changed = 0;
+      skipped = 0;
+      if (!current()) {
+        skipped = requested.length;
+        return false;
+      }
+      final updated = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      for (final request in requested.entries) {
+        final match = playlists.indexed
+            .where((entry) => entry.$2.playlistId == request.key)
+            .singleOrNull;
+        if (match == null || !match.$2.isLocal || match.$2.isEditLocked) {
+          skipped++;
+          continue;
+        }
+        final (index, playlist) = match;
+        bool matchesSong(Video entry) => entry.videoId == song.videoId;
+        if (request.value == playlist.videos.any(matchesSong)) continue;
+        final videos = request.value
+            ? [...playlist.videos, _newLocalPlaylistEntry(song)]
+            : playlist.videos.where((entry) => !matchesSong(entry)).toList();
+        playlists[index] = playlist.copyWith(
+            videos: videos, videoCount: videos.length, updated: updated);
+        changed++;
+      }
+      return changed > 0;
+    }, database: owner);
+    return (changed: changed, skipped: skipped);
+  }
+
   // Persist display metadata only. Obtain transport URLs at playback.
-  static Video _newLocalPlaylistEntry(Video video) {
+  static Video _newLocalPlaylistEntry(Video video, {String? indexId}) {
     if (video.videoId.startsWith('device:')) {
       final music = video.musicMetadata;
       if (devicePlaylistFileProof(video.videoId) == null ||
@@ -3289,7 +3489,7 @@ class Service {
       }
       return Video(
         videoId: video.videoId,
-        indexId: const Uuid().v4(),
+        indexId: indexId ?? const Uuid().v4(),
         title: music.title,
         author: music.artist,
         lengthSeconds: video.lengthSeconds,
@@ -3299,7 +3499,7 @@ class Service {
     }
     return Video(
       videoId: video.videoId,
-      indexId: const Uuid().v4(),
+      indexId: indexId ?? const Uuid().v4(),
       title: video.title,
       author: video.author,
       authorId: video.authorId,
@@ -3427,6 +3627,44 @@ class Service {
             id, video, entry.videoId, entry.queueEntryId))
         .singleOrNull;
     return saved == null ? null : (playlist, saved);
+  }
+
+  /// Replaces the reviewed recording in its current source occurrence.
+  Future<bool> replaceLocalPlaylistMusicEntry(
+      PlaylistReference source, Video entry, Video replacement,
+      {required bool Function() isCurrent}) async {
+    if (!_canEditLocalPlaylist(source) ||
+        entry.musicMetadata == null ||
+        replacement.musicMetadata == null ||
+        replacement.videoId == entry.videoId) {
+      return false;
+    }
+
+    final owner = db.forProfile(source.profileId);
+    var replaced = false;
+    await _updateLocalPlaylists((playlists) {
+      if (!_canEditLocalPlaylist(source) || !isCurrent()) return false;
+      final match =
+          _findLocalPlaylistOccurrence(playlists, source.playlistId, entry);
+      if (match == null) return false;
+
+      final (playlist, saved) = match;
+      // A legacy index equal to the new recording ID would be remapped on read.
+      if (playlist.isEditLocked ||
+          saved.musicMetadata == null ||
+          saved.indexId == replacement.videoId) {
+        return false;
+      }
+      final videos = List<Video>.of(playlist.videos);
+      videos[videos.indexOf(saved)] =
+          _newLocalPlaylistEntry(replacement, indexId: saved.indexId);
+      playlists[playlists.indexOf(playlist)] = playlist.copyWith(
+          videos: videos,
+          updated: DateTime.now().millisecondsSinceEpoch ~/ 1000);
+      replaced = true;
+      return true;
+    }, database: owner);
+    return replaced;
   }
 
   /// Keeps the final membership and player checks inside the playlist write.

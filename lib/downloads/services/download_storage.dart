@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
+import '../../music/models/music_file_audio_format.dart';
 import '../models/downloaded_video.dart';
 
 const downloadFolderSetting = 'download-folder';
@@ -143,6 +144,77 @@ class DownloadStorage {
           String profileId, Iterable<DownloadedVideo> downloads) =>
       _probeMusicFiles(profileId, downloads);
 
+  /// Reads audio properties from the verified file for a single inspector.
+  Future<({String uri, int byteLength, MusicFileAudioFormat? audioFormat})?>
+      inspectMusicFile(DownloadedVideo file, {String? expectedIdentity}) async {
+    final profileId = file.profileId;
+    if (kIsWeb ||
+        defaultTargetPlatform != TargetPlatform.android ||
+        !_readyMusicFile(file, profileId) ||
+        !DownloadedVideo.isSafeFileId(profileId) ||
+        (file.storageUri == null) != (file.folderUri == null) ||
+        (expectedIdentity != null &&
+            _fileProof.stringMatch(expectedIdentity) != expectedIdentity)) {
+      return null;
+    }
+
+    try {
+      final uri = file.storageUri ??
+          _privateMusicUri(await _privateMusicFolder(profileId), file);
+      final expectedLength = file.playbackProvenance?.byteLength;
+      final available = await _channel.invokeMapMethod<String, Object?>(
+        'probeMusicFiles',
+        {
+          'profileId': profileId,
+          'includeAudioFormat': true,
+          'files': [
+            {
+              'key': file.videoId,
+              'videoId': file.videoId,
+              'uri': uri,
+              'folderUri': file.folderUri,
+              if (expectedIdentity != null)
+                'expectedIdentity': expectedIdentity,
+              if (expectedLength != null) 'expectedByteLength': expectedLength,
+            },
+          ],
+        },
+      );
+      final value = available?[file.videoId];
+      if (value is! Map<Object?, Object?>) return null;
+      final proof = _musicProbe(file, uri, value);
+      if (proof == null ||
+          (expectedIdentity != null && proof.identity != expectedIdentity)) {
+        return null;
+      }
+      return (
+        uri: proof.uri,
+        byteLength: proof.byteLength,
+        audioFormat: MusicFileAudioFormat.fromChannel(value['audioFormat']),
+      );
+    } on Exception {
+      return null;
+    }
+  }
+
+  static MusicFileProbe? _musicProbe(
+    DownloadedVideo file,
+    String uri,
+    Object? value,
+  ) {
+    if (value
+        case {
+          'identity': final String id,
+          'byteLength': final int n,
+        } when _fileProof.stringMatch(id) == id && n > 0) {
+      final expectedLength = file.playbackProvenance?.byteLength;
+      if (expectedLength == null || expectedLength == n) {
+        return (download: file, uri: uri, identity: id, byteLength: n);
+      }
+    }
+    return null;
+  }
+
   Future<List<MusicFileProbe>> _probeMusicFiles(
       String profileId, Iterable<DownloadedVideo> downloads,
       {String? expectedSha256}) async {
@@ -186,20 +258,12 @@ class DownloadStorage {
           ],
         });
         for (final entry in batch.entries) {
-          final proof = available?[entry.key];
-          if (proof
-              case {'identity': final String id, 'byteLength': final int n}
-              when _fileProof.stringMatch(id) == id && n > 0) {
-            final expectedLength =
-                entry.value.file.playbackProvenance?.byteLength;
-            if (expectedLength != null && expectedLength != n) continue;
-            result.add((
-              download: entry.value.file,
-              uri: entry.value.uri,
-              identity: id,
-              byteLength: n,
-            ));
-          }
+          final proof = _musicProbe(
+            entry.value.file,
+            entry.value.uri,
+            available?[entry.key],
+          );
+          if (proof != null) result.add(proof);
         }
       } on PlatformException {
         // Storage or a provider may become unavailable between reads.
@@ -212,6 +276,41 @@ class DownloadStorage {
 
   /// Opens Android sharing for one current, completed audible rendition.
   Future<bool> shareMusicFile(DownloadedVideo file,
+          {String? expectedIdentity,
+          required bool Function() isCurrent}) async =>
+      await _musicFileAction<bool>('shareMusicFile', file,
+          expectedIdentity: expectedIdentity, isCurrent: isCurrent) ??
+      false;
+
+  Future<bool> canSetMusicRingtone(DownloadedVideo file,
+          {String? expectedIdentity,
+          required bool Function() isCurrent}) async =>
+      await _musicFileAction<bool>('canSetMusicRingtone', file,
+          expectedIdentity: expectedIdentity, isCurrent: isCurrent) ??
+      false;
+
+  Future<String?> setMusicRingtone(DownloadedVideo file,
+          {String? expectedIdentity, required bool Function() isCurrent}) =>
+      _musicFileAction<String>('setMusicRingtone', file,
+          expectedIdentity: expectedIdentity, isCurrent: isCurrent);
+
+  Future<T?> _musicFileAction<T>(String method, DownloadedVideo file,
+      {String? expectedIdentity, required bool Function() isCurrent}) async {
+    final arguments = await musicFileShareArguments(file,
+        expectedIdentity: expectedIdentity, isCurrent: isCurrent);
+    if (arguments == null || !isCurrent()) return null;
+    try {
+      return await _channel.invokeMethod<T>(method, {
+        ...arguments,
+        if (method != 'shareMusicFile') 'title': file.title,
+      });
+    } on Exception {
+      return null;
+    }
+  }
+
+  /// Serializes a current downloaded rendition for Android's attachment checks.
+  Future<Map<String, Object?>?> musicFileShareArguments(DownloadedVideo file,
       {String? expectedIdentity, required bool Function() isCurrent}) async {
     if (kIsWeb ||
         defaultTargetPlatform != TargetPlatform.android ||
@@ -221,25 +320,24 @@ class DownloadStorage {
         (expectedIdentity != null &&
             _fileProof.stringMatch(expectedIdentity) != expectedIdentity) ||
         !isCurrent()) {
-      return false;
+      return null;
     }
     try {
       final uri = file.storageUri ??
           _privateMusicUri(await _privateMusicFolder(file.profileId), file);
-      if (!isCurrent()) return false;
-      return await _channel.invokeMethod<bool>('shareMusicFile', {
-            'profileId': file.profileId,
-            'videoId': file.videoId,
-            'uri': uri,
-            'folderUri': file.folderUri,
-            'mime': file.mimeType,
-            'expectedIdentity': expectedIdentity,
-            'expectedSha256': file.playbackProvenance?.sha256,
-            'byteLength': file.playbackProvenance?.byteLength,
-          }) ==
-          true;
+      if (!isCurrent()) return null;
+      return {
+        'profileId': file.profileId,
+        'videoId': file.videoId,
+        'uri': uri,
+        'folderUri': file.folderUri,
+        'mime': file.mimeType,
+        'expectedIdentity': expectedIdentity,
+        'expectedSha256': file.playbackProvenance?.sha256,
+        'byteLength': file.playbackProvenance?.byteLength,
+      };
     } on Exception {
-      return false;
+      return null;
     }
   }
 

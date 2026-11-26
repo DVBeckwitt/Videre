@@ -8,6 +8,7 @@ import 'package:intl/intl.dart';
 
 import '../../../comments/views/components/comments_container.dart';
 import '../../../comments/states/comments.dart';
+import '../../../globals.dart';
 import '../../../l10n/generated/app_localizations.dart';
 import '../../../player/states/player.dart';
 import '../../../player/views/components/watch_playback_actions.dart';
@@ -20,12 +21,15 @@ import '../../../utils.dart';
 import '../../../utils/views/components/channel_avatar.dart';
 import '../../../utils/views/components/conditional_wrap.dart';
 import '../../models/video.dart';
+import '../../models/video_chapter.dart';
 import 'add_to_playlist_button.dart';
 import 'community_browse.dart';
 import 'download_modal_sheet.dart';
 import 'info.dart';
 import 'recommended_videos.dart';
 import 'video_dislike_metrics.dart';
+import 'watch_notes_button.dart';
+import 'watch_chapter_list.dart';
 
 typedef FlowWatchPanelPresenter = void Function(
     String title, Widget child, bool scrollable);
@@ -39,6 +43,7 @@ class FlowWatchBody extends StatelessWidget {
   final VoidCallback? onDownload;
   final IconData downloadIcon;
   final Widget? extraAction;
+  final Future<void> Function(Duration)? onStartAt;
   final bool showRelated;
   final bool relatedGrid;
   final FlowWatchPanelPresenter? onOpenPanel;
@@ -52,6 +57,7 @@ class FlowWatchBody extends StatelessWidget {
     this.onDownload,
     this.downloadIcon = Icons.download_rounded,
     this.extraAction,
+    this.onStartAt,
     this.showRelated = true,
     this.relatedGrid = false,
     this.onOpenPanel,
@@ -92,6 +98,38 @@ class FlowWatchBody extends StatelessWidget {
     }
   }
 
+  void _openChapters(BuildContext context, List<VideoChapter> chapters) {
+    final player = context.read<PlayerCubit>();
+    final generation = player.playbackOccurrenceRevision;
+    final queueId = player.state.currentQueueId;
+    final profile = db.profileId;
+
+    bool isCurrent() {
+      final state = player.state;
+      return !player.isClosed &&
+          db.profileId == profile &&
+          player.playbackOccurrenceRevision == generation &&
+          state.currentQueueId == queueId &&
+          state.currentlyPlaying?.videoId == video.videoId &&
+          !state.isAudio &&
+          !state.isHidden &&
+          !state.isClosing;
+    }
+
+    if (!isCurrent()) return;
+    _openPanel(
+      context,
+      AppLocalizations.of(context)!.videoChapters,
+      WatchChapterList(
+        player: player,
+        chapters: chapters,
+        isCurrent: isCurrent,
+        showHeading: onOpenPanel == null,
+      ),
+      scrollable: false,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -104,6 +142,10 @@ class FlowWatchBody extends StatelessWidget {
     final channel = video.author ?? '';
     final title = video.title ?? '';
     final viewCount = video.viewCount;
+    final chapters =
+        inPlayer && video.liveNow != true && video.isUpcoming != true
+            ? video.chaptersFor(Duration(seconds: video.lengthSeconds ?? 0))
+            : const <VideoChapter>[];
     final metadata = [
       if (viewCount != null && viewCount > 0)
         video.viewCountText ?? compactCurrency.format(viewCount),
@@ -221,6 +263,13 @@ class FlowWatchBody extends StatelessWidget {
               ),
             )),
             if (inPlayer) ...[
+              if (chapters.isNotEmpty)
+                IconButton(
+                  key: const ValueKey('watch-open-chapters'),
+                  tooltip: locals.videoChapters,
+                  icon: const Icon(Icons.segment_rounded),
+                  onPressed: () => _openChapters(context, chapters),
+                ),
               if (!queueDockVisible)
                 IconButton(
                   key: const ValueKey('watch-open-queue'),
@@ -261,6 +310,12 @@ class FlowWatchBody extends StatelessWidget {
                 )
               else
                 reactionButtons(showDislikes ? dislikes : null),
+              const SizedBox(width: 8),
+              WatchNotesButton(
+                videoId: video.videoId,
+                labeled: true,
+                onStartAt: onStartAt,
+              ),
               const SizedBox(width: 8),
               _WatchAction(
                 icon: downloadIcon,

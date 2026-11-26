@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart' show listEquals;
+import 'package:flutter/foundation.dart' show listEquals, setEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
@@ -13,12 +13,18 @@ import '../../../playlists/models/playlist.dart';
 import '../../../playlists/models/playlist_reference.dart';
 import '../../../settings/models/db/server.dart';
 import '../../../utils/interfaces/db.dart';
+import '../../../videos/models/video.dart';
+import '../../models/local_music_track.dart';
 import '../../models/music_library_entry.dart';
 import '../../models/on_device_music_entry.dart';
+import '../../services/local_music_library.dart';
 import '../../services/music_library_search.dart';
 import '../../services/music_library_service.dart';
 import '../../services/music_playlist_covers.dart';
 import '../screens/music.dart';
+import '../screens/music_device_album.dart';
+import '../screens/music_device_artist.dart';
+import '../screens/music_device_collections.dart';
 import '../screens/music_library.dart';
 import 'music_playlist_cover.dart';
 import 'music_status_title.dart';
@@ -30,13 +36,16 @@ typedef _SearchOwner = ({
   Server? server,
 });
 
+typedef _LyricScope = ({_SearchOwner owner, String query});
+typedef _DeviceLyricMatch = ({LocalMusicTrack track, String line});
+
 /// Results from the current profile's saved library and verified audio files.
 class MusicLibrarySearchResults extends StatefulWidget {
   const MusicLibrarySearchResults({
     super.key,
     required this.query,
     required this.active,
-    this.type = MusicLibrarySearchType.all,
+    this.types = MusicLibrarySearchType.categories,
     this.controller,
     this.scrollKey,
     this.searchFocusNode,
@@ -46,7 +55,7 @@ class MusicLibrarySearchResults extends StatefulWidget {
 
   final String query;
   final bool active;
-  final MusicLibrarySearchType type;
+  final Set<MusicLibrarySearchType> types;
   final ScrollController? controller;
   final Key? scrollKey;
   final FocusNode? searchFocusNode;
@@ -64,22 +73,35 @@ class MusicLibrarySearchResults extends StatefulWidget {
 
 class _MusicLibrarySearchResultsState extends State<MusicLibrarySearchResults>
     with WidgetsBindingObserver {
-  final _search = MusicLibrarySearch();
+  static const _lyricSearchDelay = Duration(milliseconds: 250);
+  final _device = LocalMusicLibrary.instance;
+  late final _search = MusicLibrarySearch(deviceLibrary: _device);
   late final _fileChanges = _search.fileChanges;
   _SearchOwner? _visibleOwner;
   bool Function()? _visibleSource;
   List<DownloadedVideo> _lastFiles = const [];
   int _fileEpoch = 0;
+  int _activationRevision = 0;
   late bool _foreground;
   bool _scheduled = false;
   bool _force = false;
   bool _checkingFiles = false;
+  _LyricScope? _lyricScope;
+  int _lyricRevision = 0;
+  bool _checkingLyrics = false;
+  Timer? _lyricDelay;
+  StreamSubscription<_DeviceLyricMatch>? _deviceLyrics;
+  StreamSubscription<void>? _savedLyrics;
+  final _deviceLyricMatches = <LocalMusicTrack, String>{};
+
+  bool get _lyricsMode => widget.types.contains(MusicLibrarySearchType.lyrics);
 
   @override
   void initState() {
     super.initState();
     final lifecycle = WidgetsBinding.instance.lifecycleState;
     _foreground = lifecycle == null || lifecycle == AppLifecycleState.resumed;
+    _device.addListener(_resetDeviceLyrics);
     _fileChanges.addListener(_scheduleFileRefresh);
     WidgetsBinding.instance.addObserver(this);
   }
@@ -87,7 +109,10 @@ class _MusicLibrarySearchResultsState extends State<MusicLibrarySearchResults>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _device.removeListener(_resetDeviceLyrics);
     _fileChanges.removeListener(_scheduleFileRefresh);
+    _resetDeviceLyrics();
+    unawaited(_savedLyrics?.cancel());
     _search.dispose();
     super.dispose();
   }
@@ -98,12 +123,14 @@ class _MusicLibrarySearchResultsState extends State<MusicLibrarySearchResults>
     if (resumed == _foreground) return;
     _foreground = resumed;
     _fileEpoch++;
-    if (!resumed || !widget.active) return;
-    if (_visibleOwner == null) {
-      setState(() {});
-    } else {
-      _scheduleFileRefresh(force: true);
+    if (!resumed && _lyricScope != null) {
+      setState(() => _setLyricScope(null));
     }
+    if (!resumed || !widget.active) return;
+    if (_visibleOwner == null || _lyricsMode) {
+      setState(() {});
+    }
+    _scheduleFileRefresh(force: true);
   }
 
   _SearchOwner? _owner(AppState state) {
@@ -148,6 +175,77 @@ class _MusicLibrarySearchResultsState extends State<MusicLibrarySearchResults>
             file,
       ];
 
+  void _resetDeviceLyrics() {
+    _lyricRevision++;
+    _lyricDelay?.cancel();
+    _lyricDelay = null;
+    unawaited(_deviceLyrics?.cancel());
+    _deviceLyrics = null;
+    _deviceLyricMatches.clear();
+    _checkingLyrics = _lyricScope != null;
+  }
+
+  void _setLyricScope(_LyricScope? scope) {
+    final previous = _lyricScope;
+    if (previous == scope) return;
+    _lyricScope = scope;
+    _resetDeviceLyrics();
+    if (previous?.owner != scope?.owner) {
+      unawaited(_savedLyrics?.cancel());
+      _savedLyrics = null;
+      if (scope case (owner: final owner, query: _)) {
+        _savedLyrics = _search
+            .watchSavedLyrics(owner.database, owner.profileId)
+            .listen((_) {
+          if (_lyricScope?.owner == owner && _current(owner) && _visible) {
+            setState(() {});
+          }
+        }, onError: (Object _) {});
+      }
+    }
+    if (scope != null) _scheduleFileRefresh();
+  }
+
+  void _scheduleDeviceLyrics() {
+    final scope = _lyricScope;
+    if (scope == null ||
+        !_checkingLyrics ||
+        _lyricDelay != null ||
+        _deviceLyrics != null) {
+      return;
+    }
+    final (owner: owner, query: query) = scope;
+    final revision = _lyricRevision;
+    bool current() =>
+        revision == _lyricRevision &&
+        _current(owner) &&
+        _visible &&
+        _lyricsMode &&
+        widget.query == query;
+    void finish() {
+      if (!current()) return;
+      setState(() {
+        _deviceLyrics = null;
+        _checkingLyrics = false;
+      });
+    }
+
+    _lyricDelay = Timer(_lyricSearchDelay, () {
+      _lyricDelay = null;
+      if (!current()) return;
+      _deviceLyrics = _search
+          .findDeviceLyricMatches(query,
+              database: owner.database,
+              profileId: owner.profileId,
+              isCurrent: current)
+          .listen((match) {
+        if (current()) {
+          setState(() => _deviceLyricMatches[match.track] = match.line);
+        }
+      }, onDone: finish, onError: (Object _) => finish(), cancelOnError: true);
+    });
+  }
+
   void _scheduleFileRefresh({bool force = false}) {
     if (!mounted || _visibleOwner == null) return;
     _force |= force;
@@ -184,7 +282,10 @@ class _MusicLibrarySearchResultsState extends State<MusicLibrarySearchResults>
     } catch (_) {
       // A file probe may fail after access changes. Saved metadata is still searchable.
     } finally {
-      if (current() && _checkingFiles) setState(() => _checkingFiles = false);
+      if (current()) {
+        if (_checkingFiles) setState(() => _checkingFiles = false);
+        _scheduleDeviceLyrics();
+      }
     }
   }
 
@@ -192,19 +293,22 @@ class _MusicLibrarySearchResultsState extends State<MusicLibrarySearchResults>
       _search.search(widget.query,
           database: owner.database,
           profileId: owner.profileId,
-          type: widget.type);
+          types: widget.types,
+          deviceLyricMatches: _deviceLyricMatches);
 
   Future<void> _activate(
     _SearchOwner owner,
     String query,
-    MusicLibrarySearchType type,
+    Set<MusicLibrarySearchType> types,
     MusicLibrarySearchHit requested,
     bool Function()? ownsSearch,
   ) async {
+    final activation = ++_activationRevision;
     bool current() =>
         _current(owner) &&
+        activation == _activationRevision &&
         widget.query == query &&
-        widget.type == type &&
+        setEquals(widget.types, types) &&
         (ownsSearch?.call() ?? true);
     if (!current() || !_visible) return;
     final hits = _hits(owner);
@@ -214,46 +318,94 @@ class _MusicLibrarySearchResultsState extends State<MusicLibrarySearchResults>
     final searchFocus = widget.searchFocusNode;
     try {
       switch (hit) {
-        case MusicLibrarySearchBookmark(:final entry):
-          if (entry.kind == MusicLibraryKind.song) {
-            final songs = [
-              for (final bookmark
-                  in hits.whereType<MusicLibrarySearchBookmark>())
-                if (bookmark.entry.kind == MusicLibraryKind.song)
-                  bookmark.entry.toVideo(),
-            ];
-            final index = songs.indexWhere((song) => song.videoId == entry.id);
-            if (index < 0) return;
-            searchFocus?.unfocus();
-            await MusicScreen.playTracks(context, songs,
-                startIndex: index,
-                queueTitle: locals.musicSavedSongs,
-                songTap: true);
-          } else {
-            searchFocus?.unfocus();
-            await Navigator.of(context).push<void>(MaterialPageRoute(
-                builder: (_) => MusicScreen(
-                      artistId: entry.kind == MusicLibraryKind.artist
-                          ? entry.id
-                          : null,
-                      playlistId: entry.kind == MusicLibraryKind.artist
-                          ? null
-                          : entry.id,
-                    )));
+        case MusicLibrarySearchBookmark(
+                entry: MusicLibraryEntry(kind: MusicLibraryKind.song)
+              ) ||
+              MusicLibrarySearchRecording():
+          final songs = <Video>[];
+          var index = -1;
+          for (final result in hits) {
+            final song = switch (result) {
+              MusicLibrarySearchBookmark(:final entry)
+                  when entry.kind == MusicLibraryKind.song =>
+                entry.toVideo(),
+              MusicLibrarySearchRecording(:final video) => video,
+              _ => null,
+            };
+            if (song == null) continue;
+            if (result.key == hit.key) index = songs.length;
+            songs.add(song);
           }
+          if (index < 0) return;
+          searchFocus?.unfocus();
+          await MusicScreen.playTracks(context, songs,
+              startIndex: index,
+              queueTitle:
+                  _lyricsMode ? locals.musicLyrics : locals.musicSavedSongs,
+              songTap: true);
+        case MusicLibrarySearchBookmark(:final entry):
+          searchFocus?.unfocus();
+          await Navigator.of(context).push<void>(MaterialPageRoute(
+              builder: (_) => MusicScreen(
+                    artistId:
+                        entry.kind == MusicLibraryKind.artist ? entry.id : null,
+                    playlistId:
+                        entry.kind == MusicLibraryKind.artist ? null : entry.id,
+                  )));
         case MusicLibrarySearchPlaylist(:final playlist):
           final source = PlaylistReference.forPlaylist(
               playlist, owner.database.forProfile(owner.profileId));
           searchFocus?.unfocus();
           await Navigator.of(context).push<void>(MaterialPageRoute(
               builder: (_) => MusicLibraryPage(source: source)));
+        case MusicLibrarySearchAlbum(:final album):
+          searchFocus?.unfocus();
+          await MusicScreen.openDeviceCollection(
+              context,
+              MusicDeviceAlbumPage(
+                  selectionId: _device.selectionId, albumKey: album.key));
+        case MusicLibrarySearchArtist(:final artist):
+          searchFocus?.unfocus();
+          await MusicScreen.openDeviceCollection(
+              context,
+              MusicDeviceArtistPage(
+                  selectionId: _device.selectionId, artistKey: artist.key));
+        case MusicLibrarySearchGenre(:final genreKey):
+          searchFocus?.unfocus();
+          await openMusicDeviceCollections(
+              context, _device, MusicDeviceCollection.genres,
+              collectionKey: genreKey);
         case MusicLibrarySearchFile(:final entry):
+          final track = _lyricsMode ? entry.deviceTrack : null;
+          var currentHits = hits;
+          if (track != null) {
+            final revision = _lyricRevision;
+            bool canRecheck() =>
+                current() && _visible && revision == _lyricRevision;
+            final line = await _search.recheckDeviceLyric(query, track,
+                database: owner.database,
+                profileId: owner.profileId,
+                isCurrent: canRecheck);
+            if (!canRecheck()) return;
+            setState(() {
+              if (line == null) {
+                _deviceLyricMatches.remove(track);
+              } else {
+                _deviceLyricMatches[track] = line;
+              }
+            });
+            if (line == null) return;
+            currentHits = _hits(owner);
+          }
+          if (!mounted) return;
           bool present(MusicLibrarySearchFile file) =>
               file.entry.download == null ||
               _completedFiles(context.read<DownloadManagerCubit?>())
                   .contains(file.entry.download);
-          final files =
-              hits.whereType<MusicLibrarySearchFile>().where(present).toList();
+          final files = currentHits
+              .whereType<MusicLibrarySearchFile>()
+              .where(present)
+              .toList();
           final index = files.indexWhere((file) => file.entry.id == entry.id);
           if (index < 0) return;
           searchFocus?.unfocus();
@@ -264,9 +416,15 @@ class _MusicLibrarySearchResultsState extends State<MusicLibrarySearchResults>
               songTap: true,
               isCurrent: () =>
                   current() &&
-                  _hits(owner)
-                      .whereType<MusicLibrarySearchFile>()
-                      .any((file) => file.key == hit.key && present(file)));
+                  (track != null
+                      // TV playback opens a route over search and needs the
+                      // selected file to stay valid after the snippets clear.
+                      ? _device.enabled &&
+                          !_device.unavailable &&
+                          identical(
+                              _device.visibleTrackById(track.playbackId), track)
+                      : _hits(owner).whereType<MusicLibrarySearchFile>().any(
+                          (file) => file.key == hit.key && present(file))));
       }
     } catch (_) {
       if (mounted && current() && _visible) {
@@ -276,8 +434,12 @@ class _MusicLibrarySearchResultsState extends State<MusicLibrarySearchResults>
     }
   }
 
-  Widget _row(_SearchOwner owner, String query, MusicLibrarySearchType type,
-      MusicLibrarySearchHit hit, AppLocalizations locals) {
+  Widget _row(
+      _SearchOwner owner,
+      String query,
+      Set<MusicLibrarySearchType> types,
+      MusicLibrarySearchHit hit,
+      AppLocalizations locals) {
     final ownsSearch = widget.isCurrent;
     final (title, kind, icon, plays) = switch (hit) {
       MusicLibrarySearchBookmark(:final entry) => (
@@ -304,6 +466,30 @@ class _MusicLibrarySearchResultsState extends State<MusicLibrarySearchResults>
           Icons.playlist_play,
           false,
         ),
+      MusicLibrarySearchAlbum() => (
+          hit.title,
+          locals.localMusicBrowseAlbums,
+          Icons.album_outlined,
+          false,
+        ),
+      MusicLibrarySearchArtist() => (
+          hit.title,
+          locals.localMusicBrowseArtists,
+          Icons.person_outline,
+          false,
+        ),
+      MusicLibrarySearchGenre() => (
+          hit.title,
+          locals.localMusicGenres,
+          Icons.category_outlined,
+          false,
+        ),
+      MusicLibrarySearchRecording() => (
+          hit.title,
+          locals.musicLyrics,
+          Icons.music_note_outlined,
+          true,
+        ),
       MusicLibrarySearchFile() => (
           hit.title,
           locals.onDevice,
@@ -312,6 +498,9 @@ class _MusicLibrarySearchResultsState extends State<MusicLibrarySearchResults>
         ),
     };
     final subtitle = hit.subtitle?.trim();
+    final detail =
+        subtitle == null || subtitle.isEmpty ? kind : '$kind · $subtitle';
+    final lyricLine = hit.lyricLine;
     final titleLabel = Text(title);
     return ListTile(
       key: ValueKey(('music-library-search-hit', hit.key)),
@@ -328,6 +517,8 @@ class _MusicLibrarySearchResultsState extends State<MusicLibrarySearchResults>
         MusicLibrarySearchBookmark(:final entry)
             when entry.kind == MusicLibraryKind.song =>
           MusicStatusTitle.song(video: entry.toVideo(), child: titleLabel),
+        MusicLibrarySearchRecording(:final video) =>
+          MusicStatusTitle.song(video: video, child: titleLabel),
         MusicLibrarySearchBookmark(:final entry) => MusicStatusTitle.bookmark(
             kind: entry.kind, id: entry.id, child: titleLabel),
         MusicLibrarySearchFile(
@@ -340,11 +531,21 @@ class _MusicLibrarySearchResultsState extends State<MusicLibrarySearchResults>
               file: file, fileProof: downloadFileProof, child: titleLabel),
         _ => titleLabel,
       },
-      subtitle: Text(
-          subtitle == null || subtitle.isEmpty ? kind : '$kind · $subtitle'),
+      subtitle: lyricLine == null
+          ? Text(detail)
+          : Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(detail, maxLines: 1, overflow: TextOverflow.ellipsis),
+                Text(locals.musicSearchLyricLine(lyricLine),
+                    maxLines: 2, overflow: TextOverflow.ellipsis),
+              ],
+            ),
+      isThreeLine: lyricLine != null,
       trailing: Icon(plays ? Icons.play_arrow : Icons.chevron_right),
       onTap: widget.active
-          ? () => _activate(owner, query, type, hit, ownsSearch)
+          ? () => _activate(owner, query, types, hit, ownsSearch)
           : null,
     );
   }
@@ -361,18 +562,31 @@ class _MusicLibrarySearchResultsState extends State<MusicLibrarySearchResults>
     } else {
       final activating =
           _visibleOwner != owner || _visibleSource?.call() == false;
-      if (activating) _fileEpoch++;
       _visibleOwner = owner;
       _visibleSource = widget.isSessionCurrent;
       if (activating || !listEquals(files, _lastFiles)) {
+        _fileEpoch++;
+        if (_lyricScope != null) _resetDeviceLyrics();
         _checkingFiles |= activating;
         _lastFiles = files;
         _scheduleFileRefresh(force: activating);
       }
     }
     final query = widget.query;
-    final type = widget.type;
-    if (!widget.active || owner == null || query.trim().isEmpty) {
+    final types = widget.types;
+    final lyricsMode = _lyricsMode;
+    final hasQuery = query.trim().isNotEmpty;
+    _setLyricScope(lyricsMode &&
+            owner != null &&
+            _visibleOwner == owner &&
+            _current(owner) &&
+            hasQuery
+        ? (owner: owner, query: query)
+        : null);
+    if (!widget.active ||
+        owner == null ||
+        !hasQuery ||
+        (lyricsMode && _lyricScope == null)) {
       return const SizedBox.shrink();
     }
     final locals = AppLocalizations.of(context)!;
@@ -385,20 +599,35 @@ class _MusicLibrarySearchResultsState extends State<MusicLibrarySearchResults>
           return const SizedBox.shrink();
         }
         final hits = _hits(owner);
+        final searchingLyrics = lyricsMode && _checkingLyrics;
         if (hits.isEmpty) {
+          final loading = searchingLyrics ||
+              (_checkingFiles &&
+                  types
+                      .any((type) => type != MusicLibrarySearchType.playlists));
           return Center(
-              child: _checkingFiles && type != MusicLibrarySearchType.playlists
-                  ? const CircularProgressIndicator()
-                  : Text(locals.musicNoResults));
+              child: loading
+                  ? CircularProgressIndicator(
+                      semanticsLabel:
+                          lyricsMode ? locals.musicSearchLyricsLoading : null)
+                  : Text(lyricsMode
+                      ? locals.musicSearchLyricsEmpty
+                      : locals.musicNoResults));
         }
         return ListView.builder(
           key: widget.scrollKey ??
               const PageStorageKey('music-search-library-results'),
           controller: widget.controller,
           primary: false,
-          itemCount: hits.length,
-          itemBuilder: (context, index) =>
-              _row(owner, query, type, hits[index], locals),
+          itemCount: hits.length + (searchingLyrics ? 1 : 0),
+          itemBuilder: (context, index) => index == hits.length
+              ? Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  child: LinearProgressIndicator(
+                      semanticsLabel: locals.musicSearchLyricsLoading),
+                )
+              : _row(owner, query, types, hits[index], locals),
         );
       },
     );

@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:clipious/l10n/generated/app_localizations.dart';
+import 'package:clipious/music/models/music_current_cue.dart';
 import 'package:clipious/music/models/music_lyrics.dart';
 import 'package:clipious/music/services/music_lyrics_reader_preferences.dart';
 import 'package:clipious/player/states/player.dart';
@@ -12,6 +14,8 @@ import 'package:flutter/rendering.dart' show ScrollDirection;
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import 'music_lyric_share_button.dart';
+import 'music_lyric_cue_details.dart';
+import 'music_word_timed_lyric_line.dart';
 
 class MusicTimedLyrics extends StatefulWidget {
   final MusicLyrics lyrics;
@@ -19,8 +23,10 @@ class MusicTimedLyrics extends StatefulWidget {
   final bool edited;
   final MusicLyricsReaderPreferences preferences;
   final Duration seekLimit;
+  final Duration delay;
   final bool Function() isCurrent;
   final ValueChanged<Duration> onSeek;
+  final Future<List<File>> Function()? loadShareArtwork;
 
   const MusicTimedLyrics({
     super.key,
@@ -29,8 +35,10 @@ class MusicTimedLyrics extends StatefulWidget {
     required this.edited,
     required this.preferences,
     required this.seekLimit,
+    required this.delay,
     required this.isCurrent,
     required this.onSeek,
+    this.loadShareArtwork,
   });
 
   @override
@@ -102,34 +110,9 @@ class _MusicTimedLyricsState extends State<MusicTimedLyrics> {
   }
 
   int _startingAnchor() {
-    final active = _activeLine(context.read<PlayerCubit>().state.position);
+    final position = context.read<PlayerCubit>().state.position;
+    final active = activeMusicLyricIndex(_cues, position - widget.delay);
     return active < 0 ? 0 : active;
-  }
-
-  int _activeLine(Duration position) {
-    var start = 0;
-    var end = _cues.length;
-    while (start < end) {
-      final middle = (start + end) ~/ 2;
-      if (_cues[middle].start <= position) {
-        start = middle + 1;
-      } else {
-        end = middle;
-      }
-    }
-    if (start == 0) return -1;
-    final cueStart = _cues[start - 1].start;
-    end = start - 1;
-    start = 0;
-    while (start < end) {
-      final middle = (start + end) ~/ 2;
-      if (_cues[middle].start < cueStart) {
-        start = middle + 1;
-      } else {
-        end = middle;
-      }
-    }
-    return start;
   }
 
   bool get _canReveal =>
@@ -228,13 +211,34 @@ class _MusicTimedLyricsState extends State<MusicTimedLyrics> {
     });
   }
 
-  Widget _line(BuildContext context, int index, int active) {
+  Widget _line(BuildContext context, int index, int active, Duration position) {
     final cue = _cues[index];
-    final playing = active >= 0 && cue.start == _cues[active].start;
+    final start = cue.start + widget.delay;
+    final seekPosition = start < Duration.zero ? Duration.zero : start;
+    final metadata = widget.lyrics.metadataByCue[index];
+    final playing = switch (metadata?.end) {
+      final end? => cue.start <= position && position < end,
+      null => active >= 0 && cue.start == _cues[active].start,
+    };
     final selected = _selectedLines.contains(index);
     final canSelect = cue.text.trim().isNotEmpty;
+    final words = widget.lyrics.wordsByCue[index];
+    final text = widget.preferences.syncedCueText(widget.lyrics, index);
+    final alignment =
+        widget.preferences.alignment == MusicLyricsTextAlignment.center
+            ? TextAlign.center
+            : TextAlign.start;
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
+    final title = playing && words != null
+        ? MusicWordTimedLyricLine(
+            text: text,
+            words: words,
+            position: position,
+            wordOffset: (text.length - text.trimLeft().length) -
+                (cue.text.length - cue.text.trimLeft().length),
+            textAlign: alignment)
+        : Text(text, textAlign: alignment);
     return IndexedSemantics(
       index: index,
       child: ListTile(
@@ -257,20 +261,21 @@ class _MusicTimedLyricsState extends State<MusicTimedLyrics> {
                 borderRadius: BorderRadius.circular(2)),
           ),
           const SizedBox(width: 8),
-          Text(prettyDurationCustom(cue.start)),
+          Text(prettyDurationCustom(seekPosition)),
         ]),
-        title: Text(cue.text,
-            textAlign:
-                widget.preferences.alignment == MusicLyricsTextAlignment.center
-                    ? TextAlign.center
-                    : TextAlign.start),
+        title: metadata != null && metadata.hasDetails
+            ? MusicLyricCueDetails(
+                metadata: metadata, alignment: alignment, child: title)
+            : title,
         trailing: _selecting && canSelect
             ? Icon(selected ? Icons.check_circle : Icons.circle_outlined)
             : null,
         onFocusChange: (focused) => _rowFocusChanged(index, focused),
         onTap: _selecting
             ? (canSelect ? () => _toggleLine(index) : null)
-            : () => _seek(cue.start),
+            : seekPosition <= widget.seekLimit
+                ? () => _seek(seekPosition)
+                : null,
       ),
     );
   }
@@ -292,7 +297,9 @@ class _MusicTimedLyricsState extends State<MusicTimedLyrics> {
       children: [
         if (_previewPosition != null)
           Text(
-            active < 0 ? time : '$time · ${_cues[active].text}',
+            active < 0
+                ? time
+                : '$time · ${widget.preferences.syncedCueText(widget.lyrics, active)}',
             key: const ValueKey('music-lyrics-seek-preview'),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
@@ -364,6 +371,7 @@ class _MusicTimedLyricsState extends State<MusicTimedLyrics> {
               track: widget.track,
               source: lyrics.source,
               edited: widget.edited,
+              loadArtwork: widget.loadShareArtwork,
               isCurrent: () =>
                   mounted &&
                   identical(widget.lyrics, lyrics) &&
@@ -379,7 +387,9 @@ class _MusicTimedLyricsState extends State<MusicTimedLyrics> {
     final playbackPosition =
         context.select((PlayerCubit player) => player.state.position);
     final position = _previewPosition ?? playbackPosition;
-    final active = _activeLine(position);
+    // Compare in lyric time. The slider and its seek stay in playback time.
+    final lyricPosition = position - widget.delay;
+    final active = activeMusicLyricIndex(_cues, lyricPosition);
     if (_canReveal && _lastRevealed != active) {
       final animate = _lastRevealed != null && _previewPosition == null;
       _lastRevealed = active;
@@ -401,15 +411,15 @@ class _MusicTimedLyricsState extends State<MusicTimedLyrics> {
                   SliverList.builder(
                     addSemanticIndexes: false,
                     itemCount: _anchor,
-                    itemBuilder: (context, index) =>
-                        _line(context, _anchor - index - 1, active),
+                    itemBuilder: (context, index) => _line(
+                        context, _anchor - index - 1, active, lyricPosition),
                   ),
                 SliverList.builder(
                   key: _center,
                   addSemanticIndexes: false,
                   itemCount: _cues.length - _anchor,
                   itemBuilder: (context, index) =>
-                      _line(context, _anchor + index, active),
+                      _line(context, _anchor + index, active, lyricPosition),
                 ),
               ],
             ),

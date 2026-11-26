@@ -443,6 +443,97 @@ void main() {
     expect((await service.rankVideos([other])).items, hasLength(1));
   });
 
+  test('music dismissal undo restores artist feedback and keeps newer choices',
+      () async {
+    const music = RecommendationDomain.music;
+    const track = MusicTrack(
+        videoId: 'abcdefghijk', title: 'Dismissed', artists: ['Artist']);
+    const neighbor = MusicTrack(
+        videoId: 'zyxwvutsrqp', title: 'Other', artists: ['Other artist']);
+    const artist = 'name:artist';
+    const otherArtist = 'name:other artist';
+    const priorAffinity = {'score': 0.8, 'plays': 5, 'liked': true};
+    await database.saveSetting(SettingsValue(
+        recommendationSettingName(music),
+        const RecommendationSnapshot(state: {
+          'schemaVersion': 1,
+          'domain': 'music',
+          'artistAffinity': {artist: priorAffinity},
+          'recentRotation': {artist: 0.5},
+          'dislikedArtists': {artist: 123},
+          'discoveryAppetite': 0.5,
+        }).encode()));
+    service.dispose();
+    service = RecommendationService.forTesting(database, bridge: (request) {
+      final state = request['state'] as Map;
+      final event = (request['events'] as List).single as Map;
+      final key = (event['candidate'] as Map)['artistKey'];
+      return Future.value({
+        'state': event['type'] == 'block'
+            ? {
+                ...state,
+                'blockedArtists': [artist],
+                'artistAffinity': {
+                  artist: {...priorAffinity, 'score': 0.0, 'liked': false}
+                },
+                'recentRotation': <String, double>{},
+                'dislikedArtists': <String, int>{},
+              }
+            : {
+                ...state,
+                'artistAffinity': {
+                  ...state['artistAffinity'] as Map,
+                  key: {'score': 0.9},
+                },
+                'discoveryAppetite': 0.6,
+              },
+      });
+    });
+
+    final undo = (await service.dismissMusicRecommendation(
+        track, RecommendationFeedback.block))!;
+    expect(service.eligibleMusic([track, neighbor]), [neighbor]);
+    await service.feedback(
+        neighbor.toVideo(), music, RecommendationFeedback.notInterested);
+    final beforeUndo = snapshot(music);
+    expect(await undo(), isTrue);
+    final restored = snapshot(music);
+    expect(service.eligibleMusic([track, neighbor]), [track]);
+    expect(restored.state['artistAffinity'], {
+      artist: priorAffinity,
+      otherArtist: {'score': 0.9},
+    });
+    expect(restored.state['dislikedArtists'], {artist: 123});
+    expect(restored.state['recentRotation'], {artist: 0.5});
+    expect(restored.state['discoveryAppetite'], 0.6);
+    expect(restored.state['blockedArtists'], isEmpty);
+    expect(restored.eventIds, beforeUndo.eventIds);
+    expect(await undo(), isFalse);
+  });
+
+  test('music undo belongs to the latest dismissal in its profile session',
+      () async {
+    const track = MusicTrack(videoId: 'abcdefghijk', title: 'First');
+    const neighbor = MusicTrack(videoId: 'zyxwvutsrqp', title: 'Second');
+    final firstUndo = (await service.dismissMusicRecommendation(
+        track, RecommendationFeedback.notInterested))!;
+    final secondUndo = (await service.dismissMusicRecommendation(
+        neighbor, RecommendationFeedback.notInterested))!;
+    expect(await firstUndo(), isFalse);
+    final original = database.profileId;
+    final member = await database.createProfile('Other listener');
+    RecommendationService.invalidateSession();
+    await database.useProfile(member.id);
+    expect(await secondUndo(), isFalse);
+    expect(
+        database
+            .getSettings(recommendationSettingName(RecommendationDomain.music)),
+        isNull);
+    await database.useProfile(original);
+    expect(await secondUndo(), isFalse);
+    expect(service.eligibleMusic([track, neighbor]), isEmpty);
+  });
+
   for (final domain in RecommendationDomain.values) {
     test(
         '${domain.name} native creator blocks apply before ranking and locally',

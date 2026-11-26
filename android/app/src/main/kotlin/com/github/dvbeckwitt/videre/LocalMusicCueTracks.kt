@@ -59,22 +59,37 @@ internal class LocalMusicCueTracks(
                         resolved.identityKey ?: resolved.identityUri ?: resolved.uri,
                         resolved.visibilityKey.orEmpty(), track.startUs.toString(), track.endUs?.toString().orEmpty(),
                     )
-                    add(base + mapOf(
-                        "title" to (track.title ?: "$albumTitle (${track.number})"),
-                        "artist" to (track.performer ?: sheet.performer ?: metadata.artist),
-                        "album" to albumTitle,
-                        "albumArtist" to (sheet.performer ?: metadata.albumArtist),
-                        "albumKey" to albumKey,
-                        "durationMs" to (durationUs / 1000L),
-                        "canRename" to false,
-                        "identityUri" to null,
-                        "identityKey" to identity,
-                        "visibilityKey" to resolved.visibilityKey?.let {
-                            localMusicVisibilityFingerprint("cue-visibility", identity)
-                        },
-                        "cueStartUs" to track.startUs,
-                        "cueEndUs" to track.endUs,
-                    ))
+                    val artist = track.performer ?: sheet.performer
+                    add(base + buildMap<String, Any?> {
+                        if (artist != null) {
+                            put("artists", listOf(artist))
+                            put("artistSort", null)
+                        }
+                        if (sheet.performer != null) {
+                            put("albumArtists", listOf(sheet.performer))
+                            put("albumArtistSort", null)
+                        }
+                        putAll(mapOf(
+                            "title" to (track.title ?: "$albumTitle (${track.number})"),
+                            "titleSort" to null,
+                            "artist" to (artist ?: metadata.artist),
+                            "album" to albumTitle,
+                            "albumSort" to null,
+                            "albumArtist" to (sheet.performer ?: metadata.albumArtist),
+                            "trackNumber" to track.number,
+                            "canEditTags" to false,
+                            "albumKey" to albumKey,
+                            "durationMs" to (durationUs / 1000L),
+                            "canRename" to false,
+                            "identityUri" to null,
+                            "identityKey" to identity,
+                            "visibilityKey" to resolved.visibilityKey?.let {
+                                localMusicVisibilityFingerprint("cue-visibility", identity)
+                            },
+                            "cueStartUs" to track.startUs,
+                            "cueEndUs" to track.endUs,
+                        ))
+                    })
                 }
             }
         }

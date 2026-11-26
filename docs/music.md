@@ -102,10 +102,11 @@ General Discover and each of up to three saved-artist selections inspect at
 most eight unique candidates and return up to six tracks. Explore checks up to
 four candidates per genre for Pop, Jazz, Classical, and Electronic. Opening a
 ready genre shows the verified songs and playback controls immediately.
-Discovery does not download media, poll in the background, or keep searching
-until the shelf is full. Existing bounded same-route metadata retries can add
-requests when the instance fails. On onion or SOCKS connections, candidate checks
-run one at a time. Other connections check at most two candidates concurrently.
+Opening Discover loads metadata. It avoids background polling and limits each
+search to the candidate counts above. Existing bounded same-route metadata
+retries can add requests when the instance fails. On onion or SOCKS connections,
+candidate checks run one at a time. Other connections check at most two
+candidates concurrently.
 An instance cooldown stops further checks and keeps tracks already verified.
 Press **Refresh** for another selection or **Retry** after a connection failure.
 Session changes discard old results. An unavailable instance never causes a
@@ -114,6 +115,15 @@ Discovery uses the instance's original titles and artwork without optional
 DeArrow enrichment or related-video lookups. Your content filters apply to both
 search candidates and verified details; editing those manual filters invalidates
 the shelf.
+
+On phones and tablets, **Keep selection offline** saves the displayed Discover
+shelf for the active profile. The app downloads discovery audio privately in
+Data Saver quality and follows the profile's Wi-Fi setting. Discovery storage
+uses the configured playback-cache limit as its own ceiling. **Play offline**
+plays the files the device can read. Refreshing Discover leaves the saved
+selection in place until you choose **Update offline selection**. Choosing
+**Stop keeping offline** releases discovery files while preserving explicit
+downloads and files still needed by a playlist set to Keep offline.
 
 Under **Settings → Browsing → AI content filters**, choose **Off**, **Label**,
 or **Hide** for AiSList block entries, AiSList warnings, and the separate AI
@@ -417,6 +427,14 @@ grant access to the sheet and its audio. Referenced files must be beside the
 sheet or in its subfolders, with matching filenames. Open the sheet's album
 to play its tracks in CUE order. The original audio file is still playable.
 
+In **Manage music locations**, choose **Add folder from document provider** to
+add a folder from a provider already set up in Android's picker. Videre lists
+files in that folder and opens the selected audio for playback. A remote
+provider may need a connection, and seeking is available when the stream
+supports it. If a provider is temporarily unavailable, check its connection and
+retry the location. Use **Reconnect to restore access** if its grant was
+revoked. Offline indicators require a verified local copy.
+
 If Android verifies that an indexed row and a completed download point to the
 same file, the device row represents both. Separate files with identical tags
 remain separate. Hiding that device row also hides its verified download alias
@@ -433,6 +451,37 @@ Standalone downloads with no indexed date appear after dated files in date sorts
 The song menu offers **Rename file** for supported files, with an Android write
 prompt when required. This changes the filename and preserves embedded tags.
 Forgetting the library leaves your audio files in place.
+
+Choose **Edit tags** in a device song’s menu to change its embedded title,
+artist, album, album artist, genre, release date, or track and disc numbers
+with optional totals. Enter the release date as YYYY or YYYY-MM-DD. ID3v2.4
+files also accept YYYY-MM. An ID3v2.4 recording date stays in the file and can
+still supply the library date after you clear the release date.
+Clear both fields to remove a number and its total. This works for MP3 files in
+Android's music library or an Android storage folder with enough room in an
+existing ID3v2.3 or ID3v2.4 tag. Android may ask you to approve changes to the
+song or select the same storage folder again. Saving keeps the file in place and
+preserves the audio and unedited tags. **Choose front cover** or **Replace front
+cover** stages a JPEG or PNG for that file. **Remove front cover** stages removal
+of its embedded front cover and preserves other embedded pictures. Confirm the
+change with **Save**. If the image won't fit in the existing tag, choose a
+smaller image. A separate legacy tag, if present, can still supply a value after
+you clear its ID3v2 field.
+
+Open a device album and choose **Edit album tags** to edit several source files.
+Select the tracks and choose shared album, artist, genre, or release tags.
+Edit track and disc numbers on their own rows. Supported files can also share a front cover change.
+**Review changes** shows the edits by file before you apply them. Android may
+ask for write access as each file is saved. **Stop after current file** leaves
+the remaining files untouched. The results show which files saved, were skipped,
+or need attention.
+
+To save lyrics for other players, open the local song’s **Lyrics** reader and
+choose **Edit plain lyrics** to save a draft to your profile. In the device song’s
+menu, choose **Edit tags** and then **Embed plain lyrics**. Review the language
+and optional description before writing. Videre replaces the embedded lyrics
+entry with that language and description, or adds a new entry if there is no
+match. The edit needs write access and enough room in the existing ID3v2 tag.
 
 Choose **Hide from this library** in a device song’s menu to leave it out of
 browsing and search for the active Videre profile. Use **Undo** immediately,
@@ -455,7 +504,33 @@ the song after the current track and **Add to queue** appends it. Either action
 starts a local queue if you're listening to nothing. Videre asks before
 replacing an active queue from another source. In **Queue**, you can drag tracks
 above or below the playing song, or choose **Move up** or **Move down**. You can add the
-same file more than once. The queue, speed and pitch controls work offline.
+same file more than once. For audio stored on this device, the queue, speed
+and pitch controls work offline.
+
+## Import Spotify listening history
+
+Open **Music → Library → Music history → ⋮ → Import or export history →
+Import Spotify history**. Extract your Spotify Extended Streaming History
+download and select one audio JSON file at a time, such as
+`Streaming_History_Audio_*.json` or an older `endsong_*.json`. The file limit is
+10 MiB. The preview shows the stream end time in UTC. Timestamps must
+include a time zone. See [Spotify's export guide](https://support.spotify.com/us/article/understanding-your-data/#extended-streaming-history)
+and the [Namida importer used in the feature audit](https://github.com/namidaco/namida/blob/436feae5be45d92bebcdf66cd9e04e613cd7782c/lib/controller/json_to_history_parser.dart#L1581-L1603).
+
+Videre compares titles and artists against the profile's saved songs and known
+Music history, and against visible tracks in its approved device library.
+Capitalization and spacing are ignored. A matching album can distinguish
+editions, and a different known album rules out a candidate. Use the preview
+filter to review matches, ambiguous and unmatched rows, duplicates, and skipped
+or invalid rows. Confirm to add the new, unambiguous matches to this profile.
+Repeat the import after adding missing tracks to the library.
+
+The import runs on the device. Private-session entries, non-music entries,
+and plays with zero listening time are skipped. The resulting history contains
+Videre track details and the original timestamp. An identifier derived from the
+timestamp, time played, and Spotify track URI (or song labels if the URI is
+absent) prevents repeats from being added again, including after a Videre backup
+and restore. Spotify account and network metadata are discarded.
 
 ## Google Takeout import
 
@@ -544,10 +619,17 @@ catalog.
 [LRCLIB API](https://lrclib.net/docs.txt)
 
 For a device song, **Lyrics** reads the file offline. Choose the song's folder
-in the On-device library to give Videre access to sibling lyrics files. For
-`Song.mp3`, place `Song.lrc` beside it, or use `Song.mp3.lrc` to distinguish
-it from another file with the same stem. A readable sidecar takes precedence
-over embedded lyrics. LRC offsets use milliseconds, with positive values
+in the On-device library to give Videre access to sibling lyrics files. Videre
+reads TTML, SRT, and LRC. For `Song.mp3`, place `Song.ttml`, `Song.srt`, or
+`Song.lrc` beside it. Use `Song.mp3.ttml` (or the equivalent SRT or LRC name)
+when several recordings share the same stem. A full filename match takes
+priority, then formats are tried in TTML, SRT, and LRC order. When no usable
+sidecar is available, Videre can read embedded lyrics.
+
+The reader keeps the lines supplied in SRT, including bilingual text and
+speaker labels. TTML with media-time clocks or offsets can identify the
+singing voice of each part and supply translations under the corresponding
+lyric. LRC offsets use milliseconds, with positive values
 showing lines earlier. Embedded lyrics also work from Android's system music
 library. If the lyrics file is removed, reopen the sheet to read the embedded
 lyrics if available. Videre keeps device lyrics on the device.

@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="music_home"
+        android:icon="@drawable/ic_shortcut_music"
+        android:shortcutShortLabel="@string/shortcut_music_home">
+        <intent
+            android:action="com.github.dvbeckwitt.videre.action.MUSIC_HOME"
+            android:targetPackage="com.github.dvbeckwitt.videre"
+            android:targetClass="com.github.dvbeckwitt.videre.MusicShortcutActivity" />
+    </shortcut>
+    <shortcut
+        android:shortcutId="music_search"
+        android:icon="@drawable/ic_shortcut_music_search"
+        android:shortcutShortLabel="@string/shortcut_music_search">
+        <intent
+            android:action="com.github.dvbeckwitt.videre.action.MUSIC_SEARCH"
+            android:targetPackage="com.github.dvbeckwitt.videre"
+            android:targetClass="com.github.dvbeckwitt.videre.MusicShortcutActivity" />
+    </shortcut>
+    <shortcut
+        android:shortcutId="music_library"
+        android:icon="@drawable/ic_shortcut_music_library"
+        android:shortcutShortLabel="@string/shortcut_music_library">
+        <intent
+            android:action="com.github.dvbeckwitt.videre.action.MUSIC_LIBRARY"
+            android:targetPackage="com.github.dvbeckwitt.videre"
+            android:targetClass="com.github.dvbeckwitt.videre.MusicShortcutActivity" />
+    </shortcut>
+    <shortcut
+        android:shortcutId="music_shuffle_local"
+        android:icon="@drawable/ic_shortcut_music_shuffle"
+        android:shortcutShortLabel="@string/shortcut_music_shuffle_local">
+        <intent
+            android:action="com.github.dvbeckwitt.videre.action.MUSIC_SHUFFLE_LOCAL"
+            android:targetPackage="com.github.dvbeckwitt.videre"
+            android:targetClass="com.github.dvbeckwitt.videre.MusicShortcutActivity" />
+    </shortcut>
+</shortcuts>

@@ -1,4 +1,5 @@
 import 'music_library_entry.dart';
+import 'music_recording_rating.dart';
 import 'music_search_text.dart';
 
 const musicRulePlaylistTextLimit = 120;
@@ -16,6 +17,7 @@ class MusicRulePlaylist {
     this.albumContains = '',
     this.minimumDurationSeconds,
     this.maximumDurationSeconds,
+    this.minimumRating,
     this.sort = MusicRulePlaylistSort.saved,
     this.descending = false,
     this.limit,
@@ -28,6 +30,7 @@ class MusicRulePlaylist {
   final String albumContains;
   final int? minimumDurationSeconds;
   final int? maximumDurationSeconds;
+  final int? minimumRating;
   final MusicRulePlaylistSort sort;
   final bool descending;
   final int? limit;
@@ -45,6 +48,7 @@ class MusicRulePlaylist {
           'minimumDurationSeconds': minimumDurationSeconds,
         if (maximumDurationSeconds != null)
           'maximumDurationSeconds': maximumDurationSeconds,
+        if (minimumRating != null) 'minimumRating': minimumRating,
         'sort': sort.name,
         'descending': descending,
         if (limit != null) 'limit': limit,
@@ -59,6 +63,7 @@ class MusicRulePlaylist {
     final album = _cleanText(value['albumContains'] ?? '');
     final minimum = value['minimumDurationSeconds'];
     final maximum = value['maximumDurationSeconds'];
+    final minimumRating = value['minimumRating'];
     final limit = value['limit'];
     final sort = MusicRulePlaylistSort.values
         .asNameMap()[value['sort'] ?? MusicRulePlaylistSort.saved.name];
@@ -75,6 +80,8 @@ class MusicRulePlaylist {
         (maximum != null &&
             !_inRange(maximum, 0, musicRulePlaylistMaximumDuration)) ||
         (minimum is int && maximum is int && minimum > maximum) ||
+        (minimumRating != null &&
+            !isValidMusicRecordingRating(minimumRating)) ||
         (limit != null && !_inRange(limit, 1, musicLibraryMaximumEntries)) ||
         sort == null ||
         descending is! bool) {
@@ -88,6 +95,7 @@ class MusicRulePlaylist {
       albumContains: album,
       minimumDurationSeconds: minimum as int?,
       maximumDurationSeconds: maximum as int?,
+      minimumRating: minimumRating as int?,
       sort: sort,
       descending: descending,
       limit: limit as int?,
@@ -105,16 +113,23 @@ class MusicRulePlaylist {
 
   /// All supplied conditions must match. Saved order is the input order.
   /// An unknown value fails its filter and sorts after known values.
-  List<MusicLibraryEntry> resolve(Iterable<MusicLibraryEntry> entries) {
+  List<MusicLibraryEntry> resolve(Iterable<MusicLibraryEntry> entries,
+      {Map<String, int> ratings = const {}}) {
     final titleFilter = _normalized(titleContains);
     final artistFilter = _normalized(artistContains);
     final albumFilter = _normalized(albumContains);
     final minimum = minimumDurationSeconds;
     final maximum = maximumDurationSeconds;
+    final ratingThreshold = minimumRating;
     final rows =
         <({MusicLibraryEntry entry, int index, String? text, num? duration})>[];
     for (final (index, entry) in entries.indexed) {
       if (entry.kind != MusicLibraryKind.song) continue;
+      final rating = ratings[entry.id];
+      if (ratingThreshold != null &&
+          (rating == null || rating < ratingThreshold)) {
+        continue;
+      }
       final title =
           entry.title.trim() == entry.id ? null : _normalized(entry.title);
       if (!_matches(title, titleFilter)) continue;

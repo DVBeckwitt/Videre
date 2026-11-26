@@ -48,6 +48,34 @@ void main() {
 
   tearDown(() => messenger.setMockMethodCallHandler(local, null));
 
+  test('an unreachable provider does not hide a confirmed shared download',
+      () async {
+    messenger.setMockMethodCallHandler(local, (call) async {
+      return switch (call.method) {
+        'getFolder' => {
+            'uri': tree,
+            'name': 'Music',
+            'isDocumentProvider': true
+          },
+        'listTracks' => throw PlatformException(code: 'SCAN_UNAVAILABLE'),
+        _ => throw MissingPluginException(),
+      };
+    });
+    final library = LocalMusicLibrary();
+    addTearDown(library.dispose);
+    await library.refresh();
+    expect(library.isProviderUnreachable(library.roots.single), isTrue);
+
+    final storage = _ProbedStorage()
+      ..replies[downloaded.profileId] =
+          Future.value([probe(downloaded, proof)]);
+    final downloads = OnDeviceMusicDownloads(storage: storage);
+    addTearDown(downloads.dispose);
+    await downloads.refresh(library, downloaded.profileId, [downloaded]);
+    expect(downloads.entries(library, downloaded.profileId).single.download,
+        downloaded);
+  });
+
   test('remember a proven hidden shared copy when source access goes away',
       () async {
     var authorized = true;

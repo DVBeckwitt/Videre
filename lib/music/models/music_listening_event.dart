@@ -14,12 +14,16 @@ class MusicListeningEvent {
   final bool isLegacy;
   final PlaylistReference? playlist;
 
+  /// Observed playback time. Earlier history has no elapsed measurement.
+  final Duration? elapsed;
+
   MusicListeningEvent({
     required this.id,
     required this.entry,
     required this.source,
     this.isLegacy = false,
     this.playlist,
+    this.elapsed,
   })  : trackId = entry.videoId,
         playedAt = entry.created.toUtc();
 
@@ -41,10 +45,12 @@ class MusicListeningEvent {
         Map<String, dynamic>.from(json['entry'] as Map));
     final playedAt = DateTime.parse(json['playedAt'] as String).toUtc();
     final source = MusicListeningSource.values.byName(json['source'] as String);
+    final elapsed = json['elapsedMicroseconds'];
     if (entry.videoId != json['trackId'] ||
         entry.created.toUtc() != playedAt ||
         entry.videoId.startsWith('device:') !=
-            (source == MusicListeningSource.device)) {
+            (source == MusicListeningSource.device) ||
+        (elapsed != null && (elapsed is! int || elapsed < 0))) {
       throw const FormatException('Inconsistent Music listening event');
     }
     return MusicListeningEvent(
@@ -53,6 +59,7 @@ class MusicListeningEvent {
       source: source,
       isLegacy: json['isLegacy'] as bool? ?? false,
       playlist: PlaylistReference.tryParse(json['playlist']),
+      elapsed: elapsed is int ? Duration(microseconds: elapsed) : null,
     );
   }
 
@@ -64,5 +71,6 @@ class MusicListeningEvent {
         'entry': {...entry.toJson(), 'created': playedAt.toIso8601String()},
         if (isLegacy) 'isLegacy': true,
         if (playlist != null) 'playlist': playlist!.toJson(),
+        if (elapsed != null) 'elapsedMicroseconds': elapsed!.inMicroseconds,
       };
 }

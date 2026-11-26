@@ -119,6 +119,8 @@ class DownloadStoragePlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activ
             }
             "probeMusicFiles" -> probeMusicFiles(call, result)
             "shareMusicFile" -> shareMusicFile(call, result)
+            "canSetMusicRingtone" -> musicRingtone(call, result, probe = true)
+            "setMusicRingtone" -> musicRingtone(call, result, probe = false)
             "documentSize" -> measureDocument(call, result)
             "exportExists" -> run(result) {
                 val uri = Uri.parse(call.argument<String>("uri")!!)
@@ -241,7 +243,9 @@ class DownloadStoragePlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activ
     private fun probeMusicFiles(call: MethodCall, result: MethodChannel.Result) = runMetadataProbe(result) {
         val profile = call.argument<String>("profileId") ?: return@runMetadataProbe null
         val files = call.argument<List<*>>("files") ?: return@runMetadataProbe null
-        if (!downloadProfileId.matches(profile) || files.size > 64) return@runMetadataProbe null
+        val includeAudioFormat = call.argument<Boolean>("includeAudioFormat") == true
+        if (!downloadProfileId.matches(profile) || files.size > 64 ||
+            (includeAudioFormat && files.size != 1)) return@runMetadataProbe null
         buildMap {
             for (value in files) {
                 val file = value as? Map<*, *> ?: continue
@@ -259,13 +263,54 @@ class DownloadStoragePlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activ
                 if (resolved.encodedQuery != null || resolved.encodedFragment != null ||
                     destination?.encodedQuery != null || destination?.encodedFragment != null) continue
                 try {
-                    val stamp = DownloadDocumentIntegrity.probe(context, uri, folder, profile, video, expected)
-                    put(key, mapOf("identity" to stamp.identity, "byteLength" to stamp.byteLength))
+                    if (includeAudioFormat) {
+                        if (expected != null) continue
+                        val identity = file["expectedIdentity"] as? String
+                        if (file["expectedIdentity"] != null &&
+                            (identity == null || !downloadContentHash.matches(identity))) continue
+                        val length = when (val size = file["expectedByteLength"]) {
+                            is Int -> size.toLong()
+                            is Long -> size
+                            null -> null
+                            else -> continue
+                        }
+                        if (length != null && length <= 0L) continue
+                        val (stamp, format) = DownloadDocumentIntegrity.readVerifiedFile(
+                            context, uri, folder, profile, video, identity, length, MusicFileAudioFormat::read,
+                        )
+                        put(key, mapOf("identity" to stamp.identity, "byteLength" to stamp.byteLength,
+                            "audioFormat" to format))
+                    } else {
+                        val stamp = DownloadDocumentIntegrity.probe(context, uri, folder, profile, video, expected)
+                        put(key, mapOf("identity" to stamp.identity, "byteLength" to stamp.byteLength))
+                    }
                 } catch (_: Exception) {
                     // One missing, unmounted or moved file should not suppress others.
                 }
             }
         }
+    }
+
+    private fun musicRingtone(call: MethodCall, result: MethodChannel.Result, probe: Boolean) {
+        val action = (activity?.activity as? MainActivity)?.recordingRingtone
+        val original = call.argument<String>("uri")?.let(Uri::parse)
+        val extension = musicShareExtensions[call.argument<String>("mime")]
+        val privateDownload = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+            original?.scheme == "file" && original.authority.isNullOrEmpty()
+        if (action == null || original == null || extension == null || pendingPicker != null ||
+            (!privateDownload && !RingtoneSource.isLocal(context, original))) {
+            result.success(if (probe) false else RecordingRingtone.UNAVAILABLE)
+            return
+        }
+        val title = call.argument<String>("title")?.trim()?.take(240)?.takeIf { it.isNotEmpty() }
+        fun resolve(): RingtoneSource? {
+            val attachment = resolveMusicShare(call).first
+            val name = title ?: call.argument<String>("videoId") ?: return null
+            return RingtoneSource.open(context, attachment, "$name.$extension")
+        }
+
+        if (probe) action.canSet(::resolve, result::success)
+        else action.set(title, ::resolve, { resolveMusicShare(call).first.scheme == "content" }, result::success)
     }
 
     private fun shareMusicFile(call: MethodCall, result: MethodChannel.Result) {
@@ -278,7 +323,7 @@ class DownloadStoragePlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activ
         try {
             sizeWorker.execute {
                 val attachment = try {
-                    resolveMusicShare(call)
+                    resolveMusicDownloadShare(context, call.arguments as Map<*, *>)
                 } catch (_: Exception) {
                     null
                 }
@@ -302,46 +347,6 @@ class DownloadStoragePlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activ
         }
     }
 
-    private fun resolveMusicShare(call: MethodCall): Pair<Uri, String> {
-        val profile = requireNotNull(call.argument<String>("profileId"))
-        val video = requireNotNull(call.argument<String>("videoId"))
-        val value = requireNotNull(call.argument<String>("uri"))
-        val folder = call.argument<String>("folderUri")
-        val mime = requireNotNull(call.argument<String>("mime"))
-        val identity = call.argument<String>("expectedIdentity")
-        val sha256 = call.argument<String>("expectedSha256")
-        val length = call.argument<Number>("byteLength")?.toLong()
-        val extension = requireNotNull(musicShareExtensions[mime])
-        require(downloadProfileId.matches(profile) && downloadProfileId.matches(video))
-        require(value.length in 1..32768 && (folder == null || folder.length in 1..32768))
-        require(identity == null || downloadContentHash.matches(identity))
-        require(sha256 == null || downloadContentHash.matches(sha256))
-        val uri = Uri.parse(value)
-        val destination = folder?.let(Uri::parse)
-        require(uri.encodedQuery == null && uri.encodedFragment == null &&
-            destination?.encodedQuery == null && destination?.encodedFragment == null)
-
-        val stamp = DownloadDocumentIntegrity.probe(context, value, folder, profile, video, sha256)
-        require((identity == null || identity == stamp.identity) &&
-            (length == null || length == stamp.byteLength))
-        if (uri.scheme == "file") {
-            val file = File(requireNotNull(uri.path)).canonicalFile
-            require(file.name == "$video.$extension")
-            val contentUri = FileProvider.getUriForFile(context, "${context.packageName}.music_download_share", file)
-            return contentUri to mime
-        }
-
-        val providerType = context.contentResolver.getType(uri)
-        val shareMime = when {
-            providerType?.startsWith("audio/") == true -> providerType
-            providerType.isNullOrEmpty() || providerType == "application/octet-stream" ||
-                providerType == "application/${mime.substringAfter('/')}" ||
-                (mime == "audio/webm" && providerType == "video/webm") -> mime
-            else -> throw IOException()
-        }
-        return uri to shareMime
-    }
-
     private fun runMetadataProbe(result: MethodChannel.Result, action: () -> Any?) {
         pendingSizes.add(result)
         try {
@@ -358,12 +363,6 @@ class DownloadStoragePlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activ
             result.success(null)
         }
     }
-
-    private val downloadProfileId = Regex("[A-Za-z0-9_-]{1,128}")
-    private val downloadContentHash = Regex("[0-9a-f]{64}")
-    private val musicShareExtensions = mapOf(
-        "audio/mpeg" to "mp3", "audio/mp4" to "m4a", "audio/ogg" to "ogg", "audio/webm" to "webm",
-    )
 
     private fun transfer(call: MethodCall, result: MethodChannel.Result, action: (AtomicBoolean) -> Unit) {
         val id = call.argument<String>("id")
@@ -579,6 +578,52 @@ class DownloadStoragePlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activ
 }
 
 class MusicDownloadShareProvider : FileProvider()
+
+private val downloadProfileId = Regex("[A-Za-z0-9_-]{1,128}")
+private val downloadContentHash = Regex("[0-9a-f]{64}")
+private val musicShareExtensions = mapOf(
+    "audio/mpeg" to "mp3", "audio/mp4" to "m4a", "audio/ogg" to "ogg", "audio/webm" to "webm",
+)
+
+internal fun resolveMusicDownloadShare(context: Context, arguments: Map<*, *>): Pair<Uri, String> {
+    val profile = requireNotNull(arguments["profileId"] as? String)
+    val video = requireNotNull(arguments["videoId"] as? String)
+    val value = requireNotNull(arguments["uri"] as? String)
+    val folder = arguments["folderUri"] as String?
+    val mime = requireNotNull(arguments["mime"] as? String)
+    val identity = arguments["expectedIdentity"] as String?
+    val sha256 = arguments["expectedSha256"] as String?
+    val length = (arguments["byteLength"] as Number?)?.toLong()
+    val extension = requireNotNull(musicShareExtensions[mime])
+    require(downloadProfileId.matches(profile) && downloadProfileId.matches(video))
+    require(value.length in 1..32768 && (folder == null || folder.length in 1..32768))
+    require(identity == null || downloadContentHash.matches(identity))
+    require(sha256 == null || downloadContentHash.matches(sha256))
+    val uri = Uri.parse(value)
+    val destination = folder?.let(Uri::parse)
+    require(uri.encodedQuery == null && uri.encodedFragment == null &&
+        destination?.encodedQuery == null && destination?.encodedFragment == null)
+
+    val stamp = DownloadDocumentIntegrity.probe(context, value, folder, profile, video, sha256)
+    require((identity == null || identity == stamp.identity) &&
+        (length == null || length == stamp.byteLength))
+    if (uri.scheme == "file") {
+        val file = File(requireNotNull(uri.path)).canonicalFile
+        require(file.name == "$video.$extension")
+        val contentUri = FileProvider.getUriForFile(context, "${context.packageName}.music_download_share", file)
+        return contentUri to mime
+    }
+
+    val providerType = context.contentResolver.getType(uri)
+    val shareMime = when {
+        providerType?.startsWith("audio/") == true -> providerType
+        providerType.isNullOrEmpty() || providerType == "application/octet-stream" ||
+            providerType == "application/${mime.substringAfter('/')}" ||
+            (mime == "audio/webm" && providerType == "video/webm") -> mime
+        else -> throw IOException()
+    }
+    return uri to shareMime
+}
 
 /** Resolve only immediate files of the granted tree from Android's ExternalStorageProvider. */
 internal fun sharedAudioFile(volumeRoot: File, treeId: String, documentId: String): File? {

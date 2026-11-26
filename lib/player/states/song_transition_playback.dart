@@ -22,8 +22,11 @@ class _SongTransitionPlayback {
   double get startVolume => _volumeAt(_primaryGain, music: primaryIsMusic);
   SongTransitionMode get _mode => owner.settings.state.songTransitionMode;
 
-  double _volumeAt(double gain, {required bool music}) =>
-      muted ? 0 : gain * (music ? owner.settings.state.musicPlaybackVolume : 1);
+  double _volumeAt(double gain, {required bool music}) => muted
+      ? 0
+      : gain *
+          owner.player.sleepTimerGain.value *
+          (music ? owner.settings.state.musicPlaybackVolume : 1);
 
   void _gain(AudioPlayer? decoder, double factor, {bool music = true}) {
     if (decoder == null) return;
@@ -41,9 +44,12 @@ class _SongTransitionPlayback {
       _gain(owner.audioPlayer, _primaryGain, music: primaryIsMusic);
 
   void refreshVolume() {
-    applyStartVolume();
-    _gain(incoming?.decoder, _secondaryGain);
+    final duckGain = _ducked ? .5 : 1.0;
+    _gain(owner.audioPlayer, _primaryGain * duckGain, music: primaryIsMusic);
+    _gain(incoming?.decoder, _secondaryGain * duckGain);
   }
+
+  void refreshSleepVolume() => refreshVolume();
 
   void setMuted(bool value) {
     muted = value;
@@ -142,10 +148,12 @@ class _SongTransitionPlayback {
     if (incoming != null || _primaryGain != 1 || _intro) stop();
   }
 
-  bool switchTo(String id, _StandbyAudio? standby) {
-    final automatic = owner.player.isAutomaticMusicHandoffTo(id);
-    final continuing = automatic &&
-        _mode == SongTransitionMode.crossfade &&
+  bool switchTo(IdedVideo entry, _StandbyAudio? standby) {
+    final id = playbackQueueId(entry);
+    final mode = owner.player.isAutomaticMusicHandoffTo(id)
+        ? owner.player.musicTransitionModeTo(entry)
+        : SongTransitionMode.seamless;
+    final continuing = mode == SongTransitionMode.crossfade &&
         _afterEof == id &&
         _started &&
         identical(standby, incoming) &&
@@ -156,7 +164,7 @@ class _SongTransitionPlayback {
       _started = false;
     }
     stop();
-    _intro = automatic && _mode == SongTransitionMode.fade;
+    _intro = mode == SongTransitionMode.fade;
     _primaryGain = _intro ? 0 : 1;
     return continuing;
   }
@@ -168,7 +176,8 @@ class _SongTransitionPlayback {
         _started &&
         target != null &&
         playbackQueueId(slot.entry) == playbackQueueId(target) &&
-        _mode == SongTransitionMode.crossfade) {
+        owner.player.musicTransitionModeTo(target) ==
+            SongTransitionMode.crossfade) {
       _afterEof = playbackQueueId(target);
       _primaryGain = 0;
       _secondaryGain = 1;
@@ -182,8 +191,11 @@ class _SongTransitionPlayback {
   void update({Duration? position}) {
     final end = _afterEof;
     if (end != null) {
-      if (!owner.player.isAutomaticMusicHandoffTo(end) ||
-          _mode != SongTransitionMode.crossfade ||
+      final slot = incoming;
+      if (slot == null ||
+          !owner.player.isAutomaticMusicHandoffTo(end) ||
+          owner.player.musicTransitionModeTo(slot.entry) !=
+              SongTransitionMode.crossfade ||
           owner.player.playbackInterrupted) {
         stop();
       }
@@ -207,9 +219,11 @@ class _SongTransitionPlayback {
       return;
     }
     if (decoder == null ||
+        owner._silenceSkippingOrUpdating ||
         !owner._sourceAdmitted ||
         !owner._ownsParentPlayback ||
         owner._loadingGeneration != null ||
+        owner._abRepeat.isActive ||
         !owner._wantsToPlay ||
         _ducked ||
         owner._focusInterrupted ||
@@ -244,7 +258,9 @@ class _SongTransitionPlayback {
       return;
     }
     final target = owner.player.automaticMusicSuccessor;
-    if (target == null) {
+    if (target == null ||
+        owner.player.musicTransitionModeTo(target) ==
+            SongTransitionMode.seamless) {
       suspend();
       return;
     }
@@ -292,20 +308,26 @@ class _SongTransitionPlayback {
     final outgoing = owner.audioPlayer!;
     // Queue planning and actual audible playback are separate admission points.
     // Recheck the account, download proof and selected URI before starting.
-    bool current() =>
-        identical(_request, token) &&
-        identical(incoming, slot) &&
-        !owner.isClosed &&
-        owner._ownsParentPlayback &&
-        owner._sourceAdmitted &&
-        owner._wantsToPlay &&
-        !owner._focusInterrupted &&
-        !_ducked &&
-        !owner.player.playbackInterrupted &&
-        outgoing.playing &&
-        outgoing.processingState == ProcessingState.ready &&
-        _mode == SongTransitionMode.crossfade &&
-        playbackQueueId(entry) == _successorId;
+    bool current() {
+      final successor = owner.player.automaticMusicSuccessor;
+      return identical(_request, token) &&
+          identical(incoming, slot) &&
+          !owner.isClosed &&
+          owner._ownsParentPlayback &&
+          owner._sourceAdmitted &&
+          owner._wantsToPlay &&
+          !owner._focusInterrupted &&
+          !_ducked &&
+          !owner.player.playbackInterrupted &&
+          !owner._silenceSkippingOrUpdating &&
+          outgoing.playing &&
+          outgoing.processingState == ProcessingState.ready &&
+          successor != null &&
+          playbackQueueId(entry) == playbackQueueId(successor) &&
+          owner.player.musicTransitionModeTo(successor) ==
+              SongTransitionMode.crossfade;
+    }
+
     try {
       // A manual reservation or an earlier audible overlap may have owned
       // this decoder while the user changed the streaming default.
@@ -318,6 +340,7 @@ class _SongTransitionPlayback {
       final active = await resolveAudioPlaybackSources(
         video: entry is Video ? entry : null,
         offlineVideo: entry is DownloadedVideo ? entry : null,
+        openedAudioTrack: owner.player.openedAudioTrack,
         sessionId: 'crossfade:${identityHashCode(slot)}',
         isCurrent: current,
       );
@@ -363,10 +386,5 @@ class _SongTransitionPlayback {
     } catch (_) {
       // The ordinary foreground selection owns retry and error reporting.
     }
-  }
-
-  String? get _successorId {
-    final entry = owner.player.automaticMusicSuccessor;
-    return entry == null ? null : playbackQueueId(entry);
   }
 }

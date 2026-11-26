@@ -17,6 +17,8 @@ import '../../../videos/models/music_metadata.dart';
 import '../../../videos/models/video.dart';
 import '../../models/music_cover_corners.dart';
 import '../../models/music_lyrics.dart';
+import '../../services/local_music_library.dart';
+import '../../services/local_music_video_pairings.dart';
 import '../../services/music_catalog_service.dart';
 import '../../services/music_video_match.dart';
 import 'music_lyrics_button.dart';
@@ -27,16 +29,24 @@ import 'music_video_surface.dart';
 typedef MusicVideoSurfaceBuilder = Widget Function(
     Video video, VoidCallback onUnavailable);
 
+typedef _LocalVideoSource = ({
+  LocalMusicVideoOwner owner,
+  Object database,
+  int sessionRevision,
+  int occurrenceRevision,
+});
+
 class MusicPlayerArtwork extends StatefulWidget {
   final MusicMetadata music;
   final Video? video;
   final DownloadedVideo? offline;
   final double size;
   final bool active;
+  final bool localVideoActive;
   final bool interactive;
   final bool scaleWithPlayback;
   final ValueChanged<bool>? onSeekStep;
-  final MusicLyricsLoader lyricsLoader;
+  final MusicLyricsLoader? lyricsLoader;
   final MusicVideoSurfaceBuilder? videoSurfaceBuilder;
 
   const MusicPlayerArtwork({
@@ -46,6 +56,7 @@ class MusicPlayerArtwork extends StatefulWidget {
     required this.offline,
     required this.size,
     required this.active,
+    this.localVideoActive = false,
     this.interactive = true,
     this.scaleWithPlayback = true,
     this.onSeekStep,
@@ -75,6 +86,11 @@ class _MusicPlayerArtworkState extends State<MusicPlayerArtwork>
   final _filterChanges = communityFilters.changes;
   bool _needsFilterCheck = true;
   bool _songAllowed = true;
+  _LocalVideoSource? _localSource;
+  LocalMusicVideoPairing? _localPairing;
+  Object? _localLookup;
+  Object? _localOpen;
+  bool _localChecked = false;
 
   @override
   void initState() {
@@ -83,6 +99,8 @@ class _MusicPlayerArtworkState extends State<MusicPlayerArtwork>
     _foreground = lifecycle == null || lifecycle == AppLifecycleState.resumed;
     WidgetsBinding.instance.addObserver(this);
     _filterChanges.addListener(_filtersChanged);
+    LocalMusicLibrary.instance.addListener(_deviceLibraryChanged);
+    LocalMusicVideoPairings.changes.addListener(_localPairingChanged);
     MusicCoverCorners.revision.addListener(_coverCornersChanged);
     NetworkProxy.instance.addBeforeApply(_proxyChanging);
   }
@@ -98,6 +116,7 @@ class _MusicPlayerArtworkState extends State<MusicPlayerArtwork>
         _request = null;
         _display = null;
         _needsFilterCheck = true;
+        _localOpen = null;
       }
     });
   }
@@ -134,6 +153,8 @@ class _MusicPlayerArtworkState extends State<MusicPlayerArtwork>
   void dispose() {
     _feedbackTimer?.cancel();
     _filterChanges.removeListener(_filtersChanged);
+    LocalMusicLibrary.instance.removeListener(_deviceLibraryChanged);
+    LocalMusicVideoPairings.changes.removeListener(_localPairingChanged);
     MusicCoverCorners.revision.removeListener(_coverCornersChanged);
     NetworkProxy.instance.removeBeforeApply(_proxyChanging);
     WidgetsBinding.instance.removeObserver(this);
@@ -190,15 +211,112 @@ class _MusicPlayerArtworkState extends State<MusicPlayerArtwork>
     );
   }
 
-  bool get _visible {
+  bool get _visible => widget.active && _artworkVisible;
+
+  bool get _artworkVisible {
     if (!_foreground ||
-        !widget.active ||
         !TickerMode.of(context) ||
         ModalRoute.isCurrentOf(context) == false) {
       return false;
     }
     final state = context.read<PlayerCubit>().state;
     return !state.isHidden && !state.isMini && !state.isClosing;
+  }
+
+  _LocalVideoSource? _currentLocalSource() {
+    if (!widget.localVideoActive || !LocalMusicVideoPairings.supported) {
+      return null;
+    }
+    final entry = widget.offline;
+    final session = context.read<AppCubit>().state;
+    final player = context.read<PlayerCubit>();
+    if (entry == null ||
+        !player.state.isAudio ||
+        player.openingMusicEntry != null ||
+        player.state.offlineCurrentlyPlaying?.videoId != entry.videoId ||
+        entry.profileId != session.profileId ||
+        db.profileId != session.profileId ||
+        session.globalLoading ||
+        session.sessionRecoveryRequired) {
+      return null;
+    }
+    final track = localMusicTrackForPlayback(entry.videoId);
+    if (track == null) return null;
+    return (
+      owner: (profileId: session.profileId, recordingId: track.playbackId),
+      database: db,
+      sessionRevision: session.sessionRevision,
+      occurrenceRevision: player.playbackOccurrenceRevision,
+    );
+  }
+
+  void _resetLocalPairing() {
+    _localLookup = null;
+    _localOpen = null;
+    _localPairing = null;
+    _localChecked = false;
+    _showVideo = false;
+    _display = null;
+  }
+
+  void _deviceLibraryChanged() {
+    if (widget.localVideoActive) setState(() {});
+  }
+
+  void _localPairingChanged() {
+    if (_localSource?.owner == LocalMusicVideoPairings.changes.value?.$1) {
+      setState(_resetLocalPairing);
+    }
+  }
+
+  void _loadLocalPairing(_LocalVideoSource source) {
+    final request = _localLookup = Object();
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      LocalMusicVideoPairing? pairing;
+      try {
+        if (!mounted || _localLookup != request) return;
+        pairing = await LocalMusicVideoPairings.get(source.owner);
+      } catch (_) {
+        // Artwork remains available if the optional pairing store cannot load.
+      }
+      if (!mounted ||
+          _localLookup != request ||
+          _currentLocalSource() != source) {
+        return;
+      }
+      setState(() {
+        _localLookup = null;
+        _localChecked = true;
+        _localPairing = pairing;
+      });
+    });
+  }
+
+  Future<void> _openLocalPairing(
+      _LocalVideoSource source, LocalMusicVideoPairing pairing) async {
+    final request = Object();
+    setState(() => _localOpen = request);
+    var readable = false;
+    try {
+      readable = await LocalMusicVideoPairings.open(source.owner, pairing);
+    } catch (_) {
+      // A missing file or revoked grant leaves song playback in place.
+    }
+    if (!mounted || _localOpen != request) return;
+    final current = _artworkVisible && _currentLocalSource() == source;
+    setState(() {
+      _localOpen = null;
+      if (current && readable) _showVideo = true;
+    });
+    if (current && !readable) _showVideoUnavailable(local: true);
+  }
+
+  void _showVideoUnavailable({required bool local}) {
+    final locals = AppLocalizations.of(context)!;
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(SnackBar(
+        content: Text(local
+            ? locals.localMusicVideoUnavailable
+            : locals.musicVideoUnavailable)));
   }
 
   void _prepare(Object source, Video song) {
@@ -240,10 +358,19 @@ class _MusicPlayerArtworkState extends State<MusicPlayerArtwork>
     final queueId = player.state.currentQueueId;
     final source = _currentSource();
     if (source != _source) _reset(source);
+    final localSource = _currentLocalSource();
+    if (localSource != _localSource) {
+      _localSource = localSource;
+      _resetLocalPairing();
+    }
     final active = _visible && source != null;
+    final localActive = _artworkVisible && localSource != null;
+    if (localActive && !_localChecked && _localLookup == null) {
+      _loadLocalPairing(localSource);
+    }
     if (!active) {
       _request = null;
-      _display = null;
+      if (!localActive) _display = null;
       _needsFilterCheck = true;
     } else {
       if (_needsFilterCheck) _recheckFilters();
@@ -252,7 +379,8 @@ class _MusicPlayerArtworkState extends State<MusicPlayerArtwork>
       }
     }
     final match = active ? _match : null;
-    final showing = match != null && _showVideo;
+    final localPairing = localActive ? _localPairing : null;
+    final showing = (match != null || localPairing != null) && _showVideo;
     final display = showing ? (_display ??= Object()) : null;
     final locals = AppLocalizations.of(context)!;
     final coverCorners = MusicCoverCorners.forDatabase(db);
@@ -267,19 +395,31 @@ class _MusicPlayerArtworkState extends State<MusicPlayerArtwork>
       if (!mounted ||
           display == null ||
           !identical(_display, display) ||
-          !_visible ||
-          _currentSource() != source) {
+          !(localPairing != null ? _artworkVisible : _visible) ||
+          _currentSource() != source ||
+          _currentLocalSource() != localSource) {
         return;
       }
       setState(() {
         _showVideo = false;
         _display = null;
       });
-      ScaffoldMessenger.maybeOf(context)
-          ?.showSnackBar(SnackBar(content: Text(locals.musicVideoUnavailable)));
+      _showVideoUnavailable(local: localPairing != null);
     }
 
     void toggle() {
+      if (localPairing != null && localSource != null) {
+        if (!_artworkVisible || _currentLocalSource() != localSource) return;
+        if (_showVideo) {
+          setState(() {
+            _showVideo = false;
+            _display = null;
+          });
+        } else if (_localOpen == null) {
+          unawaited(_openLocalPairing(localSource, localPairing));
+        }
+        return;
+      }
       if (!_visible ||
           _currentSource() != source ||
           !identical(_match, match)) {
@@ -438,11 +578,16 @@ class _MusicPlayerArtworkState extends State<MusicPlayerArtwork>
                           child: ColoredBox(
                               key: const ValueKey('music-player-video'),
                               color: Colors.black,
-                              child: widget.videoSurfaceBuilder
-                                      ?.call(match, unavailable) ??
-                                  MusicVideoSurface(
-                                      video: match,
-                                      onUnavailable: unavailable)))
+                              child: localPairing != null
+                                  ? MusicVideoSurface.local(
+                                      uri: localPairing.uri,
+                                      offset: localPairing.offset,
+                                      onUnavailable: unavailable)
+                                  : widget.videoSurfaceBuilder
+                                          ?.call(match!, unavailable) ??
+                                      MusicVideoSurface(
+                                          video: match!,
+                                          onUnavailable: unavailable)))
                       : Semantics(
                           image: true,
                           button: canTapCover,
@@ -502,7 +647,7 @@ class _MusicPlayerArtworkState extends State<MusicPlayerArtwork>
             spacing: 4,
             runSpacing: 2,
             children: [
-              if (match != null)
+              if (match != null || localPairing != null)
                 if (widget.size >= MediaQuery.textScalerOf(context).scale(218))
                   Tooltip(
                       message: showing
@@ -510,7 +655,7 @@ class _MusicPlayerArtworkState extends State<MusicPlayerArtwork>
                           : locals.musicShowVideo,
                       child: FilledButton.tonalIcon(
                           key: const ValueKey('music-player-video-toggle'),
-                          onPressed: toggle,
+                          onPressed: _localOpen == null ? toggle : null,
                           icon: Icon(
                               showing
                                   ? Icons.album_outlined
@@ -525,7 +670,7 @@ class _MusicPlayerArtworkState extends State<MusicPlayerArtwork>
                       tooltip: showing
                           ? locals.musicShowCover
                           : locals.musicShowVideo,
-                      onPressed: toggle,
+                      onPressed: _localOpen == null ? toggle : null,
                       icon: Icon(showing
                           ? Icons.album_outlined
                           : Icons.music_video_outlined)),

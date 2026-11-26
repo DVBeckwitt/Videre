@@ -13,6 +13,7 @@ import 'package:clipious/network/nerdvpn_origin.dart';
 import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/player/models/media_event.dart';
 import 'package:clipious/player/models/video_quality.dart';
+import 'package:clipious/player/services/watch_local_subtitles.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/player/states/tv_player_settings.dart';
 import 'package:clipious/player/states/video_player.dart';
@@ -603,6 +604,131 @@ void main() {
       messenger.setMockMethodCallHandler(pathProvider, null);
       await directory.delete(recursive: true);
     }
+  });
+
+  test('offline Watch attaches, reopens, relinks and removes a local track',
+      () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    final directory =
+        await Directory.systemTemp.createTemp('videre-watch-subtitles-');
+    addTearDown(() => directory.delete(recursive: true));
+    const pathProvider = MethodChannel('plugins.flutter.io/path_provider');
+    const documents = MethodChannel('videre/watch_local_subtitles');
+    addTearDown(() => messenger.setMockMethodCallHandler(pathProvider, null));
+    addTearDown(() => messenger.setMockMethodCallHandler(documents, null));
+    messenger.setMockMethodCallHandler(
+        pathProvider, (_) async => directory.path);
+    const download = DownloadedVideo(
+      videoId: 'watch-local-subtitles',
+      title: 'Offline Watch',
+      lengthSeconds: 60,
+      quality: '480p',
+      downloadComplete: true,
+      captionLabel: 'French',
+      storageUri: 'content://documents/video.mp4',
+    );
+    final path = await download.subtitlePath;
+    await File(path)
+        .writeAsString('WEBVTT\n\n00:00:00.000 --> 00:00:05.000\nBonjour');
+    final owner = {'profileId': db.profileId, 'videoId': download.videoId};
+    String? attachedName;
+    Uint8List? attachedBytes;
+    var name = 'offline.SRT';
+    var bytes = Uint8List.fromList(utf8
+        .encode('\uFEFF1\r\n00:00:00,000 --> 00:00:05,000\r\nLocal caption'));
+    var readable = true;
+    var saves = 0;
+    messenger.setMockMethodCallHandler(documents, (call) async {
+      if (['attachment', 'pick', 'read', 'remove'].contains(call.method)) {
+        expect(call.arguments, owner);
+      } else {
+        expect(call.arguments, {'token': 'picked'});
+      }
+      switch (call.method) {
+        case 'attachment':
+          return attachedName;
+        case 'pick':
+          return {'token': 'picked', 'name': name, 'bytes': bytes};
+        case 'save':
+          saves++;
+          attachedName = name;
+          attachedBytes = bytes;
+          readable = true;
+          return null;
+        case 'discardPick':
+          return null;
+        case 'read':
+          if (readable) return attachedBytes;
+          throw PlatformException(code: 'SUBTITLE_ACCESS');
+        case 'remove':
+          attachedName = null;
+          attachedBytes = null;
+          return null;
+      }
+      fail('Unexpected subtitle call: ${call.method}');
+    });
+
+    Future<_VideoPlayer> open() async {
+      final video = _VideoPlayer(
+          VideoPlayerState(
+              offlineVideo: download,
+              colors: const ColorScheme.dark(),
+              overFlowTextColor: Colors.white,
+              key: GlobalKey()),
+          player,
+          settings);
+      addTearDown(() async {
+        if (!video.isClosed) await video.close();
+      });
+      await video.playVideo(true);
+      return video;
+    }
+
+    final opened = await open();
+    expect(opened.canManageLocalSubtitles, isTrue);
+    expect(opened.localSubtitleName, isNull);
+    expect(await opened.pickLocalSubtitle(), WatchLocalSubtitleResult.done);
+    expect(opened.localSubtitleName, 'offline.SRT');
+    expect(
+        opened.videoController!.subtitlesLines.single.texts, ['Local caption']);
+    expect(opened.getSubtitles(), contains('French'));
+    expect(sources, [download.storageUri]);
+    await opened.close();
+
+    final reopened = await open();
+    final controller = reopened.videoController!;
+    expect(reopened.localSubtitleName, 'offline.SRT');
+    final tracks = controller.betterPlayerSubtitlesSourceList;
+    await controller.setupSubtitleSource(tracks.first);
+    expect(controller.subtitlesLines.single.texts, ['Local caption']);
+    final french = tracks.firstWhere((track) => track.name == 'French');
+    await controller.setupSubtitleSource(french);
+    readable = false;
+    await controller.setupSubtitleSource(tracks.first);
+    expect(reopened.state.subtitleFailed, isTrue);
+    expect(controller.subtitlesLines.single.texts, ['Bonjour']);
+
+    name = 'invalid.srt';
+    bytes = Uint8List.fromList(utf8.encode('no captions'));
+    expect(await reopened.pickLocalSubtitle(),
+        WatchLocalSubtitleResult.invalidFile);
+    expect(reopened.localSubtitleName, 'offline.SRT');
+    expect(saves, 1);
+
+    name = 'replacement.vtt';
+    bytes = Uint8List.fromList(
+        utf8.encode('WEBVTT\n\n00:00:00.000 --> 00:00:05.000\nReplacement'));
+    expect(await reopened.pickLocalSubtitle(), WatchLocalSubtitleResult.done);
+    expect(reopened.state.subtitleFailed, isFalse);
+    expect(controller.subtitlesLines.single.texts, ['Replacement']);
+    expect(await reopened.removeLocalSubtitle(), WatchLocalSubtitleResult.done);
+    expect(reopened.localSubtitleName, isNull);
+    expect(controller.subtitlesLines, isEmpty);
+    expect(tracks, contains(french));
+    await controller.setupSubtitleSource(french);
+    expect(controller.subtitlesLines.single.texts, ['Bonjour']);
+    expect(sources, [download.storageUri, download.storageUri]);
   });
 
   for (final preference in [null, 0, 144, 480, 720, 1080, 2160]) {

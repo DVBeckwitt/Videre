@@ -146,12 +146,34 @@ void main() {
       {'limit': 1.5},
       {'minimumDurationSeconds': -1},
       {'maximumDurationSeconds': '10'},
+      {'minimumRating': 0},
+      {'minimumRating': 6},
+      {'minimumRating': '1'},
       {'maximumDurationSeconds': musicRulePlaylistMaximumDuration + 1},
       {'minimumDurationSeconds': 20, 'maximumDurationSeconds': 19},
     ]) {
       expect(MusicRulePlaylist.tryParse({...input, ...invalid}), isNull,
           reason: 'Accepted $invalid');
     }
+  });
+
+  test('a minimum rating includes its boundary and excludes unrated songs', () {
+    final rule = MusicRulePlaylist.tryParse({
+      ..._rule.toJson(),
+      'minimumRating': 1,
+      'limit': 3,
+    })!;
+    final songs = [_short, _long];
+    final ratings = {_long.id: 1, 'unsaved0001': 5};
+    expect(rule.toJson()['minimumRating'], 1);
+    expect(rule.resolve(songs, ratings: ratings), [_long]);
+    expect(rule.resolve(songs), isEmpty);
+    final anyRating = MusicRulePlaylist.tryParse({
+      ...rule.toJson(),
+      'minimumRating': null,
+    })!;
+    expect(anyRating.toJson(), isNot(contains('minimumRating')));
+    expect(anyRating.resolve(songs, ratings: ratings), songs);
   });
 
   test('persists a rule and resolves changing membership after reopening',

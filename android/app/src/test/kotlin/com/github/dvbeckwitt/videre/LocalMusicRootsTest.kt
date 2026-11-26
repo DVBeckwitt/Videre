@@ -22,7 +22,24 @@ class LocalMusicRootsTest {
         assertNull(configuration.selectionId)
         assertTrue(root.ownsRead)
         assertTrue(root.needsReapproval)
+        assertFalse(root.isDocumentProvider)
         assertFalse(root.channelValue().containsKey("ownsRead"))
+    }
+
+    @Test
+    fun `reselecting a provider URI keeps its picker kind`() {
+        val local = LocalMusicRoot("content://provider/tree/music", "Music", "initial")
+        val provider = local.copy(isDocumentProvider = true)
+        val reconnected = local.copy(selectionId = "reconnected")
+        val configuration = LocalMusicRoots.read(emptyMap<String, Any>())
+            .withRoot(local)
+            .withRoot(provider)
+            .withRoot(reconnected)
+
+        val root = configuration.entries.single()
+        assertEquals("reconnected", root.selectionId)
+        assertTrue(root.isDocumentProvider)
+        assertEquals(true, root.channelValue()["isDocumentProvider"])
     }
 
     @Test

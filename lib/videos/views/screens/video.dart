@@ -28,6 +28,7 @@ import '../components/add_to_queue_button.dart';
 import '../components/flow_watch_body.dart';
 import '../components/play_button.dart';
 import '../components/video_thumbnail.dart';
+import '../components/watch_notes_button.dart';
 
 @RoutePage()
 class VideoScreen extends StatelessWidget {
@@ -99,12 +100,19 @@ class VideoScreen extends StatelessWidget {
         builder: (context, videoState) {
           return OrientationBuilder(builder: (context, orientation) {
             final video = videoState.video;
+            final cubit = context.read<VideoCubit>();
+            final onStartAt = video == null ||
+                    video.liveNow == true ||
+                    videoState.loadingVideo ||
+                    videoState.error.isNotEmpty
+                ? null
+                : (Duration position) =>
+                    cubit.playVideo(false, startAt: position);
             if (deviceType == DeviceType.phone &&
                 orientation == Orientation.portrait &&
                 video != null &&
                 !videoState.loadingVideo &&
                 videoState.error.isEmpty) {
-              final cubit = context.read<VideoCubit>();
               final restart = context.select((PlayerCubit p) =>
                   p.state.currentlyPlaying?.videoId == video.videoId);
               final downloadInLibrary = videoState.isDownloaded ||
@@ -170,6 +178,7 @@ class VideoScreen extends StatelessWidget {
                           key: ValueKey(video.videoId),
                           video: video,
                           dislikes: videoState.dislikes,
+                          onStartAt: onStartAt,
                           onDownload: downloadInLibrary
                               ? () => openDownloadManager(context)
                               : () => downloadVideo(context, videoState),
@@ -248,8 +257,10 @@ class VideoScreen extends StatelessWidget {
                       appBar: AppBar(
                         actions: videoState.loadingVideo ||
                                 videoState.video == null
-                            ? []
+                            ? [WatchNotesButton(videoId: videoId)]
                             : [
+                                WatchNotesButton(
+                                    videoId: videoId, onStartAt: onStartAt),
                                 AnimatedSwitcher(
                                     duration: AppMotion.duration(context),
                                     child: videoState.downloading

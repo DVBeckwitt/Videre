@@ -7,6 +7,7 @@ import 'package:clipious/utils/models/paginated_list.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:clipious/videos/models/user_feed.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/models/db/server.dart';
@@ -179,6 +180,23 @@ void main() {
     await list.getItems();
 
     expect(fakeService.continuations, [null, 'next-page']);
+  });
+
+  test('group filters can use the requested on-device subscription channel',
+      () async {
+    final filter = ValueNotifier<SubscriptionChannelFilter?>(
+        (channelIds: {'UC123'}, exclude: false));
+    addTearDown(filter.dispose);
+    final list = SubscriptionVideoList(channelFilter: filter);
+    final firstPage = await list.getItems();
+    expect(list.visibleItems(firstPage).map((video) => video.videoId),
+        ['video-1']);
+    expect(list.getHasMore(), isTrue);
+
+    filter.value = (channelIds: {'UC123'}, exclude: true);
+    expect(list.visibleItems(firstPage), isEmpty);
+    expect(list.visibleItems(await list.getMoreItems()), isEmpty);
+    expect(list.getHasMore(), isFalse);
   });
 
   test('overlapping progress writes leave visibility at the saved progress',

@@ -38,8 +38,9 @@ class OnDeviceMusicDownloads extends ChangeNotifier {
     final indexed = currentAliases.values.toSet();
     // Until the first scan and alias check finish, app-owned downloads may
     // already be readable. Private files cannot alias the device catalog.
-    final showShared = !library.enabled ||
-        library.unavailable ||
+    final hasLocalAliasSources = library.roots.any(
+        (root) => !root.isDocumentProvider && !library.isRootUnavailable(root));
+    final showShared = !hasLocalAliasSources ||
         library.error != null ||
         identical(_checkedTracks, library.tracks);
     final listed = <String>{};

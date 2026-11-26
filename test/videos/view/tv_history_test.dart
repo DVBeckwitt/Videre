@@ -138,7 +138,8 @@ class _Player extends Cubit<PlayerState> implements PlayerCubit {
       String? queueTitle,
       PlaylistReference? recommendationSource,
       bool fromMusic = false,
-      bool songTap = false}) async {
+      bool songTap = false,
+      bool collectionDetail = false}) async {
     if (failPlayback) throw StateError('Playback unavailable');
     calls.add((videos: videos, audio: audio, startAt: startAt));
   }

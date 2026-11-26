@@ -18,8 +18,11 @@ import 'recommendation_snapshot.dart';
 
 export 'recommendation_models.dart';
 
+part 'music_dismissal.dart';
+
 typedef RecommendationBridge = Future<Map<String, dynamic>> Function(
     Map<String, Object?> request);
+typedef UndoMusicDismissal = Future<bool> Function();
 
 /// Dart owns durable state and every network operation. The native Flow cores
 /// receive bounded metadata batches and return a new, network-free snapshot.
@@ -82,8 +85,13 @@ class RecommendationService extends ChangeNotifier {
   bool _restoring = false;
   int? _recoveredSession;
   int _feedbackSequence = 0;
+  Object? _latestMusicDismissal;
+  int _musicDismissalRevision = 0;
 
   Listenable get changes => this;
+
+  /// Lets a rendered shelf update eligibility without replacing its order.
+  int get musicDismissalRevision => _musicDismissalRevision;
 
   /// Call after finalizing the outgoing playback session. Already-running
   /// native calls may finish, but their old result can no longer be committed.
@@ -735,9 +743,49 @@ class RecommendationService extends ChangeNotifier {
         expectedGeneration: expectedGeneration);
   }
 
-  Future<void> feedback(
+  Future<void> feedback(Video video, RecommendationDomain domain,
+          RecommendationFeedback feedback, {int? expectedGeneration}) =>
+      _recordFeedback(video, domain, feedback,
+          expectedGeneration: expectedGeneration);
+
+  /// Records a dismissal and returns an action for the latest dismissal in
+  /// the current profile session. A stale or already excluded item has no undo.
+  Future<UndoMusicDismissal?> dismissMusicRecommendation(
+      MusicTrack track, RecommendationFeedback feedback) async {
+    if (feedback != RecommendationFeedback.notInterested &&
+        feedback != RecommendationFeedback.block) {
+      throw ArgumentError.value(feedback, 'feedback');
+    }
+    const domain = RecommendationDomain.music;
+    final token = generation(domain);
+    final identity = Object();
+    UndoMusicDismissal? undo;
+    await _recordFeedback(track.toVideo(), domain, feedback,
+        expectedGeneration: token, onDismissed: (dismissal) {
+      _latestMusicDismissal = identity;
+      _musicDismissalRevision++;
+      undo = () => _serialized(() async {
+            if (!_valid(domain, token) ||
+                !identical(_latestMusicDismissal, identity)) {
+              return false;
+            }
+            final snapshot = _read(domain);
+            final restored = dismissal.restore(snapshot);
+            if (restored == null) return false;
+            await _write(domain, restored, token);
+            if (!_valid(domain, token)) return false;
+            _latestMusicDismissal = null;
+            _musicDismissalRevision++;
+            notifyListeners();
+            return true;
+          });
+    });
+    return undo;
+  }
+
+  Future<void> _recordFeedback(
       Video video, RecommendationDomain domain, RecommendationFeedback feedback,
-      {int? expectedGeneration}) {
+      {int? expectedGeneration, ValueChanged<_MusicDismissal>? onDismissed}) {
     final candidate = domain == RecommendationDomain.music
         ? RecommendationCandidate.fromMusicVideo(video)
         : RecommendationCandidate.video(video);
@@ -758,7 +806,8 @@ class RecommendationService extends ChangeNotifier {
                     feedback == RecommendationFeedback.save)
             ? video.recommendedVideos
             : const [],
-        expectedGeneration: expectedGeneration);
+        expectedGeneration: expectedGeneration,
+        onDismissed: onDismissed);
   }
 
   Future<void> _learn(RecommendationDomain domain, Map<String, Object?> event,
@@ -769,7 +818,8 @@ class RecommendationService extends ChangeNotifier {
       Video? passiveVideo,
       Video? playbackVideo,
       PlaybackCheckpoint? recovery,
-      List<Video> relatedVideos = const []}) {
+      List<Video> relatedVideos = const [],
+      ValueChanged<_MusicDismissal>? onDismissed}) {
     final token = expectedGeneration ?? generation(domain);
     bool searchAllowed() =>
         event['type'] != 'search' ||
@@ -777,6 +827,14 @@ class RecommendationService extends ChangeNotifier {
     return _serialized(() async {
       if (!_valid(domain, token) || !searchAllowed()) return;
       var snapshot = _read(domain);
+      if (onDismissed != null &&
+          (!candidate!.valid ||
+              snapshot.blockedIds.contains(candidate.id) ||
+              snapshot.blockedCreators.contains(candidate.creatorKey) ||
+              _nativeCreatorBlocks(domain, snapshot)
+                  .contains(candidate.creatorKey))) {
+        return;
+      }
       if (!explicit && !snapshot.enabled) return;
       if (passiveVideo != null &&
           !_admittedPlayback(domain, snapshot, passiveVideo, event)) {
@@ -859,6 +917,11 @@ class RecommendationService extends ChangeNotifier {
             for (final entry in creatorLabels.entries)
               if (boundedCreators.contains(entry.key)) entry.key: entry.value,
           });
+      if (onDismissed != null &&
+          !next.blockedIds.contains(candidate!.id) &&
+          !next.blockedCreators.contains(candidate.creatorKey)) {
+        throw const FormatException('Recommendation exclusions are full');
+      }
       Map<String, dynamic>? nextSession;
       try {
         final result = await _evaluateLearning(domain, snapshot, [
@@ -908,6 +971,9 @@ class RecommendationService extends ChangeNotifier {
       await _write(domain, next, token);
       if (_valid(domain, token)) {
         if (nextSession != null) _sessionContexts[domain] = nextSession;
+        if (onDismissed != null) {
+          onDismissed(_MusicDismissal(candidate!, eventId, snapshot, next));
+        }
         notifyListeners();
       }
     });

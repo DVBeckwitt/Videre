@@ -53,6 +53,7 @@ class _BetterPlayerSubtitlesDrawerState
     widget.betterPlayerController.addEventsListener(_onPlayerEvent);
     widget.betterPlayerController.subtitleFontSize
         .addListener(_onFontSizeChanged);
+    widget.betterPlayerController.subtitleOffset.addListener(_updateState);
 
     _updateTextStyles();
     super.initState();
@@ -88,11 +89,14 @@ class _BetterPlayerSubtitlesDrawerState
       oldWidget.betterPlayerController.removeEventsListener(_onPlayerEvent);
       oldWidget.betterPlayerController.subtitleFontSize
           .removeListener(_onFontSizeChanged);
+      oldWidget.betterPlayerController.subtitleOffset
+          .removeListener(_updateState);
       widget.betterPlayerController.videoPlayerController
           ?.addListener(_updateState);
       widget.betterPlayerController.addEventsListener(_onPlayerEvent);
       widget.betterPlayerController.subtitleFontSize
           .addListener(_onFontSizeChanged);
+      widget.betterPlayerController.subtitleOffset.addListener(_updateState);
     }
     if (oldWidget.betterPlayerController != widget.betterPlayerController ||
         oldWidget.betterPlayerSubtitlesConfiguration !=
@@ -108,6 +112,7 @@ class _BetterPlayerSubtitlesDrawerState
     widget.betterPlayerController.removeEventsListener(_onPlayerEvent);
     widget.betterPlayerController.subtitleFontSize
         .removeListener(_onFontSizeChanged);
+    widget.betterPlayerController.subtitleOffset.removeListener(_updateState);
     _visibilityStreamSubscription.cancel();
     super.dispose();
   }
@@ -157,7 +162,8 @@ class _BetterPlayerSubtitlesDrawerState
       return null;
     }
 
-    final Duration position = value.position;
+    final Duration position =
+        value.position - widget.betterPlayerController.subtitleOffset.value;
     for (final BetterPlayerSubtitle subtitle
         in widget.betterPlayerController.subtitlesLines) {
       // Cue intervals exclude their end, so adjacent transcript lines switch

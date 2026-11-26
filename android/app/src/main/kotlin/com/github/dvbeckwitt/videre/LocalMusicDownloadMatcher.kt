@@ -45,7 +45,7 @@ internal data class LocalMusicDownloadCandidate(
     }
 }
 
-/** Compares completed downloads only with the approved catalog's current rows. */
+/** Compares opened files only with the approved catalog's current rows. */
 internal class LocalMusicDownloadMatcher(
     private val context: Context,
     private val source: Uri,
@@ -54,10 +54,11 @@ internal class LocalMusicDownloadMatcher(
 ) {
     private val system = source.toString() == LocalMusicCatalog.SYSTEM_URI
     private val byUri = tracks.keys
-    private val bySize = tracks.values.groupBy { it.sizeBytes }
-    private val byDocument = if (system) emptyMap() else tracks.keys
-        .mapNotNull { raw -> documentKey(Uri.parse(raw))?.let { it to raw } }
-        .groupBy({ it.first }, { it.second })
+    private val bySize by lazy { tracks.values.groupBy { it.sizeBytes } }
+    private val byDocument by lazy {
+        tracks.keys.mapNotNull { raw -> documentKey(Uri.parse(raw))?.let { it to raw } }
+            .groupBy({ it.first }, { it.second })
+    }
     private val measured = mutableMapOf<String, LocalStorageFileIdentity?>()
     private var remainingFallback = 64
 
@@ -93,6 +94,27 @@ internal class LocalMusicDownloadMatcher(
         return matches.toList()
     }
 
+    // The caller already opened the incoming URI with its explicit grant.
+    fun matchOpenedAudio(uri: Uri): String? {
+        val raw = uri.toString()
+        if (raw in byUri) return raw
+        val candidate = (if (system) {
+            providerAliases(uri).singleOrNull()
+        } else {
+            val document = providerDocument(uri)?.let(::documentKey) ?: return null
+            if (document.first != source.authority) return null
+            DocumentsContract.buildDocumentUriUsingTree(source, document.second).toString()
+        })?.takeIf { it in byUri } ?: return null
+        if (!system && uri.authority == source.authority) {
+            // The same DocumentsProvider identifies both locations by its durable document ID.
+            return candidate.takeIf {
+                optional { context.contentResolver.openAssetFileDescriptor(Uri.parse(it), "r")?.use { true } } == true
+            }
+        }
+        val verified = optional { DownloadDocumentIntegrity.probeIndexedDocument(context, uri, signal) } ?: return null
+        return candidate.takeIf { measure(it) == verified }
+    }
+
     private fun providerAliases(uri: Uri): List<String> {
         if (system) {
             val media = if (uri.authority == MediaStore.AUTHORITY) uri
@@ -101,11 +123,13 @@ internal class LocalMusicDownloadMatcher(
             val canonical = media?.let(::canonicalMediaItem)
             return listOfNotNull(canonical)
         }
-        val document = if (uri.authority != MediaStore.AUTHORITY) uri
-            else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
-                optional { MediaStore.getDocumentUri(context, uri) } else null
-        return document?.let(::documentKey)?.let { byDocument[it] }.orEmpty()
+        return providerDocument(uri)?.let(::documentKey)?.let { byDocument[it] }.orEmpty()
     }
+
+    private fun providerDocument(uri: Uri): Uri? =
+        if (uri.authority != MediaStore.AUTHORITY) uri
+        else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+            optional { MediaStore.getDocumentUri(context, uri) } else null
 
     private fun canonicalMediaItem(uri: Uri): String? {
         val parts = uri.pathSegments

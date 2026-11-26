@@ -2,7 +2,10 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:clipious/music/models/device_playlist_track.dart';
+import 'package:clipious/music/models/device_music_artwork_preferences.dart';
+import 'package:clipious/music/models/local_music_scan_report.dart';
 import 'package:clipious/music/models/local_music_track.dart';
+import 'package:clipious/music/models/music_content_advisory.dart';
 import 'package:clipious/music/services/local_music_library.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:crypto/crypto.dart';
@@ -34,6 +37,17 @@ void main() {
     'artPath': '/data/cache/art.jpg',
     'adjacentArtPath': '/data/cache/adjacent.jpg',
   };
+  Map<String, Object> scanned(
+    List<Map<String, Object?>> skipped, {
+    int? count,
+    bool partial = false,
+  }) =>
+      {
+        'tracks': [doc],
+        'skippedFiles': skipped,
+        'skippedCount': count ?? skipped.length,
+        'partial': partial,
+      };
   Map<String, Object> selection(List<Map<String, String>> roots) => {
         'roots': roots,
         'selectionId': 'library-session',
@@ -42,9 +56,12 @@ void main() {
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
   late LocalMusicLibrary library;
   late List<String> calls;
-  Map<String, String>? saved;
-  Map<String, String>? choice;
+  Map<String, Object?>? saved;
+  Map<String, Object?>? choice;
   late Future<Object?> Function() scan;
+  Map<String, Object?>? repairs;
+  Map<String, Object?>? confirmed;
+  Object? confirmationArguments;
   late Future<bool?> Function() checkAccess;
   Future<void> Function()? pickerWait;
   int? scanId;
@@ -53,7 +70,10 @@ void main() {
   bool forceScan = false;
   bool savedAutomaticScan = false;
   Object? renamed;
+  Future<Object?> Function(MethodCall)? resolveAudio;
   bool denySystem = false;
+  String? pickerInitialUri;
+  bool? providerCanSeek;
   Future<void> emitBatch(List<Object?> documents, {int? id}) async {
     await messenger.handlePlatformMessage(
       channel.name,
@@ -86,7 +106,13 @@ void main() {
     forceScan = false;
     savedAutomaticScan = false;
     renamed = null;
+    resolveAudio = null;
     denySystem = false;
+    pickerInitialUri = null;
+    providerCanSeek = null;
+    repairs = null;
+    confirmed = null;
+    confirmationArguments = null;
     scan = () async => [doc];
     checkAccess = () async => true;
     messenger.setMockMethodCallHandler(channel, (call) async {
@@ -97,15 +123,17 @@ void main() {
             return {'folder': saved, 'automaticScan': savedAutomaticScan};
           }
           return saved;
-        case 'pickFolder' || 'pickSystem':
+        case 'pickFolder' || 'pickProviderFolder' || 'pickSystem':
           if (call.method == 'pickSystem' && denySystem) {
             throw PlatformException(code: 'AUDIO_PERMISSION_DENIED');
           }
+          pickerInitialUri = call.arguments['initialUri'] as String?;
           await pickerWait?.call();
           if (choice != null) saved = choice;
           return choice;
         case 'listTracks':
           expect(call.arguments['treeUri'], saved?['uri']);
+          expect(call.arguments['detailed'], true);
           scanId = call.arguments['scanId'] as int?;
           forceScan = call.arguments['force'] == true;
           return scan();
@@ -118,12 +146,26 @@ void main() {
         case 'watchLibrary':
           watchId = call.arguments['watchId'] as int?;
           return null;
+        case 'listMovedFileRepairs':
+          return repairs ?? {};
+        case 'confirmMovedFileRepair':
+          confirmationArguments = call.arguments;
+          return confirmed;
         case 'renameTrack':
           expect(call.arguments['treeUri'], saved?['uri']);
           return renamed;
+        case 'resolveOpenedAudio':
+          return resolveAudio?.call(call);
         case 'checkFolderAccess':
           expect(call.arguments['treeUri'], saved?['uri']);
           return checkAccess();
+        case 'canSeekProviderTrack':
+          expect(call.arguments, {
+            'treeUri': tree,
+            'selectionId': 'provider-grant',
+            'uri': uri,
+          });
+          return providerCanSeek;
         case 'forgetFolder':
           expect(call.arguments['treeUri'], saved?['uri']);
           saved = null;
@@ -284,6 +326,88 @@ void main() {
     expect(tagged.replayGain?.albumPeak, isNull);
   });
 
+  test('opening a granted file does not enable or populate the library',
+      () async {
+    final opened = Uri.parse('content://files/document/file%3A1');
+    resolveAudio = (call) async {
+      expect(call.arguments, {'uri': opened.toString(), 'allowIndexed': false});
+      return {'uri': opened.toString(), 'title': 'File.flac'};
+    };
+    final file =
+        await library.resolveOpenedAudio(opened, isCurrent: () => true);
+    expect(file, (uri: opened, title: 'File.flac', indexedTrack: null));
+    expect(library.enabled, isFalse);
+    expect(library.tracks, isEmpty);
+    expect(calls, ['getFolder', 'resolveOpenedAudio']);
+  });
+
+  test('opening an indexed alias uses the catalog row and its playback ID',
+      () async {
+    saved = folder;
+    final opened =
+        Uri.parse('content://documents/document/primary%3AMusic%2Ftrack.flac');
+    resolveAudio = (call) async {
+      expect(call.arguments['treeUri'], tree);
+      expect(call.arguments['uri'], opened.toString());
+      return {
+        'uri': opened.toString(),
+        'title': 'track.flac',
+        'indexedUri': uri
+      };
+    };
+    final file =
+        await library.resolveOpenedAudio(opened, isCurrent: () => true);
+    expect(file?.indexedTrack, same(library.tracks.single));
+    expect(file?.indexedTrack?.title, 'Title');
+    expect(file?.indexedTrack?.uri, uri);
+    expect(calls, [
+      'getFolder',
+      'resolveOpenedAudio',
+      'listTracks',
+      'listMovedFileRepairs',
+    ]);
+  });
+
+  test('a superseded grant response cannot open audio', () async {
+    final opened = Uri.parse('content://files/document/file%3A1');
+    var current = true;
+    resolveAudio = (_) async {
+      current = false;
+      return {'uri': opened.toString(), 'title': 'File.flac'};
+    };
+    expect(await library.resolveOpenedAudio(opened, isCurrent: () => current),
+        isNull);
+  });
+
+  test('a known hidden indexed row cannot reopen as a temporary file',
+      () async {
+    final database = await SembastSqfDb.createInMemory();
+    library.dispose();
+    library = LocalMusicLibrary(visibilityDatabase: () => database);
+    saved = folder;
+    scan = () async => [
+          {...doc, 'visibilityKey': 'a' * 64},
+        ];
+    await library.refresh();
+    expect(await library.hideTrack(library.tracks.single), isNotNull);
+    final opened =
+        Uri.parse('content://documents/document/primary%3AMusic%2Ftrack.flac');
+    resolveAudio = (_) async =>
+        {'uri': opened.toString(), 'title': 'File', 'indexedUri': uri};
+
+    expect(await library.resolveOpenedAudio(opened, isCurrent: () => true),
+        isNull);
+  });
+
+  test('an unavailable Android grant does not fall back to playback', () async {
+    final opened = Uri.parse('content://files/document/file%3A1');
+    resolveAudio = (_) async => null;
+
+    expect(await library.resolveOpenedAudio(opened, isCurrent: () => true),
+        isNull);
+    expect(calls, ['getFolder', 'resolveOpenedAudio']);
+  });
+
   test(
       'album navigation metadata is optional and does not alter track identity',
       () {
@@ -304,6 +428,255 @@ void main() {
     }
   });
 
+  test(
+    'review is explicit and preserves both IDs for a chosen duplicate',
+    () async {
+      final oldId = 'device:${'a' * 64}';
+      final newId = 'device:${'b' * 64}';
+      final otherId = 'device:${'c' * 64}';
+      final newerAlias = 'device:${'d' * 64}';
+      final playlistProof = 'e' * 64;
+      final memberId = 'device:playlist:$playlistProof';
+      saved = {...folder, 'selectionId': 'authorized'};
+      scan = () async => [
+            {...doc, 'identityKey': 'b' * 64},
+            {
+              ...doc,
+              'identityKey': 'c' * 64,
+              'uri': '$tree/document/another%2Ftrack.flac',
+            },
+          ];
+      repairs = {
+        'missing': [
+          {
+            'id': oldId,
+            'title': 'Title',
+            'fileName': 'track.flac',
+            'folder': 'Music / Old',
+            'candidates': [
+              {'id': newId, 'reason': 'revision'},
+              {'id': otherId, 'reason': 'tags'},
+              {'id': 'device:${'f' * 64}', 'reason': 'revision'},
+            ],
+          },
+        ],
+        'missingAliases': {newerAlias: oldId},
+        'missingPlaylistIds': {playlistProof: oldId},
+      };
+      await library.refresh();
+      final pending = library.movedFileRepairs.single;
+      expect(pending.candidates.map((candidate) => candidate.id), [
+        newId,
+        otherId,
+      ]);
+      expect(library.missingTrackById(newerAlias), same(pending));
+      expect(library.trackById(oldId), isNull);
+      expect(library.playlistTrackById(memberId), isNull);
+      expect(library.missingTrackById(memberId), same(pending));
+      expect(confirmationArguments, isNull);
+
+      confirmed = {
+        'missing': [],
+        'aliases': {oldId: otherId, newerAlias: otherId},
+        'playlistAliases': {playlistProof: otherId},
+      };
+      expect(
+        await library.confirmMovedFileRepair(
+          pending,
+          pending.candidates.last,
+          isCurrent: () => false,
+        ),
+        isFalse,
+      );
+      expect(confirmationArguments, isNull);
+      expect(
+        await library.confirmMovedFileRepair(pending, pending.candidates.last),
+        isTrue,
+      );
+      expect(confirmationArguments, {
+        'treeUri': tree,
+        'selectionId': 'authorized',
+        'missingId': oldId,
+        'candidateId': otherId,
+      });
+      expect(library.movedFileRepairs, isEmpty);
+      expect(library.trackById(oldId), same(library.trackById(otherId)));
+      expect(library.trackById(newerAlias), same(library.trackById(otherId)));
+      expect(library.playlistTrackById(memberId),
+          same(library.trackById(otherId)));
+      expect(library.missingTrackById(memberId), isNull);
+      expect(library.visibleTrackById(oldId)?.playbackId, otherId);
+      expect(library.tracks.map((track) => track.playbackId), [newId, otherId]);
+
+      checkAccess = () async => false;
+      await library.revalidate();
+      expect(library.trackById(oldId), isNull);
+      expect(library.movedFileRepairs, isEmpty);
+    },
+  );
+
+  test('a refreshed or rejected match cannot publish a stale alias', () async {
+    final oldId = 'device:${'a' * 64}';
+    final newId = 'device:${'b' * 64}';
+    saved = folder;
+    scan = () async => [
+          {...doc, 'identityKey': 'b' * 64},
+        ];
+    repairs = {
+      'missing': [
+        {
+          'id': oldId,
+          'title': 'Old',
+          'candidates': [
+            {'id': newId, 'reason': 'revision'},
+          ],
+        },
+      ],
+    };
+    await library.refresh();
+    final stale = library.movedFileRepairs.single;
+    await library.refresh();
+    expect(
+      await library.confirmMovedFileRepair(stale, stale.candidates.single),
+      isFalse,
+    );
+    expect(confirmationArguments, isNull);
+    final current = library.movedFileRepairs.single;
+    expect(
+      await library.confirmMovedFileRepair(current, current.candidates.single),
+      isFalse,
+    );
+    expect(confirmationArguments, isNotNull);
+    expect(library.trackById(oldId), isNull);
+    expect(library.missingTrackById(oldId), same(current));
+  });
+
+  test('uses only recognized advisory codes from authorized metadata', () {
+    final source = Uri.parse(tree);
+    for (final (code, expected) in <(Object?, MusicContentAdvisory?)>[
+      (1, MusicContentAdvisory.explicit),
+      (2, MusicContentAdvisory.clean),
+      (null, null),
+      (4, null),
+      (1.0, null),
+      ('1', null),
+      ('explicit', null),
+    ]) {
+      final track = LocalMusicTrack.fromDocument({
+        ...doc,
+        'title': 'Explicit Title',
+        'contentAdvisory': code,
+      }, source);
+      expect(track?.contentAdvisory, expected, reason: 'Platform code: $code');
+    }
+  });
+
+  test('explicit visibility is opt-in and persists per profile', () async {
+    final database = await SembastSqfDb.createInMemory();
+    addTearDown(database.close);
+    await database.getProfiles();
+    final owner = database.profileId;
+    final other = await database.createProfile('Other listener');
+    LocalMusicLibrary createLibrary() =>
+        LocalMusicLibrary(visibilityDatabase: () => database);
+    library.dispose();
+    library = createLibrary();
+    saved = folder;
+    const cleanUri = '$tree/document/primary%3AMusic%2Fclean.m4a';
+    const untaggedUri = '$tree/document/primary%3AMusic%2Funtagged.m4a';
+    scan = () async => [
+          {
+            ...doc,
+            'uri': '$tree/document/primary%3AMusic%2Fexplicit.m4a',
+            'title': 'Advisory QA Alpha',
+            'contentAdvisory': 1,
+          },
+          {
+            ...doc,
+            'uri': cleanUri,
+            'title': 'Advisory QA Bravo Explicit',
+            'contentAdvisory': 2,
+          },
+          {
+            ...doc,
+            'uri': untaggedUri,
+            'title': 'Advisory QA Charlie Explicit',
+          },
+        ];
+    await library.refresh();
+    final explicit = library.tracks.first;
+    expect(library.hideExplicitTracks, isFalse);
+    expect(library.visibleTracks, hasLength(3));
+    var notifications = 0;
+    library.addListener(() => notifications++);
+    expect(await library.setHideExplicitTracks(true), isTrue);
+    expect(await library.setHideExplicitTracks(true), isFalse);
+    expect(notifications, 1);
+    expect(library.visibleTracks.map((track) => track.uri), [
+      cleanUri,
+      untaggedUri,
+    ]);
+    expect(library.visibleTrackById(explicit.playbackId), isNull);
+    expect(library.trackById(explicit.playbackId), same(explicit));
+
+    library.dispose();
+    library = createLibrary();
+    await library.refresh();
+    expect(library.hideExplicitTracks, isTrue);
+    expect(library.visibleTracks, hasLength(2));
+
+    await database.useProfile(other.id);
+    library.visibilityProfileChanged();
+    expect(library.hideExplicitTracks, isFalse);
+    expect(library.visibleTracks, hasLength(3));
+
+    await database.useProfile(owner);
+    library.visibilityProfileChanged();
+    expect(library.visibleTracks, hasLength(2));
+    expect(await library.setHideExplicitTracks(false), isTrue);
+    expect(library.visibleTracks, hasLength(3));
+  });
+
+  test('saved tag separators refresh approvals without changing track identity',
+      () async {
+    var separators = ';';
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      calls.add(call.method);
+      switch (call.method) {
+        case 'getFolder':
+          return {
+            ...selection([folder]),
+            'tagSeparators': separators
+          };
+        case 'listTracks':
+          return [
+            {
+              ...doc,
+              'artist': 'Duo; Guest',
+              'artists': separators.isEmpty ? ['Duo; Guest'] : ['Duo', 'Guest'],
+              'genres': ['Rock', 'Pop'],
+            }
+          ];
+        case 'setTagSeparators':
+          separators = call.arguments['separators'] as String;
+          return true;
+      }
+      throw MissingPluginException();
+    });
+
+    await library.refresh();
+    expect(library.tagSeparators, ';');
+    final original = library.tracks.single;
+    expect(original.artists, ['Duo', 'Guest']);
+    expect(await library.setTagSeparators(''), isTrue);
+    final updated = library.tracks.single;
+    expect(updated.artists, ['Duo; Guest']);
+    expect(updated.genres, ['Rock', 'Pop']);
+    expect(updated.playbackId, original.playbackId);
+    expect(
+        calls, ['getFolder', 'listTracks', 'setTagSeparators', 'listTracks']);
+  });
+
   test('fresh installs and cancellation never scan or grant access', () async {
     expect(library.enabled, isFalse);
     await library.initialize();
@@ -314,6 +687,296 @@ void main() {
     expect(library.enabled, isFalse);
     expect(library.tracks, isEmpty);
     expect(calls, ['getFolder', 'pickFolder']);
+  });
+
+  test('cover opt-out restarts an active scan and re-enable restores covers',
+      () async {
+    final database = await SembastSqfDb.createInMemory();
+    addTearDown(database.close);
+    library.dispose();
+    library = LocalMusicLibrary(visibilityDatabase: () => database);
+    final first = Completer<int>();
+    final firstResult = Completer<List<Object?>>();
+    final pickerOpened = Completer<void>();
+    final pickerClosed = Completer<void>();
+    final policies = <bool>[];
+    final cancelled = <int>[];
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      switch (call.method) {
+        case 'getFolder':
+          return folder;
+        case 'pickFolder':
+          pickerOpened.complete();
+          await pickerClosed.future;
+          return null;
+        case 'listTracks':
+          final loadCovers = call.arguments['loadCovers'] as bool;
+          policies.add(loadCovers);
+          if (!first.isCompleted) {
+            first.complete(call.arguments['scanId'] as int);
+            return firstResult.future;
+          }
+          return [
+            if (loadCovers)
+              doc
+            else
+              {...doc, 'artPath': null, 'adjacentArtPath': null},
+          ];
+        case 'cancelTrackScan':
+          cancelled.add(call.arguments['scanId'] as int);
+          return null;
+      }
+      throw MissingPluginException();
+    });
+
+    final scanning = library.refresh();
+    final initialId = await first.future.timeout(const Duration(seconds: 5));
+    await DeviceMusicArtworkPreferences.setLoadCovers(database, false);
+    expect(cancelled, [initialId]);
+    await emitBatch([doc], id: initialId);
+    expect(library.tracks, isEmpty);
+    firstResult.completeError(PlatformException(code: 'SCAN_CANCELLED'));
+    await scanning;
+    expect(policies, [true, false]);
+    expect(library.error, isNull);
+    final track = library.tracks.single;
+    expect(track.artPath, isNull);
+    expect(track.adjacentArtPath, isNull);
+
+    final restored = Completer<void>();
+    library.addListener(() {
+      if (!restored.isCompleted &&
+          !library.scanning &&
+          library.tracks.singleOrNull?.artPath != null) {
+        restored.complete();
+      }
+    });
+    final choosing = library.chooseFolder();
+    await pickerOpened.future.timeout(const Duration(seconds: 5));
+    await DeviceMusicArtworkPreferences.setLoadCovers(database, true);
+    expect(policies, [true, false]);
+    pickerClosed.complete();
+    expect(await choosing, isFalse);
+    await restored.future.timeout(const Duration(seconds: 5));
+    expect(policies, [true, false, true]);
+    expect(library.tracks.single.playbackId, track.playbackId);
+    expect(library.tracks.single.artPath, doc['artPath']);
+    expect(library.tracks.single.adjacentArtPath, doc['adjacentArtPath']);
+  });
+
+  test('provider selection and reconnect use the provider picker', () async {
+    await library.initialize();
+    expect(await library.chooseProviderFolder(), isFalse);
+    expect(calls, ['getFolder', 'pickProviderFolder']);
+
+    choice = {
+      ...folder,
+      'selectionId': 'provider-grant',
+      'isDocumentProvider': true,
+    };
+    scan = () async => [
+          {...doc, 'canRename': true},
+        ];
+    expect(await library.chooseProviderFolder(), isTrue);
+    final root = library.roots.single;
+    final track = library.tracks.single;
+    expect(root.isDocumentProvider, isTrue);
+    expect(track.isDocumentProvider, isTrue);
+    expect(track.canRename, isFalse);
+    expect(await library.canSeekProviderTrack(track), isFalse);
+    providerCanSeek = true;
+    expect(await library.canSeekProviderTrack(track), isTrue);
+
+    checkAccess = () async => false;
+    await library.revalidate();
+    expect(library.isRootUnavailable(root), isTrue);
+    expect(library.tracks, isEmpty);
+    expect(await library.canSeekProviderTrack(track), isFalse);
+    expect(calls.last, 'checkFolderAccess');
+    checkAccess = () async => true;
+    expect(await library.chooseFolder(reconnect: root), isTrue);
+    expect(pickerInitialUri, tree);
+    expect(calls.skip(calls.length - 2), ['pickProviderFolder', 'listTracks']);
+    expect(library.isRootUnavailable(root), isFalse);
+  });
+
+  test('outage keeps confirmed provider rows until a successful retry',
+      () async {
+    saved = {...folder, 'isDocumentProvider': true};
+    await library.refresh();
+    final root = library.roots.single;
+    final track = library.tracks.single;
+    final started = Completer<void>();
+    final pending = Completer<List<Object?>>();
+    scan = () {
+      started.complete();
+      return pending.future;
+    };
+    final scanning = library.refresh();
+    await started.future;
+    const otherUri = '$tree/document/other.mp3';
+    await emitBatch([
+      {...doc, 'uri': otherUri},
+    ]);
+    expect(library.containsUri(otherUri), isFalse);
+    pending.completeError(PlatformException(code: 'SCAN_UNAVAILABLE'));
+    await scanning;
+    expect(library.isProviderUnreachable(root), isTrue);
+    expect(library.isRootUnavailable(root), isFalse);
+    expect(library.tracks.single, same(track));
+    expect(calls.where((method) => method.startsWith('pick')), isEmpty);
+
+    scan = () async => [
+          {...doc, 'uri': otherUri},
+        ];
+    await library.refresh();
+    expect(library.isProviderUnreachable(root), isFalse);
+    expect(library.tracks.single.uri, otherUri);
+  });
+
+  test('skipped files come only from the latest detailed scan result',
+      () async {
+    saved = folder;
+    await library.refresh();
+    expect(library.scanReport, isNull);
+    expect(library.tracks.single.title, 'Title');
+
+    scan = () async => scanned([
+          {'name': 'playlist.m3u', 'reason': 'playlist'},
+          {'name': null, 'reason': 'missingDetails'},
+          {'name': 'new-format.aac', 'reason': 'futureReason'},
+        ], count: 4);
+    await library.refresh();
+    final result = library.scanReport!.locations.single;
+    expect(result.root, same(library.roots.single));
+    expect(result.files.map((file) => file.name),
+        ['playlist.m3u', null, 'new-format.aac']);
+    expect(result.files.map((file) => file.reason), [
+      LocalMusicSkipReason.playlist,
+      LocalMusicSkipReason.missingDetails,
+      LocalMusicSkipReason.unknown,
+    ]);
+    expect(result.skippedCount, 4);
+    expect(library.tracks.single.title, 'Title');
+
+    final started = Completer<void>();
+    final response = Completer<Object?>();
+    scan = () {
+      started.complete();
+      return response.future;
+    };
+    final refreshing = library.refresh();
+    await started.future;
+    expect(library.scanReport, isNull);
+    response.complete(scanned([]));
+    await refreshing;
+    expect(library.scanReport!.locations.single.skippedCount, 0);
+    expect(library.scanReport!.partial, isFalse);
+  });
+
+  test('root access loss redacts that location even during a multi-root scan',
+      () async {
+    var lost = false;
+    final startedSecond = Completer<void>();
+    final secondResult = Completer<Object?>();
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      final root = (call.arguments as Map?)?['treeUri'];
+      switch (call.method) {
+        case 'getFolder':
+          return selection([folder, secondFolder]);
+        case 'listTracks':
+          if (root == tree) {
+            return scanned([
+              {'name': 'private.m3u', 'reason': 'playlist'}
+            ]);
+          }
+          startedSecond.complete();
+          return secondResult.future;
+        case 'checkFolderAccess':
+          return !lost || root != tree;
+      }
+      throw MissingPluginException();
+    });
+
+    final refreshing = library.refresh();
+    await startedSecond.future;
+    expect(library.scanReport, isNull);
+    lost = true;
+    await library.revalidate();
+    secondResult.complete(scanned([]));
+    await refreshing;
+
+    expect(library.scanReport!.partial, isTrue);
+    expect(
+        library.scanReport!.locations.single.root.uri, Uri.parse(secondTree));
+  });
+
+  test('provider failure leaves a partial report from other available roots',
+      () async {
+    var lost = false;
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      final root = (call.arguments as Map?)?['treeUri'];
+      switch (call.method) {
+        case 'getFolder':
+          return selection([folder, secondFolder]);
+        case 'listTracks':
+          if (root == tree) return scanned([]);
+          throw PlatformException(code: 'SCAN_UNAVAILABLE');
+        case 'checkFolderAccess':
+          return !lost || root != tree;
+      }
+      throw MissingPluginException();
+    });
+
+    await library.refresh();
+    expect(library.scanReport!.partial, isTrue);
+    expect(library.scanReport!.locations.single.root.uri, Uri.parse(tree));
+    lost = true;
+    await library.revalidate();
+    expect(library.scanReport, isNull);
+  });
+
+  test('a profile switch discards pending and published scan reports',
+      () async {
+    final factory = newDatabaseFactoryMemory();
+    final database =
+        SembastSqfDb(await factory.openDatabase('device-music-scan-report'));
+    addTearDown(database.close);
+    await database.getProfiles();
+    final original = database.profileId;
+    final other = await database.createProfile('Another listener');
+    library.dispose();
+    library = LocalMusicLibrary(visibilityDatabase: () => database);
+    saved = folder;
+    final skipped = scanned([
+      {'name': 'private.m3u', 'reason': 'playlist'}
+    ]);
+    scan = () async => skipped;
+    await library.refresh();
+    expect(library.scanReport, isNotNull);
+
+    final started = Completer<void>();
+    final response = Completer<Object?>();
+    scan = () {
+      started.complete();
+      return response.future;
+    };
+    final refreshing = library.refresh();
+    await started.future;
+    await database.useProfile(other.id);
+    library.visibilityProfileChanged();
+    await database.useProfile(original);
+    library.visibilityProfileChanged();
+    response.complete(skipped);
+    await refreshing;
+    expect(library.scanReport, isNull);
+
+    scan = () async => skipped;
+    await library.refresh();
+    expect(library.scanReport, isNotNull);
+    await database.useProfile(other.id);
+    expect(library.scanReport, isNull);
+    library.visibilityProfileChanged();
   });
 
   test('overlapping SAF roots show one file and keep it hidden after removal',
@@ -631,7 +1294,12 @@ void main() {
     await library.revalidate();
     expect(library.trackById(track.playbackId), same(track));
     expect(library.unavailable, isFalse);
-    expect(calls, ['getFolder', 'listTracks', 'checkFolderAccess']);
+    expect(calls, [
+      'getFolder',
+      'listTracks',
+      'listMovedFileRepairs',
+      'checkFolderAccess'
+    ]);
   });
 
   test('an interrupted child scan preserves the current queue source and art',
@@ -981,6 +1649,8 @@ void main() {
         case 'cancelScan':
           expect(call.arguments['scanId'], scanId);
           return null;
+        case 'listMovedFileRepairs':
+          return const <String, Object?>{};
         case 'shareTrack' || 'readTrackLyrics':
           expect(call.arguments['treeUri'], secondTree);
           expect(call.arguments['selectionId'], 'albums-grant');
@@ -1096,6 +1766,8 @@ void main() {
           return selection([folder, secondFolder]);
         case 'listTracks':
           return documents[call.arguments['treeUri']];
+        case 'listMovedFileRepairs':
+          return const <String, Object?>{};
         default:
           fail('Unexpected ${call.method}');
       }

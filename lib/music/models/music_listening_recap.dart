@@ -1,16 +1,42 @@
 import 'music_listening_event.dart';
 import 'music_listening_rankings.dart';
 
-/// A calendar-year summary of the confirmed starts still in Music history.
+/// A local calendar year, optionally narrowed to a single calendar month.
+class MusicListeningRecapPeriod {
+  const MusicListeningRecapPeriod(this.year, {this.month})
+      : assert(month == null || (month >= 1 && month <= 12));
+
+  final int year;
+  final int? month;
+
+  String get fileSuffix {
+    final selectedMonth = month;
+    return selectedMonth == null
+        ? '$year'
+        : '$year-${selectedMonth.toString().padLeft(2, '0')}';
+  }
+}
+
+/// A calendar summary of the confirmed starts still in Music history.
 /// The observed dates are endpoints, with no claim of continuous capture.
 class MusicListeningRecap {
   MusicListeningRecap._(
-      this.year, this.firstPlay, this.lastPlay, this.rankings);
+    this.period,
+    this.firstPlay,
+    this.lastPlay,
+    this.rankings,
+    this.dailyPlays,
+  );
 
-  final int year;
+  final MusicListeningRecapPeriod period;
   final DateTime firstPlay;
   final DateTime lastPlay;
   final MusicListeningRankings rankings;
+
+  /// Monthly play counts in calendar order, including days with zero plays.
+  final List<int> dailyPlays;
+
+  int get year => period.year;
 
   int get songCount => rankings.rankedBy(MusicListeningRankBy.song).length;
 
@@ -19,6 +45,18 @@ class MusicListeningRecap {
 
   static bool _isRecorded(MusicListeningEvent event, DateTime now) =>
       !event.isLegacy && !event.playedAt.isAfter(now);
+
+  static Iterable<MusicListeningEvent> recordedInPeriod(
+    Iterable<MusicListeningEvent> events,
+    MusicListeningRecapPeriod period, {
+    required DateTime now,
+  }) =>
+      events.where((event) {
+        if (!_isRecorded(event, now)) return false;
+        final local = event.playedAt.toLocal();
+        return local.year == period.year &&
+            (period.month == null || local.month == period.month);
+      });
 
   static List<int> availableYears(Iterable<MusicListeningEvent> events,
       {required DateTime now}) {
@@ -31,15 +69,28 @@ class MusicListeningRecap {
   }
 
   static MusicListeningRecap? forYear(
-      Iterable<MusicListeningEvent> events, int year,
-      {required DateTime now}) {
+    Iterable<MusicListeningEvent> events,
+    int year, {
+    required DateTime now,
+  }) =>
+      forPeriod(events, MusicListeningRecapPeriod(year), now: now);
+
+  static MusicListeningRecap? forPeriod(
+    Iterable<MusicListeningEvent> events,
+    MusicListeningRecapPeriod period, {
+    required DateTime now,
+  }) {
+    final month = period.month;
+    final dailyPlays = month == null
+        ? const <int>[]
+        : List.filled(DateTime.utc(period.year, month + 1, 0).day, 0);
     final recorded = <MusicListeningEvent>[];
     DateTime? firstPlay;
     DateTime? lastPlay;
-    for (final event in events) {
+    for (final event in recordedInPeriod(events, period, now: now)) {
       final playedAt = event.playedAt.toLocal();
-      if (playedAt.year != year || !_isRecorded(event, now)) continue;
       recorded.add(event);
+      if (month != null) dailyPlays[playedAt.day - 1]++;
       if (firstPlay == null || playedAt.isBefore(firstPlay)) {
         firstPlay = playedAt;
       }
@@ -47,11 +98,15 @@ class MusicListeningRecap {
     }
     if (firstPlay == null || lastPlay == null) return null;
     return MusicListeningRecap._(
-      year,
+      period,
       firstPlay,
       lastPlay,
-      MusicListeningRankings.fromEvents(recorded, MusicListeningPeriod.allTime,
-          now: now),
+      MusicListeningRankings.fromEvents(
+        recorded,
+        MusicListeningPeriod.allTime,
+        now: now,
+      ),
+      List.unmodifiable(dailyPlays),
     );
   }
 
@@ -72,6 +127,7 @@ class MusicListeningRecap {
       'format': 'videre-music-recap',
       'version': 1,
       'year': year,
+      if (period.month != null) 'month': period.month,
       'coverage': {
         'basis': 'recorded-events-only',
         'firstRecordedDate': calendarDate(firstPlay),

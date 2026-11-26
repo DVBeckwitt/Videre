@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/globals.dart';
+import 'package:clipious/settings/models/search_history_control.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:settings_ui/settings_ui.dart';
 
@@ -11,7 +12,19 @@ import 'settings.dart';
 
 @RoutePage()
 class SearchHistorySettingsScreen extends StatelessWidget {
-  const SearchHistorySettingsScreen({super.key});
+  final SearchHistoryControl? _target;
+  final FocusNode? _targetFocus;
+
+  const SearchHistorySettingsScreen({super.key})
+      : _target = null,
+        _targetFocus = null;
+
+  const SearchHistorySettingsScreen.focused(
+    SearchHistoryControl target,
+    FocusNode focusNode, {
+    super.key,
+  })  : _target = target,
+        _targetFocus = focusNode;
 
   confirmClear(BuildContext context) {
     var locals = AppLocalizations.of(context)!;
@@ -65,10 +78,18 @@ class SearchHistorySettingsScreen extends StatelessWidget {
                 SettingsSection(
                     title: Text(locals.searchHistoryDescription),
                     tiles: [
-                      SettingsTile.switchTile(
-                        initialValue: state.useSearchHistory,
-                        onToggle: cubit.toggleSearchHistory,
-                        title: Text(locals.enableSearchHistory),
+                      CustomSettingsTile(
+                        child: SwitchListTile.adaptive(
+                          key: ValueKey(SearchHistoryControl.enable.id),
+                          focusNode: _target == SearchHistoryControl.enable
+                              ? _targetFocus
+                              : null,
+                          contentPadding: const EdgeInsetsDirectional.only(
+                              start: 24, end: 8),
+                          value: state.useSearchHistory,
+                          onChanged: cubit.toggleSearchHistory,
+                          title: Text(locals.enableSearchHistory),
+                        ),
                       ),
                       SettingsTile(
                         enabled: state.useSearchHistory,
@@ -93,9 +114,17 @@ class SearchHistorySettingsScreen extends StatelessWidget {
                           ],
                         ),
                       ),
-                      SettingsTile(
-                        title: Text(locals.clearSearchHistory),
-                        onPressed: (context) => confirmClear(context),
+                      CustomSettingsTile(
+                        child: ListTile(
+                          key: ValueKey(SearchHistoryControl.clear.id),
+                          focusNode: _target == SearchHistoryControl.clear
+                              ? _targetFocus
+                              : null,
+                          contentPadding: const EdgeInsetsDirectional.only(
+                              start: 24, end: 8),
+                          title: Text(locals.clearSearchHistory),
+                          onTap: () => confirmClear(context),
+                        ),
                       )
                     ])
               ]),

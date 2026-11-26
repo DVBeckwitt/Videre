@@ -103,6 +103,21 @@ void main() {
     expect(settings.state.musicArtworkSwipe, isFalse);
   });
 
+  testWidgets('the mini-player lyric setting starts off and can be enabled',
+      (tester) async {
+    await showSettings(tester);
+    final tile = find.byKey(const ValueKey('music-mini-player-lyrics-setting'));
+    expect(tester.widget<SwitchListTile>(tile).value, isFalse);
+    await tester.ensureVisible(tile);
+    await tester.runAsync(() async {
+      await tester.tap(tile);
+      await (db as SembastSqfDb).db.transaction((_) async {});
+    });
+    await tester.pumpAndSettle();
+    expect(tester.widget<SwitchListTile>(tile).value, isTrue);
+    expect(settings.state.musicMiniPlayerLyrics, isTrue);
+  });
+
   testWidgets('double-tap seeking is opt-in and independent of artwork swiping',
       (tester) async {
     await showSettings(tester);
@@ -154,10 +169,17 @@ void main() {
         MusicSongRowSwipeAction.addToQueue);
   });
 
+  const deviceSongTapChoices = {
+    MusicSongTapQueueScope.allSongs: 'Queue all device songs',
+    MusicSongTapQueueScope.album: 'Queue this album',
+    MusicSongTapQueueScope.artist: 'Queue songs by this artist',
+    MusicSongTapQueueScope.genre: 'Queue songs in this genre',
+  };
+
   testWidgets('song tap queue and retained shuffle save independently',
       (tester) async {
     await showSettings(tester);
-    final scope = find.widgetWithText(ListTile, 'When tapping a song');
+    final scope = find.byKey(const ValueKey('music-song-tap-queue-setting'));
     final shuffle =
         find.widgetWithText(SwitchListTile, 'Keep shuffle when playing a song');
     expect(
@@ -165,16 +187,22 @@ void main() {
         findsOneWidget);
     expect(tester.widget<SwitchListTile>(shuffle).value, isTrue);
 
-    await tester.ensureVisible(scope);
-    await tester.tap(scope);
-    await tester.pumpAndSettle();
-    final songOnly = find.widgetWithText(ListTile, 'Queue only this song');
-    await tester.tap(songOnly);
-    await tester.pumpAndSettle();
-    expect(
-        find.descendant(of: scope, matching: find.text('Queue only this song')),
-        findsOneWidget);
-    expect(tester.widget<SwitchListTile>(shuffle).value, isTrue);
+    for (final option in {
+      ...deviceSongTapChoices,
+      MusicSongTapQueueScope.songOnly: 'Queue only this song',
+    }.entries) {
+      await tester.ensureVisible(scope);
+      await tester.tap(scope);
+      await tester.pumpAndSettle();
+      final choice = find.widgetWithText(ListTile, option.value);
+      await tester.ensureVisible(choice);
+      await tester.tap(choice);
+      await tester.pumpAndSettle();
+      expect(find.descendant(of: scope, matching: find.text(option.value)),
+          findsOneWidget);
+      expect(SettingsState.init().musicSongTapQueueScope, option.key);
+      expect(tester.widget<SwitchListTile>(shuffle).value, isTrue);
+    }
 
     await tester.ensureVisible(shuffle);
     await tester.tap(shuffle);
@@ -183,6 +211,58 @@ void main() {
     final saved = SettingsState.init();
     expect(saved.musicSongTapQueueScope, MusicSongTapQueueScope.songOnly);
     expect(saved.musicRetainShuffleOnSongTap, isFalse);
+  });
+
+  testWidgets('album and playlist taps can override or inherit the default',
+      (tester) async {
+    await showSettings(tester);
+    final defaultTile =
+        find.byKey(const ValueKey('music-song-tap-queue-setting'));
+    final detailTile =
+        find.byKey(const ValueKey('music-collection-detail-song-tap-setting'));
+
+    Future<void> choose(Finder tile, String choice) async {
+      await tester.ensureVisible(tile);
+      await tester.tap(tile);
+      await tester.pumpAndSettle();
+      final option = find.descendant(
+          of: find.byType(SimpleDialog), matching: find.text(choice));
+      await tester.ensureVisible(option);
+      await tester.tap(option);
+      await tester.pumpAndSettle();
+      expect(find.descendant(of: tile, matching: find.text(choice)),
+          findsOneWidget);
+    }
+
+    expect(
+        find.descendant(of: detailTile, matching: find.text('Use the default')),
+        findsOneWidget);
+    await choose(defaultTile, 'Queue only this song');
+    final inherited = SettingsState.init();
+    expect(inherited.musicCollectionDetailSongTapQueueScope, isNull);
+    expect(inherited.resolveMusicSongTapQueueScope(collectionDetail: true),
+        MusicSongTapQueueScope.songOnly);
+
+    for (final option in deviceSongTapChoices.entries) {
+      await choose(detailTile, option.value);
+      expect(SettingsState.init().musicCollectionDetailSongTapQueueScope,
+          option.key);
+    }
+
+    await choose(detailTile, 'Queue the collection');
+    final overridden = SettingsState.init();
+    expect(overridden.musicCollectionDetailSongTapQueueScope,
+        MusicSongTapQueueScope.collection);
+    expect(overridden.resolveMusicSongTapQueueScope(collectionDetail: false),
+        MusicSongTapQueueScope.songOnly);
+    expect(overridden.resolveMusicSongTapQueueScope(collectionDetail: true),
+        MusicSongTapQueueScope.collection);
+
+    await choose(detailTile, 'Use the default');
+    final restored = SettingsState.init();
+    expect(restored.musicCollectionDetailSongTapQueueScope, isNull);
+    expect(restored.resolveMusicSongTapQueueScope(collectionDetail: true),
+        MusicSongTapQueueScope.songOnly);
   });
 
   testWidgets('Android Music screen privacy is opt-in and persists',
@@ -202,15 +282,30 @@ void main() {
     expect(SettingsState.init().musicScreenPrivacy, isFalse);
   });
 
+  testWidgets('Android wired headset autoplay is opt-in', (tester) async {
+    await showSettings(tester);
+    final tile =
+        find.byKey(const ValueKey('music-wired-headset-autoplay-setting'));
+    expect(tester.widget<SwitchListTile>(tile).value, isFalse);
+    await tester.ensureVisible(tile);
+    await tester.tap(tile);
+    await tester.pumpAndSettle();
+    expect(tester.widget<SwitchListTile>(tile).value, isTrue);
+    expect(settings.state.musicWiredHeadsetAutoplay, isTrue);
+  }, variant: const TargetPlatformVariant({TargetPlatform.android}));
+
   testWidgets('TV omits touch gestures and mini-player choices',
       (tester) async {
     app.isTv = true;
     await showSettings(tester);
     expect(find.text('Streaming audio quality'), findsOneWidget);
-    expect(find.text('When tapping a song'), findsOneWidget);
+    expect(find.text('Default song taps (including Search)'), findsOneWidget);
+    expect(find.text('Song taps in albums and playlists'), findsOneWidget);
     expect(find.text('Keep shuffle when playing a song'), findsOneWidget);
     expect(find.text('Mini-player layout'), findsNothing);
     expect(find.text('Mini-player shortcut'), findsNothing);
+    expect(find.byKey(const ValueKey('music-mini-player-lyrics-setting')),
+        findsNothing);
     expect(find.text('Swipe artwork to change songs'), findsNothing);
     expect(find.text('Double-tap artwork to seek'), findsNothing);
     expect(find.text('Swipe right on song rows'), findsNothing);
@@ -218,7 +313,8 @@ void main() {
     expect(find.text('Now Playing style'), findsOneWidget);
     expect(find.text('Now Playing background'), findsOneWidget);
     expect(find.text('Scrubber style'), findsOneWidget);
-  });
+    expect(find.text('Autoplay on wired headset connection'), findsNothing);
+  }, variant: const TargetPlatformVariant({TargetPlatform.android}));
 
   testWidgets('shows and saves the transport choices in Music settings',
       (tester) async {
@@ -246,7 +342,70 @@ void main() {
     expect(saved.musicKeepPausedOnSkip, isTrue);
   });
 
-  testWidgets('Android TV offers all four Music interruption choices',
+  testWidgets('Android shows the opt-in resume choice with pause at zero',
+      (tester) async {
+    await showSettings(tester);
+    final rise = find.byKey(const ValueKey('music-volume-rise-setting'));
+    expect(rise, findsNothing);
+
+    final zero = find.byKey(const ValueKey('music-volume-zero-setting'));
+    await tester.ensureVisible(zero);
+    await tester.tap(zero);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('music-volume-zero-true')));
+    await tester.pumpAndSettle();
+    expect(find.descendant(of: rise, matching: find.text('Stay paused')),
+        findsOneWidget);
+
+    await tester.ensureVisible(rise);
+    await tester.tap(rise);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('music-volume-rise-true')));
+    await tester.pumpAndSettle();
+    expect(find.descendant(of: rise, matching: find.text('Resume playback')),
+        findsOneWidget);
+    expect(settings.state.musicResumeOnVolumeRise, isTrue);
+  }, variant: TargetPlatformVariant.only(TargetPlatform.android));
+
+  testWidgets('Android TV can opt in to Bluetooth reconnect resume',
+      (tester) async {
+    app.isTv = true;
+    await showSettings(tester);
+    final tile =
+        find.byKey(const ValueKey('music-bluetooth-reconnect-setting'));
+    expect(find.descendant(of: tile, matching: find.text('Stay paused')),
+        findsOneWidget);
+
+    await tester.ensureVisible(tile);
+    await tester.tap(tile);
+    await tester.pumpAndSettle();
+    final optIn = find.byKey(const ValueKey('music-bluetooth-reconnect-true'));
+    expect(
+      find.descendant(
+        of: optIn,
+        matching: find
+            .text('On Android 13 and later, resume Music if playback paused '
+                'when this Bluetooth audio device disconnected.'),
+      ),
+      findsOneWidget,
+    );
+    await tester.tap(optIn);
+    await tester.pumpAndSettle();
+
+    expect(find.descendant(of: tile, matching: find.text('Resume playback')),
+        findsOneWidget);
+    expect(settings.state.musicResumeOnBluetoothReconnect, isTrue);
+    expect(settings.state.musicAutoReconnect, isTrue);
+  }, variant: TargetPlatformVariant.only(TargetPlatform.android));
+
+  testWidgets('non-Android settings omit Bluetooth reconnect resume',
+      (tester) async {
+    await showSettings(tester);
+    expect(find.byKey(const ValueKey('music-bluetooth-reconnect-setting')),
+        findsNothing);
+  }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
+
+  testWidgets('Android TV offers focus, volume and stream recovery choices',
       (tester) async {
     app.isTv = true;
     await showSettings(tester);
@@ -271,8 +430,7 @@ void main() {
       expect(option, findsOneWidget);
       if (key == 'volume-zero') {
         expect(
-          find.text('Playback pauses when you lower the media volume to zero. '
-              'Press Play to resume.'),
+          find.text('Playback pauses when you lower the media volume to zero.'),
           findsOneWidget,
         );
       }

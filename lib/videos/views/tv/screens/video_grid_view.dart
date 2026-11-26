@@ -1,6 +1,7 @@
 import 'package:clipious/utils/motion.dart';
 import 'package:auto_route/annotations.dart';
 import 'package:clipious/videos/models/video.dart';
+import 'package:clipious/subscription_management/view/components/subscription_feed_groups.dart';
 import 'package:clipious/videos/models/community_video_filter.dart';
 import 'package:clipious/videos/views/components/community_browse.dart';
 import 'package:flutter/material.dart';
@@ -28,10 +29,21 @@ class TvGridScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (paginatedVideoList is SubscriptionVideoList) {
+      return SubscriptionFeedGroups(
+        autofocus: true,
+        builder: (context, feed, filters) => _buildGrid(context, feed, filters),
+      );
+    }
+    return _buildGrid(context, paginatedVideoList, null);
+  }
+
+  Widget _buildGrid(
+      BuildContext context, PaginatedList<Video> feed, Widget? filters) {
     var textTheme = Theme.of(context).textTheme;
     return BlocProvider(
       create: (BuildContext context) =>
-          ItemListCubit(ItemListState(itemList: paginatedVideoList)),
+          ItemListCubit(ItemListState(itemList: feed)),
       child: Scaffold(
         body: TvOverscan(
           child: BlocBuilder<ItemListCubit<Video>, ItemListState<Video>>(
@@ -67,6 +79,7 @@ class TvGridScreen extends StatelessWidget {
                         : const SizedBox.shrink()
                   ],
                 ),
+                if (filters != null) filters,
                 if (state.error == ItemListErrors.nerdVpnApprovalPending)
                   Padding(
                     padding: const EdgeInsets.symmetric(vertical: 8),
@@ -83,13 +96,16 @@ class TvGridScreen extends StatelessWidget {
                         video: e,
                         autoFocus: false,
                         showCommunityLabels: true)),
-                    if (showPageAction && !state.loading)
+                    if (showPageAction && (!state.loading || filters != null))
                       Center(
+                        key: const ValueKey('subscription-page-action'),
                         child: TvButton(
-                          autofocus: items.isEmpty,
-                          onPressed: (_) => hasError
-                              ? cubit.retryItems()
-                              : cubit.getMoreItems(),
+                          autofocus: filters == null && items.isEmpty,
+                          onPressed: state.loading
+                              ? null
+                              : (_) => hasError
+                                  ? cubit.retryItems()
+                                  : cubit.getMoreItems(),
                           child: Padding(
                             padding: const EdgeInsets.all(16),
                             child:

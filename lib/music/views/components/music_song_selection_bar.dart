@@ -19,6 +19,7 @@ class MusicSongSelectionBar extends StatelessWidget {
     this.selectedCount,
     this.resolveDownloads,
     this.onRemoveDownloads,
+    this.onRemoveFromPlaylist,
   });
 
   final List<Video> selected;
@@ -32,6 +33,7 @@ class MusicSongSelectionBar extends StatelessWidget {
   final int? selectedCount;
   final MusicSelectionDownloadResolver? resolveDownloads;
   final Future<void> Function()? onRemoveDownloads;
+  final Future<void> Function()? onRemoveFromPlaylist;
 
   @override
   Widget build(BuildContext context) {
@@ -60,6 +62,7 @@ class MusicSongSelectionBar extends StatelessWidget {
         selectedCount: selectedCount,
         resolveDownloads: resolveDownloads,
         onRemoveDownloads: onRemoveDownloads,
+        onRemoveFromPlaylist: onRemoveFromPlaylist,
         isCurrent: isCurrent,
         onCompleted: onClose,
         onPlay: (shuffle) {

@@ -8,6 +8,7 @@ import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' as app_main;
 import 'package:clipious/media_handler.dart';
+import 'package:clipious/music/models/song_transition.dart';
 import 'package:clipious/player/audio_playback_sources.dart';
 import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/player/models/media_command.dart';
@@ -47,7 +48,7 @@ class _AudioWithoutAutostart extends AudioPlayerCubit {
 }
 
 class _SessionPlayer extends PlayerCubit {
-  _SessionPlayer(super.initialState, super.settings);
+  _SessionPlayer(super.initialState, super.settings, {super.ownAudioDecoder});
 
   @override
   Future<void> onReady() async {}
@@ -84,6 +85,10 @@ class _TransportPlayer extends AudioPlayerPlatform {
   final events = StreamController<PlaybackEventMessage>.broadcast();
   final loads = <LoadRequest>[];
   final seeks = <Duration?>[];
+  final skipSilenceAtPlay = <bool>[];
+  bool skipSilenceEnabled = false;
+  bool rejectSkipSilence = false;
+  int skipSilenceRejections = 0;
   int plays = 0;
   int pauses = 0;
   Completer<void> nextPlay = Completer<void>();
@@ -109,6 +114,7 @@ class _TransportPlayer extends AudioPlayerPlatform {
 
   @override
   Future<PlayResponse> play(PlayRequest request) async {
+    skipSilenceAtPlay.add(skipSilenceEnabled);
     plays++;
     if (!nextPlay.isCompleted) nextPlay.complete();
     return PlayResponse();
@@ -153,6 +159,17 @@ class _TransportPlayer extends AudioPlayerPlatform {
   @override
   Future<SetPitchResponse> setPitch(SetPitchRequest request) async =>
       SetPitchResponse();
+  @override
+  Future<SetSkipSilenceResponse> setSkipSilence(
+      SetSkipSilenceRequest request) async {
+    if (request.enabled && rejectSkipSilence) {
+      skipSilenceRejections++;
+      throw UnsupportedError('Silence skipping unavailable');
+    }
+    skipSilenceEnabled = request.enabled;
+    return SetSkipSilenceResponse();
+  }
+
   @override
   Future<SetLoopModeResponse> setLoopMode(SetLoopModeRequest request) async =>
       SetLoopModeResponse();
@@ -587,8 +604,196 @@ void main() {
     });
   }
 
-  test(
-      'Music prepares both neighbors and promotes the buffered decoder on skip and EOF',
+  test('Music repeats a bounded passage before normal queue completion',
+      () async {
+    final originalTarget = debugDefaultTargetPlatformOverride;
+    final originalPlatform = JustAudioPlatform.instance;
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    final platform = _TransportPlatform();
+    JustAudioPlatform.instance = platform;
+    addTearDown(() {
+      JustAudioPlatform.instance = originalPlatform;
+      debugDefaultTargetPlatformOverride = originalTarget;
+    });
+    db = await SembastSqfDb.createInMemory();
+    addTearDown(db.close);
+    const server = Server(url: 'https://instance.example');
+    await db.upsertServer(server);
+    await db.useServer(server);
+    await db.saveSetting(
+        SettingsValue(SponsorSegmentType.sponsor.settingsName(), 'false'));
+    final app = TestAppCubit(AppState(0, server, HomeLayout()));
+    await app.initState();
+    app.intentDataStreamSubscription =
+        const Stream<void>.empty().listen((_) {});
+    addTearDown(app.close);
+    final settings = TestSettingsCubit(SettingsState.init(), app);
+    addTearDown(settings.close);
+    await settings.setRepeatMode(PlayerRepeat.repeatAll);
+    await settings.setAutoplayQueue(true);
+    final player = _SessionPlayer(PlayerState.init(null), settings);
+    addTearDown(player.close);
+    player.audioSession = await AudioSession.instance;
+    app_main.mediaHandler = MediaHandler(player);
+    final first = _playableVideo('loopSong001', server, music: true);
+    final second = _playableVideo('loopSong002', server, music: true);
+    final third = _playableVideo('loopSong003', server, music: true);
+    await player
+        .playVideo([first, second, third], audio: true, fromMusic: true);
+    final occurrence = player.state.currentQueueId;
+    final audio = AudioPlayerCubit(
+        AudioPlayerState(video: player.state.currentlyPlaying),
+        player,
+        settings);
+    addTearDown(audio.close);
+    final completed = <String?>[];
+    var previous = player.state.mediaCommand;
+    final commands = player.stream.listen((state) {
+      if (state.mediaEvent.state == MediaState.completed) {
+        completed.add(state.currentQueueId);
+      }
+      final command = state.mediaCommand;
+      if (command == null || identical(command, previous)) return;
+      previous = command;
+      audio.handleCommand(command);
+    });
+    addTearDown(commands.cancel);
+
+    Future<void> until(bool Function() ready, String reason) async {
+      final deadline = Stopwatch()..start();
+      while (!ready() && deadline.elapsed < const Duration(seconds: 3)) {
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+      }
+      expect(ready(), isTrue, reason: reason);
+    }
+
+    await until(
+        () =>
+            player.musicAbRepeat.value != null &&
+            audio.audioPlayer?.playing == true,
+        'Music must have a seekable native source before marking.');
+    var native = platform.loaded(first.videoId).single;
+
+    Future<void> setPausedPosition(Duration position) async {
+      native.report(ProcessingStateMessage.ready, position);
+      await until(() => audio.audioPlayer?.position == position,
+          'The paused decoder must receive the precise marker position.');
+    }
+
+    Future<void> pause() async {
+      player.pause();
+      await until(() => audio.audioPlayer?.playing == false,
+          'Pause must reach the native decoder.');
+    }
+
+    const a = Duration(milliseconds: 4250);
+    const b = Duration(milliseconds: 8125);
+    const duration = Duration(seconds: 30);
+    await pause();
+    await setPausedPosition(const Duration(milliseconds: 29500));
+    expect(player.musicAbRepeat.value!.mark(), isFalse);
+    expect(player.musicAbRepeat.value!.start, isNull);
+    await setPausedPosition(a);
+    expect(player.musicAbRepeat.value!.mark(), isTrue);
+    expect(player.musicAbRepeat.value!.start, a);
+    await setPausedPosition(const Duration(milliseconds: 4750));
+    expect(player.musicAbRepeat.value!.mark(), isFalse);
+    expect(player.musicAbRepeat.value!.start, a);
+    expect(player.musicAbRepeat.value!.end, isNull);
+    await setPausedPosition(b);
+    expect(player.musicAbRepeat.value!.mark(), isTrue);
+    expect(player.musicAbRepeat.value!.end, b);
+    await until(() => native.seeks.lastOrNull == a,
+        'Setting B must return to A while leaving the decoder paused.');
+    expect(audio.audioPlayer?.playing, isFalse);
+
+    final markerSeekCount = native.seeks.length;
+    player.seek(a);
+    await until(() => native.seeks.length > markerSeekCount,
+        'An explicit seek to the inclusive A boundary must reach the decoder.');
+    expect(native.seeks.last, a);
+    expect(player.musicAbRepeat.value!.isActive, isTrue);
+    player.play();
+    await until(() => audio.audioPlayer?.playing == true,
+        'Play must resume the decoder before checking the boundary.');
+    for (var i = 0; i < 2; i++) {
+      final seekCount = native.seeks.length;
+      native.report(
+          ProcessingStateMessage.ready, b + const Duration(milliseconds: 50));
+      await until(() => native.seeks.length > seekCount,
+          'Crossing B must seek to A on each pass.');
+      expect(native.seeks.skip(seekCount), [a]);
+    }
+    expect(player.state.currentQueueId, occurrence);
+    expect(completed, isEmpty);
+
+    await pause();
+    expect(player.musicAbRepeat.value!.isActive, isTrue);
+    player.seek(b);
+    await until(() => native.seeks.lastOrNull == b,
+        'An explicit seek to the exclusive B boundary must reach the decoder.');
+    expect(player.musicAbRepeat.value!.start, isNull);
+
+    await setPausedPosition(a);
+    expect(player.musicAbRepeat.value!.mark(), isTrue);
+    await setPausedPosition(duration);
+    expect(player.musicAbRepeat.value!.mark(), isTrue);
+    expect(player.musicAbRepeat.value!.end, duration);
+    const inside = Duration(seconds: 5);
+    player.seek(inside);
+    await until(() => native.seeks.lastOrNull == inside,
+        'Replay the end-bounded range from inside the passage.');
+    player.play();
+    await until(() => audio.audioPlayer?.playing == true,
+        'Play must reach the decoder before reporting EOF.');
+    final seekCount = native.seeks.length;
+    native.report(ProcessingStateMessage.completed, duration);
+    await until(() => native.seeks.length > seekCount,
+        'Native EOF at B must wrap the passage before the queue advances.');
+    expect(native.seeks.skip(seekCount), [a]);
+    expect(player.state.currentQueueId, occurrence);
+    expect(completed, isEmpty);
+
+    player.musicAbRepeat.value!.clear();
+    expect(player.musicAbRepeat.value!.start, isNull);
+    await pause();
+    await setPausedPosition(a);
+    expect(player.musicAbRepeat.value!.mark(), isTrue);
+    player.play();
+    await until(() => audio.audioPlayer?.playing == true,
+        'An unfinished selection must allow ordinary playback.');
+    native.report(ProcessingStateMessage.completed, duration);
+    await until(
+        () =>
+            player.state.currentlyPlaying?.videoId == second.videoId &&
+            player.musicAbRepeat.value?.generation ==
+                player.backendPlaybackGeneration,
+        'Normal EOF must advance the queue and reset an unfinished selection.');
+    expect(completed, contains(occurrence));
+    expect(player.musicAbRepeat.value!.start, isNull);
+
+    native = platform.loaded(second.videoId).single;
+    await pause();
+    await setPausedPosition(a);
+    expect(player.musicAbRepeat.value!.mark(), isTrue);
+    await setPausedPosition(b);
+    expect(player.musicAbRepeat.value!.mark(), isTrue);
+    final oldControls = player.musicAbRepeat.value!;
+    expect(oldControls.isActive, isTrue);
+
+    player.playNext();
+    await until(
+        () =>
+            player.state.currentlyPlaying?.videoId == third.videoId &&
+            player.musicAbRepeat.value?.generation ==
+                player.backendPlaybackGeneration,
+        'An explicit track change must clear an active passage.');
+    expect(player.musicAbRepeat.value!.start, isNull);
+    expect(player.musicAbRepeat.value!.isActive, isFalse);
+    expect(oldControls.mark(), isFalse);
+  });
+
+  test('Music preserves seeks and promotes buffered decoders with Skip silence',
       () async {
     final originalTarget = debugDefaultTargetPlatformOverride;
     final originalPlatform = JustAudioPlatform.instance;
@@ -649,12 +854,36 @@ void main() {
       final previous = loaded(tracks.first.videoId).single;
       final next = loaded(tracks.last.videoId).single;
       expect([previous.plays, next.plays], [0, 0]);
+      final middle = loaded(tracks[1].videoId).single;
+      expect(middle.skipSilenceAtPlay, [false]);
+
+      await settings.setMusicSkipSilence(true);
+      await until(() => middle.skipSilenceEnabled,
+          'Opting in should update the active decoder.');
+      expect([previous.skipSilenceEnabled, next.skipSilenceEnabled],
+          [false, false]);
+      const sourceTime = Duration(seconds: 12);
+      audio.seek(sourceTime);
+      await until(() => middle.seeks.contains(sourceTime),
+          'A seek must use the unmodified source timestamp.');
+
+      await settings.setSongTransitionMode(SongTransitionMode.fade);
+      await until(() => !middle.skipSilenceEnabled,
+          'Fade must keep the original source clock.');
+      await settings.setSongTransitionMode(SongTransitionMode.pause);
+      await until(() => middle.skipSilenceEnabled,
+          'A pause starts at EOF and can use silence skipping.');
+      await settings.setSongTransitionMode(SongTransitionMode.crossfade);
+      await until(() => !middle.skipSilenceEnabled,
+          'Crossfade must keep both decoders on their original clocks.');
+      await settings.setSongTransitionMode(SongTransitionMode.seamless);
 
       player.playPrevious();
       await until(() => previous.plays > 0,
           'Swiping back should use the prepared player.');
       expect(player.state.currentlyPlaying?.videoId, tracks.first.videoId);
       expect(previous.loads, hasLength(1));
+      expect(previous.skipSilenceAtPlay, [true]);
 
       await until(
           () =>
@@ -667,12 +896,16 @@ void main() {
           loaded(tracks[1].videoId).where((p) => !p.events.isClosed).last;
       final playsBeforeEnd = bufferedMiddle.plays;
       final loadsBeforeEnd = bufferedMiddle.loads.length;
+      bufferedMiddle.rejectSkipSilence = true;
       previous.report(
           ProcessingStateMessage.completed, const Duration(seconds: 30));
       await until(() => bufferedMiddle.plays > playsBeforeEnd,
           'The real native completion event should reuse the prepared next player.');
       expect(player.state.currentlyPlaying?.videoId, tracks[1].videoId);
       expect(bufferedMiddle.loads, hasLength(loadsBeforeEnd));
+      expect(bufferedMiddle.skipSilenceRejections, 1);
+      expect(bufferedMiddle.skipSilenceAtPlay.last, isFalse);
+      expect(audio.state.error, isNull);
     } finally {
       await commands.cancel();
       await audio?.close();
@@ -784,6 +1017,97 @@ void main() {
         final closed = mountedTransport?.stream.drain<void>();
         await tester.pumpWidget(const SizedBox.shrink());
         await closed;
+        await player.close();
+        await settings.close();
+        await app.close();
+        await db.close();
+        JustAudioPlatform.instance = originalPlatform;
+        debugDefaultTargetPlatformOverride = originalTarget;
+      }
+    });
+  });
+
+  testWidgets(
+      'Android transport starts without frames and survives UI attachment',
+      (tester) async {
+    await tester.runAsync(() async {
+      final originalPlatform = JustAudioPlatform.instance;
+      final originalTarget = debugDefaultTargetPlatformOverride;
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      final platform = _TransportPlatform();
+      JustAudioPlatform.instance = platform;
+      db = await SembastSqfDb.createInMemory();
+      const server = Server(url: 'https://instance.example');
+      await db.upsertServer(server);
+      await db.useServer(server);
+      await db.saveSetting(
+          SettingsValue(SponsorSegmentType.sponsor.settingsName(), 'false'));
+      final app = TestAppCubit(AppState(0, server, HomeLayout()));
+      await app.initState();
+      app.intentDataStreamSubscription =
+          const Stream<void>.empty().listen((_) {});
+      final settings = TestSettingsCubit(SettingsState.init(), app);
+      final player = _SessionPlayer(PlayerState.init(null), settings,
+          ownAudioDecoder: true);
+      player.audioSession = await AudioSession.instance;
+      final handler = app_main.mediaHandler = MediaHandler(player);
+      final song = _playableVideo('engine-song', server, music: true);
+
+      Future<void> waitFor(bool Function() ready) async {
+        final deadline = Stopwatch()..start();
+        while (!ready() && deadline.elapsed < const Duration(seconds: 3)) {
+          await Future<void>.delayed(const Duration(milliseconds: 5));
+        }
+        expect(ready(), isTrue);
+      }
+
+      try {
+        tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+        expect(tester.binding.framesEnabled, isFalse);
+        const position = Duration(milliseconds: 7421);
+        await player.playVideo([song], audio: true, startAt: position);
+        await waitFor(
+            () => platform.loaded(song.videoId).any((p) => p.plays > 0));
+        final native = platform.loaded(song.videoId).single;
+        expect(native.loads.single.initialPosition, position);
+        final transport = player.runtimeAudioDecoder!;
+
+        await handler.pause();
+        await waitFor(() => native.pauses > 0);
+        await handler.play();
+        await waitFor(() => native.plays == 2);
+
+        tester.binding
+            .handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+        app_main.darkColorScheme = ThemeData.dark().colorScheme;
+        await tester.pumpWidget(MultiBlocProvider(
+          providers: [
+            BlocProvider<AppCubit>.value(value: app),
+            BlocProvider<SettingsCubit>.value(value: settings),
+            BlocProvider<PlayerCubit>.value(value: player),
+          ],
+          child: MaterialApp(
+            localizationsDelegates: AppLocalizations.localizationsDelegates,
+            supportedLocales: AppLocalizations.supportedLocales,
+            home: Scaffold(
+                body: view.AudioPlayer(
+                    video: player.state.currentlyPlaying, miniPlayer: false)),
+          ),
+        ));
+        expect(
+            tester
+                .element(find.byType(PlayerControls))
+                .read<AudioPlayerCubit>(),
+            same(transport));
+        expect(platform.loaded(song.videoId).single, same(native));
+
+        await tester.pumpWidget(const SizedBox.shrink());
+        expect(transport.isClosed, isFalse);
+        expect(native.events.isClosed, isFalse);
+      } finally {
+        tester.binding
+            .handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+        await tester.pumpWidget(const SizedBox.shrink());
         await player.close();
         await settings.close();
         await app.close();

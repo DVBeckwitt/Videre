@@ -115,7 +115,10 @@ class _Player extends Cubit<PlayerState> implements PlayerCubit {
   @override
   Future<void> playMusicCollectionQueue(List<Video> tracks,
       {required String queueTitle,
+      int? startIndex,
       bool shuffle = false,
+      bool songTap = false,
+      bool collectionDetail = false,
       bool Function()? isCurrent,
       List<PlaylistReference?>? recommendationSources}) async {
     expect(isCurrent?.call(), isNot(false));

@@ -17,6 +17,9 @@ import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/home/models/content_mode.dart';
 import 'package:clipious/home/models/phone_navigation.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
+import 'package:clipious/music/models/local_music_track.dart';
+import 'package:clipious/music/services/local_music_library.dart';
+import 'package:clipious/music/views/screens/music_library.dart';
 import 'package:clipious/main.dart' as app_main;
 import 'package:clipious/music/models/music_artist.dart';
 import 'package:clipious/music/models/music_artist_page.dart';
@@ -381,6 +384,19 @@ class _QueueSelectionPlayer extends TestPlayerCubit {
   }
 }
 
+class _LauncherShufflePlayer extends TestPlayerCubit {
+  _LauncherShufflePlayer(super.initialState, super.settings);
+
+  final requests = <List<String>>[];
+
+  @override
+  Future<void> shuffleLocalMusic(List<LocalMusicTrack> tracks,
+      {required String queueTitle, required bool Function() isCurrent}) async {
+    expect(isCurrent(), isTrue);
+    requests.add(tracks.map((track) => track.title).toList());
+  }
+}
+
 class _WatchSelectionPlayer extends TestPlayerCubit {
   _WatchSelectionPlayer(super.initialState, super.settings);
 
@@ -395,7 +411,8 @@ class _WatchSelectionPlayer extends TestPlayerCubit {
       String? queueTitle,
       PlaylistReference? recommendationSource,
       bool fromMusic = false,
-      bool songTap = false}) async {
+      bool songTap = false,
+      bool collectionDetail = false}) async {
     selection.add((videos.single.videoId, audio));
   }
 }
@@ -1846,6 +1863,84 @@ void main() {
     await tester.pumpAndSettle();
     _expectMusicSection(tester, MusicDestination.library);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('launcher Search focuses Music and Back returns to the video tab',
+      (tester) async {
+    await _pumpHomepage(tester, const Size(390, 844));
+    await _selectPhoneTab(tester, PhoneNavigationItem.history);
+    final historyIndex =
+        tester.widget<NavigationBar>(_phoneNavigation).selectedIndex;
+
+    unawaited(appRouter
+        .push(MusicShortcutRoute(destination: MusicDestination.search)));
+    await tester.pumpAndSettle();
+    final field =
+        tester.widget<TextField>(find.byKey(const ValueKey('music-search')));
+    expect(field.focusNode!.hasFocus, isTrue);
+
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(find.byType(MusicShortcutScreen), findsNothing);
+    expect(tester.widget<NavigationBar>(_phoneNavigation).selectedIndex,
+        historyIndex);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('launcher shuffle plays from Library and reports a revoked grant',
+      (tester) async {
+    const channel = MethodChannel('com.github.dvbeckwitt.videre/local_music');
+    const tree = 'content://provider/tree/music';
+    const folder = {'uri': tree, 'name': 'Fixture'};
+    final library = LocalMusicLibrary.instance;
+    final messenger = tester.binding.defaultBinaryMessenger;
+    var granted = true;
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      return switch (call.method) {
+        'getFolder' => null,
+        'pickFolder' => folder,
+        'checkFolderAccess' => granted,
+        'listTracks' => [
+            {'uri': '$tree/document/song', 'title': 'Fixture song'},
+          ],
+        'forgetFolder' => null,
+        _ => throw MissingPluginException(call.method),
+      };
+    });
+    addTearDown(() async {
+      if (library.enabled) await library.disable();
+      messenger.setMockMethodCallHandler(channel, null);
+    });
+    expect(await library.chooseFolder(), isTrue);
+    expect(library.visibleTracks.single.title, 'Fixture song');
+    late _LauncherShufflePlayer player;
+    await _pumpHomepage(tester, const Size(390, 844),
+        createPlayer: (settings) =>
+            player = _LauncherShufflePlayer(PlayerState.init(null), settings));
+
+    void launch() {
+      unawaited(appRouter.push(MusicShortcutRoute(
+          key: UniqueKey(),
+          destination: MusicDestination.library,
+          canStartShuffle: () => true)));
+    }
+
+    launch();
+    await tester.pumpAndSettle();
+    expect(find.byType(MusicLibraryPage), findsOneWidget);
+    expect(player.requests, [
+      ['Fixture song'],
+    ]);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+
+    granted = false;
+    launch();
+    await tester.pumpAndSettle();
+    expect(player.requests, hasLength(1));
+    expect(
+        find.textContaining('Access to this folder was lost'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox.shrink());
   });
 
   testWidgets('choosing Music Home overrides a Search shortcut in progress',

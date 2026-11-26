@@ -1,6 +1,8 @@
 import 'dart:async';
 
 import 'package:clipious/app/states/app.dart';
+import 'package:clipious/downloads/models/music_offline_policy.dart';
+import 'package:clipious/downloads/states/download_manager.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
@@ -60,6 +62,39 @@ class _Player extends Cubit<PlayerState> implements PlayerCubit {
     ));
   }
 
+  void showCachedSong(String videoId, String rendition) {
+    final song = CachedMusicSong(
+      videoId: videoId,
+      title: 'Current song',
+      artist: 'Artist',
+      lengthSeconds: 93,
+      rendition: rendition,
+    );
+    emit(state.copyWith(
+      currentlyPlaying: song.playbackEntry(cachedMusicOwner(_firstAccount)!),
+    ));
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => throw UnimplementedError();
+}
+
+class _Downloads extends Cubit<DownloadManagerState>
+    implements DownloadManagerCubit {
+  _Downloads() : super(const DownloadManagerState());
+
+  final keeps = <({Server owner, String videoId, String rendition})>[];
+  Future<KeepCachedMusicResult>? keepResult;
+
+  @override
+  Future<KeepCachedMusicResult> keepCachedMusicSong(
+      Server server, CachedMusicSong song,
+      {MusicOfflinePolicy policy = const MusicOfflinePolicy()}) async {
+    keeps
+        .add((owner: server, videoId: song.videoId, rendition: song.rendition));
+    return await keepResult ?? KeepCachedMusicResult.saved;
+  }
+
   @override
   dynamic noSuchMethod(Invocation invocation) => throw UnimplementedError();
 }
@@ -80,6 +115,7 @@ void main() {
   late bool wasTv;
   late _App app;
   late _Player player;
+  late _Downloads downloads;
   late TestSettingsCubit settings;
 
   setUp(() async {
@@ -88,11 +124,13 @@ void main() {
     db = await SembastSqfDb.createInMemory();
     app = _App();
     player = _Player();
+    downloads = _Downloads();
     settings = TestSettingsCubit(SettingsState.init(), app);
   });
 
   tearDown(() async {
     messenger.setMockMethodCallHandler(_channel, null);
+    await downloads.close();
     await player.close();
     await settings.close();
     await app.close();
@@ -100,12 +138,14 @@ void main() {
     app_globals.isTv = wasTv;
   });
 
-  Future<void> open(WidgetTester tester) async {
+  Future<void> open(WidgetTester tester, {bool withDownloads = false}) async {
     await tester.pumpWidget(MultiBlocProvider(
       providers: [
         BlocProvider<AppCubit>.value(value: app),
         BlocProvider<PlayerCubit>.value(value: player),
         BlocProvider<SettingsCubit>.value(value: settings),
+        if (withDownloads)
+          BlocProvider<DownloadManagerCubit>.value(value: downloads),
       ],
       child: MaterialApp(
         localizationsDelegates: AppLocalizations.localizationsDelegates,
@@ -119,6 +159,165 @@ void main() {
     await tester.tap(tab);
     await tester.pump();
   }
+
+  Finder songMenu(Map<String, Object> row) => find.descendant(
+        of: find.byKey(
+          ValueKey((row['videoId'] as String, row['rendition'] as String)),
+        ),
+        matching: find.byType(IconButton),
+      );
+
+  Future<void> remove(WidgetTester tester, Map<String, Object> row) async {
+    await tester.tap(songMenu(row));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Remove from playback cache'));
+    await tester.pumpAndSettle();
+  }
+
+  testWidgets(
+      'Removing a cached song refreshes the same-ID alternate rendition',
+      (tester) async {
+    final first = _song('aaaaaaaaaaa', 'First song', 'a');
+    final alternate = _song('aaaaaaaaaaa', 'Alternate rendition', 'c');
+    final second = _song('bbbbbbbbbbb', 'Second song', 'b');
+    final pending = Completer<String>();
+    final attempts = <String>[];
+    var rows = [first, alternate, second];
+    messenger.setMockMethodCallHandler(_channel, (call) async {
+      expect(call.arguments['accountId'], _firstAccount.accountId);
+      if (call.method == 'cachedMusicSongs') return rows;
+      expect(call.method, 'removeCachedMusicSong');
+      expect(call.arguments['profileId'], _firstAccount.profileId);
+      expect(call.arguments['origin'], 'https://example.test');
+      expect(call.arguments['contentId'], first['videoId']);
+      final rendition = call.arguments['rendition'] as String;
+      attempts.add(rendition);
+      if (rendition == first['rendition']) return pending.future;
+      expect(rendition, alternate['rendition']);
+      rows = [second];
+      return 'missing';
+    });
+
+    await open(tester);
+    await tester.pumpAndSettle();
+    await remove(tester, first);
+    expect(attempts, [first['rendition']]);
+    expect(tester.widget<IconButton>(songMenu(first)).onPressed, isNull);
+    await tester.tap(find.text('Second song'));
+    await tester.pumpAndSettle();
+    expect(player.selections, isEmpty);
+
+    rows = [alternate, second];
+    pending.complete('removed');
+    await tester.pumpAndSettle();
+    expect(find.text('First song'), findsNothing);
+    expect(find.text('Alternate rendition'), findsOneWidget);
+    expect(find.text('Second song'), findsOneWidget);
+    expect(find.text('Song removed from the playback cache.'), findsOneWidget);
+
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
+    await remove(tester, alternate);
+    expect(attempts, [first['rendition'], alternate['rendition']]);
+    expect(find.text('Alternate rendition'), findsNothing);
+    expect(find.text('Second song'), findsOneWidget);
+    expect(find.text('This song is no longer in the playback cache.'),
+        findsOneWidget);
+  }, variant: android);
+
+  testWidgets('Removal defers while a cached rendition is playing or in use',
+      (tester) async {
+    final first = _song('aaaaaaaaaaa', 'First song', 'a');
+    var nativeAttempts = 0;
+    messenger.setMockMethodCallHandler(_channel, (call) async {
+      if (call.method == 'cachedMusicSongs') return [first];
+      expect(call.method, 'removeCachedMusicSong');
+      nativeAttempts++;
+      return 'inUse';
+    });
+
+    await open(tester);
+    await tester.pumpAndSettle();
+    player.showCachedSong(
+        first['videoId'] as String, first['rendition'] as String);
+    await remove(tester, first);
+    expect(nativeAttempts, 0);
+    expect(find.text('First song'), findsOneWidget);
+    expect(find.text('This cached song is in use. Try again later.'),
+        findsOneWidget);
+
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
+    player.showCachedSong(first['videoId'] as String, 'c' * 64);
+    await remove(tester, first);
+    expect(nativeAttempts, 1);
+    expect(find.text('First song'), findsOneWidget);
+    expect(find.text('This cached song is in use. Try again later.'),
+        findsOneWidget);
+  }, variant: android);
+
+  Future<void> openSongMenu(
+      WidgetTester tester, Map<String, Object> row) async {
+    await tester.tap(songMenu(row));
+    await tester.pumpAndSettle();
+  }
+
+  testWidgets('Cached song menu saves the selected rendition once',
+      (tester) async {
+    final first = _song('aaaaaaaaaaa', 'First song', 'a');
+    final second = _song('bbbbbbbbbbb', 'Second song', 'b');
+    messenger.setMockMethodCallHandler(_channel, (_) async => [first, second]);
+    final completion = Completer<KeepCachedMusicResult>();
+    downloads.keepResult = completion.future;
+
+    await open(tester, withDownloads: true);
+    await tester.pumpAndSettle();
+    await openSongMenu(tester, second);
+    await tester.tap(find.text('Keep as download'));
+    await tester.pumpAndSettle();
+
+    await openSongMenu(tester, second);
+    final action = find.widgetWithText(MenuItemButton, 'Keep as download');
+    expect(tester.widget<MenuItemButton>(action).onPressed, isNull);
+    expect(downloads.keeps, [
+      (owner: _firstAccount, videoId: 'bbbbbbbbbbb', rendition: 'b' * 64),
+    ]);
+    expect(player.selections, isEmpty);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    completion.complete(KeepCachedMusicResult.saved);
+    await tester.pumpAndSettle();
+    expect(find.text('Song saved to Music downloads.'), findsOneWidget);
+  }, variant: android);
+
+  testWidgets('Cached song menu refreshes after the selected cache disappears',
+      (tester) async {
+    final first = _song('aaaaaaaaaaa', 'First song', 'a');
+    final second = _song('bbbbbbbbbbb', 'Second song', 'b');
+    var rows = [first, second];
+    var listCalls = 0;
+    messenger.setMockMethodCallHandler(_channel, (call) async {
+      expect(call.method, 'cachedMusicSongs');
+      listCalls++;
+      return rows;
+    });
+    downloads.keepResult = Future.value(KeepCachedMusicResult.unavailable);
+
+    await open(tester, withDownloads: true);
+    await tester.pumpAndSettle();
+    rows = [second];
+    await openSongMenu(tester, first);
+    await tester.tap(find.text('Keep as download'));
+    await tester.pumpAndSettle();
+
+    expect(listCalls, 2);
+    expect(downloads.keeps.single.videoId, 'aaaaaaaaaaa');
+    expect(find.text('First song'), findsNothing);
+    expect(find.text('Second song'), findsOneWidget);
+    expect(find.text('This song is no longer in the playback cache.'),
+        findsOneWidget);
+  }, variant: android);
 
   testWidgets('Cached songs recheck eviction and play the current cache order',
       (tester) async {

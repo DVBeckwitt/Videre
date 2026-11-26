@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    android:orientation="horizontal">
+
+    <ImageButton
+        android:id="@+id/music_widget_previous"
+        style="@style/MusicWidgetControl"
+        android:contentDescription="@string/music_widget_previous"
+        android:src="@drawable/music_widget_previous" />
+
+    <ImageButton
+        android:id="@+id/music_widget_toggle"
+        style="@style/MusicWidgetControl"
+        android:background="@drawable/music_widget_toggle_background"
+        android:contentDescription="@string/music_widget_play"
+        android:src="@drawable/music_widget_play"
+        android:tint="#23182E" />
+
+    <ImageButton
+        android:id="@+id/music_widget_next"
+        style="@style/MusicWidgetControl"
+        android:contentDescription="@string/music_widget_next"
+        android:src="@drawable/music_widget_next" />
+</LinearLayout>

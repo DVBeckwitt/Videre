@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/globals.dart';
@@ -34,7 +35,10 @@ class _Player extends Cubit<PlayerState> implements PlayerCubit {
 
   @override
   Future<void> playLocalMusic(List<LocalMusicTrack> tracks,
-      {int startIndex = 0, String? queueTitle, bool songTap = false}) async {
+      {int startIndex = 0,
+      String? queueTitle,
+      bool songTap = false,
+      bool collectionDetail = false}) async {
     queue = tracks;
     start = startIndex;
     source = queueTitle;
@@ -47,11 +51,13 @@ class _Player extends Cubit<PlayerState> implements PlayerCubit {
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   const channel = MethodChannel('com.github.dvbeckwitt.videre/local_music');
+  const filesChannel = MethodChannel('videre/files');
   final messenger =
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
   const tree = 'content://provider/tree/music';
   final albumKey = 'a' * 64;
   final otherAlbumKey = 'b' * 64;
+  final editedAlbumKey = 'c' * 64;
   final stableFileKey = 'd' * 64;
   final anchorId = 'device:$stableFileKey';
   late _App app;
@@ -61,6 +67,9 @@ void main() {
   late String selection;
   late bool granted;
   late int scans;
+  late List<Object?> tagReads;
+  late List<Object?> tagWrites;
+  late FutureOr<Object?> Function(Map<Object?, Object?>) writeTags;
   Completer<bool>? checkingAccess;
 
   Map<String, Object> song(int index) => {
@@ -72,6 +81,38 @@ void main() {
         'albumKey': albumKey,
         if (index == 40) 'identityKey': stableFileKey,
       };
+
+  Map<String, Object> editableSong(int index, int trackNumber) => {
+        ...song(index),
+        'title': 'Track $trackNumber',
+        'fileName': 'track$trackNumber.mp3',
+        'trackNumber': trackNumber,
+        'discNumber': 1,
+        'canEditTags': true,
+      };
+
+  String revisionFor(int index) => index.toRadixString(16).padLeft(64, '0');
+
+  Map<String, Object?> savedTags(Map<Object?, Object?> arguments) {
+    final row = rows.singleWhere((row) => row['uri'] == arguments['uri']);
+    final changes = Map<String, Object?>.from(arguments['changes']! as Map);
+    for (final field in ['trackNumber', 'discNumber']) {
+      if (changes[field] case final String value) {
+        changes[field] = int.parse(value);
+      }
+    }
+    return {
+      ...row,
+      ...changes,
+      if (changes.containsKey('album')) 'albumKey': editedAlbumKey,
+    };
+  }
+
+  Map<String, Object?> tagTarget(int index) => {
+        'treeUri': tree,
+        'selectionId': selection,
+        'uri': '$tree/document/$index',
+      };
   setUp(() async {
     db = await SembastSqfDb.createInMemory();
     app = _App();
@@ -79,6 +120,9 @@ void main() {
     library = LocalMusicLibrary(visibilityDatabase: () => db);
     granted = true;
     scans = 0;
+    tagReads = [];
+    tagWrites = [];
+    writeTags = savedTags;
     checkingAccess = null;
     selection = 'original';
     rows = [
@@ -95,6 +139,34 @@ void main() {
         case 'listTracks':
           scans++;
           return rows;
+        case 'readTrackTags':
+          tagReads.add(call.arguments);
+          final uri = call.arguments['uri'] as String;
+          final row = rows.singleWhere((row) => row['uri'] == uri);
+          final values = {
+            'title': row['title'],
+            'album': row['album'],
+            'artist': row['artist'],
+            'albumArtist': row['albumArtist'],
+            'trackNumber': row['trackNumber']?.toString(),
+            'trackTotal': '8',
+            'discNumber': row['discNumber']?.toString(),
+            'discTotal': '2',
+            if (row.containsKey('genre')) 'genre': row['genre'],
+            if (row.containsKey('releaseDate'))
+              'releaseDate': row['releaseDate'],
+          };
+          return {
+            'revision': revisionFor(int.parse(uri.split('/').last)),
+            'values': values,
+            'editableFields': values.keys.toList(),
+            if (row['id3Version'] case final int version) 'id3Version': version,
+            'artworkEditable': true,
+            'hasArtwork': true,
+          };
+        case 'editTrackTags':
+          tagWrites.add(call.arguments);
+          return writeTags(Map<Object?, Object?>.from(call.arguments as Map));
         default:
           throw MissingPluginException(call.method);
       }
@@ -141,10 +213,267 @@ void main() {
     if (settle) await tester.pumpAndSettle();
   }
 
+  Finder inTagDialog(Finder matching) => find.descendant(
+        of: find.byType(AlertDialog),
+        matching: matching,
+      );
+
+  Future<void> openTagEditor(WidgetTester tester) async {
+    await show(tester, fromLibrary: true);
+    await tester.tap(find.text('Edit album tags'));
+    await tester.pumpAndSettle();
+  }
+
+  Future<void> proposeAlbumName(WidgetTester tester) async {
+    await tester
+        .tap(inTagDialog(find.widgetWithText(CheckboxListTile, 'Album')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+        find.byKey(const ValueKey('album')), 'Live remaster');
+    await tester.pumpAndSettle();
+  }
+
+  Future<void> reviewTags(WidgetTester tester) async {
+    await tester
+        .tap(inTagDialog(find.widgetWithText(FilledButton, 'Review changes')));
+    await tester.pumpAndSettle();
+  }
+
+  testWidgets(
+      'album action reviews only its source files and cancel writes nothing',
+      (tester) async {
+    rows = [
+      editableSong(40, 1),
+      editableSong(41, 2),
+      {...editableSong(80, 1), 'albumKey': otherAlbumKey},
+    ];
+    await openTagEditor(tester);
+    expect(tagReads, [tagTarget(40), tagTarget(41)]);
+    await proposeAlbumName(tester);
+    await reviewTags(tester);
+    expect(find.text('Apply the changes below to 2 source files.'),
+        findsOneWidget);
+    expect(find.textContaining('Album → Live remaster'), findsNWidgets(2));
+    expect(tagWrites, isEmpty);
+
+    await tester.tap(inTagDialog(find.text('Cancel')));
+    await tester.pumpAndSettle();
+
+    expect(tagWrites, isEmpty);
+    expect(find.byType(AlertDialog), findsNothing);
+    expect(library.trackById(anchorId)?.album, 'Live');
+  });
+
+  testWidgets(
+    'reviews and applies genre and release date for each album file',
+    (tester) async {
+      rows = [
+        for (final (index, trackNumber, version) in [(40, 1, 3), (41, 2, 4)])
+          {
+            ...editableSong(index, trackNumber),
+            'genre': 'Rock',
+            'releaseDate': '1997',
+            'id3Version': version,
+          },
+      ];
+      await openTagEditor(tester);
+
+      Future<Finder> enableField(String label, String key) async {
+        final toggle = inTagDialog(
+          find.widgetWithText(CheckboxListTile, label),
+        );
+        await tester.ensureVisible(toggle);
+        await tester.tap(toggle);
+        await tester.pumpAndSettle();
+        final field = find.byKey(ValueKey(key));
+        await tester.ensureVisible(field);
+        return field;
+      }
+
+      final genre = await enableField('Genre', 'genre');
+      await tester.enterText(genre, 'Soul');
+      final release = await enableField('Release date', 'releaseDate');
+      await tester.enterText(release, '2023-04');
+      await tester.pumpAndSettle();
+
+      final review = inTagDialog(
+        find.widgetWithText(FilledButton, 'Review changes'),
+      );
+      expect(tester.widget<FilledButton>(review).onPressed, isNull);
+      expect(tagWrites, isEmpty);
+
+      await tester.enterText(release, '2023-04-19');
+      await tester.pumpAndSettle();
+      await reviewTags(tester);
+      expect(
+        find.text('Apply the changes below to 2 source files.'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('Genre → Soul'), findsNWidgets(2));
+      expect(
+        find.textContaining('Release date → 2023-04-19'),
+        findsNWidgets(2),
+      );
+      expect(tagWrites, isEmpty);
+
+      await tester.tap(inTagDialog(find.text('Apply changes')));
+      await tester.pumpAndSettle();
+
+      expect(tagWrites, [
+        for (final index in [40, 41])
+          {
+            ...tagTarget(index),
+            'revision': revisionFor(index),
+            'changes': {'genre': 'Soul', 'releaseDate': '2023-04-19'},
+          },
+      ]);
+      expect(find.textContaining('Tags saved'), findsNWidgets(2));
+      expect(library.tracks.map((track) => track.genre), ['Soul', 'Soul']);
+      expect(library.tracks.map((track) => track.releaseDate), [
+        '2023-04-19',
+        '2023-04-19',
+      ]);
+    },
+  );
+
+  testWidgets(
+      'combines reviewed edits and reports each file after a partial failure',
+      (tester) async {
+    rows = [
+      editableSong(40, 1),
+      editableSong(41, 2),
+      editableSong(42, 3),
+      editableSong(43, 4),
+    ];
+    writeTags = (arguments) {
+      if (arguments['uri'] == '$tree/document/41') {
+        throw PlatformException(code: 'TAGS_NO_SPACE');
+      }
+      return savedTags(arguments);
+    };
+    final artwork = base64Decode(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUB'
+      'AScY42YAAAAASUVORK5CYII=',
+    );
+    var picks = 0;
+    messenger.setMockMethodCallHandler(filesChannel, (call) async {
+      expect(call.method, 'openPlaylistCover');
+      expect(call.arguments, isNull);
+      picks++;
+      return artwork;
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(filesChannel, null));
+
+    await openTagEditor(tester);
+    await proposeAlbumName(tester);
+    FocusManager.instance.primaryFocus?.unfocus();
+    await tester.pumpAndSettle();
+    final editorScroll = inTagDialog(find.byType(Scrollable)).first;
+    final cover = inTagDialog(
+      find.widgetWithText(TextButton, 'Choose front cover'),
+    );
+    await tester.scrollUntilVisible(cover.hitTestable(), 100,
+        scrollable: editorScroll);
+    await tester.tap(cover);
+    await tester.pumpAndSettle();
+    expect(picks, 1);
+
+    final number = find.byKey(ValueKey((anchorId, 'trackNumber')));
+    await tester.scrollUntilVisible(number, 100, scrollable: editorScroll);
+    await tester.enterText(number, '7');
+    final disc = find.byKey(ValueKey((anchorId, 'discNumber')));
+    await tester.ensureVisible(disc);
+    await tester.enterText(disc, '2');
+    final excluded =
+        inTagDialog(find.widgetWithText(CheckboxListTile, 'Track 3'));
+    await tester.scrollUntilVisible(excluded, 100, scrollable: editorScroll);
+    await tester.tap(excluded);
+    await tester.pumpAndSettle();
+
+    await reviewTags(tester);
+    expect(find.text('Apply the changes below to 3 source files.'),
+        findsOneWidget);
+    expect(find.textContaining('Track number → 7'), findsOneWidget);
+    expect(find.textContaining('Disc number → 2'), findsOneWidget);
+    expect(find.textContaining('Replace front cover'), findsNWidgets(3));
+    expect(tagWrites, isEmpty);
+
+    await tester.tap(inTagDialog(find.text('Apply changes')));
+    await tester.pumpAndSettle();
+
+    expect(tagWrites, [
+      for (final index in [40, 41, 43])
+        {
+          ...tagTarget(index),
+          'revision': revisionFor(index),
+          'changes': {
+            'album': 'Live remaster',
+            if (index == 40) ...{'trackNumber': '7', 'discNumber': '2'},
+          },
+          'artwork': artwork,
+        },
+    ]);
+    expect(find.text('Album tag results'), findsOneWidget);
+    expect(find.textContaining('Tags saved'), findsNWidgets(2));
+    expect(
+        find.textContaining('exceed the available tag space'), findsOneWidget);
+    expect(find.textContaining('Not selected'), findsOneWidget);
+    expect(library.trackById(anchorId)?.album, 'Live remaster');
+    expect(library.trackById(anchorId)?.artist, 'Guest 40');
+    expect(library.trackById(anchorId)?.trackNumber, 7);
+    expect(
+      {for (final track in library.tracks) track.uri: track.album},
+      const {
+        '$tree/document/40': 'Live remaster',
+        '$tree/document/41': 'Live',
+        '$tree/document/42': 'Live',
+        '$tree/document/43': 'Live remaster',
+      },
+    );
+  });
+
+  testWidgets('stop waits for the current file and skips the remaining write',
+      (tester) async {
+    rows = [editableSong(40, 1), editableSong(41, 2)];
+    final authorization = Completer<Object?>();
+    Map<Object?, Object?>? pendingWrite;
+    writeTags = (arguments) {
+      pendingWrite = arguments;
+      return authorization.future;
+    };
+    await openTagEditor(tester);
+    await proposeAlbumName(tester);
+    await reviewTags(tester);
+
+    await tester.tap(inTagDialog(find.text('Apply changes')));
+    await tester.pump();
+    expect(tagWrites, hasLength(1));
+    final stop =
+        inTagDialog(find.widgetWithText(TextButton, 'Stop after current file'));
+    await tester.tap(stop);
+    await tester.pump();
+    expect(tester.widget<TextButton>(stop).onPressed, isNull);
+    expect(tagWrites, hasLength(1));
+
+    authorization.complete(savedTags(pendingWrite!));
+    await tester.pumpAndSettle();
+
+    expect(tagWrites, hasLength(1));
+    expect(find.text('Album tag results'), findsOneWidget);
+    expect(find.textContaining('Tags saved'), findsOneWidget);
+    expect(find.textContaining('Stopped before writing this file'),
+        findsOneWidget);
+  });
+
   testWidgets('browse opens one edition and plays in disc and track order',
       (tester) async {
     rows = [
-      {...song(21), 'discNumber': 2, 'trackNumber': 1},
+      {
+        ...song(21),
+        'discNumber': 2,
+        'discSubtitle': 'Rarities',
+        'trackNumber': 1
+      },
       {...song(10), 'discNumber': 1, 'trackNumber': 10},
       {...song(2), 'discNumber': 1, 'trackNumber': 2, 'releaseDate': '1997-09'},
       {...song(80), 'albumKey': otherAlbumKey, 'title': 'Other edition'},
@@ -154,12 +483,18 @@ void main() {
     expect(find.text('The ensemble'), findsOneWidget);
     expect(find.text('1997-09'), findsOneWidget);
     expect(find.text('Other edition'), findsNothing);
+    expect(find.text('Disc 1'), findsOneWidget);
+    expect(find.text('Disc 2 · Rarities'), findsOneWidget);
     expect(find.text('1.2'), findsOneWidget);
     expect(find.text('1.10'), findsOneWidget);
     expect(find.text('2.1'), findsOneWidget);
     final first = find.text('Song 2');
     final next = find.text('Song 10');
     final last = find.text('Song 21');
+    expect(tester.getTopLeft(find.text('Disc 1')).dy,
+        lessThan(tester.getTopLeft(first).dy));
+    expect(tester.getTopLeft(find.text('Disc 2 · Rarities')).dy,
+        lessThan(tester.getTopLeft(last).dy));
     expect(tester.getTopLeft(first).dy, lessThan(tester.getTopLeft(next).dy));
     expect(tester.getTopLeft(next).dy, lessThan(tester.getTopLeft(last).dy));
     expect(player.queue, isEmpty);
@@ -282,8 +617,18 @@ void main() {
     final wasTv = app_globals.isTv;
     addTearDown(() => app_globals.isTv = wasTv);
     app_globals.isTv = true;
+    rows = [
+      for (var index = 0; index < 50; index++)
+        {
+          ...song(index),
+          'discNumber': index <= 40 ? 1 : 2,
+          'trackNumber': index <= 40 ? index + 1 : index - 40,
+          'discSubtitle': index <= 40 ? 'Main' : 'Rarities',
+        },
+    ];
     await show(tester);
     expect(Focus.of(tester.element(find.text('Guest 40'))).hasFocus, isTrue);
+    expect(find.text('Disc 2 · Rarities').hitTestable(), findsOneWidget);
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pumpAndSettle();
     expect(Focus.of(tester.element(find.text('Guest 41'))).hasFocus, isTrue);

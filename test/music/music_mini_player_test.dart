@@ -6,6 +6,8 @@ import 'package:clipious/app/states/app.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
+import 'package:clipious/music/models/music_artist.dart';
+import 'package:clipious/music/models/music_artist_identity.dart';
 import 'package:clipious/music/models/music_library_entry.dart';
 import 'package:clipious/music/models/music_mini_player_preferences.dart';
 import 'package:clipious/music/services/music_library_service.dart';
@@ -166,6 +168,34 @@ void main() {
       await settings.setMusicMiniPlayerShortcut(shortcut);
     });
   }
+
+  testWidgets('Mini player refreshes the artist alias for the current song',
+      (tester) async {
+    const channelId = 'UCabcdefghijklmnopqrstuv';
+    const identity = MusicArtistIdentity.catalog(channelId);
+    const credit = MusicArtistCredit(name: 'Singer', id: channelId);
+    final linked = song.copyWith(
+        musicMetadata: const MusicMetadata(
+            title: 'Song', artist: 'Singer', artistCredits: [credit]));
+    await player.seed(player.state.copyWith(currentlyPlaying: linked));
+    await pump(tester);
+    expect(find.text('Singer'), findsOneWidget);
+
+    final library = MusicLibraryService.forProfile(db, db.profileId);
+    await tester.runAsync(
+        () => library.setArtistAlias(identity, 'Alias', isCurrent: () => true));
+    await tester.pump();
+    expect(find.text('Alias'), findsOneWidget);
+    expect(find.text('Singer'), findsNothing);
+
+    await tester.runAsync(
+        () => library.setArtistAlias(identity, null, isCurrent: () => true));
+    await tester.pump();
+    expect(find.text('Alias'), findsNothing);
+    expect(find.text('Singer'), findsOneWidget);
+    expect(player.state.currentlyPlaying?.musicMetadata?.artistCredits.single,
+        same(credit));
+  });
 
   testWidgets(
       'Transport mini layout offers direct Previous and paged Next with Save in More',

@@ -29,6 +29,8 @@ class PlaybackCacheStatus {
       );
 }
 
+enum CachedMusicRemoval { removed, missing, inUse }
+
 abstract final class PlaybackCache {
   static const _channel = MethodChannel('videre/proxy');
   static bool get supported =>
@@ -65,6 +67,22 @@ abstract final class PlaybackCache {
     return await _channel.invokeListMethod<Object?>(
             'cachedMusicSongs', owner) ??
         const [];
+  }
+
+  static Future<CachedMusicRemoval> removeCachedMusicSong(
+      Map<String, Object?> selection) async {
+    if (!supported) return CachedMusicRemoval.missing;
+    final result =
+        await _channel.invokeMethod<String>('removeCachedMusicSong', selection);
+    return CachedMusicRemoval.values.byName(result ?? '');
+  }
+
+  /// Copies the exact cached Music selection to a private staging file.
+  /// The caller owns cleanup of the returned file.
+  static Future<String?> copyCachedMusicSong(
+      Map<String, Object?> selection) async {
+    if (!supported) return null;
+    return _channel.invokeMethod<String>('copyCachedMusicSong', selection);
   }
 
   /// Deletes only an inactive profile's byte spans and invalidates its sources.

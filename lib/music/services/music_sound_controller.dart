@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:just_audio/just_audio.dart';
 
 import '../models/replay_gain.dart';
+import 'music_output_presets.dart';
 import 'music_replay_gain_preferences.dart';
 
 class MusicEqualizerBand {
@@ -59,22 +60,41 @@ class _JustAudioEqualizer implements MusicEqualizerBackend {
       .setAndroidEqualizerBandGain(band, gain, expectedSessionId: session);
 }
 
-/// Equalizer effects last for the current listening session and are created
-/// only after Sound is opened. ReplayGain and preamp are profile preferences.
+typedef _OutputGain = ({
+  ReplayGainMode mode,
+  double taggedPreampDb,
+  double untaggedPreampDb,
+});
+
+/// Applies EQ only to the active Music decoder. A verified output can restore a
+/// locally saved Sound preset. Otherwise ReplayGain uses the profile defaults.
 class MusicSoundController extends ChangeNotifier {
   MusicSoundController({
     bool? supported,
     String Function()? currentProfile,
+    MusicOutputPresetStore outputPresets = const MusicOutputPresetStore(),
   })  : supported = supported ??
             (!kIsWeb && defaultTargetPlatform == TargetPlatform.android),
-        _currentProfile = currentProfile ?? (() => db.profileId);
+        _currentProfile = currentProfile ?? (() => db.profileId),
+        _outputPresets = outputPresets;
 
   final bool supported;
   final String Function() _currentProfile;
+  final MusicOutputPresetStore _outputPresets;
   MusicEqualizerBackend? _backend;
   Object? _owner;
   String? _profile;
   StreamSubscription<int?>? _subscription;
+  Stream<MusicOutput?>? _outputSource;
+  StreamSubscription<MusicOutput?>? _outputSubscription;
+  MusicOutput? _output;
+  bool _restoreOutput = false;
+  MusicOutputPreset? _savedOutputPreset;
+  _OutputGain? _outputGain;
+  int _outputSelection = 0;
+  bool _outputPresetFailed = false;
+  bool _savingOutputPreset = false;
+  ({MusicEqualizerBackend backend, int session, Future<void> done})? _operation;
   int? _session;
   int _revision = 0;
   bool _disposed = false;
@@ -92,21 +112,66 @@ class MusicSoundController extends ChangeNotifier {
   bool get enabled => _enabled;
   bool get waiting => supported && (_session == null || _session! <= 0);
   bool get available => supported && _parameters != null && !_failed;
+  MusicOutput? get output => _output;
+  bool get hasOutputPreset => _savedOutputPreset != null;
+  bool get outputPresetFailed => _outputPresetFailed;
+  bool get savingOutputPreset => _savingOutputPreset;
 
   bool get replayGainSupported => supported;
-  ReplayGainMode get replayGainMode =>
-      replayGainSupported ? _replayGainPreferences.mode : ReplayGainMode.off;
-  double get musicPreampDb =>
-      replayGainSupported ? _replayGainPreferences.preampDb : 0;
+  _OutputGain? get _activeOutputGain =>
+      _profile == _currentProfile() ? _outputGain : null;
+
+  ReplayGainMode get replayGainMode => replayGainSupported
+      ? _activeOutputGain?.mode ?? _replayGainPreferences.mode
+      : ReplayGainMode.off;
+  double get musicTaggedPreampDb => replayGainSupported
+      ? _activeOutputGain?.taggedPreampDb ??
+          _replayGainPreferences.taggedPreampDb
+      : 0;
+  double get musicUntaggedPreampDb => replayGainSupported
+      ? _activeOutputGain?.untaggedPreampDb ??
+          _replayGainPreferences.untaggedPreampDb
+      : 0;
 
   MusicReplayGainPreferences get _replayGainPreferences =>
       MusicReplayGainPreferences(db.forProfile(db.profileId));
 
-  Future<void> setReplayGainMode(ReplayGainMode mode) =>
-      _saveReplayGain((preferences) => preferences.setMode(mode));
+  Future<void> setReplayGainMode(ReplayGainMode mode) async {
+    if (_disposed || !replayGainSupported) return;
+    if (_output != null && _profile == _currentProfile()) {
+      _outputGain = (
+        mode: mode,
+        taggedPreampDb: musicTaggedPreampDb,
+        untaggedPreampDb: musicUntaggedPreampDb,
+      );
+      _notify();
+    } else {
+      await _saveReplayGain((preferences) => preferences.setMode(mode));
+    }
+  }
 
-  Future<void> setMusicPreampDb(double db) =>
-      _saveReplayGain((preferences) => preferences.setPreampDb(db));
+  Future<void> setMusicTaggedPreampDb(double value) =>
+      _setMusicPreampDb(value, tagged: true);
+
+  Future<void> setMusicUntaggedPreampDb(double value) =>
+      _setMusicPreampDb(value, tagged: false);
+
+  Future<void> _setMusicPreampDb(double value, {required bool tagged}) async {
+    if (_disposed || !replayGainSupported) return;
+    final preamp = clampMusicPreampDb(value);
+    if (_output != null && _profile == _currentProfile()) {
+      _outputGain = (
+        mode: replayGainMode,
+        taggedPreampDb: tagged ? preamp : musicTaggedPreampDb,
+        untaggedPreampDb: tagged ? musicUntaggedPreampDb : preamp,
+      );
+      _notify();
+    } else {
+      await _saveReplayGain((preferences) => tagged
+          ? preferences.setTaggedPreampDb(preamp)
+          : preferences.setUntaggedPreampDb(preamp));
+    }
+  }
 
   Future<void> _saveReplayGain(
       Future<void> Function(MusicReplayGainPreferences) save) async {
@@ -121,26 +186,32 @@ class MusicSoundController extends ChangeNotifier {
 
   void attach(AudioPlayer player, {required String profileId}) =>
       attachBackend(_JustAudioEqualizer(player),
-          owner: player, profileId: profileId);
+          owner: player,
+          profileId: profileId,
+          outputs: supported ? androidMusicOutputs : null);
 
   @visibleForTesting
   void attachBackend(MusicEqualizerBackend backend,
-      {required Object owner, required String profileId}) {
+      {required Object owner,
+      required String profileId,
+      Stream<MusicOutput?>? outputs}) {
     if (_disposed) return;
-    if (identical(owner, _owner)) return;
+    if (identical(owner, _owner) && _profile == profileId) return;
     final previous = _backend;
     final previousSession = _session;
     final hadEffect = _opened;
     _revision++;
     unawaited(_subscription?.cancel());
     if (_profile != profileId) {
+      _profile = profileId;
       _desiredGains.clear();
       _enabled = false;
       _opened = false;
+      _restoreOutput = _output != null;
+      _loadOutputPreset();
     }
     _backend = backend;
     _owner = owner;
-    _profile = profileId;
     _session = backend.sessionId;
     _parameters = null;
     _failed = false;
@@ -155,11 +226,71 @@ class MusicSoundController extends ChangeNotifier {
       _parameters = null;
       _failed = false;
       _busy = false;
-      _notify();
-      if (_opened && !waiting) unawaited(open());
+      _refresh();
     });
-    _notify();
-    if (_opened && !waiting) unawaited(open());
+    if (supported && !identical(outputs, _outputSource)) {
+      unawaited(_outputSubscription?.cancel());
+      _outputSource = outputs;
+      _outputSubscription = outputs?.listen(_outputChanged,
+          onError: (Object _) => _outputChanged(null));
+      _outputChanged(null);
+    }
+    _refresh();
+  }
+
+  void _outputChanged(MusicOutput? output) {
+    if (_disposed || _profile != _currentProfile()) return;
+    final previous = _output;
+    _output = output;
+    if (previous?.id == output?.id) {
+      if (previous?.label != output?.label) _notify();
+      return;
+    }
+    _loadOutputPreset();
+    _restoreOutputEqualizer();
+  }
+
+  static _OutputGain? _gainFromPreset(MusicOutputPreset? preset) {
+    final gain = preset?.gain;
+    if (gain == null) return null;
+    return (
+      mode: gain.mode,
+      taggedPreampDb: gain.preampDb,
+      untaggedPreampDb: preset?.untaggedPreampDb ?? gain.preampDb,
+    );
+  }
+
+  void _loadOutputPreset() {
+    _outputSelection++;
+    _savedOutputPreset = null;
+    _outputGain = null;
+    _outputPresetFailed = false;
+    if (_output case final output?) {
+      try {
+        _savedOutputPreset = _outputPresets.read(_profile!, output.id);
+        _outputGain = _gainFromPreset(_savedOutputPreset);
+      } catch (_) {
+        _outputPresetFailed = true;
+      }
+    }
+  }
+
+  void _restoreOutputEqualizer() {
+    _revision++;
+    _parameters = null;
+    _busy = false;
+    _failed = false;
+    _restoreOutput = true;
+    _refresh();
+  }
+
+  void _refresh() {
+    if (!waiting &&
+        (_opened || (_restoreOutput && _savedOutputPreset?.enabled != null))) {
+      unawaited(_synchronize());
+    } else {
+      _notify();
+    }
   }
 
   Future<void> detach(Object owner) async {
@@ -200,10 +331,19 @@ class MusicSoundController extends ChangeNotifier {
     }
     final revision = _revision;
     bool current() => _current(revision, backend, session);
+    final previous = _operation;
+    final done = Completer<void>();
+    _operation = (backend: backend, session: session, done: done.future);
     _busy = true;
     _failed = false;
     _notify();
     try {
+      // An output can change without replacing the Android audio session.
+      // Finish old writes before applying to that same effect again.
+      if (previous?.backend == backend && previous?.session == session) {
+        await previous!.done;
+        if (!current()) return;
+      }
       await action(backend, session, current);
     } catch (_) {
       if (current()) {
@@ -227,6 +367,8 @@ class MusicSoundController extends ChangeNotifier {
         }
       }
     } finally {
+      done.complete();
+      if (_operation?.done == done.future) _operation = null;
       if (current()) {
         _busy = false;
         _notify();
@@ -237,21 +379,92 @@ class MusicSoundController extends ChangeNotifier {
   Future<void> open() async {
     if (_disposed) return;
     _opened = true;
-    await _run((backend, session, current) async {
-      var parameters = await backend.read(session);
-      if (!current()) return;
-      for (final band in parameters.bands) {
-        final desired = _desiredGains[band.frequency] ?? 0.0;
-        if (desired == band.gain) continue;
-        await backend.setGain(band.index,
-            desired.clamp(parameters.minimum, parameters.maximum), session);
+    await _synchronize();
+  }
+
+  Future<void> _synchronize() => _run((backend, session, current) async {
+        var desiredGains = _desiredGains;
+        var desiredEnabled = _enabled;
+        if (_restoreOutput) {
+          final preset = _savedOutputPreset;
+          if (_opened) {
+            await backend.setEnabled(false, session);
+            if (!current()) return;
+            _enabled = false;
+          }
+          _opened = true;
+          desiredGains = preset?.gains ?? const {};
+          desiredEnabled = preset?.enabled ?? false;
+        }
+        var parameters = await backend.read(session);
         if (!current()) return;
+        for (final band in parameters.bands) {
+          final desired = desiredGains[band.frequency] ?? 0.0;
+          if (desired == band.gain) continue;
+          await backend.setGain(band.index,
+              desired.clamp(parameters.minimum, parameters.maximum), session);
+          if (!current()) return;
+        }
+        await backend.setEnabled(desiredEnabled, session);
+        if (!current()) return;
+        _enabled = desiredEnabled;
+        parameters = await backend.read(session);
+        if (current()) {
+          _remember(parameters);
+          _restoreOutput = false;
+        }
+      });
+
+  Future<void> saveOutputPreset() async {
+    if (_output == null || !supported || _profile != _currentProfile()) return;
+    final stored = _savedOutputPreset;
+    await _writeOutputPreset(MusicOutputPreset(
+        available ? _enabled : stored?.enabled,
+        available ? _desiredGains : stored?.gains ?? const {},
+        gain: (mode: replayGainMode, preampDb: musicTaggedPreampDb),
+        untaggedPreampDb: musicUntaggedPreampDb));
+  }
+
+  Future<void> forgetOutputPreset() async {
+    if (!hasOutputPreset) return;
+    await _writeOutputPreset(null);
+  }
+
+  Future<void> _writeOutputPreset(MusicOutputPreset? preset) async {
+    final output = _output;
+    final profile = _profile;
+    if (_disposed ||
+        _busy ||
+        savingOutputPreset ||
+        profile == null ||
+        profile != _currentProfile() ||
+        output == null) {
+      return;
+    }
+    bool current() =>
+        !_disposed &&
+        _profile == profile &&
+        _currentProfile() == profile &&
+        _output?.id == output.id;
+    final selection = _outputSelection;
+    _savingOutputPreset = true;
+    _outputPresetFailed = false;
+    _notify();
+    try {
+      await _outputPresets.write(profile, output.id, preset);
+      if (current()) {
+        _savedOutputPreset = preset;
+        if (selection != _outputSelection) {
+          _outputGain = _gainFromPreset(preset);
+          _restoreOutputEqualizer();
+        }
       }
-      await backend.setEnabled(_enabled, session);
-      if (!current()) return;
-      parameters = await backend.read(session);
-      if (current()) _remember(parameters);
-    });
+    } catch (_) {
+      if (current()) _outputPresetFailed = true;
+    } finally {
+      _savingOutputPreset = false;
+      _notify();
+    }
   }
 
   Future<void> setEnabled(bool enabled) =>
@@ -295,7 +508,10 @@ class MusicSoundController extends ChangeNotifier {
         if (!current()) return;
         _enabled = enabled;
         final actual = await backend.read(session);
-        if (current()) _remember(actual);
+        if (current()) {
+          _remember(actual);
+          _restoreOutput = false;
+        }
       });
 
   Future<void> _disable(MusicEqualizerBackend? backend, int? session) async {
@@ -317,11 +533,17 @@ class MusicSoundController extends ChangeNotifier {
     final session = _session;
     final hadEffect = _opened;
     final subscription = _subscription;
+    final outputSubscription = _outputSubscription;
     _revision++;
     _backend = null;
     _owner = null;
     _profile = null;
     _subscription = null;
+    _outputSource = null;
+    _outputSubscription = null;
+    _output = null;
+    _restoreOutput = false;
+    _loadOutputPreset();
     _session = null;
     _parameters = null;
     _desiredGains.clear();
@@ -331,6 +553,7 @@ class MusicSoundController extends ChangeNotifier {
     _failed = false;
     _notify();
     await subscription?.cancel();
+    await outputSubscription?.cancel();
     if (hadEffect) await _disable(backend, session);
   }
 

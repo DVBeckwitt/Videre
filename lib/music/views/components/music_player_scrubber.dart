@@ -1,4 +1,4 @@
-import 'dart:ui' show clampDouble;
+import 'dart:math' as math;
 
 import 'package:clipious/music/models/music_player_appearance.dart';
 import 'package:clipious/utils.dart';
@@ -15,6 +15,7 @@ class MusicPlayerScrubber extends StatelessWidget {
     required this.position,
     required this.onChanged,
     required this.onChangeEnd,
+    this.waveformPeaks,
   });
 
   final MusicScrubberStyle style;
@@ -24,6 +25,9 @@ class MusicPlayerScrubber extends StatelessWidget {
   final ValueChanged<double>? onChanged;
   final ValueChanged<double>? onChangeEnd;
 
+  /// Absolute amplitude peaks from 0 to 1 in playback order.
+  final List<double>? waveformPeaks;
+
   @override
   Widget build(BuildContext context) {
     final foreground = Theme.of(context).colorScheme.onSurface;
@@ -32,6 +36,9 @@ class MusicPlayerScrubber extends StatelessWidget {
       inactiveTrackColor: foreground.withValues(alpha: 0.16),
       thumbColor: foreground,
     );
+    const SliderTrackShape regularTrack = RoundedRectSliderTrackShape();
+    final peaks = waveformPeaks;
+    final hasWaveform = peaks != null && peaks.isNotEmpty;
     final scrubberTheme = switch (style) {
       MusicScrubberStyle.gapped => theme.copyWith(
           trackHeight: 12,
@@ -42,12 +49,14 @@ class MusicPlayerScrubber extends StatelessWidget {
         ),
       MusicScrubberStyle.continuous => theme.copyWith(
           trackHeight: 5,
-          trackShape: const RoundedRectSliderTrackShape(),
+          trackShape: regularTrack,
           thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 7),
         ),
       MusicScrubberStyle.wave => theme.copyWith(
           trackHeight: 4,
-          trackShape: const _WaveTrackShape(),
+          trackShape: hasWaveform ? _WaveformTrackShape(peaks) : regularTrack,
+          inactiveTrackColor:
+              hasWaveform ? foreground.withValues(alpha: 0.45) : null,
           thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 7),
         ),
     };
@@ -72,8 +81,10 @@ class MusicPlayerScrubber extends StatelessWidget {
   }
 }
 
-class _WaveTrackShape extends SliderTrackShape with BaseSliderTrackShape {
-  const _WaveTrackShape();
+class _WaveformTrackShape extends SliderTrackShape with BaseSliderTrackShape {
+  const _WaveformTrackShape(this.peaks);
+
+  final List<double> peaks;
 
   @override
   void paint(
@@ -97,49 +108,51 @@ class _WaveTrackShape extends SliderTrackShape with BaseSliderTrackShape {
     );
     if (track.isEmpty) return;
 
-    final rtl = textDirection == TextDirection.rtl;
-    final start = rtl ? track.right : track.left;
-    final end = rtl ? track.left : track.right;
-    final playhead = clampDouble(thumbCenter.dx, track.left, track.right);
-    final center = track.center.dy;
-    final canvas = context.canvas;
-    final stroke = Paint()
-      ..style = PaintingStyle.stroke
+    final barCount = math.min(peaks.length, math.max(1, track.width ~/ 3));
+    final spacing = track.width / barCount;
+    final barWidth = math.min(2.0, spacing * 0.65);
+    final maxHalfHeight = math.min(
+      12.0,
+      (parentBox.size.height - barWidth) / 2,
+    );
+    if (maxHalfHeight <= 0) return;
+    final minHalfHeight = math.min(1.0, maxHalfHeight);
+    final active = Paint()
+      ..color = Color.lerp(
+        sliderTheme.disabledActiveTrackColor,
+        sliderTheme.activeTrackColor,
+        enableAnimation.value,
+      )!
       ..strokeCap = StrokeCap.round
-      ..strokeWidth = track.height;
-
-    if (playhead != end) {
-      stroke.color = Color.lerp(
+      ..strokeWidth = barWidth;
+    final inactive = Paint()
+      ..color = Color.lerp(
         sliderTheme.disabledInactiveTrackColor,
         sliderTheme.inactiveTrackColor,
         enableAnimation.value,
-      )!;
-      canvas.drawLine(Offset(playhead, center), Offset(end, center), stroke);
-    }
+      )!
+      ..strokeCap = StrokeCap.round
+      ..strokeWidth = barWidth;
 
-    final played = (playhead - start).abs();
-    if (played == 0) return;
-
-    const halfWave = 8.0;
-    const amplitude = 2.5;
-    final wave = Path()..moveTo(0, 0);
-    var crest = -amplitude;
-    for (var distance = 0.0; distance < played; distance += halfWave) {
-      wave.relativeQuadraticBezierTo(halfWave / 2, 2 * crest, halfWave, 0);
-      crest = -crest;
+    final rtl = textDirection == TextDirection.rtl;
+    final centerY = track.center.dy;
+    for (var bar = 0; bar < barCount; bar++) {
+      // Retain short transients when several peaks share a bar at this width.
+      final begin = bar * peaks.length ~/ barCount;
+      final end = (bar + 1) * peaks.length ~/ barCount;
+      var peak = 0.0;
+      for (var sample = begin; sample < end; sample++) {
+        peak = math.max(peak, peaks[sample]);
+      }
+      final distance = (bar + 0.5) * spacing;
+      final x = rtl ? track.right - distance : track.left + distance;
+      final played = rtl ? x >= thumbCenter.dx : x <= thumbCenter.dx;
+      final halfHeight = minHalfHeight + (maxHalfHeight - minHalfHeight) * peak;
+      context.canvas.drawLine(
+        Offset(x, centerY - halfHeight),
+        Offset(x, centerY + halfHeight),
+        played ? active : inactive,
+      );
     }
-    stroke.color = Color.lerp(
-      sliderTheme.disabledActiveTrackColor,
-      sliderTheme.activeTrackColor,
-      enableAnimation.value,
-    )!;
-    canvas.save();
-    canvas.translate(start, center);
-    if (rtl) canvas.scale(-1, 1);
-    // Let the fixed wave end under the thumb as the playhead moves.
-    final padding = track.height + amplitude;
-    canvas.clipRect(Rect.fromLTRB(-padding, -padding, played, padding));
-    canvas.drawPath(wave, stroke);
-    canvas.restore();
   }
 }

@@ -90,6 +90,7 @@ Future<void> main() async {
     final other = await db.createProfile('Other listener');
     expect(settingsCubit.state.songTransitionMode, SongTransitionMode.seamless);
     expect(settingsCubit.state.songTransitionSeconds, 3);
+    expect(settingsCubit.state.preserveAlbumTransitions, isFalse);
     for (final mode in SongTransitionMode.values) {
       await settingsCubit.setSongTransitionMode(mode);
       expect(settingsCubit.state.songTransitionMode, mode);
@@ -102,20 +103,25 @@ Future<void> main() async {
     expect(SettingsState.init().songTransitionSeconds, 10);
     expect(() => settingsCubit.setSongTransitionSeconds(11), throwsRangeError);
     expect(() => settingsCubit.setSongTransitionSeconds(0), throwsRangeError);
+    await settingsCubit.setPreserveAlbumTransitions(true);
+    expect(SettingsState.init().preserveAlbumTransitions, isTrue);
     final backup = UserBackup.parse((await db.exportBackup()).encode());
     await db.useProfile(other.id);
     expect(
         SettingsState.init().songTransitionMode, SongTransitionMode.seamless);
     expect(SettingsState.init().songTransitionSeconds, 3);
+    expect(SettingsState.init().preserveAlbumTransitions, isFalse);
     await db.restoreBackup(backup, replace: true);
     expect(
         SettingsState.init().songTransitionMode, SongTransitionMode.crossfade);
     expect(SettingsState.init().songTransitionSeconds, 10);
+    expect(SettingsState.init().preserveAlbumTransitions, isTrue);
     for (final invalid in [
       SettingsValue(songTransitionModeSettingName, 'unsupported'),
       SettingsValue(songTransitionSecondsSettingName, '11'),
       SettingsValue(songTransitionSecondsSettingName, '-1'),
       SettingsValue(songTransitionSecondsSettingName, 'NaN'),
+      SettingsValue(preserveAlbumTransitionsSettingName, 'unsupported'),
     ]) {
       expect(UserBackup.validSetting(invalid), isFalse);
       await db.saveSetting(invalid);
@@ -123,23 +129,48 @@ Future<void> main() async {
     expect(
         SettingsState.init().songTransitionMode, SongTransitionMode.seamless);
     expect(SettingsState.init().songTransitionSeconds, 3);
+    expect(SettingsState.init().preserveAlbumTransitions, isFalse);
+  });
+
+  test('Bluetooth reconnect resume is opt-in and portable per profile',
+      () async {
+    final other = await db.createProfile('Other listener');
+    expect(settingsCubit.state.musicResumeOnBluetoothReconnect, isFalse);
+
+    await settingsCubit.setMusicResumeOnBluetoothReconnect(true);
+    expect(settingsCubit.state.musicResumeOnBluetoothReconnect, isTrue);
+    expect(SettingsState.init().musicResumeOnBluetoothReconnect, isTrue);
+
+    final backup = UserBackup.parse((await db.exportBackup()).encode());
+    await db.useProfile(other.id);
+    expect(SettingsState.init().musicResumeOnBluetoothReconnect, isFalse);
+    await db.restoreBackup(backup, replace: true);
+    expect(SettingsState.init().musicResumeOnBluetoothReconnect, isTrue);
+
+    final invalid = SettingsValue(
+        musicResumeOnBluetoothReconnectSettingName, 'unsupported');
+    expect(UserBackup.validSetting(invalid), isFalse);
+    await db.saveSetting(invalid);
+    expect(SettingsState.init().musicResumeOnBluetoothReconnect, isFalse);
   });
 
   test('Music interruption choices persist per profile and in backups',
       () async {
     final other = await db.createProfile('Other listener');
-    (bool, bool, bool, bool) choices(SettingsState state) => (
+    (bool, bool, bool, bool, bool) choices(SettingsState state) => (
           state.musicResumeAfterAudioFocusLoss,
           state.musicPauseAtZeroVolume,
+          state.musicResumeOnVolumeRise,
           state.musicAutoReconnect,
           state.musicSkipAfterRetryExhaustion,
         );
-    const defaults = (true, false, true, false);
-    const changed = (false, true, false, true);
+    const defaults = (true, false, false, true, false);
+    const changed = (false, true, true, false, true);
     expect(choices(settingsCubit.state), defaults);
 
     await settingsCubit.setMusicResumeAfterAudioFocusLoss(false);
     await settingsCubit.setMusicPauseAtZeroVolume(true);
+    await settingsCubit.setMusicResumeOnVolumeRise(true);
     await settingsCubit.setMusicAutoReconnect(false);
     await settingsCubit.setMusicSkipAfterRetryExhaustion(true);
     expect(choices(settingsCubit.state), changed);
@@ -154,6 +185,7 @@ Future<void> main() async {
     for (final key in [
       musicResumeAfterAudioFocusLossSettingName,
       musicPauseAtZeroVolumeSettingName,
+      musicResumeOnVolumeRiseSettingName,
       musicAutoReconnectSettingName,
       musicSkipAfterRetryExhaustionSettingName,
     ]) {
@@ -778,6 +810,32 @@ Future<void> main() async {
     expect(settingsCubit.state.musicSongSwipeTowardStart, append);
   });
 
+  test('wired headset autoplay defaults off and follows the profile', () async {
+    final original = db.forProfile(db.profileId);
+    expect(settingsCubit.state.musicWiredHeadsetAutoplay, isFalse);
+    await settingsCubit.setMusicWiredHeadsetAutoplay(true);
+    expect(settingsCubit.state.musicWiredHeadsetAutoplay, isTrue);
+    final backup = UserBackup.parse((await db.exportBackup()).encode());
+
+    final other = await db.createProfile('Other');
+    await db.useProfile(other.id);
+    appCubit.advanceSession();
+    await settingsCubit.reloadForProfile();
+    expect(settingsCubit.state.musicWiredHeadsetAutoplay, isFalse);
+    await db.restoreBackup(backup, replace: false);
+    await settingsCubit.reloadForProfile();
+    expect(settingsCubit.state.musicWiredHeadsetAutoplay, isTrue);
+
+    expect(
+        UserBackup.validSetting(
+            SettingsValue(musicWiredHeadsetAutoplaySettingName, 'yes')),
+        isFalse);
+    await settingsCubit.setMusicWiredHeadsetAutoplay(false);
+    expect(settingsCubit.state.musicWiredHeadsetAutoplay, isFalse);
+    expect(original.getSettings(musicWiredHeadsetAutoplaySettingName)?.value,
+        'true');
+  });
+
   test('mini-player settings follow the profile and round-trip through backup',
       () async {
     final original = db.forProfile(db.profileId);
@@ -1160,6 +1218,7 @@ Future<void> main() async {
         Finder keyed(String key) => find.byKey(ValueKey(key));
         final setting = keyed('music-transition-setting');
         final duration = keyed('music-transition-duration-setting');
+        final preserveAlbum = keyed('music-preserve-album-transitions-setting');
         Future<void> open(Finder tile) async {
           await tester.ensureVisible(tile);
           await tester.pumpAndSettle();
@@ -1195,6 +1254,7 @@ Future<void> main() async {
         expect(settingsCubit.state.songTransitionMode,
             SongTransitionMode.seamless);
         expect(duration, findsNothing);
+        expect(preserveAlbum, findsNothing);
         await tester.ensureVisible(setting);
         await tester.pumpAndSettle();
         expect(tester.getSemantics(find.text('Song transition options')).label,
@@ -1206,6 +1266,10 @@ Future<void> main() async {
         await choose('music-transition-pause', 1);
         expect(
             settingsCubit.state.songTransitionMode, SongTransitionMode.pause);
+        expect(tester.widget<SwitchListTile>(preserveAlbum).value, isFalse);
+        await open(preserveAlbum);
+        expect(tester.widget<SwitchListTile>(preserveAlbum).value, isTrue);
+        expect(SettingsState.init().preserveAlbumTransitions, isTrue);
         expect(find.descendant(of: duration, matching: find.text('3 seconds')),
             findsOneWidget);
         await open(duration);
@@ -1244,6 +1308,8 @@ Future<void> main() async {
         expect(settingsCubit.state.songTransitionMode,
             SongTransitionMode.seamless);
         expect(duration, findsNothing);
+        expect(preserveAlbum, findsNothing);
+        expect(SettingsState.init().preserveAlbumTransitions, isTrue);
       });
     }
 
@@ -1362,6 +1428,27 @@ Future<void> main() async {
       expect(result.source, DeviceMusicArtworkSource.embeddedOnly);
       expect(result.quality, DeviceMusicArtworkQuality.high);
       expect(result.crop, DeviceMusicArtworkCrop.fit);
+
+      final loading =
+          find.byKey(const ValueKey('device-music-artwork-loading-setting'));
+      await tester.ensureVisible(loading);
+      await tester.pumpAndSettle();
+      expect(tester.widget<SwitchListTile>(loading).value, isTrue);
+      if (name == 'TV') {
+        Focus.of(tester.element(find.text('Load device music covers')))
+            .requestFocus();
+        await tester.pumpAndSettle();
+        await tester.sendKeyEvent(LogicalKeyboardKey.select);
+      } else {
+        await tester.tap(loading);
+      }
+      await tester.pumpAndSettle();
+      expect(tester.widget<SwitchListTile>(loading).value, isFalse);
+      final disabled = DeviceMusicArtworkPreferences.forDatabase(db);
+      expect(disabled.loadCovers, isFalse);
+      expect(disabled.source, result.source);
+      expect(disabled.quality, result.quality);
+      expect(disabled.crop, result.crop);
     });
 
     testWidgets('$name selects and cancels the YT Music download format',

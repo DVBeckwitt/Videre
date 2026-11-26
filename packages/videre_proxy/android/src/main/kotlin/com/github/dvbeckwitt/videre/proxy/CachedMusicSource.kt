@@ -21,14 +21,14 @@ internal data class CachedMusicSelection(
     val key = owner.persistentKey(contentId, rendition)
 
     companion object {
-        fun parse(values: Map<*, *>, uri: String): CachedMusicSelection {
+        fun parse(values: Map<*, *>, uri: String? = null): CachedMusicSelection {
             val contentId = values["contentId"] as? String ?: throw CachedMusicUnavailable()
             val rendition = values["rendition"] as? String ?: throw CachedMusicUnavailable()
             if (!contentIdPattern.matches(contentId) || !renditionPattern.matches(rendition)) {
                 throw CachedMusicUnavailable()
             }
             return CachedMusicSelection(PlaybackCacheOwner.parse(values), contentId, rendition)
-                .also { if (it.uri != uri) throw CachedMusicUnavailable() }
+                .also { if (uri != null && it.uri != uri) throw CachedMusicUnavailable() }
         }
     }
 }
@@ -88,14 +88,19 @@ internal data class CachedMusicSong(
             return CachedMusicSong(selection, title, artist, duration.toInt(), size)
         }
 
+        fun hasCatalogEntry(cache: SimpleCache, selection: CachedMusicSelection): Boolean =
+            selection.matches(cache.getContentMetadata(selection.key))
+
+        private fun CachedMusicSelection.matches(values: ContentMetadata): Boolean =
+            values.get(OWNER, "") == owner.catalogKey && values.get(CONTENT, "") == contentId
+
         fun complete(cache: SimpleCache, owner: PlaybackCacheOwner, key: String): CachedMusicSong? {
             val values = cache.getContentMetadata(key)
-            if (values.get(OWNER, "") != owner.catalogKey) return null
             val content = values.get(CONTENT, "") ?: return null
             val rendition = key.substringAfterLast(':')
             if (!contentIdPattern.matches(content) || !renditionPattern.matches(rendition)) return null
             val selection = CachedMusicSelection(owner, content, rendition)
-            if (selection.key != key) return null
+            if (selection.key != key || !selection.matches(values)) return null
             val title = text(values.get(TITLE, ""))?.takeIf(String::isNotEmpty) ?: return null
             val artist = text(values.get(ARTIST, "")) ?: return null
             val duration = values.get(DURATION, -1L)

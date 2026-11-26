@@ -102,6 +102,17 @@ class BetterPlayerController {
     }
   }
 
+  final _subtitleOffset = ValueNotifier<Duration>(Duration.zero);
+
+  ValueListenable<Duration> get subtitleOffset => _subtitleOffset;
+
+  ///Shifts caption presentation. A positive offset shows captions later.
+  void setSubtitleOffset(Duration offset) {
+    if (!_disposed) {
+      _subtitleOffset.value = offset;
+    }
+  }
+
   ///Subtitles lines for current data source.
   List<BetterPlayerSubtitle> subtitlesLines = [];
 
@@ -1486,6 +1497,7 @@ class BetterPlayerController {
       _videoEventStreamSubscription?.cancel();
       _disposed = true;
       _subtitleFontSize.dispose();
+      _subtitleOffset.dispose();
       _controllerEventStreamController.close();
 
       ///Delete files async
