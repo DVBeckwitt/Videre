@@ -23,6 +23,8 @@ class MusicSongOperation extends StatefulWidget {
   final bool Function() isSessionCurrent;
   final bool Function() isCurrent;
   final Stream<Object?> sessionChanges;
+  final Future<MusicSongRadioResult> Function(bool Function() isCurrent)?
+      startCurrentRadio;
   final Widget Function(Video song, bool Function() isCurrent)?
       previewSaveAction;
   final void Function(Video song, bool Function() isCurrent)? onPlayFullSong;
@@ -35,6 +37,7 @@ class MusicSongOperation extends StatefulWidget {
     required this.isSessionCurrent,
     required this.isCurrent,
     required this.sessionChanges,
+    this.startCurrentRadio,
     this.previewSaveAction,
     this.onPlayFullSong,
   });
@@ -80,10 +83,13 @@ class _MusicSongOperationState extends State<MusicSongOperation>
 
   Video get _currentSong => _songs[_songIndex];
 
-  bool get _sameTransport =>
+  bool get _sameOccurrence =>
       !widget.player.isClosed &&
       widget.player.playbackOccurrenceRevision == _occurrence &&
-      widget.player.musicSelectionRequestRevision == _selection &&
+      widget.player.musicSelectionRequestRevision == _selection;
+
+  bool get _sameTransport =>
+      _sameOccurrence &&
       widget.player.playbackPositionGeneration == _positionGeneration &&
       widget.player.transportIntentRevision == _transport;
 
@@ -92,7 +98,7 @@ class _MusicSongOperationState extends State<MusicSongOperation>
       !_proxy.isChanging &&
       identical(_initialProxy, _proxy.config) &&
       widget.isSessionCurrent() &&
-      _sameTransport;
+      (widget.startCurrentRadio != null ? _sameOccurrence : _sameTransport);
 
   // A save can remove the originating discovery row while its preview is open.
   bool get _sessionCurrent =>
@@ -244,6 +250,21 @@ class _MusicSongOperationState extends State<MusicSongOperation>
     }
     if (widget.preview) _startSample();
     try {
+      if (widget.startCurrentRadio case final start?) {
+        final result = await start(() => _current);
+        if (!mounted) return;
+        switch (result) {
+          case MusicSongRadioResult.started:
+            _finish();
+          case MusicSongRadioResult.superseded:
+            unawaited(_close());
+          case MusicSongRadioResult.empty:
+            if (_continueOperation()) setState(() => _empty = true);
+          case MusicSongRadioResult.unavailable:
+            if (_continueOperation()) setState(() => _failed = true);
+        }
+        return;
+      }
       final recommendations =
           RecommendationService.forProfile(db, db.profileId);
       final songs = await loadMusicSongRadio(widget.song,
