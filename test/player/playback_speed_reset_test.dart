@@ -33,8 +33,21 @@ import '../test_settings_cubit.dart';
 class _VideoWithoutAutostart extends VideoPlayerCubit {
   _VideoWithoutAutostart(super.initialState, super.player, super.settings);
 
+  late Future<void> sourceSetup;
+
   @override
   void onInit() {}
+
+  @override
+  Future<void> playVideo(bool offline,
+      {Duration? startAt,
+      bool preservePlaybackIntent = false,
+      bool recoveringPlayback = false}) {
+    return sourceSetup = super.playVideo(offline,
+        startAt: startAt,
+        preservePlaybackIntent: preservePlaybackIntent,
+        recoveringPlayback: recoveringPlayback);
+  }
 }
 
 class _RetainedAudioPlayer implements AudioPlayer {
@@ -281,11 +294,8 @@ void main() {
         expect(nativeVideoPitch, closeTo(pitchFactorForSemitones(7), 0.000001));
         expect(nativeVideoSpeed, 2);
 
-        final initialized = video.stream
-            .firstWhere((state) => state.video?.videoId == 'second');
         video.switchVideo(_video('second'));
-        await initialized;
-        await _flush();
+        await video.sourceSetup;
 
         expect(videoSources.last, contains('second'));
         expect(nativeVideoSpeed, remember ? 2 : 1);
@@ -357,7 +367,7 @@ void main() {
       expect(nativeVideoSpeed, 2);
 
       video.switchVideo(_video('second'));
-      await _flush();
+      await video.sourceSetup;
       expect(videoSources.last, contains('second'));
       expect(nativeVideoSpeed, 1);
       expect(player.state.speed, 1);
