@@ -35,6 +35,10 @@ final class MusicGainProcessor extends BaseAudioProcessor {
 
     @Override
     public void queueInput(ByteBuffer input) {
+        // The shared empty input can also be BaseAudioProcessor's output buffer.
+        if (!input.hasRemaining()) {
+            return;
+        }
         ByteBuffer output = replaceOutputBuffer(input.remaining());
         double factor = gain;
         if (factor == 1) {
