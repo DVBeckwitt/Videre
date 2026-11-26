@@ -1768,6 +1768,10 @@ void main() {
 
   testWidgets('Library Search opens local album, artist, and genre details',
       (tester) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(800, 600);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(tester.view.resetPhysicalSize);
     const channel = MethodChannel('com.github.dvbeckwitt.videre/local_music');
     const tree = 'content://documents/tree/MusicSearch';
     const album = 'Mélody Album';
@@ -1828,11 +1832,16 @@ void main() {
 
     final field = find.byKey(const ValueKey('music-search'));
     final track = find.widgetWithText(ListTile, title);
+    final genreTitle = find.descendant(
+      of: find.byKey(const ValueKey('music-collection-details-pane')),
+      matching: find.text(genre),
+    );
     for (final group in [album, artist, genre]) {
       final result = find.widgetWithText(ListTile, group);
       expect(result, findsOneWidget);
       await tester.tap(result);
-      await waitFor(find.widgetWithText(AppBar, group));
+      await waitFor(
+          group == genre ? genreTitle : find.widgetWithText(AppBar, group));
       expect(track, findsOneWidget);
       await tester.pageBack();
       await tester.pumpAndSettle();
@@ -1840,7 +1849,7 @@ void main() {
     }
 
     await tester.tap(find.widgetWithText(ListTile, genre));
-    await waitFor(find.widgetWithText(AppBar, genre));
+    await waitFor(genreTitle);
     app.setGlobalLoading(true);
     await tester.pumpAndSettle();
     expect(track, findsNothing);
