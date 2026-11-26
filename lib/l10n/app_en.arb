@@ -2765,6 +2765,7 @@
   "musicStarterArtistsEdit": "Edit starter artists",
   "musicStarterArtistsSkip": "Skip",
   "musicStarterArtistName": "Artist name",
+  "musicStarterArtistsConnect": "Select an Invidious instance to search for artists.",
   "musicStarterArtistsSearch": "Choose an artist to search on your configured instance.",
   "musicStarterArtistMatches": "From your starter artists",
   "musicSpeedDial": "Speed dial",

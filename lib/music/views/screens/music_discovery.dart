@@ -1019,16 +1019,14 @@ class _DiscoverySongsState extends State<_DiscoverySongs>
       MusicLibraryService library,
       RecommendationService recommendations,
       MusicVisibility visibility,
-      List<String> starterArtists) {
+      List<MusicStarterArtistPick> starterArtists) {
     final seeds = <String?>[null, ..._savedArtistNames(library)];
-    final starterKeys =
-        starterArtists.map(MusicStarterArtists.artistKey).toSet();
     Iterable<MusicTrack> ordered(String? seed, Iterable<MusicTrack> tracks) {
-      if (seed != null || starterKeys.isEmpty) return tracks;
+      if (seed != null || starterArtists.isEmpty) return tracks;
       final matching = <MusicTrack>[];
       final remaining = <MusicTrack>[];
       for (final track in tracks) {
-        if (MusicStarterArtists.matches(track, starterKeys)) {
+        if (MusicStarterArtists.matches(track, starterArtists)) {
           matching.add(track);
         } else {
           remaining.add(track);

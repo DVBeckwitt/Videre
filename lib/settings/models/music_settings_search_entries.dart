@@ -45,6 +45,8 @@ List<SettingsSearchEntry> musicSettingsSearchEntries(
     ],
     setting('music-history-privacy-setting', locals.musicHistoryPrivacy,
         keywords: [locals.settingsSearchHistoryPrivacyKeywords]),
+    setting('music-starter-artists-setting', locals.musicStarterArtists,
+        description: locals.musicStarterArtistsHint),
     setting(
         'music-streaming-quality-setting', locals.musicStreamingQualitySetting,
         keywords: [
