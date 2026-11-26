@@ -11,19 +11,29 @@ List<MusicFastScrollSection> musicFastScrollSections<T>(
   required String Function(int first, int last) rangeLabel,
   String? Function(T row)? sectionLabel,
   required String unknownLabel,
+  bool labelRangesWithCategory = false,
+  int? maxCategories,
 }) {
   if (rows.length < 30) return const [];
   if (sectionLabel != null) {
-    final categories = _categorySections(rows, sectionLabel, unknownLabel);
+    final categories =
+        _categorySections(rows, sectionLabel, unknownLabel, maxCategories);
     if (categories.length > 1) return categories;
   }
 
   final rangeSize = math.max(5, (rows.length / 20).ceil());
+  String labelForRange(int index) {
+    final range =
+        rangeLabel(index + 1, math.min(index + rangeSize, rows.length));
+    if (!labelRangesWithCategory || sectionLabel == null) return range;
+    return '${sectionLabel(rows[index]) ?? unknownLabel} · $range';
+  }
+
   return [
     for (var index = 0; index < rows.length; index += rangeSize)
       (
         index: index,
-        label: rangeLabel(index + 1, math.min(index + rangeSize, rows.length)),
+        label: labelForRange(index),
       ),
   ];
 }
@@ -32,6 +42,7 @@ List<MusicFastScrollSection> _categorySections<T>(
   List<T> rows,
   String? Function(T row) sectionLabel,
   String unknownLabel,
+  int? maxCategories,
 ) {
   final sections = <MusicFastScrollSection>[];
   final seen = <String>{};
@@ -40,6 +51,7 @@ List<MusicFastScrollSection> _categorySections<T>(
     if (sections.isNotEmpty && sections.last.label == label) continue;
     // A repeated label would promise one jump target for multiple row ranges.
     if (!seen.add(label)) return const [];
+    if (sections.length == maxCategories) return const [];
     sections.add((index: index, label: label));
   }
   return sections;

@@ -18,6 +18,7 @@ import '../components/local_music_detail_song_sort_menu.dart';
 import '../components/device_music_artwork.dart';
 import '../components/device_music_song_selection.dart';
 import '../components/music_collection_panes.dart';
+import '../components/music_fast_scroll.dart';
 import '../components/music_library_actions.dart';
 import 'music.dart';
 import 'music_device_artist.dart';
@@ -192,14 +193,18 @@ class _DeviceCollectionPageState extends State<_DeviceCollectionPage> {
   }
 
   Widget _browse(
-      AppLocalizations locals, Map<Object, _BrowseCollection> labels) {
+    BuildContext context,
+    AppLocalizations locals,
+    Map<Object, _BrowseCollection> labels,
+    LocalMusicCategoryOrder? genreOrder,
+  ) {
     if (labels.isEmpty) return Center(child: Text(locals.musicNoResults));
     final collections = labels.entries.toList();
     final indexes = {
       for (final (index, collection) in collections.indexed)
         ValueKey(collection.key): index,
     };
-    return ListView.builder(
+    final list = ListView.builder(
       itemCount: collections.length,
       findChildIndexCallback: (key) => indexes[key],
       itemBuilder: (context, index) {
@@ -231,6 +236,23 @@ class _DeviceCollectionPageState extends State<_DeviceCollectionPage> {
           },
         );
       },
+    );
+    if (genreOrder == null) return list;
+    return MusicFastScroll(
+      scope: (
+        widget.library,
+        widget.profile,
+        widget.selectionId,
+        genreOrder.value
+      ),
+      sections: musicDeviceCategoryFastScrollSections(
+        context,
+        collections,
+        sort: genreOrder.field,
+        name: (collection) => collection.value.label,
+        tracks: (collection) => collection.value.tracks,
+      ),
+      child: list,
     );
   }
 
@@ -438,7 +460,8 @@ class _DeviceCollectionPageState extends State<_DeviceCollectionPage> {
                       if (selection.toolbar case final toolbar?) toolbar,
                       Expanded(
                         child: key == null
-                            ? _browse(locals, _indexCollections(order))
+                            ? _browse(context, locals, _indexCollections(order),
+                                order)
                             : collectionTitle == null
                                 ? Center(child: Text(locals.musicNoResults))
                                 : _trackList(context, locals, key,

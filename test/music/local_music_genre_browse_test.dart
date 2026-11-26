@@ -635,6 +635,23 @@ void main() {
     expect(player.queues.last.start, songs.indexOf('Beta'));
     expect(player.lastSongTap, isTrue);
 
+    await tester.tap(find.byTooltip('Music actions'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Play next'));
+    await tester.pumpAndSettle();
+    expect(player.copies.single.titles, songs);
+    expect(player.copies.single.next, isTrue);
+
+    final beta = find.widgetWithText(ListTile, 'Beta');
+    await tester.longPress(beta);
+    await tester.pumpAndSettle();
+    await sortBy('Ascending');
+    expect(visibleSongs(), ['Alpha', 'Beta', 'Middle', 'Zulu']);
+    expect(find.text('1 selected'), findsOneWidget);
+    expect(tester.widget<ListTile>(beta).selected, isTrue);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+
     await sortBy('Default order');
     await playAll(defaultSongs);
   });

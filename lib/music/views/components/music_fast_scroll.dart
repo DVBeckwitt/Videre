@@ -7,7 +7,10 @@ import 'package:flutter/rendering.dart';
 
 import '../../../l10n/generated/app_localizations.dart';
 import '../../../utils.dart' show selectKeys;
+import '../../models/local_music_browse.dart';
+import '../../models/local_music_track.dart';
 import '../../models/music_fast_scroll_sections.dart';
+import 'music_duration_label.dart';
 
 /// Builds section labels from the primary values of the current display sort.
 /// A collection in source order can omit [sortValue] to show position ranges.
@@ -46,14 +49,60 @@ List<MusicFastScrollSection> musicFastScrollSectionsFor<T>(
     };
   }
 
+  return _localizedSections(context, rows,
+      sectionLabel: sortValue == null ? null : sectionLabel);
+}
+
+/// Uses the primary sort value from the device artist and genre indexes.
+List<MusicFastScrollSection> musicDeviceCategoryFastScrollSections<T>(
+  BuildContext context,
+  List<T> rows, {
+  required LocalMusicCategorySort sort,
+  required String Function(T row) name,
+  required List<LocalMusicTrack> Function(T row) tracks,
+}) {
+  final labels = AppLocalizations.of(context)!;
+  String? durationLabel(T row) {
+    final duration = LocalMusicTotals.fromTracks(tracks(row)).durationMs;
+    return duration == null ? null : formatMusicDuration(duration ~/ 1000);
+  }
+
+  return _localizedSections<T>(
+    context,
+    rows,
+    sectionLabel: switch (sort) {
+      LocalMusicCategorySort.name => (T row) =>
+          musicFastScrollInitial(localMusicSortName(name(row))),
+      LocalMusicCategorySort.trackCount => (T row) =>
+          labels.musicTrackCount(tracks(row).length),
+      LocalMusicCategorySort.duration => durationLabel,
+      LocalMusicCategorySort.size => null,
+    },
+    labelRangesWithCategory: true,
+    // Numeric sorts can have a different value for nearly every row.
+    maxCategories: sort == LocalMusicCategorySort.name ? null : 20,
+  );
+}
+
+List<MusicFastScrollSection> _localizedSections<T>(
+  BuildContext context,
+  List<T> rows, {
+  required String? Function(T row)? sectionLabel,
+  bool labelRangesWithCategory = false,
+  int? maxCategories,
+}) {
+  final labels = AppLocalizations.of(context)!;
+  final material = MaterialLocalizations.of(context);
   return musicFastScrollSections(
     rows,
     rangeLabel: (first, last) => labels.musicFastScrollPositions(
       material.formatDecimal(first),
       material.formatDecimal(last),
     ),
-    sectionLabel: sortValue == null ? null : sectionLabel,
+    sectionLabel: sectionLabel,
     unknownLabel: labels.musicFastScrollUnknown,
+    labelRangesWithCategory: labelRangesWithCategory,
+    maxCategories: maxCategories,
   );
 }
 
