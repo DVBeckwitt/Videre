@@ -2,9 +2,23 @@ import 'dart:convert';
 
 import '../models/local_music_track.dart';
 
+const _maxPathLength = 4096;
 final _pathControls = RegExp(r'[\x00-\x1f\x7f]');
 final _drive = RegExp(r'^[a-zA-Z]:/');
 final _scheme = RegExp(r'^[a-zA-Z][a-zA-Z0-9+.-]*:');
+
+final _windowsInvalidCharacter = RegExp(r'[<>:"/\\|?*]');
+final _windowsDeviceName = RegExp(
+  r'^(?:CON|PRN|AUX|NUL|(?:COM|LPT)[1-9¹²³]) *(?:\.|$)',
+  caseSensitive: false,
+);
+
+bool _isWindowsPathComponent(String component) =>
+    !component.startsWith(' ') &&
+    !component.endsWith(' ') &&
+    !component.endsWith('.') &&
+    !_windowsInvalidCharacter.hasMatch(component) &&
+    !_windowsDeviceName.hasMatch(component);
 
 /// A file coordinate reported by the Android document picker or Music index.
 /// It is used only for matching and writing playlist text.
@@ -26,7 +40,9 @@ M3uLocation? m3uLocation(Object? value) {
 }
 
 String? _normalizePath(String value, [Iterable<String> base = const []]) {
-  if (value.isEmpty || value.length > 4096 || _pathControls.hasMatch(value)) {
+  if (value.isEmpty ||
+      value.length > _maxPathLength ||
+      _pathControls.hasMatch(value)) {
     return null;
   }
   final parts = base.toList();
@@ -57,7 +73,7 @@ class M3uDocument {
         throw const FormatException('HLS playlist');
       }
       if (trimmed.isEmpty || trimmed.startsWith('#')) continue;
-      if (entries.length == maxEntries || line.length > 4096) {
+      if (entries.length == maxEntries || line.length > _maxPathLength) {
         throw const FormatException('Playlist exceeds size limits');
       }
       entries.add(line);
@@ -79,6 +95,8 @@ typedef M3uIndexSnapshot = ({
   M3uTrackIndex index,
   bool Function() isCurrent,
 });
+
+enum M3uExportPathStyle { automatic, relative, absolute, windows }
 
 class M3uTrackIndex {
   final _locations = <M3uLocation, List<M3uIndexedTrack>>{};
@@ -186,7 +204,9 @@ class M3uTrackIndex {
   }
 
   static String? _localPath(String value) {
-    if (value.isEmpty || value.length > 4096 || _pathControls.hasMatch(value)) {
+    if (value.isEmpty ||
+        value.length > _maxPathLength ||
+        _pathControls.hasMatch(value)) {
       return null;
     }
     final path = value.replaceAll('\\', '/');
@@ -211,11 +231,21 @@ class M3uTrackIndex {
     return uri.path.startsWith('/') ? '/$decoded' : null;
   }
 
-  String? exportPath(M3uLocation track, M3uLocation? destination) {
-    if (track.volume != destination?.volume) {
+  /// Returns a path in [style], or null when the track cannot use it.
+  String? exportPath(
+    M3uLocation track,
+    M3uLocation? destination, {
+    M3uExportPathStyle style = M3uExportPathStyle.automatic,
+  }) {
+    final sameVolume = track.volume == destination?.volume;
+    if (style == M3uExportPathStyle.absolute ||
+        (style == M3uExportPathStyle.automatic && !sameVolume)) {
       final root = volumeRoots[track.volume];
-      return root == null ? null : '$root/${track.path}';
+      if (root == null) return null;
+      final path = '$root/${track.path}';
+      return path.length <= _maxPathLength ? path : null;
     }
+    if (!sameVolume) return null;
     final from = destination!.path.split('/')..removeLast();
     final to = track.path.split('/');
     var common = 0;
@@ -224,12 +254,18 @@ class M3uTrackIndex {
         from[common] == to[common]) {
       common++;
     }
+    final components = to.skip(common);
+    final windows = style == M3uExportPathStyle.windows;
+    if (windows && !components.every(_isWindowsPathComponent)) return null;
     final relative = [
       for (var i = common; i < from.length; i++) '..',
-      ...to.skip(common),
+      ...components,
     ].join('/');
-    return relative.trimLeft().startsWith('#') || _scheme.hasMatch(relative)
-        ? './$relative'
-        : relative;
+    final path =
+        relative.trimLeft().startsWith('#') || _scheme.hasMatch(relative)
+            ? './$relative'
+            : relative;
+    if (path.length > _maxPathLength) return null;
+    return windows ? path.replaceAll('/', r'\') : path;
   }
 }
