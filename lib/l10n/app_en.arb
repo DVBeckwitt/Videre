@@ -1775,6 +1775,15 @@
   "animationsDescription": "Reduced removes movement and pulsing while keeping brief fades. Off stops interface animations. The Android Remove animations setting is always respected.",
   "autoplayQueue": "Autoplay next in queue",
   "autoplayQueueDescription": "Automatically continue through the queue. When off, stop when a video ends, including in repeat mode. Your queue stays available for manual playback.",
+  "videoAutoplayNextIn": "Next in {seconds}s",
+  "@videoAutoplayNextIn": {
+    "description": "Compact upcoming-video countdown shown in the floating player",
+    "placeholders": {"seconds": {"type": "int"}}
+  },
+  "videoAutoplayPlayNow": "Play now",
+  "@videoAutoplayPlayNow": {
+    "description": "Plays the upcoming video immediately during the autoplay countdown"
+  },
   "nerdVpnAccessTitle": "NerdVPN API access",
   "nerdVpnAccessReady": "An API key is saved securely for this account.",
   "nerdVpnSignInConnection": "Videre could not reach NerdVPN to finish sign-in. Check your connection, then start sign-in again.",
