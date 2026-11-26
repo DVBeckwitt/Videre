@@ -83,6 +83,13 @@ List<SettingsSearchEntry> musicSettingsSearchEntries(
           keywords: [locals.settingsSearchTaskRemovalKeywords]),
       setting('music-audio-offload-setting', locals.musicAudioOffloadSetting,
           description: locals.musicAudioOffloadWhenSupportedHelp),
+      setting('music-android-notifications-setting',
+          locals.musicAndroidNotificationSettings,
+          description: locals.musicAndroidNotificationSettingsHelp,
+          keywords: [locals.notifications]),
+      setting(
+          'music-android-battery-setting', locals.musicAndroidBatterySettings,
+          description: locals.musicAndroidBatterySettingsHelp),
     ],
     setting('music-now-playing-style-setting', locals.musicNowPlayingStyle,
         keywords: [
