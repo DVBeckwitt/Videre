@@ -26,7 +26,9 @@ import 'music_lyrics_reader.dart';
 
 class MusicLyricsButton extends StatefulWidget {
   final MusicLyricsLoader? loader;
-  const MusicLyricsButton({super.key, required this.loader});
+  final bool compact;
+  const MusicLyricsButton(
+      {super.key, required this.loader, this.compact = false});
 
   @override
   State<MusicLyricsButton> createState() => _MusicLyricsButtonState();
@@ -128,12 +130,24 @@ class _MusicLyricsButtonState extends State<MusicLyricsButton> {
   }
 
   @override
-  Widget build(BuildContext context) => FilledButton.tonalIcon(
-        key: const ValueKey('music-player-lyrics'),
+  Widget build(BuildContext context) {
+    const key = ValueKey('music-player-lyrics');
+    final label = AppLocalizations.of(context)!.musicLyrics;
+    if (widget.compact) {
+      return IconButton(
+        key: key,
+        tooltip: label,
         onPressed: _open,
-        icon: const Icon(Icons.lyrics_outlined, size: 20),
-        label: Text(AppLocalizations.of(context)!.musicLyrics),
+        icon: const Icon(Icons.lyrics_outlined),
       );
+    }
+    return FilledButton.tonalIcon(
+      key: key,
+      onPressed: _open,
+      icon: const Icon(Icons.lyrics_outlined, size: 20),
+      label: Text(label),
+    );
+  }
 }
 
 typedef _PlayingLyricsSong = ({

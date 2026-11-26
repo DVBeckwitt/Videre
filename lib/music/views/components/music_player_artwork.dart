@@ -47,6 +47,7 @@ class MusicPlayerArtwork extends StatefulWidget {
   final bool scaleWithPlayback;
   final ValueChanged<bool>? onSeekStep;
   final MusicLyricsLoader? lyricsLoader;
+  final bool showLyricsButton;
   final MusicVideoSurfaceBuilder? videoSurfaceBuilder;
 
   const MusicPlayerArtwork({
@@ -61,6 +62,7 @@ class MusicPlayerArtwork extends StatefulWidget {
     this.scaleWithPlayback = true,
     this.onSeekStep,
     required this.lyricsLoader,
+    this.showLyricsButton = true,
     this.videoSurfaceBuilder,
   });
 
@@ -674,7 +676,8 @@ class _MusicPlayerArtworkState extends State<MusicPlayerArtwork>
                       icon: Icon(showing
                           ? Icons.album_outlined
                           : Icons.music_video_outlined)),
-              MusicLyricsButton(loader: widget.lyricsLoader),
+              if (widget.showLyricsButton)
+                MusicLyricsButton(loader: widget.lyricsLoader),
             ],
           )),
     ]));
