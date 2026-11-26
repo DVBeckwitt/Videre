@@ -478,6 +478,7 @@ class MusicProviderSettings extends StatelessWidget {
             MusicMiniPlayerShortcut.next => locals.musicMiniPlayerNext,
             MusicMiniPlayerShortcut.repeat => locals.musicMiniPlayerRepeat,
             MusicMiniPlayerShortcut.shuffle => locals.musicShuffle,
+            MusicMiniPlayerShortcut.like => locals.musicLikeSong,
           },
           optionKey: (value) =>
               ValueKey('music-mini-player-shortcut-${value.name}'),

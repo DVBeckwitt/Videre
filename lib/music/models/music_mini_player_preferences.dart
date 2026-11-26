@@ -11,7 +11,8 @@ enum MusicMiniPlayerShortcut {
   automatic,
   next,
   repeat,
-  shuffle;
+  shuffle,
+  like;
 
   static MusicMiniPlayerShortcut? fromStorage(String? value) =>
       values.asNameMap()[value];

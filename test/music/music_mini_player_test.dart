@@ -3,6 +3,7 @@ import 'dart:collection';
 
 import 'package:back_button_interceptor/back_button_interceptor.dart';
 import 'package:clipious/app/states/app.dart';
+import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
@@ -21,6 +22,7 @@ import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/backend_selector.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
+import 'package:clipious/videos/models/ided_video.dart';
 import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/material.dart';
@@ -35,8 +37,9 @@ import '../test_settings_cubit.dart';
 class _App extends TestAppCubit {
   _App(super.initialState);
 
-  void changeSession() =>
-      emit(state.copyWith(sessionRevision: state.sessionRevision + 1));
+  void changeSession({String? profileId}) => emit(state.copyWith(
+      profileId: profileId ?? state.profileId,
+      sessionRevision: state.sessionRevision + 1));
 }
 
 class _Player extends TestPlayerCubit {
@@ -48,6 +51,10 @@ class _Player extends TestPlayerCubit {
   int closeCalls = 0;
   Duration? sought;
   bool loadingMoreSongs = false;
+  IdedVideo? opening;
+
+  @override
+  IdedVideo? get openingMusicEntry => opening ?? super.openingMusicEntry;
 
   @override
   bool get playlistComplete => !loadingMoreSongs && super.playlistComplete;
@@ -167,6 +174,21 @@ void main() {
       await settings.setMusicMiniPlayerLayout(layout);
       await settings.setMusicMiniPlayerShortcut(shortcut);
     });
+  }
+
+  Future<void> tapLike(WidgetTester tester, String id,
+      {required bool liked}) async {
+    final library = MusicLibraryService.forProfile(db, db.profileId);
+    await tester.runAsync(() async {
+      await tester.tap(key('music-mini-like'));
+      await Future.doWhile(() async {
+        await tester.pump();
+        if (library.isLiked(id) == liked) return false;
+        await Future<void>.delayed(const Duration(milliseconds: 1));
+        return true;
+      }).timeout(const Duration(seconds: 5));
+    });
+    await tester.pump();
   }
 
   testWidgets('Mini player refreshes the artist alias for the current song',
@@ -379,6 +401,127 @@ void main() {
     expect(find.byTooltip('Save song'), findsOneWidget);
     expect(player.expandCalls, 0);
     expect(player.nextCalls, 0);
+  });
+
+  testWidgets('mini Like follows skips and preserves each song’s Save state',
+      (tester) async {
+    await miniPreferences(
+        tester, MusicMiniPlayerLayout.compact, MusicMiniPlayerShortcut.like);
+    final library = MusicLibraryService.forProfile(db, db.profileId);
+    await tester.runAsync(() => library.save(MusicLibraryEntry.song(song)));
+    await pump(tester, scale: 2.5);
+
+    expect(find.byTooltip('Like song'), findsOneWidget);
+    await tapLike(tester, song.videoId, liked: true);
+    expect(find.byTooltip('Unlike song'), findsOneWidget);
+    expect(find.byTooltip('Remove saved song'), findsOneWidget);
+
+    tester.view.physicalSize = const Size(240, 844);
+    await tester.pumpAndSettle();
+    expect(key('music-mini-like').hitTestable(), findsOneWidget);
+    expect(key('music-mini-play').hitTestable(), findsOneWidget);
+    expect(find.byTooltip('Remove saved song'), findsNothing);
+    await tester.tap(key('music-mini-more'));
+    await tester.pumpAndSettle();
+    expect(key('music-mini-bookmark-menu').hitTestable(), findsOneWidget);
+    expect(find.text('Remove saved song'), findsOneWidget);
+    await tester.tap(key('music-mini-next'));
+    await tester.pumpAndSettle();
+    expect(player.nextCalls, 1);
+    await player.seed(player.state.copyWith(
+        currentlyPlaying: next,
+        playedVideos: [song.videoId],
+        playQueue: ListQueue<String>()));
+    await tester.pumpAndSettle();
+
+    expect(find.byTooltip('Like song'), findsOneWidget);
+    await tapLike(tester, next.videoId, liked: true);
+    expect(library.likedSongs.map((entry) => entry.id),
+        unorderedEquals([song.videoId, next.videoId]));
+    expect(library.savedSong(next.videoId), isNull);
+
+    await player.seed(player.state.copyWith(currentlyPlaying: song));
+    await tester.pumpAndSettle();
+    expect(find.byTooltip('Unlike song'), findsOneWidget);
+    await tapLike(tester, song.videoId, liked: false);
+    expect(find.byTooltip('Like song'), findsOneWidget);
+    expect(library.savedSong(song.videoId), isNotNull);
+    expect(library.likedSongs.single.id, next.videoId);
+    expect(player.expandCalls, 0);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('mini Like follows the active profile for the same song',
+      (tester) async {
+    await miniPreferences(
+        tester, MusicMiniPlayerLayout.compact, MusicMiniPlayerShortcut.like);
+    final firstLibrary = MusicLibraryService.forProfile(db, db.profileId);
+    final other = (await tester.runAsync(() => db.createProfile('Other')))!;
+    final entry = MusicLibraryEntry.song(song);
+    final otherLibrary = (await tester.runAsync(() async {
+      final library = MusicLibraryService.forProfile(db, other.id);
+      await firstLibrary.save(entry);
+      await library.setSongLiked(entry, liked: true);
+      return library;
+    }))!;
+    await pump(tester);
+    expect(find.byTooltip('Like song'), findsOneWidget);
+    expect(find.byTooltip('Remove saved song'), findsOneWidget);
+    final staleLike =
+        tester.widget<IconButton>(key('music-mini-like')).onPressed;
+    expect(staleLike, isNotNull);
+
+    await tester.runAsync(() async {
+      await db.useProfile(other.id);
+      app.changeSession(profileId: other.id);
+      staleLike!();
+      // Wait for any queued write to either profile before checking ownership.
+      final untouched = MusicLibraryEntry.song(next);
+      await firstLibrary.setSongLiked(untouched, liked: false);
+      await otherLibrary.setSongLiked(untouched, liked: false);
+    });
+    await tester.pumpAndSettle();
+    expect(find.byTooltip('Unlike song'), findsOneWidget);
+    expect(find.byTooltip('Save song'), findsOneWidget);
+    expect(firstLibrary.isLiked(song.videoId), isFalse);
+
+    await tapLike(tester, song.videoId, liked: false);
+    expect(find.byTooltip('Like song'), findsOneWidget);
+    expect(firstLibrary.isLiked(song.videoId), isFalse);
+    expect(firstLibrary.savedSong(song.videoId), isNotNull);
+    expect(otherLibrary.savedSong(song.videoId), isNull);
+  });
+
+  testWidgets('mini Like follows the displayed download while it opens',
+      (tester) async {
+    await miniPreferences(
+        tester, MusicMiniPlayerLayout.compact, MusicMiniPlayerShortcut.like);
+    final library = MusicLibraryService.forProfile(db, db.profileId);
+    const opening = DownloadedVideo(
+        videoId: 'offline0001',
+        title: 'Offline recording',
+        musicMetadata:
+            MusicMetadata(title: 'Offline recording', artist: 'Singer'),
+        downloadComplete: true,
+        lengthSeconds: 180,
+        quality: 'Audio');
+    await pump(tester);
+    final staleLike =
+        tester.widget<IconButton>(key('music-mini-like')).onPressed;
+
+    player.opening = opening;
+    await tester.runAsync(() async {
+      staleLike!();
+      await library.setSongLiked(MusicLibraryEntry.song(next), liked: false);
+    });
+    await player.seed(player.state.copyWith(position: Duration.zero));
+    await tester.pump();
+    expect(find.text('Offline recording'), findsOneWidget);
+    expect(player.state.currentlyPlaying, song);
+
+    await tapLike(tester, opening.videoId, liked: true);
+    expect(library.likedSongs.single.id, opening.videoId);
+    expect(library.savedSong(opening.videoId), isNull);
   });
 
   testWidgets('last song menu still returns to the previous track',
