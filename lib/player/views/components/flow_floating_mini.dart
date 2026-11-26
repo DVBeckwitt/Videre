@@ -493,17 +493,22 @@ class FlowFloatingMiniControls extends StatelessWidget {
 /// Switches the floating surface to the pending autoplay transition.
 class FlowFloatingMiniOverlay extends StatelessWidget {
   final bool largeWindow;
+  final bool wide;
   final double scale;
 
   const FlowFloatingMiniOverlay(
-      {super.key, required this.largeWindow, required this.scale});
+      {super.key,
+      required this.largeWindow,
+      required this.wide,
+      required this.scale});
 
   @override
   Widget build(BuildContext context) {
     final player = context.read<PlayerCubit>();
     return ValueListenableBuilder<VideoAutoplayCountdown?>(
       valueListenable: player.videoAutoplayCountdown,
-      child: FlowFloatingMiniControls(largeWindow: largeWindow, scale: scale),
+      child: FlowFloatingMiniControls(
+          largeWindow: largeWindow, wide: wide, scale: scale),
       builder: (context, countdown, controls) {
         if (countdown == null) return controls!;
         return _FlowFloatingMiniAutoplay(

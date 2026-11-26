@@ -265,7 +265,7 @@ void main() {
                         onExpand: player.showBigPlayer,
                         onDismiss: player.hide,
                         child: const FlowFloatingMiniOverlay(
-                            largeWindow: false, scale: 1),
+                            wide: false, largeWindow: false, scale: 1),
                       ),
                     ),
                   )
