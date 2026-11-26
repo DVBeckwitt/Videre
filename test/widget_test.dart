@@ -3827,6 +3827,10 @@ void main() {
 
     await compact();
     final stage = find.byKey(const ValueKey('flow-mini-surface'));
+    final back = find.byIcon(Icons.replay_10_rounded);
+    final forward = find.byIcon(Icons.forward_10_rounded);
+    expect(back, findsNothing);
+    expect(forward, findsNothing);
     final corner = tester.getRect(stage);
     expect(corner.width, closeTo(390 * .45, 1));
     expect(corner.right, closeTo(382, 1));
@@ -3849,6 +3853,8 @@ void main() {
     await second.up();
     await tester.pumpAndSettle();
     final wide = tester.getRect(stage);
+    expect(back.hitTestable(), findsOneWidget);
+    expect(forward.hitTestable(), findsOneWidget);
     expect(wide.width, closeTo(390 - 16, 1));
     expect(wide.center.dx, closeTo(195, 1));
     expect(wide.bottom, closeTo(corner.bottom, 1));
@@ -3863,6 +3869,8 @@ void main() {
     await tester.tapAt(tap);
     await tester.pumpAndSettle();
     expect(tester.getRect(stage).width, closeTo(corner.width, 1));
+    expect(back, findsNothing);
+    expect(forward, findsNothing);
     await tester.tapAt(tester.getRect(stage).center + const Offset(0, 8));
     await tester.pump(const Duration(milliseconds: 301));
     expect(player.state.isMini, isFalse);

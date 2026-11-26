@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 
 import 'package:back_button_interceptor/back_button_interceptor.dart';
 import 'package:clipious/app/states/app.dart';
@@ -17,6 +18,7 @@ import 'package:clipious/player/states/player.dart';
 import 'package:clipious/player/states/player_controls.dart';
 import 'package:clipious/player/states/tv_player_controls.dart';
 import 'package:clipious/player/states/video_player.dart';
+import 'package:clipious/player/views/components/flow_floating_mini.dart';
 import 'package:clipious/player/views/components/minimize_on_swipe_down.dart';
 import 'package:clipious/player/views/components/player_controls.dart';
 import 'package:clipious/player/views/components/seek_preview.dart';
@@ -24,7 +26,6 @@ import 'package:clipious/player/views/components/video_display_mode_picker.dart'
 import 'package:clipious/player/views/tv/components/player_settings.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/states/settings.dart';
-import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/gestures.dart';
@@ -154,7 +155,7 @@ void main() {
   late _ControlsTestPlayer player;
 
   setUp(() async {
-    db = await SembastSqfDb.createInMemory();
+    db = await createPlayerTestDatabase();
     app = TestAppCubit(AppState(0, null, HomeLayout()));
     settings = TestSettingsCubit(SettingsState.init(), app);
     player = _ControlsTestPlayer(
@@ -235,6 +236,118 @@ void main() {
     addTearDown(audio.close);
     return audio;
   }
+
+  const floatingVideo = Video(
+    videoId: 'floating-video',
+    queueEntryId: 'floating-video-occurrence',
+    lengthSeconds: 35,
+  );
+  const previousVideo = Video(videoId: 'previous-video');
+  const nextVideo = Video(videoId: 'next-video');
+
+  Future<void> createFloatingVideo(
+    WidgetTester tester,
+    Video video, {
+    bool playing = false,
+  }) async {
+    await tester.runAsync(player.close);
+    player = _ControlsTestPlayer(
+      PlayerState(
+        currentlyPlaying: video,
+        videos: [previousVideo, video, nextVideo],
+        playedVideos: [previousVideo.videoId],
+        playQueue: ListQueue.of([nextVideo.videoId]),
+        isHidden: false,
+        isPlaying: playing,
+        position: const Duration(seconds: 17),
+        mediaEvent: MediaEvent(
+          state: playing ? MediaState.playing : MediaState.pause,
+        ),
+      ),
+      settings,
+    );
+  }
+
+  Widget floatingControls({required bool wide}) => hostControls(SizedBox(
+        width: wide ? 374 : 175,
+        height: wide ? 210 : 98,
+        child: FlowFloatingMiniControls(
+          largeWindow: false,
+          wide: wide,
+          scale: wide ? 2.1 : 1,
+        ),
+      ));
+
+  final previousVideoButton = find.byIcon(Icons.skip_previous_rounded);
+  final nextVideoButton = find.byIcon(Icons.skip_next_rounded);
+  final replay = find.byTooltip('Back 10 seconds');
+  final forward = find.byTooltip('Forward 10 seconds');
+
+  for (final playing in [false, true]) {
+    final playback = playing ? 'playing' : 'paused';
+    testWidgets('wide floating video seeks ten seconds while $playback',
+        (tester) async {
+      await createFloatingVideo(tester, floatingVideo, playing: playing);
+      await tester.pumpWidget(floatingControls(wide: true));
+
+      expect(previousVideoButton.hitTestable(), findsOneWidget);
+      expect(nextVideoButton.hitTestable(), findsOneWidget);
+      expect(tester.getRect(previousVideoButton).right,
+          lessThan(tester.getRect(replay).left));
+      expect(tester.getRect(forward).right,
+          lessThan(tester.getRect(nextVideoButton).left));
+
+      for (final (button, seconds) in [
+        (forward, 27),
+        (forward, 35),
+        (replay, 25),
+        (replay, 15),
+        (replay, 5),
+        (replay, 0),
+      ]) {
+        await tester.tap(button);
+        await tester.pump();
+
+        final target = Duration(seconds: seconds);
+        expect(player.state.mediaCommand?.type, MediaCommandType.seek);
+        expect(player.state.mediaCommand?.value, target);
+        expect(player.state.position, target);
+        expect(player.state.isPlaying, playing);
+        expect(player.state.currentQueueId, floatingVideo.queueEntryId);
+        expect(player.state.playedVideos, [previousVideo.videoId]);
+        expect(player.state.playQueue, [nextVideo.videoId]);
+      }
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  testWidgets('floating video hides time seeks when compact or unseekable',
+      (tester) async {
+    void expectQueueOnly() {
+      expect(replay, findsNothing);
+      expect(forward, findsNothing);
+      expect(previousVideoButton.hitTestable(), findsOneWidget);
+      expect(nextVideoButton.hitTestable(), findsOneWidget);
+    }
+
+    await createFloatingVideo(tester, floatingVideo);
+    await tester.pumpWidget(floatingControls(wide: false));
+    expectQueueOnly();
+
+    await tester.pumpWidget(floatingControls(wide: true));
+    expect(replay, findsOneWidget);
+    expect(forward, findsOneWidget);
+
+    await createFloatingVideo(tester, floatingVideo.copyWith(liveNow: true));
+    await tester.pumpWidget(floatingControls(wide: true));
+    expectQueueOnly();
+
+    await createFloatingVideo(
+        tester, floatingVideo.copyWith(lengthSeconds: null));
+    await tester.pumpWidget(floatingControls(wide: true));
+    expectQueueOnly();
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets('Flow watch time pill toggles and the idle timeline seeks',
       (tester) async {
