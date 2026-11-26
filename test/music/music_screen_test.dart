@@ -3668,8 +3668,20 @@ void main() {
         [first.videoId, second.videoId]);
   });
 
-  testWidgets('public playlist Find plays the exact duplicate in source order',
+  testWidgets(
+      'public playlist voice Find preserves the exact duplicate in source order',
       (tester) async {
+    const channel = MethodChannel('videre/music_voice_search');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    var recognition = Completer<String?>();
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      if (call.method == 'isAvailable') return true;
+      expect(call.method, 'recognize');
+      return recognition.future;
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+
     const duplicate = MusicTrack(
         videoId: 'duplicates1',
         title: 'Café Session',
@@ -3696,9 +3708,35 @@ void main() {
     final query = find.byKey(const ValueKey('music-public-playlist-query'));
     await tester.tap(findButton);
     await tester.pumpAndSettle();
-    await tester.enterText(query, '  ZOE   cafe ');
+
+    Future<void> startVoiceFind() async {
+      await tester.tap(find.byTooltip('Search by voice'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('may send your audio'), findsOneWidget);
+      expect(find.textContaining('this collection'), findsOneWidget);
+      await tester.tap(find.text('Use microphone'));
+      await tester.pumpAndSettle();
+    }
+
+    await startVoiceFind();
+    unawaited(navigator.push<void>(MaterialPageRoute(
+        builder: (_) => const Scaffold(body: Text('Another page')))));
+    await tester.pumpAndSettle();
+    navigator.pop();
+    await tester.pumpAndSettle();
+    recognition.complete('discarded after leaving');
+    await tester.pumpAndSettle();
+    expect(tester.widget<TextField>(query).controller!.text, isEmpty);
+
+    recognition = Completer<String?>();
+    await startVoiceFind();
+    recognition.complete('  ZOE   cafe ');
     await tester.pumpAndSettle();
 
+    expect(tester.widget<TextField>(query).controller!.text, 'ZOE   cafe');
+    expect(find.byKey(const ValueKey('music-search')), findsNothing);
+    expect(catalog.searches, isEmpty);
+    expect(player.calls, isEmpty);
     expect(find.text(first.title), findsNothing);
     expect(find.text(duplicate.title), findsNWidgets(2));
     final later = find.byKey(const ValueKey('music-song-3-duplicates1'));

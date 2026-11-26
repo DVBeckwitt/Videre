@@ -464,6 +464,89 @@ void main() {
         return true;
       }).timeout(const Duration(seconds: 5));
 
+  void mockVoiceRecognizer(Future<String?> Function() recognize) {
+    const channel = MethodChannel('videre/music_voice_search');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      if (call.method == 'isAvailable') return true;
+      expect(call.method, 'recognize');
+      return recognize();
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+  }
+
+  Future<void> openVoiceConsent(WidgetTester tester) async {
+    await tester.tap(find.byTooltip('Search by voice'));
+    await tester.pumpAndSettle();
+    expect(find.text('Use microphone'), findsOneWidget);
+  }
+
+  Future<void> confirmVoiceConsent(WidgetTester tester) async {
+    await tester.tap(find.text('Use microphone'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+  }
+
+  testWidgets('History voice Find keeps Every listen and rejects old profiles',
+      (tester) async {
+    final pending = Completer<String?>();
+    var calls = 0;
+    mockVoiceRecognizer(() {
+      calls++;
+      return calls == 1 ? Future.value('  finale  ') : pending.future;
+    });
+
+    final otherProfile = (await tester.runAsync(() async {
+      for (final (id, title, minute) in [
+        ('finale00001', 'Finale', 0),
+        ('opening0001', 'Prelude', 1),
+        ('finale00001', 'Finale', 2),
+      ]) {
+        final entry = HistoryVideoCache(id, title, 'Ensemble', '',
+            musicMetadata: MusicMetadata(title: title, artist: 'Ensemble'))
+          ..created = DateTime.utc(2026, 1, 1, 0, minute);
+        await db.beginMusicListening(id)!.record(entry);
+      }
+      return db.createProfile('Other listener');
+    }))!;
+    await show(tester);
+    await tester.tap(find.byKey(const ValueKey('music-library-history')));
+    await tester.pumpAndSettle();
+    final everyListen = find.widgetWithText(ChoiceChip, 'Every listen');
+    await tester.tap(everyListen);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('music-history-find')));
+    await tester.pumpAndSettle();
+
+    final query = find.byKey(const ValueKey('music-history-query'));
+    final controller = tester.widget<TextField>(query).controller!;
+    await openVoiceConsent(tester);
+    await confirmVoiceConsent(tester);
+    await tester.pumpAndSettle();
+    expect(controller.text, 'finale');
+    expect(find.text('Finale'), findsNWidgets(2));
+    expect(find.text('Prelude'), findsNothing);
+    expect(tester.widget<ChoiceChip>(everyListen).selected, isTrue);
+    expect(player.collectionQueues, isEmpty);
+    expect(player.online, isEmpty);
+
+    await tester.enterText(query, 'prelude');
+    await tester.pumpAndSettle();
+    expect(find.text('Prelude'), findsOneWidget);
+    await openVoiceConsent(tester);
+    await confirmVoiceConsent(tester);
+    expect(calls, 2);
+    await tester.runAsync(() => db.useProfile(otherProfile.id));
+    app.profileChanged(otherProfile.id);
+    await tester.pumpAndSettle();
+    pending.complete('finale');
+    await tester.pumpAndSettle();
+    expect(query, findsNothing);
+    expect(controller.text, 'prelude');
+    expect(player.collectionQueues, isEmpty);
+  }, variant: TargetPlatformVariant.only(TargetPlatform.android));
+
   testWidgets('Statistics plays exact song rows and keeps the chosen period',
       (tester) async {
     const title = 'Same title';
@@ -1492,6 +1575,56 @@ void main() {
             .videoId,
         device.videoId);
   }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
+
+  testWidgets('Local playlist voice Find keeps both filtered duplicate rows',
+      (tester) async {
+    mockVoiceRecognizer(() async => '  ensemble  ');
+    const playlist = Playlist(
+      playlistId: 'local:voice-takes',
+      title: 'Rehearsal takes',
+      author: '',
+      videoCount: 3,
+      videos: [
+        Video(
+            videoId: 'recording01',
+            musicMetadata:
+                MusicMetadata(title: 'First take', artist: 'Ensemble')),
+        Video(
+            videoId: 'interlude01',
+            musicMetadata: MusicMetadata(title: 'Interlude', artist: 'Solo')),
+        Video(
+            videoId: 'recording01',
+            musicMetadata:
+                MusicMetadata(title: 'Last take', artist: 'Ensemble')),
+      ],
+    );
+    await tester.runAsync(() => db.saveSetting(
+        SettingsValue(localPlaylistsSetting, jsonEncode([playlist.toJson()]))));
+    final downloads = _Downloads(const DownloadManagerState());
+    addTearDown(downloads.close);
+    await show(tester, downloads: downloads);
+    await tester.tap(find.text(playlist.title));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Search playlist'));
+    await tester.pumpAndSettle();
+
+    final query = find.byKey(const ValueKey('music-local-playlist-query'));
+    await openVoiceConsent(tester);
+    await confirmVoiceConsent(tester);
+    await tester.pumpAndSettle();
+    expect(tester.widget<TextField>(query).controller!.text, 'ensemble');
+    expect(find.text('First take'), findsOneWidget);
+    expect(find.text('Last take'), findsOneWidget);
+    expect(find.text('Interlude'), findsNothing);
+    expect(player.collectionQueues, isEmpty);
+    expect(player.online, isEmpty);
+
+    await tester.enterText(query, 'last');
+    await tester.pumpAndSettle();
+    expect(find.text('First take'), findsNothing);
+    expect(find.text('Last take'), findsOneWidget);
+    expect(find.byKey(const ValueKey('music-search')), findsNothing);
+  }, variant: TargetPlatformVariant.only(TargetPlatform.android));
 
   testWidgets(
       'filtered playlist selection plays duplicate occurrences in source order',
@@ -4975,6 +5108,71 @@ void main() {
     expect(player.offlineCalls, 1);
     expect(find.text('No results found.'), findsOneWidget);
   });
+
+  testWidgets('Downloads voice Find preserves the draft on cancel and denial',
+      (tester) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(320, 840);
+    addTearDown(tester.view.reset);
+
+    final pending = Completer<String?>();
+    var calls = 0;
+    mockVoiceRecognizer(() async {
+      switch (calls++) {
+        case 0:
+          throw PlatformException(code: 'VOICE_SEARCH_UNAVAILABLE');
+        case 1:
+          return '  finale  ';
+        default:
+          return pending.future;
+      }
+    });
+    final prelude = downloadedSong('opening0001', 'Prelude', 'Orchestra');
+    final finale = downloadedSong('ending00001', 'Finale', 'Orchestra');
+    await showDownloads(
+        tester, _Downloads(DownloadManagerState(videos: [prelude, finale])));
+    final search = find.byKey(const ValueKey('music-downloads-search'));
+    final query = find.byKey(const ValueKey('music-downloads-query'));
+    await tester.tap(search);
+    await tester.pumpAndSettle();
+    String draft() => tester.widget<TextField>(query).controller!.text;
+    await tester.tap(query);
+    await tester.enterText(query, 'prelude');
+    await tester.pumpAndSettle();
+
+    await openVoiceConsent(tester);
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    expect(calls, 0);
+    expect(draft(), 'prelude');
+
+    await openVoiceConsent(tester);
+    await confirmVoiceConsent(tester);
+    expect(find.textContaining('Voice input failed'), findsOneWidget);
+    expect(draft(), 'prelude');
+
+    await openVoiceConsent(tester);
+    await confirmVoiceConsent(tester);
+    await tester.pumpAndSettle();
+    expect(draft(), 'finale');
+    expect(find.text('Finale'), findsOneWidget);
+    expect(find.text('Prelude'), findsNothing);
+    expect(player.offlineCalls, 0);
+
+    await openVoiceConsent(tester);
+    await confirmVoiceConsent(tester);
+    expect(calls, 3);
+    await tester.tap(search);
+    await tester.pumpAndSettle();
+    expect(query, findsNothing);
+    await tester.tap(search);
+    await tester.pumpAndSettle();
+    pending.complete('prelude');
+    await tester.pumpAndSettle();
+    expect(draft(), isEmpty);
+    expect(find.byKey(const ValueKey('music-search')), findsNothing);
+    expect(player.offlineCalls, 0);
+  }, variant: TargetPlatformVariant.only(TargetPlatform.android));
 
   testWidgets('Downloads Find Back restores the unfiltered scroll position',
       (tester) async {

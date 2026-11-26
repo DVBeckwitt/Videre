@@ -2060,6 +2060,7 @@
   "musicSearchLibraryHint": "Search your music library",
   "musicVoiceSearch": "Search by voice",
   "musicVoiceSearchPrivacy": "Your Android speech provider may send your audio over the internet. You can review the recognized text before submitting an online search.",
+  "musicVoiceCollectionPrivacy": "Your Android speech provider may send your audio over the internet. You can edit the recognized text in this collection’s Find field.",
   "musicVoiceSearchStart": "Use microphone",
   "musicVoiceSearchFailed": "Voice input failed. Try again or type your search.",
   "musicSearchAll": "All",
