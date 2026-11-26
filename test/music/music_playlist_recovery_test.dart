@@ -100,9 +100,15 @@ void main() {
     await progress.save(reference, entries.last, entries: entries, audio: true);
     await seedCover(repeated.playlistId);
 
+    final rootLibrary = MusicLibraryService.forProfile(db, db.profileId);
+    var notifications = 0;
+    void onLibraryChange() => notifications++;
+    rootLibrary.changes.addListener(onLibraryChange);
+    addTearDown(() => rootLibrary.changes.removeListener(onLibraryChange));
     await playlists.deleteUserPlaylist(repeated.playlistId);
     expect(
         await playlists.deleteMusicPlaylist(empty, isCurrent: current), isTrue);
+    expect(notifications, 2);
     expect(activeIds(), [localWatchLaterId, first, last]);
     expect(cover(repeated.playlistId), 'AQ==');
     final added = await create('Added after deletion');

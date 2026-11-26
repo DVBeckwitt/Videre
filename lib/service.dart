@@ -2899,8 +2899,8 @@ class Service {
       {IDbClient? database,
       bool Function()? isCurrent,
       String? unlockingPlaylistId}) async {
-    final root = db;
-    final owner = database ?? root.forProfile(root.profileId);
+    final owner = database ?? db.forProfile(db.profileId);
+    final profileId = owner.profileId;
     var recoveryChanged = false;
     Map<String, String?> apply(String? storedPlaylists, String? storedDeleted) {
       if (isCurrent?.call() == false) return {};
@@ -2957,7 +2957,7 @@ class Service {
       }));
     }
     if (recoveryChanged) {
-      MusicLibraryService.forProfile(root, owner.profileId).notifyChanged();
+      MusicLibraryService.forProfile(owner, profileId).notifyChanged();
     }
   }
 

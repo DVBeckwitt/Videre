@@ -15,7 +15,6 @@ import 'package:clipious/player/views/components/subtitle_failure_notice.dart';
 import 'package:clipious/player/views/tv/components/player_settings.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/states/settings.dart';
-import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -72,7 +71,7 @@ void main() {
   );
 
   setUp(() async {
-    db = await SembastSqfDb.createInMemory();
+    db = await createPlayerTestDatabase();
     app = TestAppCubit(AppState(0, null, HomeLayout()));
     await app.initState();
     app.intentDataStreamSubscription =

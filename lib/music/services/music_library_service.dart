@@ -5,6 +5,7 @@ import 'package:clipious/playlists/models/playlist.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/utils/interfaces/db.dart';
 import 'package:clipious/utils/models/image_object.dart';
+import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:flutter/foundation.dart';
 
 const musicLibrarySettingName = 'music-library-v1';
@@ -31,8 +32,9 @@ class MusicLibraryService {
 
   MusicLibraryService.forProfile(IDbClient database, String profileId)
       : _database = database.forProfile(profileId),
-        _changes = (_owners[database] ??= {})
-            .putIfAbsent(profileId, _ProfileChanges.new);
+        _changes =
+            (_owners[database is SembastSqfDb ? database.db : database] ??= {})
+                .putIfAbsent(profileId, _ProfileChanges.new);
 
   String get profileId => _database.profileId;
   Listenable get changes => _changes;
