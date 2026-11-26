@@ -365,6 +365,7 @@
   "videoDisplayFitDescription": "Show the whole frame and keep its original proportions.",
   "videoDisplayCrop": "Crop",
   "videoDisplayCropDescription": "Fill the player and trim the edges as needed.",
+  "resetVideoZoom": "Reset zoom",
   "videoDisplayStretch": "Stretch",
   "videoDisplayStretchDescription": "Fill the player by changing the frame’s proportions.",
   "videoDisplayFixedRatioDescription": "Reshape the frame to a fixed ratio and fit it in the player.",

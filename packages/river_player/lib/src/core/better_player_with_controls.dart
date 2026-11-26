@@ -15,12 +15,14 @@ class BetterPlayerWithControls extends StatefulWidget {
   final BetterPlayerController? controller;
   final BoxFit? fit;
   final double? videoAspectRatio;
+  final BetterPlayerVideoSurfaceBuilder? videoSurfaceBuilder;
 
   const BetterPlayerWithControls({
     Key? key,
     this.controller,
     this.fit,
     this.videoAspectRatio,
+    this.videoSurfaceBuilder,
   }) : super(key: key);
 
   @override
@@ -146,6 +148,7 @@ class _BetterPlayerWithControlsState extends State<BetterPlayerWithControls> {
                 betterPlayerController.videoPlayerController,
                 widget.fit ?? betterPlayerController.getFit(),
                 aspectRatio: widget.videoAspectRatio,
+                surfaceBuilder: widget.videoSurfaceBuilder,
               ),
             ),
           betterPlayerController.betterPlayerConfiguration.overlay ??
@@ -222,11 +225,13 @@ class _BetterPlayerVideoFitWidget extends StatefulWidget {
     this.controller,
     this.boxFit, {
     this.aspectRatio,
+    this.surfaceBuilder,
   });
 
   final VideoPlayerController? controller;
   final BoxFit boxFit;
   final double? aspectRatio;
+  final BetterPlayerVideoSurfaceBuilder? surfaceBuilder;
 
   @override
   _BetterPlayerVideoFitWidgetState createState() =>
@@ -279,17 +284,23 @@ class _BetterPlayerVideoFitWidgetState
     if (size == null) return const SizedBox();
     final ratio = widget.aspectRatio;
     final width = ratio == null ? size.width : size.height * ratio;
-    return ClipRect(
-      child: SizedBox.expand(
-        child: FittedBox(
-          fit: widget.boxFit,
-          child: SizedBox(
-            width: width.isFinite && width > 0 ? width : size.width,
-            height: size.height,
-            child: VideoPlayer(widget.controller),
-          ),
+    final sourceSize = Size(
+      width.isFinite && width > 0 ? width : size.width,
+      size.height,
+    );
+    final fittedVideo = SizedBox.expand(
+      child: FittedBox(
+        fit: widget.boxFit,
+        child: SizedBox.fromSize(
+          size: sourceSize,
+          child: VideoPlayer(widget.controller),
         ),
       ),
+    );
+    return ClipRect(
+      child:
+          widget.surfaceBuilder?.call(fittedVideo, sourceSize, widget.boxFit) ??
+              fittedVideo,
     );
   }
 

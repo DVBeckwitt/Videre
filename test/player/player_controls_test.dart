@@ -17,6 +17,8 @@ import 'package:clipious/player/states/player.dart';
 import 'package:clipious/player/states/player_controls.dart';
 import 'package:clipious/player/states/tv_player_controls.dart';
 import 'package:clipious/player/states/video_player.dart';
+import 'package:clipious/player/views/components/flow_video_gestures.dart';
+import 'package:clipious/player/views/components/fullscreen_video_zoom.dart';
 import 'package:clipious/player/views/components/minimize_on_swipe_down.dart';
 import 'package:clipious/player/views/components/player_controls.dart';
 import 'package:clipious/player/views/components/seek_preview.dart';
@@ -155,6 +157,64 @@ class _WatchTrackAudio extends AudioPlayerCubit {
     if (switchSucceeds) selectedWatchAudioTrackId = trackId;
     return switchSucceeds;
   }
+}
+
+const _zoomViewport = Size(400, 240);
+const _zoomSource = Size(400, 75);
+const _zoomPictureKey = ValueKey('fullscreen-zoom-test-picture');
+
+Future<void> _showZoomSurface(
+  WidgetTester tester,
+  FullscreenVideoZoom zoom,
+  List<Duration> seeks, {
+  VoidCallback? onVerticalDrag,
+}) {
+  return tester.pumpWidget(
+    MaterialApp(
+      home: Center(
+        child: SizedBox.fromSize(
+          size: _zoomViewport,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              zoom.buildSurface(
+                FittedBox(
+                  fit: BoxFit.contain,
+                  child: SizedBox.fromSize(
+                    key: _zoomPictureKey,
+                    size: _zoomSource,
+                    child: const ColoredBox(color: Colors.black),
+                  ),
+                ),
+                _zoomSource,
+                BoxFit.contain,
+              ),
+              FullscreenVideoZoomScope(
+                zoom: zoom,
+                child: FlowVideoGestures(
+                  video: null,
+                  duration: const Duration(minutes: 3),
+                  readPosition: () => const Duration(minutes: 1),
+                  canSeek: true,
+                  toggleControls: () {},
+                  togglePlayback: () {},
+                  rewind: () {},
+                  fastForward: () {},
+                  seek: seeks.add,
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onVerticalDragStart:
+                        onVerticalDrag == null ? null : (_) => onVerticalDrag(),
+                    child: const SizedBox.expand(),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
 }
 
 void main() {
@@ -748,6 +808,136 @@ void main() {
     expect(player.state.position, const Duration(seconds: 90));
     await tester.pumpWidget(const SizedBox.shrink());
   });
+
+  testWidgets(
+    'fullscreen zoom waits for two-finger motion and preserves seek',
+    (tester) async {
+      final zoom = FullscreenVideoZoom();
+      final seeks = <Duration>[];
+      var transforms = 0;
+      zoom.addListener(() => transforms++);
+      addTearDown(zoom.dispose);
+      await _showZoomSurface(tester, zoom, seeks);
+      final center = tester.getCenter(find.byType(FlowVideoGestures));
+      final updatesAtRest = transforms;
+
+      final first = await tester.startGesture(center - const Offset(30, 0));
+      final second = await tester.startGesture(center + const Offset(30, 0));
+      await first.moveBy(const Offset(-kTouchSlop * 0.8, 0));
+      await first.up();
+      await second.up();
+      await tester.pump(kDoubleTapTimeout);
+      expect(transforms, updatesAtRest);
+      expect(zoom.scale, 1);
+      expect(zoom.offset, Offset.zero);
+      expect(seeks, isEmpty);
+
+      final swipe = await tester.startGesture(center - const Offset(80, 0));
+      await swipe.moveBy(const Offset(32, 0));
+      await swipe.moveBy(const Offset(80, 0));
+      await tester.pump();
+      expect(find.byType(SeekPreview), findsOneWidget);
+      expect(seeks, isEmpty);
+
+      final lateFinger = await tester.startGesture(
+        center + const Offset(50, 0),
+      );
+      await lateFinger.moveBy(const Offset(30, 0));
+      await swipe.moveBy(const Offset(30, 0));
+      await lateFinger.up();
+      await swipe.up();
+      await tester.pump();
+      expect(seeks, hasLength(1));
+      expect(seeks.single, greaterThan(const Duration(minutes: 1)));
+      expect(zoom.scale, 1);
+      expect(find.byType(SeekPreview), findsNothing);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
+  testWidgets(
+    'fullscreen pinch and pan respect the viewport, letterboxing and reset',
+    (tester) async {
+      final zoom = FullscreenVideoZoom();
+      final seeks = <Duration>[];
+      var verticalDrags = 0;
+      addTearDown(zoom.dispose);
+      await _showZoomSurface(
+        tester,
+        zoom,
+        seeks,
+        onVerticalDrag: () => verticalDrags++,
+      );
+      final center = tester.getCenter(find.byType(FlowVideoGestures));
+      final picture = find.byKey(_zoomPictureKey);
+      final fittedFrame = tester.getRect(picture);
+
+      final left = await tester.startGesture(center - const Offset(40, 0));
+      final right = await tester.startGesture(center + const Offset(40, 0));
+      await left.moveBy(const Offset(-25, 0));
+      await right.moveBy(const Offset(25, 0));
+      await left.up();
+      await right.up();
+      await tester.pump();
+      expect(zoom.scale, greaterThan(1));
+      expect(zoom.scale * _zoomSource.height, lessThan(_zoomViewport.height));
+
+      // With both fingers down, pan must win over the nested vertical drag.
+      final panLeft = await tester.startGesture(center - const Offset(75, 0));
+      final panRight = await tester.startGesture(center + const Offset(75, 0));
+      await panRight.moveBy(const Offset(0, 42));
+      await panLeft.moveBy(const Offset(0, 42));
+      await panRight.moveBy(const Offset(42, 0));
+      await panLeft.moveBy(const Offset(42, 0));
+      await tester.pump();
+      expect(zoom.offset.dx, greaterThan(0));
+      expect(zoom.offset.dy, 0);
+      expect(verticalDrags, 0);
+      await panLeft.up();
+      final zoomAtLift = (zoom.scale, zoom.offset);
+      await panRight.moveBy(const Offset(90, 90));
+      await panRight.up();
+      expect((zoom.scale, zoom.offset), zoomAtLift);
+
+      final outerLeft = await tester.startGesture(center - const Offset(15, 0));
+      final outerRight = await tester.startGesture(
+        center + const Offset(15, 0),
+      );
+      await outerLeft.moveBy(const Offset(-500, 180));
+      await outerRight.moveBy(const Offset(1100, 180));
+      await tester.pump();
+      expect(zoom.scale, 6);
+      final expandedFrame = tester.getRect(picture);
+      final viewport = Rect.fromCenter(
+        center: center,
+        width: _zoomViewport.width,
+        height: _zoomViewport.height,
+      );
+      expect(expandedFrame.left, lessThanOrEqualTo(viewport.left + .01));
+      expect(expandedFrame.right, greaterThanOrEqualTo(viewport.right - .01));
+      expect(expandedFrame.top, lessThanOrEqualTo(viewport.top + .01));
+      expect(expandedFrame.bottom, greaterThanOrEqualTo(viewport.bottom - .01));
+      expect(seeks, isEmpty);
+      expect(verticalDrags, 0);
+
+      zoom.reset();
+      await outerLeft.moveBy(const Offset(60, 0));
+      await outerLeft.up();
+      await outerRight.up();
+      await tester.pump();
+      expect(zoom.scale, 1);
+      expect(zoom.offset, Offset.zero);
+      expect(tester.getRect(picture), fittedFrame);
+
+      final swipe = await tester.startGesture(center);
+      await swipe.moveBy(const Offset(0, 42));
+      await swipe.moveBy(const Offset(0, 20));
+      await swipe.up();
+      expect(verticalDrags, 1);
+      expect(zoom.scale, 1);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
 
   testWidgets('a quick Flow center-button tap pauses without a tap delay',
       (tester) async {

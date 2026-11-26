@@ -9,6 +9,9 @@ import 'package:river_player/src/core/better_player_with_controls.dart';
 import 'package:visibility_detector/visibility_detector.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
+typedef BetterPlayerVideoSurfaceBuilder = Widget Function(
+    Widget fittedVideo, Size sourceSize, BoxFit fit);
+
 ///Widget which uses provided controller to render video player.
 class BetterPlayer extends StatefulWidget {
   const BetterPlayer({
@@ -16,6 +19,7 @@ class BetterPlayer extends StatefulWidget {
     required this.controller,
     this.fit,
     this.videoAspectRatio,
+    this.videoSurfaceBuilder,
   }) : super(key: key);
 
   factory BetterPlayer.network(
@@ -49,6 +53,9 @@ class BetterPlayer extends StatefulWidget {
 
   /// Reshapes the video before fitting it. Null uses the source proportions.
   final double? videoAspectRatio;
+
+  /// Wraps the fitted video before clipping it to the viewport.
+  final BetterPlayerVideoSurfaceBuilder? videoSurfaceBuilder;
 
   @override
   _BetterPlayerState createState() {
@@ -282,6 +289,7 @@ class _BetterPlayerState extends State<BetterPlayer>
         controller: widget.controller,
         fit: widget.fit,
         videoAspectRatio: widget.videoAspectRatio,
+          videoSurfaceBuilder: widget.videoSurfaceBuilder,
       ),
     );
   }
