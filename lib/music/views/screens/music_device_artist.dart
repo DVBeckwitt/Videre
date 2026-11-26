@@ -662,8 +662,9 @@ class _MusicDeviceArtistPageState extends State<MusicDeviceArtistPage> {
                     LocalMusicDetailSongSortMenu(
                       order: _songOrder,
                       onChanged: (order) {
-                        if (_checking || _currentArtist?.key != artist.key)
+                        if (_checking || _currentArtist?.key != artist.key) {
                           return;
+                        }
                         setState(() => _songOrder = order);
                       },
                     ),

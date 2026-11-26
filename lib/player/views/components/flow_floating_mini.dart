@@ -550,8 +550,9 @@ class _FlowFloatingMiniAutoplayState extends State<_FlowFloatingMiniAutoplay> {
 
   Future<File?> _readSavedArtwork() async {
     final video = widget.countdown.next;
-    if (video is! DownloadedVideo || video.profileId != db.profileId)
+    if (video is! DownloadedVideo || video.profileId != db.profileId) {
       return null;
+    }
     final file = File(await video.thumbnailPath);
     return await file.exists() ? file : null;
   }
