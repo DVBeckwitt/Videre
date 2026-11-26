@@ -1216,6 +1216,11 @@ void main() {
               native.pauses
             ];
         final callsBeforeRadio = nativeCalls();
+        await waitFor(() =>
+            player.savedSession?.androidResumption?.occurrence ==
+            seed.queueEntryId);
+        final recent = await player.androidRecentMusic();
+        expect(recent?.title, seed.title);
 
         final catalog = _RadioCatalog();
         final request = player.startCurrentMusicSongRadio(seed,
@@ -1240,7 +1245,8 @@ void main() {
           return;
         }
         expect(await request, MusicSongRadioResult.started);
-        await Future<void>.delayed(Duration.zero);
+        await waitFor(() => player.savedSession?.queueTitle == 'Related radio');
+        expect((await player.androidRecentMusic())?.id, recent!.id);
 
         expect(player.state.playQueue, ['radioNext01']);
         expect(player.state.videos.map((video) => video.videoId),

@@ -7184,8 +7184,6 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       _setActiveNamedMusicQueue(null);
     }
     _queuedDeviceSelectionId = null;
-    _androidResumeSource = null;
-    _androidRemoteOccurrence = null;
     _bindPlaylist(null, [], queueTitle: queueTitle, retainSleepFade: true);
     _musicHistoryEntries
       ..clear()
