@@ -26,7 +26,7 @@ class LocalMusicId3Test {
         val originalFile = original + audio
         val text = "夏 ♪\nSecond line"
 
-        val edited = LocalMusicId3.edit(original, emptyMap(), LocalMusicUslt.Edit("eng", "Studio", text))
+        val edited = LocalMusicId3.edit(original, emptyMap(), lyrics = LocalMusicUslt.Edit("eng", "Studio", text))
         val editedFile = originalFile.copyOf().apply { edited.copyInto(this) }
         val expected = title + spanish + lyricsFrame("eng", "Studio", text) + live + timed
 
@@ -46,7 +46,7 @@ class LocalMusicId3Test {
         val original = tag(3, 256, title, old)
         val text = "東京\n第二行"
 
-        val edited = LocalMusicId3.edit(original, emptyMap(), LocalMusicUslt.Edit("eng", "", text))
+        val edited = LocalMusicId3.edit(original, emptyMap(), lyrics = LocalMusicUslt.Edit("eng", "", text))
         val bigEndianBom = byteArrayOf(0xfe.toByte(), 0xff.toByte())
         val expected = title + frame("USLT", prefix + terminator + bigEndianBom +
             text.toByteArray(Charsets.UTF_16BE), version = 3)
@@ -63,7 +63,7 @@ class LocalMusicId3Test {
         val before = original.copyOf()
 
         assertThrows(LocalMusicId3.NoSpace::class.java) {
-            LocalMusicId3.edit(original, emptyMap(), LocalMusicUslt.Edit("eng", "Studio", "New lyrics"))
+            LocalMusicId3.edit(original, emptyMap(), lyrics = LocalMusicUslt.Edit("eng", "Studio", "New lyrics"))
         }
         assertArrayEquals(before, original)
     }
