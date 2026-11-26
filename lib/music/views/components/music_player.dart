@@ -52,6 +52,7 @@ import 'music_ab_repeat_control.dart';
 import 'music_audio_quality_button.dart';
 import 'music_duration_label.dart';
 import 'music_library_actions.dart';
+import 'music_lyrics_button.dart';
 import 'music_player_artwork.dart';
 import 'music_player_scrubber.dart';
 import 'music_playback_artwork.dart';
@@ -563,6 +564,7 @@ class _MusicPlayerState extends State<MusicPlayer>
                                       allowOnlineArtwork: allowOnlineArtwork,
                                       allowLocalVideo: allowLocalVideo,
                                       interactive: interactiveArtwork,
+                                      showLyricsButton: !portraitPhone,
                                       onSeekStep:
                                           widget.television ? null : seekStep))
                               : null;
@@ -813,7 +815,8 @@ class _MusicPlayerState extends State<MusicPlayer>
         );
       }
       final swipeQueue = !widget.television && !shortLandscape;
-      const footerHeight = 52.0;
+      final footerHeight = math.max(
+          52.0, MediaQuery.textScalerOf(context).scale(14) * 1.45 + 16);
       final queueHeight =
           constraints.maxHeight * (shortLandscape ? 0.94 : 0.87);
       final queueTravel = math.max(1.0, queueHeight - footerHeight);
@@ -905,6 +908,21 @@ class _MusicPlayerState extends State<MusicPlayer>
             ])
           : nowPlaying;
       if (swipeQueue) {
+        const footerActionWidth = 52.0;
+        final sleepWidth = state.hasTimer
+            ? (constraints.maxWidth - footerActionWidth) / 2
+            : footerActionWidth;
+        final footerSleep = _sleepButton(
+          context,
+          player,
+          state,
+          compact: true,
+          style: TextButton.styleFrom(
+            padding: const EdgeInsets.symmetric(horizontal: 6),
+            iconSize: 18,
+            textStyle: theme.textTheme.labelMedium,
+          ),
+        );
         return AnimatedBuilder(
           animation: _queueMotion,
           builder: (context, _) {
@@ -921,8 +939,7 @@ class _MusicPlayerState extends State<MusicPlayer>
                         child: IgnorePointer(
                           ignoring: coverPlayer,
                           child: Padding(
-                            padding:
-                                const EdgeInsets.only(bottom: footerHeight),
+                            padding: EdgeInsets.only(bottom: footerHeight),
                             child: playerPanel,
                           ),
                         ),
@@ -949,26 +966,42 @@ class _MusicPlayerState extends State<MusicPlayer>
                           borderRadius: const BorderRadius.vertical(
                               top: Radius.circular(16)),
                           clipBehavior: Clip.antiAlias,
-                          child: GestureDetector(
-                            behavior: HitTestBehavior.opaque,
-                            onVerticalDragStart: _startQueueDrag,
-                            onVerticalDragUpdate: (details) =>
-                                _updateQueueDrag(details, queueTravel),
-                            onVerticalDragEnd: _releaseQueueDrag,
-                            onVerticalDragCancel: _cancelQueueDrag,
-                            child: TextButton.icon(
-                              key: const ValueKey('music-player-queue'),
-                              focusNode: _queueButtonFocus,
-                              onPressed: () => _setQueueVisible(true),
-                              icon: const Icon(Icons.keyboard_arrow_up_rounded),
-                              label: const _MusicQueueFooterLabel(),
-                              style: TextButton.styleFrom(
-                                foregroundColor: colors.onSurface,
-                                padding:
-                                    const EdgeInsets.symmetric(horizontal: 16),
-                                shape: const RoundedRectangleBorder(),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              Expanded(
+                                child: GestureDetector(
+                                  behavior: HitTestBehavior.opaque,
+                                  onVerticalDragStart: _startQueueDrag,
+                                  onVerticalDragUpdate: (details) =>
+                                      _updateQueueDrag(details, queueTravel),
+                                  onVerticalDragEnd: _releaseQueueDrag,
+                                  onVerticalDragCancel: _cancelQueueDrag,
+                                  child: TextButton.icon(
+                                    key: const ValueKey('music-player-queue'),
+                                    focusNode: _queueButtonFocus,
+                                    onPressed: () => _setQueueVisible(true),
+                                    icon: const Icon(
+                                        Icons.keyboard_arrow_up_rounded),
+                                    label: const _MusicQueueFooterLabel(),
+                                    style: TextButton.styleFrom(
+                                      foregroundColor: colors.onSurface,
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 8),
+                                      shape: const RoundedRectangleBorder(),
+                                    ),
+                                  ),
+                                ),
                               ),
-                            ),
+                              SizedBox(width: sleepWidth, child: footerSleep),
+                              SizedBox(
+                                width: footerActionWidth,
+                                child: MusicLyricsButton(
+                                  loader: widget.lyricsLoader,
+                                  compact: true,
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                       ),
@@ -1346,6 +1379,7 @@ class _MusicPlayerState extends State<MusicPlayer>
           {required bool allowOnlineArtwork,
           required bool allowLocalVideo,
           required bool interactive,
+          bool showLyricsButton = true,
           required ValueChanged<bool>? onSeekStep}) =>
       MusicPlayerArtwork(
           key: _artwork,
@@ -1356,6 +1390,7 @@ class _MusicPlayerState extends State<MusicPlayer>
           active: allowOnlineArtwork,
           localVideoActive: allowLocalVideo,
           interactive: interactive,
+          showLyricsButton: showLyricsButton,
           scaleWithPlayback: !widget.television,
           onSeekStep: onSeekStep,
           lyricsLoader: widget.lyricsLoader,
@@ -1613,13 +1648,6 @@ class _MusicPlayerState extends State<MusicPlayer>
     final opening = player.openingMusicEntry != null;
     final locals = AppLocalizations.of(context)!;
     final theme = Theme.of(context);
-    final sleepTracksRemaining = state.sleepTracksRemaining;
-    final sleepTrackLabel = sleepTracksRemaining == null
-        ? null
-        : locals.musicSleepTracksRemaining(sleepTracksRemaining);
-    final sleepCancelLabel = sleepTrackLabel == null
-        ? locals.cancelSleepTimer
-        : '${locals.cancelSleepTimer}. $sleepTrackLabel';
     final actionStyle = TextButton.styleFrom(
       padding: const EdgeInsets.symmetric(horizontal: 8),
       textStyle: theme.textTheme.labelMedium,
@@ -1631,7 +1659,7 @@ class _MusicPlayerState extends State<MusicPlayer>
       final mainActionWidth = fitMainActions ? constraints.maxWidth / 3 : null;
       Widget action(
           String name, String label, IconData icon, VoidCallback? onPressed,
-          {bool active = false, Widget? labelWidget, FocusNode? focusNode}) {
+          {bool active = false, FocusNode? focusNode}) {
         return SizedBox(
           width: mainActionWidth,
           child: Tooltip(
@@ -1647,8 +1675,7 @@ class _MusicPlayerState extends State<MusicPlayer>
                   : actionStyle,
               onPressed: onPressed,
               icon: Icon(icon),
-              label: labelWidget ??
-                  Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
+              label: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
             ),
           ),
         );
@@ -1662,29 +1689,11 @@ class _MusicPlayerState extends State<MusicPlayer>
             action('queue', locals.musicQueue, Icons.queue_music,
                 () => _setQueueVisible(!showQueue),
                 active: showQueue, focusNode: _queueButtonFocus),
-          action(
-              'sleep',
-              state.hasTimer ? sleepCancelLabel : locals.sleepTimer,
-              Icons.bedtime_outlined,
-              opening && !state.hasTimer
-                  ? null
-                  : () async {
-                      if (player.state.hasTimer) {
-                        player.cancelSleep();
-                        return;
-                      }
-                      await _showMusicSleepTimer(context, player);
-                    },
-              active: state.hasTimer,
-              labelWidget: sleepTrackLabel != null
-                  ? Text(sleepTrackLabel,
-                      semanticsLabel: sleepCancelLabel,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis)
-                  : state.hasTimer
-                      ? _MusicSleepCountdown(
-                          player: player, cancelLabel: sleepCancelLabel)
-                      : null),
+          if (!portraitPhone)
+            SizedBox(
+              width: mainActionWidth,
+              child: _sleepButton(context, player, state, style: actionStyle),
+            ),
           action('sound', locals.musicSound, Icons.tune,
               () => showMusicSoundSheet(context, player)),
           if (portraitPhone && !onDevice && !opening)
@@ -1708,6 +1717,68 @@ class _MusicPlayerState extends State<MusicPlayer>
       );
     });
   }
+}
+
+Widget _sleepButton(BuildContext context, PlayerCubit player, PlayerState state,
+    {required ButtonStyle style, bool compact = false}) {
+  final locals = AppLocalizations.of(context)!;
+  final active = state.hasTimer;
+  final tracks = state.sleepTracksRemaining;
+  final trackLabel =
+      tracks == null ? null : locals.musicSleepTracksRemaining(tracks);
+  final cancelLabel = trackLabel == null
+      ? locals.cancelSleepTimer
+      : '${locals.cancelSleepTimer}. $trackLabel';
+  final label = active ? cancelLabel : locals.sleepTimer;
+  final VoidCallback? onPressed = player.openingMusicEntry != null && !active
+      ? null
+      : () {
+          if (player.state.hasTimer) {
+            player.cancelSleep();
+          } else {
+            _showMusicSleepTimer(context, player);
+          }
+        };
+  const key = ValueKey('music-player-sleep');
+  const icon = Icon(Icons.bedtime_outlined);
+  final buttonStyle = active
+      ? style.copyWith(
+          backgroundColor: WidgetStatePropertyAll(
+              Theme.of(context).colorScheme.secondaryContainer))
+      : style;
+  final buttonLabel = switch (trackLabel) {
+    final trackLabel? => Text(trackLabel,
+        semanticsLabel: cancelLabel,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis),
+    _ when active => _MusicSleepCountdown(
+        player: player, cancelLabel: cancelLabel, fitTime: compact),
+    _ => Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
+  };
+  return Tooltip(
+    message: label,
+    excludeFromSemantics: !compact || active,
+    child: compact
+        ? TextButton(
+            key: key,
+            style: buttonStyle,
+            onPressed: onPressed,
+            child: active
+                ? Row(
+                    mainAxisSize: MainAxisSize.min,
+                    spacing: 4,
+                    children: [icon, Flexible(child: buttonLabel)],
+                  )
+                : icon,
+          )
+        : TextButton.icon(
+            key: key,
+            style: buttonStyle,
+            onPressed: onPressed,
+            icon: icon,
+            label: buttonLabel,
+          ),
+  );
 }
 
 enum _MusicSleepMode { timed, endOfSong, trackCount }
@@ -2050,8 +2121,13 @@ class _MusicQueueFooterLabel extends StatelessWidget {
 class _MusicSleepCountdown extends StatefulWidget {
   final PlayerCubit player;
   final String cancelLabel;
+  final bool fitTime;
 
-  const _MusicSleepCountdown({required this.player, required this.cancelLabel});
+  const _MusicSleepCountdown({
+    required this.player,
+    required this.cancelLabel,
+    required this.fitTime,
+  });
 
   @override
   State<_MusicSleepCountdown> createState() => _MusicSleepCountdownState();
@@ -2076,12 +2152,17 @@ class _MusicSleepCountdownState extends State<_MusicSleepCountdown> {
   @override
   Widget build(BuildContext context) {
     final remaining = widget.player.sleepRemaining;
-    return Text(
-      remaining == null ? widget.cancelLabel : prettyDurationCustom(remaining),
-      semanticsLabel: widget.cancelLabel,
+    final time = remaining == null ? null : prettyDurationCustom(remaining);
+    final label = Text(
+      time ?? widget.cancelLabel,
+      semanticsLabel:
+          time == null ? widget.cancelLabel : '${widget.cancelLabel}. $time',
       maxLines: 1,
       overflow: TextOverflow.ellipsis,
     );
+    return widget.fitTime && time != null
+        ? FittedBox(fit: BoxFit.scaleDown, child: label)
+        : label;
   }
 }
 

@@ -184,8 +184,13 @@ class _Player extends TestPlayerCubit {
   ValueNotifier<PlayingMusicContentAdvisory?>? reportedMusicAdvisory;
   IdedVideo? previewMusicEntry;
   (String, bool)? lastSleepRequest;
+  Duration? sleepRemainingOverride;
 
   _Player(super.initialState, super.settings);
+
+  @override
+  Duration? get sleepRemaining =>
+      sleepRemainingOverride ?? super.sleepRemaining;
 
   @override
   ValueListenable<PlayingMusicContentAdvisory?> get musicContentAdvisory =>
@@ -700,16 +705,21 @@ void main() {
       expect(lyrics.hitTestable(), findsOneWidget);
       expect(videoToggle.hitTestable(), findsOneWidget);
       expect(find.byTooltip('Show music video'), findsOneWidget);
-      expect(
-          (tester.getCenter(videoToggle) - tester.getCenter(lyrics)).distance,
-          lessThan(160));
       if (television) {
+        expect(
+            (tester.getCenter(videoToggle) - tester.getCenter(lyrics)).distance,
+            lessThan(160));
         final icon =
             find.descendant(of: videoToggle, matching: find.byType(Icon));
         Focus.of(tester.element(icon)).requestFocus();
         await tester.pump();
         await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       } else {
+        expect(
+            find.descendant(
+                of: find.byKey(const ValueKey('music-queue-footer')),
+                matching: lyrics),
+            findsOneWidget);
         await tester.tap(videoToggle);
       }
       await tester.pumpAndSettle();
@@ -1510,13 +1520,14 @@ void main() {
     await pump(tester, size: const Size(360, 680));
     final source = find.byKey(const ValueKey('music-playing-source'));
     expect(source.hitTestable(), findsOneWidget);
-    final footer =
-        tester.getRect(find.byKey(const ValueKey('music-player-queue')));
-    for (final id in ['music-player-sleep', 'music-player-sound']) {
-      final utility = find.byKey(ValueKey(id));
-      expect(utility.hitTestable(), findsOneWidget);
-      expect(tester.getRect(utility).bottom, lessThanOrEqualTo(footer.top));
-    }
+    final footer = find.byKey(const ValueKey('music-queue-footer'));
+    final sleep = find.byKey(const ValueKey('music-player-sleep'));
+    final sound = find.byKey(const ValueKey('music-player-sound'));
+    expect(find.descendant(of: footer, matching: sleep).hitTestable(),
+        findsOneWidget);
+    expect(sound.hitTestable(), findsOneWidget);
+    expect(tester.getRect(sound).bottom,
+        lessThanOrEqualTo(tester.getTopLeft(footer).dy));
     final playlistTitle =
         find.descendant(of: source, matching: find.text(title));
     final sourceFocus = Focus.of(tester.element(playlistTitle));
@@ -1685,13 +1696,14 @@ void main() {
     expect(find.text(otherTitle).hitTestable(), findsOneWidget);
     expect(sourceTitle(originTitle).hitTestable(), findsOneWidget);
     expect(tester.widget(source), isA<TextButton>());
-    final footer =
-        tester.getRect(find.byKey(const ValueKey('music-player-queue')));
-    for (final id in ['music-player-sleep', 'music-player-sound']) {
-      final utility = find.byKey(ValueKey(id));
-      expect(utility.hitTestable(), findsOneWidget);
-      expect(tester.getRect(utility).bottom, lessThanOrEqualTo(footer.top));
-    }
+    final footer = find.byKey(const ValueKey('music-queue-footer'));
+    final sleep = find.byKey(const ValueKey('music-player-sleep'));
+    final sound = find.byKey(const ValueKey('music-player-sound'));
+    expect(find.descendant(of: footer, matching: sleep).hitTestable(),
+        findsOneWidget);
+    expect(sound.hitTestable(), findsOneWidget);
+    expect(tester.getRect(sound).bottom,
+        lessThanOrEqualTo(tester.getTopLeft(footer).dy));
     await tester.tap(source);
     await tester.pumpAndSettle();
     expect(catalog.releases, [otherId, originId]);
@@ -3995,12 +4007,100 @@ void main() {
     }
     final lyrics = find.byKey(const ValueKey('music-player-lyrics'));
     expect(lyrics.hitTestable(), findsOneWidget);
-    expect(find.descendant(of: lyrics, matching: find.text('Lyrics')),
-        findsOneWidget);
+    expect(find.byTooltip('Lyrics'), findsOneWidget);
     await tester.tap(lyrics);
     await tester.pumpAndSettle();
     expect(find.text('Enable LRCLIB lyrics?'), findsOneWidget);
     await pressAndroidBack(tester);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('pinned phone controls work independently with large text',
+      (tester) async {
+    await tester.runAsync(() => setLrclibEnabled(true));
+    await pump(tester,
+        size: const Size(320, 568),
+        scale: 2.0,
+        child: MusicPlayer(
+            lyricsLoader: (_, __, ___) async =>
+                const MusicLyrics.plain('Footer lyric')));
+    BackButtonInterceptor.add(player.handleBackButton,
+        zIndex: 2, ifNotYetIntercepted: true);
+    addTearDown(() => BackButtonInterceptor.remove(player.handleBackButton));
+
+    final footer = find.byKey(const ValueKey('music-queue-footer'));
+    final queue = find.byKey(const ValueKey('music-player-queue'));
+    final sleep = find.byKey(const ValueKey('music-player-sleep'));
+    final lyrics = find.byKey(const ValueKey('music-player-lyrics'));
+    final sleepElement = tester.element(sleep);
+    for (final control in [queue, sleep, lyrics]) {
+      expect(find.descendant(of: footer, matching: control), findsOneWidget);
+      expect(control.hitTestable(), findsOneWidget);
+      final bounds = tester.getRect(control);
+      expect(bounds.width, greaterThanOrEqualTo(48));
+      expect(bounds.height, greaterThanOrEqualTo(48));
+    }
+    expect(tester.getRect(queue).overlaps(tester.getRect(sleep)), isFalse);
+    expect(tester.getRect(queue).overlaps(tester.getRect(lyrics)), isFalse);
+    expect(tester.getRect(sleep).overlaps(tester.getRect(lyrics)), isFalse);
+
+    final timerDialog = find.byKey(const ValueKey('music-sleep-duration'));
+    await tester.tap(sleep);
+    await tester.pumpAndSettle();
+    expect(timerDialog, findsOneWidget);
+    await pressAndroidBack(tester);
+    expect(timerDialog, findsNothing);
+    expect(player.state.isMini, isFalse);
+    expect(player.state.hasTimer, isFalse);
+
+    player.sleepRemainingOverride = const Duration(minutes: 29, seconds: 59);
+    await tester.tap(sleep);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Set timer'));
+    await tester.pumpAndSettle();
+    expect(player.state.hasTimer, isTrue);
+    expect(tester.element(sleep), same(sleepElement));
+    final countdown = find.descendant(of: sleep, matching: find.text('29:59'));
+    expect(countdown.hitTestable(), findsOneWidget);
+    final countdownText =
+        find.descendant(of: countdown, matching: find.byType(RichText));
+    expect(
+        tester.renderObject<RenderParagraph>(countdownText).didExceedMaxLines,
+        isFalse);
+
+    player.sleepRemainingOverride = const Duration(minutes: 29, seconds: 58);
+    await tester.pump(const Duration(seconds: 1));
+    expect(find.text('29:58').hitTestable(), findsOneWidget);
+
+    await tester.fling(sleep, const Offset(0, -180), 1250);
+    await tester.pumpAndSettle();
+    expect(find.byType(MusicQueue), findsNothing);
+    expect(player.state.hasTimer, isTrue);
+
+    await tester.tap(lyrics);
+    await tester.pumpAndSettle();
+    expect(find.text('Footer lyric'), findsOneWidget);
+    await pressAndroidBack(tester);
+    expect(find.text('Footer lyric'), findsNothing);
+    expect(player.state.isMini, isFalse);
+    expect(player.state.hasTimer, isTrue);
+
+    await tester.fling(queue, const Offset(0, -180), 1250);
+    await tester.pumpAndSettle();
+    expect(find.byType(MusicQueue), findsOneWidget);
+    await pressAndroidBack(tester);
+    expect(find.byType(MusicQueue), findsNothing);
+    expect(player.state.isMini, isFalse);
+    expect(find.text('29:58').hitTestable(), findsOneWidget);
+    final sleepIcon = find.descendant(
+        of: sleep, matching: find.byIcon(Icons.bedtime_outlined));
+    final sleepFocus = Focus.of(tester.element(sleepIcon));
+    sleepFocus.requestFocus();
+    await tester.pump();
+    await tester.tap(sleep);
+    await tester.pumpAndSettle();
+    expect(player.state.hasTimer, isFalse);
+    expect(sleepFocus.hasPrimaryFocus, isTrue);
     expect(tester.takeException(), isNull);
   });
 
