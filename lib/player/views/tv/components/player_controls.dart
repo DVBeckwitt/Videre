@@ -171,8 +171,8 @@ class TvPlayerControls extends StatelessWidget {
                                 ? Padding(
                                     padding: const EdgeInsets.symmetric(
                                         horizontal: 8.0, vertical: 16),
-                                    child: FocusScope(
-                                      child: Row(
+                                    child: _TvTransportControls(
+                                      transport: Row(
                                         children: [
                                           Padding(
                                             padding: const EdgeInsets.only(
@@ -532,6 +532,81 @@ class TvPlayerControls extends StatelessWidget {
             ),
           );
         },
+      ),
+    );
+  }
+}
+
+class _TvTransportControls extends StatelessWidget {
+  const _TvTransportControls({required this.transport});
+
+  final Widget transport;
+
+  @override
+  Widget build(BuildContext context) {
+    final targets = context.select((PlayerCubit player) {
+      final targets = player.fullscreenChapterTargets;
+      return (previous: targets.previous != null, next: targets.next != null);
+    });
+    final locals = AppLocalizations.of(context)!;
+    final player = context.read<PlayerCubit>();
+    final controls = context.read<TvPlayerControlsCubit>();
+
+    Widget chapterButton(
+      String label, {
+      required bool forward,
+      required bool enabled,
+    }) {
+      void activate() {
+        if (player.skipFullscreenChapter(forward: forward)) controls.showUi();
+      }
+
+      return Semantics(
+        button: true,
+        enabled: enabled,
+        onTap: enabled ? activate : null,
+        child: IntrinsicWidth(
+          child: Opacity(
+            opacity: enabled ? 1 : 0.5,
+            child: TvButton(
+              unfocusedColor: Colors.transparent,
+              onPressed: enabled ? (_) => activate() : null,
+              child: Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                child: Text(label),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return FocusScope(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (targets.previous || targets.next)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: Wrap(
+                spacing: 8,
+                children: [
+                  chapterButton(
+                    locals.previousChapter,
+                    forward: false,
+                    enabled: targets.previous,
+                  ),
+                  chapterButton(
+                    locals.nextChapter,
+                    forward: true,
+                    enabled: targets.next,
+                  ),
+                ],
+              ),
+            ),
+          transport,
+        ],
       ),
     );
   }

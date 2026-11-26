@@ -92,6 +92,7 @@ import '../../videos/models/db/history_video_cache.dart';
 import '../../videos/models/sponsor_segment.dart';
 import '../../videos/models/sponsor_segment_types.dart';
 import '../../videos/models/video.dart';
+import '../../videos/models/video_chapter.dart';
 import '../models/android_music_resumption.dart';
 import '../models/playback_session.dart';
 import '../models/playback_queue.dart';
@@ -9346,6 +9347,48 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       }
     }
     return merged;
+  }
+
+  ({VideoChapter? previous, VideoChapter? next}) get fullscreenChapterTargets {
+    final video = state.currentlyPlaying;
+    if (video == null ||
+        video.liveNow == true ||
+        video.isUpcoming == true ||
+        state.isAudio ||
+        state.isMini ||
+        state.isPip ||
+        state.isHidden ||
+        state.isClosing ||
+        state.backendRecovery != null ||
+        state.mediaEvent.state == MediaState.error ||
+        (!isTv && state.fullScreenState != FullScreenState.fullScreen) ||
+        !canSeekCurrentMedia) {
+      return (previous: null, next: null);
+    }
+
+    final chapters =
+        video.chaptersFor(Duration(seconds: video.lengthSeconds ?? 0));
+    final position = state.position;
+    final current =
+        chapters.lastIndexWhere((chapter) => chapter.start <= position);
+    // Match Flow: after three seconds, Previous restarts the current chapter.
+    final previous = current <= 0 ||
+            position - chapters[current].start > const Duration(seconds: 3)
+        ? current
+        : current - 1;
+    final next = current + 1;
+    return (
+      previous: previous < 0 ? null : chapters[previous],
+      next: next < chapters.length ? chapters[next] : null,
+    );
+  }
+
+  bool skipFullscreenChapter({required bool forward}) {
+    final targets = fullscreenChapterTargets;
+    final chapter = forward ? targets.next : targets.previous;
+    if (chapter == null) return false;
+    seek(chapter.start);
+    return true;
   }
 
   void seek(Duration position) => _seek(position);
