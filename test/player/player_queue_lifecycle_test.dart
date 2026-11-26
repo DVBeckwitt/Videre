@@ -9,7 +9,6 @@ import 'package:clipious/player/models/playback_queue.dart';
 import 'package:clipious/player/models/sleep_timer.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/settings/states/settings.dart';
-import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -72,7 +71,7 @@ void main() {
   late _QueuePlayer player;
 
   setUp(() async {
-    db = await SembastSqfDb.createInMemory();
+    db = await createPlayerTestDatabase();
     app = TestAppCubit(AppState(0, null, HomeLayout()));
     settings = TestSettingsCubit(SettingsState.init(), app);
     player = _QueuePlayer(PlayerState.init(null), settings);

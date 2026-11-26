@@ -8,11 +8,9 @@ import 'package:clipious/music/models/replay_gain.dart';
 import 'package:clipious/music/services/music_replay_gain_preferences.dart';
 import 'package:clipious/music/services/music_sound_controller.dart';
 import 'package:clipious/music/views/components/music_sound_sheet.dart';
-import 'package:clipious/player/models/named_music_queue.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/states/settings.dart';
-import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/material.dart';
@@ -103,9 +101,7 @@ void main() {
       musicMetadata: MusicMetadata(title: 'Song', artist: 'Artist'));
 
   setUp(() async {
-    db = await SembastSqfDb.createInMemory();
-    await db.saveSetting(SettingsValue(
-        namedMusicQueuesSetting, NamedMusicQueue.encodeAll(const [])));
+    db = await createPlayerTestDatabase();
     app = TestAppCubit(AppState(0, null, HomeLayout()));
     await app.initState();
     app.intentDataStreamSubscription =

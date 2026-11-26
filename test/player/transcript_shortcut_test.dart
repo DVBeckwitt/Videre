@@ -19,7 +19,6 @@ import 'package:clipious/settings/models/backend_selector.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/subscription_management/view/components/subscribe_button.dart';
-import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/caption.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:clipious/videos/models/video_transcript.dart';
@@ -66,7 +65,7 @@ void main() {
   final transcript = find.byKey(const ValueKey('video-transcript-list'));
 
   setUp(() async {
-    db = await SembastSqfDb.createInMemory();
+    db = await createPlayerTestDatabase();
     app = TestAppCubit(AppState(0, null, HomeLayout()));
     await app.initState();
     app.intentDataStreamSubscription =

@@ -14,7 +14,6 @@ import 'package:clipious/router.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/states/settings.dart';
-import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -84,7 +83,7 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     final api = _ChannelService();
-    final database = await tester.runAsync(SembastSqfDb.createInMemory);
+    final database = await tester.runAsync(createPlayerTestDatabase);
     db = database!;
     service = api;
     final app = TestAppCubit(AppState(0, null, HomeLayout()));

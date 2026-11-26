@@ -14,7 +14,6 @@ import 'package:clipious/player/states/player.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/errors/invidious_service_error.dart';
 import 'package:clipious/settings/states/settings.dart';
-import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -82,7 +81,7 @@ void main() {
   late _CommentsService fakeService;
 
   setUp(() async {
-    db = await SembastSqfDb.createInMemory();
+    db = await createPlayerTestDatabase();
     service = fakeService = _CommentsService();
   });
 

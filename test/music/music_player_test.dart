@@ -49,7 +49,6 @@ import 'package:clipious/player/models/local_music_playback.dart';
 import 'package:clipious/player/models/media_command.dart';
 import 'package:clipious/player/models/media_event.dart';
 import 'package:clipious/player/models/music_audio_quality.dart';
-import 'package:clipious/player/models/named_music_queue.dart';
 import 'package:clipious/player/models/playback_queue.dart';
 import 'package:clipious/player/states/audio_player.dart';
 import 'package:clipious/player/states/player.dart';
@@ -68,7 +67,6 @@ import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/db/video_filter.dart';
 import 'package:clipious/utils/models/image_object.dart';
 import 'package:clipious/utils/motion.dart';
-import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/utils/views/components/selected_server.dart';
 import 'package:clipious/utils/views/components/thumbnail.dart';
 import 'package:clipious/videos/models/adaptive_format.dart';
@@ -352,9 +350,7 @@ void main() {
   setUp(() async {
     app_main.darkColorScheme = ColorScheme.fromSeed(
         seedColor: Colors.blue, brightness: Brightness.dark);
-    db = await SembastSqfDb.createInMemory();
-    await db.saveSetting(SettingsValue(
-        namedMusicQueuesSetting, NamedMusicQueue.encodeAll(const [])));
+    db = await createPlayerTestDatabase();
     app = _App(AppState(0, null, HomeLayout()));
     await app.initState();
     app.intentDataStreamSubscription =
