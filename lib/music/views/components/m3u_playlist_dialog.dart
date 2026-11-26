@@ -325,6 +325,108 @@ class _M3uTrackPickerState extends State<_M3uTrackPicker> {
   }
 }
 
+typedef _M3uExportSelection = ({
+  M3uExportPathStyle style,
+  List<String> paths,
+});
+
+class _M3uExportDialog extends StatefulWidget {
+  final M3uTrackIndex index;
+  final M3uLocation? destination;
+  final List<M3uLocation> locations;
+  final int unavailable;
+
+  const _M3uExportDialog({
+    required this.index,
+    required this.destination,
+    required this.locations,
+    required this.unavailable,
+  });
+
+  @override
+  State<_M3uExportDialog> createState() => _M3uExportDialogState();
+}
+
+class _M3uExportDialogState extends State<_M3uExportDialog> {
+  M3uExportPathStyle _style = M3uExportPathStyle.automatic;
+
+  @override
+  Widget build(BuildContext context) {
+    final locals = AppLocalizations.of(context)!;
+    final paths = [
+      for (final location in widget.locations)
+        if (widget.index.exportPath(location, widget.destination, style: _style)
+            case final path?)
+          path,
+    ];
+    final selection = (style: _style, paths: paths);
+    final unrepresentable = widget.locations.length - paths.length;
+    final absolute = paths.where((path) => path.startsWith('/')).length;
+    return AlertDialog(
+      scrollable: true,
+      title: Text(locals.musicM3uExport),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          DropdownButtonFormField<M3uExportPathStyle>(
+            initialValue: _style,
+            isExpanded: true,
+            decoration: InputDecoration(labelText: locals.musicM3uPathFormat),
+            items: [
+              for (final style in M3uExportPathStyle.values)
+                DropdownMenuItem(
+                  value: style,
+                  child: Text(switch (style) {
+                    M3uExportPathStyle.automatic =>
+                      locals.musicM3uPathAutomatic,
+                    M3uExportPathStyle.relative => locals.musicM3uPathRelative,
+                    M3uExportPathStyle.absolute => locals.musicM3uPathAbsolute,
+                    M3uExportPathStyle.windows => locals.musicM3uPathWindows,
+                  }),
+                ),
+            ],
+            onChanged: (style) {
+              if (style != null) setState(() => _style = style);
+            },
+          ),
+          const SizedBox(height: 12),
+          Text([
+            switch (_style) {
+              M3uExportPathStyle.automatic => locals.musicM3uPathAutomaticHelp,
+              M3uExportPathStyle.relative => locals.musicM3uPathRelativeHelp,
+              M3uExportPathStyle.absolute => locals.musicM3uPathAbsoluteHelp,
+              M3uExportPathStyle.windows => locals.musicM3uPathWindowsHelp,
+            },
+            if (widget.destination == null &&
+                (_style == M3uExportPathStyle.relative ||
+                    _style == M3uExportPathStyle.windows))
+              locals.musicM3uExportLocationUnavailable,
+            if (widget.unavailable > 0)
+              locals.musicM3uExportSkipped(widget.unavailable),
+            if (paths.isEmpty)
+              locals.musicM3uExportFormatEmpty
+            else if (unrepresentable > 0)
+              locals.musicM3uExportFormatSkipped(unrepresentable),
+            if (absolute > 0) locals.musicM3uExportAbsolute(absolute),
+          ].join('\n\n')),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: Text(locals.cancel),
+        ),
+        FilledButton(
+          onPressed:
+              paths.isEmpty ? null : () => Navigator.pop(context, selection),
+          child: Text(locals.save),
+        ),
+      ],
+    );
+  }
+}
+
 Future<void> exportM3uPlaylist(
   BuildContext context, {
   required MusicLibrarySession session,
@@ -354,65 +456,54 @@ Future<void> exportM3uPlaylist(
       message(locals.musicM3uSourceRequired);
       return;
     }
-    final paths = <String>[];
-    final exportedTracks = <String, M3uIndexedTrack>{};
-    for (final id in deviceIds) {
-      if (id == null) continue;
-      final track = resolve(snapshot.index, id);
+
+    final locations = <M3uLocation>[];
+    final indexed = <String, M3uIndexedTrack>{};
+    for (final id in deviceIds.nonNulls) {
+      final track = indexed[id] ?? resolve(snapshot.index, id);
       if (track == null) continue;
-      final path = snapshot.index.exportPath(track.location, destination);
-      if (path != null) {
-        paths.add(path);
-        exportedTracks[id] = track;
-      }
+      indexed[id] = track;
+      locations.add(track.location);
     }
-    if (paths.isEmpty) {
+    if (locations.isEmpty) {
       message(locals.musicM3uNoExportableTracks);
       return;
     }
-    final skipped = deviceIds.length - paths.length;
-    final absolute = paths.where((path) => path.startsWith('/')).length;
-    if (skipped > 0 || absolute > 0) {
-      final approved = await showDialog<bool>(
-        context: context,
-        animationStyle: AppMotion.dialogStyle(context),
-        builder: (context) => AlertDialog(
-          title: Text(locals.musicM3uExport),
-          content: Text([
-            if (skipped > 0) locals.musicM3uExportSkipped(skipped),
-            if (absolute > 0) locals.musicM3uExportAbsolute(absolute),
-          ].join('\n\n')),
-          actions: [
-            TextButton(
-                onPressed: () => Navigator.pop(context, false),
-                child: Text(locals.cancel)),
-            FilledButton(
-                onPressed: () => Navigator.pop(context, true),
-                child: Text(locals.save)),
-          ],
-        ),
-      );
-      if (approved != true || !context.mounted || !session.isCurrent) return;
-      final current = await library.m3uIndex();
-      if (!context.mounted || !session.isCurrent) return;
-      if (current == null ||
-          !current.isCurrent() ||
-          !exportedTracks.entries.every((item) {
-            final row = resolve(current.index, item.key);
-            return row?.track.uri == item.value.track.uri &&
-                row?.location == item.value.location &&
-                current.index.exportPath(item.value.location, destination) ==
-                    snapshot.index.exportPath(item.value.location, destination);
-          })) {
-        message(locals.musicM3uSourceChanged);
-        return;
-      }
-    }
-    if (!snapshot.isCurrent()) {
+
+    final selection = await showDialog<_M3uExportSelection>(
+      context: context,
+      animationStyle: AppMotion.dialogStyle(context),
+      builder: (_) => _M3uExportDialog(
+        index: snapshot.index,
+        destination: destination,
+        locations: locations,
+        unavailable: deviceIds.length - locations.length,
+      ),
+    );
+    if (selection == null || !context.mounted || !session.isCurrent) return;
+
+    final current = await library.m3uIndex();
+    if (!context.mounted || !session.isCurrent) return;
+    final style = selection.style;
+    if (!snapshot.isCurrent() ||
+        current == null ||
+        !current.isCurrent() ||
+        !indexed.entries.every((item) {
+          final before = item.value;
+          final path = snapshot.index
+              .exportPath(before.location, destination, style: style);
+          if (path == null) return true;
+          final row = resolve(current.index, item.key);
+          return row?.track.uri == before.track.uri &&
+              row?.location == before.location &&
+              current.index
+                      .exportPath(before.location, destination, style: style) ==
+                  path;
+        })) {
       message(locals.musicM3uSourceChanged);
       return;
     }
-    await M3uDocuments.write(output, paths);
+    await M3uDocuments.write(output, selection.paths);
     saved = true;
     message(locals.musicM3uExported);
   } catch (_) {

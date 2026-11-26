@@ -3,6 +3,7 @@ import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/music/services/local_music_library.dart';
+import 'package:clipious/music/services/m3u_playlist.dart';
 import 'package:clipious/music/views/components/m3u_playlist_dialog.dart';
 import 'package:clipious/music/views/components/music_library_actions.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
@@ -31,12 +32,15 @@ void main() {
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
   late _App app;
   var tracksAvailable = true;
+  var secondVolume = 'primary';
 
   const tree = 'content://documents/tree/primary%3AMusic';
   const first = '$tree/document/primary%3AMusic%2Ffirst.mp3';
   const second = '$tree/document/primary%3AMusic%2Fsecond.mp3';
 
   setUp(() async {
+    tracksAvailable = true;
+    secondVolume = 'primary';
     db = await SembastSqfDb.createInMemory();
     app = _App();
     messenger.setMockMethodCallHandler(documents, (call) async {
@@ -78,9 +82,12 @@ void main() {
           return {
             'locations': {
               first: {'volume': 'primary', 'path': 'Music/first.mp3'},
-              second: {'volume': 'primary', 'path': 'Music/second.mp3'},
+              second: {'volume': secondVolume, 'path': 'Music/second.mp3'},
             },
-            'roots': {'primary': '/storage/emulated/0'},
+            'roots': {
+              'primary': '/storage/emulated/0',
+              'cafe-1234': '/storage/CAFE-1234',
+            },
           };
       }
       throw MissingPluginException(call.method);
@@ -94,8 +101,143 @@ void main() {
     await db.close();
   });
 
+  Future<void> pumpExport(WidgetTester tester) async {
+    final firstProof = 'a' * 64;
+    final secondProof = 'b' * 64;
+    final firstId = 'device:playlist:$firstProof';
+    final secondId = 'device:playlist:$secondProof';
+    await tester.pumpWidget(MaterialApp(
+      localizationsDelegates: AppLocalizations.localizationsDelegates,
+      supportedLocales: AppLocalizations.supportedLocales,
+      home: Scaffold(
+        body: Builder(
+          builder: (context) => TextButton(
+            onPressed: () => exportM3uPlaylist(
+              context,
+              session: MusicLibrarySession(app),
+              title: 'Drive',
+              deviceIds: [secondId, null, firstId, firstId],
+              resolve: (index, id) {
+                final track = LocalMusicLibrary.instance
+                    .playlistTrackById(id, visibleOnly: true);
+                return track == null ? null : index.byTrack(track);
+              },
+            ),
+            child: const Text('Export review'),
+          ),
+        ),
+      ),
+    ));
+  }
+
+  Future<void> openExport(WidgetTester tester) async {
+    await tester.tap(find.text('Export review'));
+    await tester.pumpAndSettle();
+  }
+
+  Future<void> chooseFormat(WidgetTester tester, String label) async {
+    await tester.tap(find.byType(DropdownButton<M3uExportPathStyle>));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text(label).last);
+    await tester.pumpAndSettle();
+  }
+
+  Future<void> reviewPathFormats(WidgetTester tester) async {
+    secondVolume = 'cafe-1234';
+    final writes = <Object?>[];
+    messenger.setMockMethodCallHandler(documents, (call) async {
+      switch (call.method) {
+        case 'createM3u':
+          return {
+            'token': 'test-output',
+            'location': {'volume': 'primary', 'path': 'Playlists/Drive.m3u8'},
+          };
+        case 'writeM3u':
+          writes.add(call.arguments);
+          return null;
+      }
+      throw MissingPluginException(call.method);
+    });
+
+    await pumpExport(tester);
+    await openExport(tester);
+    expect(find.text('Automatic'), findsOneWidget);
+    expect(find.textContaining('1 file will use an absolute path.'),
+        findsOneWidget);
+
+    await chooseFormat(tester, 'Relative');
+    final skipped = find.textContaining(
+      '1 local entry cannot use this path format and will be skipped.',
+    );
+    expect(skipped, findsOneWidget);
+    expect(find.textContaining('will use an absolute path'), findsNothing);
+
+    await chooseFormat(tester, 'Absolute');
+    expect(skipped, findsNothing);
+    expect(find.textContaining('3 files will use absolute paths.'),
+        findsOneWidget);
+
+    await chooseFormat(tester, 'Windows-style relative');
+    expect(skipped, findsOneWidget);
+    expect(writes, isEmpty);
+    await tester.tap(find.text('Save'));
+    await tester.pumpAndSettle();
+    expect(writes, [
+      {
+        'token': 'test-output',
+        'text': '#EXTM3U\n'
+            r'..\Music\first.mp3'
+            '\n'
+            r'..\Music\first.mp3'
+            '\n',
+      },
+    ]);
+    expect(tester.takeException(), isNull);
+  }
+
+  Future<void> reviewCancellation(WidgetTester tester) async {
+    var pickLocation = false;
+    final methods = <String>[];
+    messenger.setMockMethodCallHandler(documents, (call) async {
+      methods.add(call.method);
+      switch (call.method) {
+        case 'createM3u':
+          return pickLocation ? {'token': 'test-output'} : null;
+        case 'cancelM3uSave':
+          expect(call.arguments, {'token': 'test-output'});
+          return null;
+      }
+      throw MissingPluginException(call.method);
+    });
+
+    await pumpExport(tester);
+    await openExport(tester);
+    expect(find.byType(AlertDialog), findsNothing);
+    expect(methods, ['createM3u']);
+
+    pickLocation = true;
+    await openExport(tester);
+    await chooseFormat(tester, 'Relative');
+    expect(
+      find.textContaining('The file picker did not provide a folder path.'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('No tracks can use this path format.'),
+        findsOneWidget);
+    final save = find.widgetWithText(FilledButton, 'Save');
+    expect(tester.widget<FilledButton>(save).onPressed, isNull);
+
+    await chooseFormat(tester, 'Absolute');
+    expect(tester.widget<FilledButton>(save).onPressed, isNotNull);
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    expect(methods, ['createM3u', 'createM3u', 'cancelM3uSave']);
+    expect(find.byType(AlertDialog), findsNothing);
+    expect(tester.takeException(), isNull);
+  }
+
   testWidgets(
-      'phone import and export review missing files and preserve repeats',
+      'phone M3U review preserves repeats, selects paths, and cancels exports',
       (tester) async {
     tester.view.devicePixelRatio = 1;
     tester.view.physicalSize = const Size(360, 640);
@@ -197,36 +339,12 @@ void main() {
       throw MissingPluginException(call.method);
     });
 
-    final firstProof = 'a' * 64;
-    final firstId = 'device:playlist:$firstProof';
-    final secondProof = 'b' * 64;
-    final secondId = 'device:playlist:$secondProof';
-    await tester.pumpWidget(MaterialApp(
-      localizationsDelegates: AppLocalizations.localizationsDelegates,
-      supportedLocales: AppLocalizations.supportedLocales,
-      home: Scaffold(
-        body: Builder(
-          builder: (context) => TextButton(
-            onPressed: () => exportM3uPlaylist(
-              context,
-              session: MusicLibrarySession(app),
-              title: 'Drive',
-              deviceIds: [secondId, null, firstId, firstId],
-              resolve: (index, id) {
-                final track = LocalMusicLibrary.instance
-                    .playlistTrackById(id, visibleOnly: true);
-                return track == null ? null : index.byTrack(track);
-              },
-            ),
-            child: const Text('Export review'),
-          ),
-        ),
-      ),
-    ));
-    await tester.tap(find.text('Export review'));
-    await tester.pumpAndSettle();
+    await pumpExport(tester);
+    await openExport(tester);
+    expect(find.text('Automatic'), findsOneWidget);
     expect(
-      find.text('1 entry has no exportable local file and will be skipped.'),
+      find.textContaining(
+          '1 entry has no exportable local file and will be skipped.'),
       findsOneWidget,
     );
     expect(writes, isEmpty);
@@ -240,5 +358,8 @@ void main() {
       }
     ]);
     expect(tester.takeException(), isNull);
+
+    await reviewPathFormats(tester);
+    await reviewCancellation(tester);
   });
 }

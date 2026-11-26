@@ -118,4 +118,107 @@ void main() {
     expect(
         index.match(document, _playlist).map((match) => match.exact), tracks);
   });
+
+  test(
+      'exports relative and portable paths that reimport after moving the tree',
+      () {
+    final song = _track(1, 'Music/Albums/Café 100%.mp3');
+    final opener = _track(2, 'Music/Lists/#Opener.mp3');
+    final tracks = [song, opener, song];
+    final index = M3uTrackIndex([song, opener], _volumeRoots);
+    final movedSong = _track(1, 'Archive/${song.location.path}');
+    final movedOpener = _track(2, 'Archive/${opener.location.path}');
+    final movedPlaylist =
+        (volume: 'primary', path: 'Archive/${_playlist.path}');
+    final movedIndex = M3uTrackIndex([movedSong, movedOpener], _volumeRoots);
+
+    for (final (style, expected) in [
+      (
+        M3uExportPathStyle.relative,
+        ['../Albums/Café 100%.mp3', './#Opener.mp3']
+      ),
+      (
+        M3uExportPathStyle.windows,
+        [r'..\Albums\Café 100%.mp3', r'.\#Opener.mp3']
+      ),
+    ]) {
+      final paths = [
+        for (final row in tracks)
+          index.exportPath(row.location, _playlist, style: style)!,
+      ];
+      expect(paths, [...expected, expected.first]);
+      final document = M3uDocument.parse('#EXTM3U\n${paths.join('\n')}\n');
+      expect(
+        movedIndex.match(document, movedPlaylist).map((match) => match.exact),
+        [movedSong, movedOpener, movedSong],
+      );
+    }
+  });
+
+  test('explicit formats use the available destination and volume information',
+      () {
+    final song = _track(1, 'Music/Albums/First.mp3');
+    final card = _track(2, 'Music/Albums/Second.mp3', volume: 'card');
+    final unknown = _track(3, 'Third.mp3', volume: 'opaque');
+    final index = M3uTrackIndex([song, card, unknown], _volumeRoots);
+
+    const absolute = M3uExportPathStyle.absolute;
+    expect(index.exportPath(song.location, _playlist, style: absolute),
+        '/storage/emulated/0/Music/Albums/First.mp3');
+    expect(index.exportPath(song.location, null, style: absolute),
+        '/storage/emulated/0/Music/Albums/First.mp3');
+    expect(index.exportPath(card.location, _playlist, style: absolute),
+        '/storage/card/Music/Albums/Second.mp3');
+    expect(
+        index.exportPath(unknown.location, _playlist, style: absolute), isNull);
+
+    for (final style in [
+      M3uExportPathStyle.relative,
+      M3uExportPathStyle.windows
+    ]) {
+      expect(index.exportPath(card.location, _playlist, style: style), isNull);
+      expect(index.exportPath(song.location, null, style: style), isNull);
+    }
+  });
+
+  test('portable export skips components Windows cannot preserve', () {
+    const invalidPaths = [
+      'Music/Albums/What?.mp3',
+      'Music/Lists/Track: Intro.mp3',
+      'Music/Lists/Song*.mp3',
+      'Music/Lists/AuX.flac',
+      'Music/Com¹/Track.mp3',
+      'Music/lPt9.album/Track.mp3',
+      'Music/Album./Track.mp3',
+      'Music/Album /Track.mp3',
+      'Music/Lists/ Intro.mp3',
+    ];
+    final index = M3uTrackIndex([], _volumeRoots);
+    for (final path in invalidPaths) {
+      final location = (volume: 'primary', path: path);
+      expect(
+          index.exportPath(location, _playlist,
+              style: M3uExportPathStyle.windows),
+          isNull,
+          reason: path);
+      expect(
+          index.exportPath(location, _playlist,
+              style: M3uExportPathStyle.relative),
+          isNotNull,
+          reason: path);
+    }
+  });
+
+  test('skips exported lines that exceed the playlist parser limit', () {
+    final track = _track(1, List.filled(17, 'a' * 240).join('/'));
+    final index = M3uTrackIndex([track], _volumeRoots);
+    const rootPlaylist = (volume: 'primary', path: 'Set.m3u8');
+
+    expect(index.exportPath(track.location, rootPlaylist), track.location.path);
+    expect(index.exportPath(track.location, _playlist), isNull);
+    expect(
+        index.exportPath(track.location, rootPlaylist,
+            style: M3uExportPathStyle.absolute),
+        isNull);
+  });
 }
