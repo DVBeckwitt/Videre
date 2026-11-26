@@ -1530,6 +1530,7 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
               artistName: selected == null ? name : null);
         } on MusicArtistChoiceRequired catch (choice) {
           if (!current()) return;
+          setState(() => _loading = false);
           final chosen = await _chooseArtistChannel(choice.matches);
           if (!current()) return;
           if (chosen == null) {
@@ -1537,6 +1538,7 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
             return;
           }
           selected = chosen;
+          setState(() => _loading = true);
           artist = await musicCatalogService.getArtistOverview(chosen);
         }
         if (current()) {
