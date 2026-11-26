@@ -1184,6 +1184,8 @@ void main() {
 
     expect(lock, findsNothing);
     expect(find.byType(Slider), findsNothing);
+    expect(find.byType(FlowVideoGestures), findsNothing);
+    expect(find.byType(FullscreenVideoZoomGestures), findsNothing);
     expect(
       tester.getSemantics(unlock),
       containsSemantics(isButton: true, isFocused: true, isLiveRegion: true),

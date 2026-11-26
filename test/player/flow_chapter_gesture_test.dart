@@ -1,4 +1,5 @@
 import 'package:clipious/player/views/components/flow_video_gestures.dart';
+import 'package:clipious/player/views/components/fullscreen_video_zoom.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -12,35 +13,42 @@ Future<void> _mount(
   VoidCallback? toggleControls,
   VoidCallback? fastForward,
   VoidCallback? pause,
-  GestureScaleStartCallback? onScaleStart,
+  FullscreenVideoZoom? zoom,
   ValueChanged<Duration>? seek,
 }) =>
     tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
-          body: GestureDetector(
-            behavior: HitTestBehavior.translucent,
-            onScaleStart: onScaleStart,
-            child: FlowVideoGestures(
-              video: null,
-              duration: const Duration(minutes: 5),
-              readPosition: () => const Duration(minutes: 1),
-              canSeek: true,
-              toggleControls: toggleControls ?? () {},
-              togglePlayback: () {},
-              rewind: () {},
-              fastForward: fastForward ?? () {},
-              seek: seek ?? (_) {},
-              skipChapter: skipChapter,
-              child: SizedBox.expand(
-                child: Center(
-                  child: TextButton(
-                    onPressed: pause ?? () {},
-                    child: const Text('Pause'),
+          body: Stack(
+            fit: StackFit.expand,
+            children: [
+              if (zoom != null)
+                zoom.buildSurface(const SizedBox.expand(), const Size(800, 600),
+                    BoxFit.contain),
+              FullscreenVideoZoomScope(
+                zoom: zoom,
+                child: FlowVideoGestures(
+                  video: null,
+                  duration: const Duration(minutes: 5),
+                  readPosition: () => const Duration(minutes: 1),
+                  canSeek: true,
+                  toggleControls: toggleControls ?? () {},
+                  togglePlayback: () {},
+                  rewind: () {},
+                  fastForward: fastForward ?? () {},
+                  seek: seek ?? (_) {},
+                  skipChapter: skipChapter,
+                  child: SizedBox.expand(
+                    child: Center(
+                      child: TextButton(
+                        onPressed: pause ?? () {},
+                        child: const Text('Pause'),
+                      ),
+                    ),
                   ),
                 ),
               ),
-            ),
+            ],
           ),
         ),
       ),
@@ -114,11 +122,12 @@ void main() {
   ) async {
     final skips = <bool>[];
     final timeSeeks = <Duration>[];
-    var pinchStarts = 0;
+    final zoom = FullscreenVideoZoom();
+    addTearDown(zoom.dispose);
     await _mount(
       tester,
       skipChapter: skips.add,
-      onScaleStart: (_) => pinchStarts++,
+      zoom: zoom,
       seek: timeSeeks.add,
     );
     await _tapPair(tester, _right, 0);
@@ -129,12 +138,14 @@ void main() {
     await first.up(timeStamp: _at(180));
     await second.up(timeStamp: _at(190));
 
-    expect(pinchStarts, 1);
+    expect(zoom.scale, greaterThan(1));
     expect(timeSeeks, isEmpty);
     await _tapPair(tester, _right, 240);
     expect(skips, isEmpty);
+    final afterPinch = (zoom.scale, zoom.offset);
     await _tapPair(tester, _right, 370);
     expect(skips, [true]);
+    expect((zoom.scale, zoom.offset), afterPinch);
   });
 
   testWidgets('expired, held and cancelled taps cannot make a chapter skip', (
