@@ -745,12 +745,11 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves>
 
   Widget _buildShelves(BuildContext context) {
     final locals = AppLocalizations.of(context)!;
-    final starterKeys =
-        _starterArtists.picks?.map(MusicStarterArtists.artistKey).toSet();
-    final starterMatches = starterKeys == null || starterKeys.isEmpty
+    final starterPicks = _starterArtists.picks ?? const [];
+    final starterMatches = starterPicks.isEmpty
         ? const <MusicTrack>[]
         : _eligible(_localTracks.where(
-                (track) => MusicStarterArtists.matches(track, starterKeys)))
+                (track) => MusicStarterArtists.matches(track, starterPicks)))
             .take(_maxQuickPicks)
             .toList();
     final speedDial =

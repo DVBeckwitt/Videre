@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:ui' as ui;
 
 import 'package:auto_route/auto_route.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:clipious/playlists/models/playlist_reference.dart';
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/content_filter/community_filter.dart';
@@ -14,12 +16,14 @@ import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' show isTv;
 import 'package:clipious/music/models/music_card_origin.dart';
+import 'package:clipious/music/models/music_artist.dart';
 import 'package:clipious/music/models/music_artist_page.dart';
 import 'package:clipious/music/models/music_charts.dart';
 import 'package:clipious/music/models/music_collection.dart';
 import 'package:clipious/music/models/music_library_entry.dart';
 import 'package:clipious/music/models/music_track.dart';
 import 'package:clipious/music/models/on_device_music_entry.dart';
+import 'package:clipious/music/services/music_artwork_cache.dart';
 import 'package:clipious/music/services/music_catalog_service.dart';
 import 'package:clipious/music/services/music_library_service.dart';
 import 'package:clipious/music/services/music_starter_artists.dart';
@@ -36,14 +40,20 @@ import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/models/db/video_filter.dart';
 import 'package:clipious/settings/models/errors/invidious_service_error.dart';
 import 'package:clipious/settings/states/settings.dart';
+import 'package:clipious/settings/views/screens/music_settings.dart';
+import 'package:clipious/utils/models/image_object.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
+import 'package:clipious/utils/views/components/channel_avatar.dart';
 import 'package:clipious/videos/models/db/history_video_cache.dart';
 import 'package:clipious/videos/models/ided_video.dart';
 import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:clipious/videos/models/video.dart';
+import 'package:file/file.dart' as fs;
+import 'package:file/memory.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:flutter_cache_manager/flutter_cache_manager.dart' as cache;
 import 'package:flutter_test/flutter_test.dart';
 
 import '../test_settings_cubit.dart';
@@ -104,6 +114,9 @@ class _Catalog extends MusicCatalogService {
   Object? chartFailure;
   final artistReleaseRequests = <String>[];
   final artistReleases = <String, MusicArtistReleases>{};
+  final artistQueries = <String>[];
+  final artistResults = <String, List<MusicArtist>>{};
+  final pendingArtistSearches = <String, Completer<List<MusicArtist>>>{};
 
   @override
   Future<List<MusicTrack>> getChartSongs(String playlistId,
@@ -171,6 +184,32 @@ class _Catalog extends MusicCatalogService {
   Future<List<MusicTrack>> searchSongs(String query) async {
     searchCalls++;
     return [];
+  }
+
+  @override
+  Future<List<MusicArtist>> searchArtists(String query) async {
+    artistQueries.add(query);
+    if (pendingArtistSearches[query] case final pending?) return pending.future;
+    return artistResults[query] ?? const [];
+  }
+}
+
+class _StarterArtistArtworkCache extends Fake
+    implements MusicArtworkCache, cache.BaseCacheManager {
+  _StarterArtistArtworkCache(this.image);
+
+  final fs.File image;
+  final requests = <String>[];
+
+  @override
+  cache.BaseCacheManager catalogManager(String profileId) => this;
+
+  @override
+  Stream<cache.FileResponse> getFileStream(String url,
+      {String? key, Map<String, String>? headers, bool withProgress = false}) {
+    requests.add(url);
+    return Stream.value(
+        cache.FileInfo(image, cache.FileSource.Cache, DateTime.utc(2100), url));
   }
 }
 
@@ -382,7 +421,8 @@ void main() {
       bool active = true,
       bool settle = true,
       SettingsCubit? settings,
-      DownloadManagerCubit? downloads}) async {
+      DownloadManagerCubit? downloads,
+      MusicArtworkCache? artworkCache}) async {
     await tester.pumpWidget(MultiBlocProvider(
       providers: [
         BlocProvider<AppCubit>.value(value: app),
@@ -391,6 +431,8 @@ void main() {
           BlocProvider<SettingsCubit>.value(value: settings),
         if (downloads != null)
           BlocProvider<DownloadManagerCubit>.value(value: downloads),
+        if (artworkCache != null)
+          RepositoryProvider<MusicArtworkCache>.value(value: artworkCache),
       ],
       child: MaterialApp(
         localizationsDelegates: AppLocalizations.localizationsDelegates,
@@ -432,44 +474,106 @@ void main() {
 
   Finder starterControl(String name) => find.byKey(ValueKey(name));
 
-  Future<void> openStarterArtists(WidgetTester tester) async {
-    final edit = starterControl('music-starter-artists-edit');
+  Finder artistResult(String id) =>
+      starterControl('music-starter-artist-result-$id');
+
+  final starterInput = starterControl('music-starter-artist-input');
+  final starterSave = starterControl('music-starter-artists-save');
+
+  Future<void> openStarterArtists(WidgetTester tester,
+      {String entry = 'music-starter-artists-edit'}) async {
+    final edit = starterControl(entry);
     await tester.ensureVisible(edit);
     await tester.tap(edit);
     await tester.pumpAndSettle();
     expect(starterControl('music-starter-artists-dialog'), findsOneWidget);
   }
 
-  testWidgets('Starter artists can be saved, searched explicitly and cleared',
+  Future<void> typeStarterQuery(WidgetTester tester, String query) async {
+    await tester.enterText(starterInput, query);
+    await tester.pump(const Duration(milliseconds: 350));
+  }
+
+  testWidgets('Same-name starter artists retain their exact ID and artwork',
       (tester) async {
     tester.view.devicePixelRatio = 1;
     tester.view.physicalSize = const Size(360, 560);
     addTearDown(tester.view.resetDevicePixelRatio);
     addTearDown(tester.view.resetPhysicalSize);
-    await show(tester, textScale: 1.5);
-    expect(find.text('Choose artists'), findsOneWidget);
-    await openStarterArtists(tester);
+    final artwork = (await tester.runAsync(() async {
+      await db.upsertServer(app.state.server!);
+      final recorder = ui.PictureRecorder();
+      ui.Canvas(recorder).drawColor(const Color(0xff14865e), ui.BlendMode.src);
+      final picture = recorder.endRecording();
+      final image = await picture.toImage(8, 8);
+      final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+      image.dispose();
+      picture.dispose();
+      return _StarterArtistArtworkCache(
+          MemoryFileSystem.test().file('starter-artist.png')
+            ..writeAsBytesSync(bytes!.buffer.asUint8List()));
+    }))!;
 
     const artist = 'Björk';
-    final save = starterControl('music-starter-artists-save');
-    expect(tester.widget<FilledButton>(save).onPressed, isNull);
-    await tester.enterText(
-        starterControl('music-starter-artist-input'), '  $artist  ');
+    const noArtworkId = 'UCabcdefghijklmnopqrstuv';
+    const artworkId = 'UCABCDEFGHIJKLMNOPQRSTUV';
+    const artworkUrl = 'https://yt3.ggpht.com/starter-avatar=s88';
+    const routedUrl = 'https://music.example/ggpht/starter-avatar=s88';
+    final withArtwork = MusicArtist(
+        id: artworkId,
+        name: artist,
+        thumbnails: [ImageObject(null, artworkUrl, 88, 88)]);
+    catalog.artistResults[artist] = [
+      const MusicArtist(id: noArtworkId, name: artist),
+      withArtwork,
+      withArtwork,
+    ];
+
+    await show(tester, textScale: 1.5, artworkCache: artwork);
+    expect(find.text('Choose artists'), findsOneWidget);
+    await openStarterArtists(tester);
+    expect(tester.widget<FilledButton>(starterSave).onPressed, isNull);
+
+    await typeStarterQuery(tester, '  $artist  ');
     await tester.pumpAndSettle();
-    await tester.tap(starterControl('music-starter-artist-add'));
+    final pictured = artistResult(artworkId);
+    final noPicture = artistResult(noArtworkId);
+    expect(pictured, findsOneWidget);
+    expect(noPicture, findsOneWidget);
+
+    Finder avatarIn(Finder row) =>
+        find.descendant(of: row, matching: find.byType(ChannelAvatar));
+    final noPictureAvatar = avatarIn(noPicture);
+    expect(find.descendant(of: noPictureAvatar, matching: find.text('B')),
+        findsOneWidget);
+    final displayedArtwork = find.descendant(
+        of: avatarIn(pictured), matching: find.byType(CachedNetworkImage));
+    expect(tester.widget<CachedNetworkImage>(displayedArtwork).imageUrl,
+        routedUrl);
+    expect(artwork.requests, contains(routedUrl));
+
+    await tester.ensureVisible(pictured);
+    await tester.tap(pictured);
     await tester.pumpAndSettle();
     final draft = find.widgetWithText(InputChip, artist);
-    expect(draft, findsOneWidget);
-    await tester.tap(save);
+    expect(avatarIn(draft), findsOneWidget);
+
+    await typeStarterQuery(tester, artist);
+    await tester.pumpAndSettle();
+    expect(tester.widget<ListTile>(pictured).onTap, isNull);
+    expect(tester.widget<ListTile>(noPicture).onTap, isNotNull);
+    await tester.tap(starterSave);
     await tester.pumpAndSettle();
     expect(starterControl('music-starter-artists-dialog'), findsNothing);
+    final saved = MusicStarterArtists(db, db.profileId).picks!.single;
+    expect(saved.catalogId, artworkId);
+    expect(saved.thumbnails.single.url, artworkUrl);
 
     await tester.pumpWidget(const SizedBox.shrink());
-    await show(tester, textScale: 1.5);
+    await show(tester, textScale: 1.5, artworkCache: artwork);
     final pick = find.widgetWithText(ActionChip, artist);
-    expect(pick, findsOneWidget);
+    expect(avatarIn(pick), findsOneWidget);
     expect(find.text('Choose artists'), findsNothing);
-    expect(find.textContaining('configured instance'), findsOneWidget);
     expect(router.pushed, isNull);
     expect(catalog.searchCalls, 0);
     expect(catalog.discoveryArtists.whereType<String>(), isEmpty);
@@ -479,7 +583,7 @@ void main() {
     await tester.tap(pick);
     await tester.pumpAndSettle();
     expect(router.pushed, isA<MusicRoute>());
-    expect((router.pushed!.args as MusicRouteArgs).initialQuery, artist);
+    expect((router.pushed!.args as MusicRouteArgs).artistId, artworkId);
 
     await openStarterArtists(tester);
     final label = find.descendant(of: draft, matching: find.text(artist));
@@ -489,47 +593,179 @@ void main() {
     await tester.sendKeyEvent(LogicalKeyboardKey.select);
     await tester.pumpAndSettle();
     expect(draft, findsNothing);
-    await tester.tap(save);
+
+    await tester.tap(starterSave);
     await tester.pumpAndSettle();
+    expect(MusicStarterArtists(db, db.profileId).picks, isEmpty);
     expect(pick, findsNothing);
     expect(find.text('Edit starter artists'), findsOneWidget);
   });
 
+  testWidgets('Starter artist searches debounce and ignore outdated results',
+      (tester) async {
+    final delayed = catalog.pendingArtistSearches['Old'] = Completer();
+    final latest = catalog.pendingArtistSearches['Current'] = Completer();
+    const old = MusicArtist(id: 'UCabcdefghijklmnopqrstuv', name: 'Old row');
+    const current =
+        MusicArtist(id: 'UCABCDEFGHIJKLMNOPQRSTUV', name: 'Current row');
+    await show(tester);
+    await openStarterArtists(tester);
+
+    await tester.enterText(starterInput, 'O');
+    await tester.pump(const Duration(milliseconds: 150));
+    await tester.enterText(starterInput, 'Old');
+    await tester.pump(const Duration(milliseconds: 150));
+    expect(catalog.artistQueries, isEmpty);
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(catalog.artistQueries, ['Old']);
+    await typeStarterQuery(tester, 'Current');
+    expect(catalog.artistQueries, ['Old', 'Current']);
+
+    latest.complete([current]);
+    await tester.pumpAndSettle();
+    expect(artistResult(current.id), findsOneWidget);
+    delayed.complete([old]);
+    await tester.pumpAndSettle();
+    expect(artistResult(current.id), findsOneWidget);
+    expect(artistResult(old.id), findsNothing);
+
+    await typeStarterQuery(tester, 'No match');
+    await tester.pumpAndSettle();
+    expect(artistResult(current.id), findsNothing);
+    expect(find.text('No results found.'), findsOneWidget);
+    expect(tester.widget<FilledButton>(starterSave).onPressed, isNull);
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await tester.pumpAndSettle();
+    expect(find.byType(InputChip), findsNothing);
+    expect(MusicStarterArtists(db, db.profileId).picks, isNull);
+  });
+
+  for (final switchProfile in [false, true]) {
+    testWidgets(
+        'Pending starter artist responses are discarded after a '
+        '${switchProfile ? 'profile' : 'server'} change', (tester) async {
+      final original = db.profileId;
+      final pending = catalog.pendingArtistSearches['Delayed'] = Completer();
+      const stale =
+          MusicArtist(id: 'UCabcdefghijklmnopqrstuv', name: 'Stale row');
+      await show(tester);
+      await openStarterArtists(tester);
+      await typeStarterQuery(tester, 'Delayed');
+      expect(catalog.artistQueries, ['Delayed']);
+
+      if (switchProfile) {
+        final other = (await tester.runAsync(() async {
+          final profile = await db.createProfile('Second starter profile');
+          await db.useProfile(profile.id);
+          return profile;
+        }))!;
+        app.change(app.state.copyWith(
+            profileId: other.id,
+            server: Server(url: 'https://other.example', profileId: other.id)));
+      } else {
+        app.change(app.state
+            .copyWith(server: const Server(url: 'https://other.example')));
+      }
+      await tester.pump();
+      pending.complete([stale]);
+      await tester.pumpAndSettle();
+
+      expect(artistResult(stale.id), findsNothing);
+      expect(starterInput, findsNothing);
+      expect(
+          find.textContaining('profile or connection changed'), findsOneWidget);
+      expect(MusicStarterArtists(db, original).picks, isNull);
+      expect(MusicStarterArtists(db, db.profileId).picks, isNull);
+    });
+  }
+
   testWidgets('Skipping starter artists persists only in the current profile',
       (tester) async {
     final original = db.profileId;
+    final server = app.state.server!;
     await show(tester);
     await openStarterArtists(tester);
-    await tester.enterText(
-        starterControl('music-starter-artist-input'), 'Discarded artist');
-    await tester.pumpAndSettle();
+    await tester.enterText(starterInput, 'Discarded artist');
     await tester.tap(starterControl('music-starter-artists-skip'));
     await tester.pumpAndSettle();
     expect(find.text('Choose artists'), findsNothing);
     expect(find.text('Edit starter artists'), findsOneWidget);
     expect(find.text('Discarded artist'), findsNothing);
+    expect(catalog.artistQueries, isEmpty);
 
     final other = (await tester
         .runAsync(() => db.createProfile('Other starter profile')))!;
     await tester.runAsync(() => db.useProfile(other.id));
-    app.change(app.state.copyWith(profileId: other.id));
+    app.change(app.state.copyWith(
+        profileId: other.id, server: server.copyWith(profileId: other.id)));
     await tester.pumpAndSettle();
+
+    const otherArtist = MusicArtist(
+        id: 'UCABCDEFGHIJKLMNOPQRSTUV', name: 'Other profile artist');
+    catalog.artistResults['Other'] = [otherArtist];
     expect(find.text('Choose artists'), findsOneWidget);
     await openStarterArtists(tester);
-    await tester.enterText(
-        starterControl('music-starter-artist-input'), 'Other profile artist');
+    await typeStarterQuery(tester, 'Other');
     await tester.pumpAndSettle();
-    await tester.tap(starterControl('music-starter-artists-save'));
+    await tester.tap(artistResult(otherArtist.id));
     await tester.pumpAndSettle();
-    final otherPick = find.widgetWithText(ActionChip, 'Other profile artist');
+    await tester.tap(starterSave);
+    await tester.pumpAndSettle();
+    final otherPick = find.widgetWithText(ActionChip, otherArtist.name);
     expect(otherPick, findsOneWidget);
 
     await tester.runAsync(() => db.useProfile(original));
-    app.change(app.state.copyWith(profileId: original));
+    app.change(app.state.copyWith(profileId: original, server: server));
     await tester.pumpAndSettle();
     expect(otherPick, findsNothing);
     expect(find.text('Choose artists'), findsNothing);
     expect(find.text('Edit starter artists'), findsOneWidget);
+  });
+
+  testWidgets('Music Settings opens the same editor and keeps legacy picks',
+      (tester) async {
+    await tester.runAsync(() => db.saveSetting(
+        SettingsValue(musicStarterArtistsSettingName, '["Legacy"]')));
+    final settings = TestSettingsCubit(SettingsState.init(), app);
+    final focus = FocusNode();
+    addTearDown(settings.close);
+    addTearDown(focus.dispose);
+    await tester.pumpWidget(MultiBlocProvider(
+      providers: [
+        BlocProvider<AppCubit>.value(value: app),
+        BlocProvider<SettingsCubit>.value(value: settings),
+      ],
+      child: MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: MusicSettingsScreen(
+          television: false,
+          focusedSetting: 'music-starter-artists-setting',
+          settingFocusNode: focus,
+        ),
+      ),
+    ));
+    await tester.pumpAndSettle();
+
+    const artist =
+        MusicArtist(id: 'UCABCDEFGHIJKLMNOPQRSTUV', name: 'Nina Simone');
+    catalog.artistResults['Nina'] = [artist];
+    await openStarterArtists(tester, entry: 'music-starter-artists-setting');
+    expect(find.widgetWithText(InputChip, 'Legacy'), findsOneWidget);
+    await typeStarterQuery(tester, 'Nina');
+    await tester.pumpAndSettle();
+    await tester.tap(artistResult(artist.id));
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(InputChip, artist.name), findsOneWidget);
+    await tester.tap(starterSave);
+    await tester.pumpAndSettle();
+
+    final saved = MusicStarterArtists(db, db.profileId).picks!;
+    expect(saved.map((pick) => pick.name), ['Legacy', artist.name]);
+    expect(saved.map((pick) => pick.catalogId), [null, artist.id]);
+    await openStarterArtists(tester, entry: 'music-starter-artists-setting');
+    expect(find.widgetWithText(InputChip, 'Legacy'), findsOneWidget);
+    expect(find.widgetWithText(InputChip, artist.name), findsOneWidget);
   });
 
   testWidgets('Starter artists use local songs and reorder generic discovery',
@@ -545,6 +781,8 @@ void main() {
                 musicMetadata: MusicMetadata(title: id, artist: artist)));
       }
     });
+    await tester.runAsync(() => db.saveSetting(
+        SettingsValue(musicStarterArtistsSettingName, '["ARTÍST"]')));
     catalog.holdDiscovery = true;
     await show(tester, settle: false);
     catalog.discoveries.single.complete([
@@ -553,11 +791,6 @@ void main() {
     ]);
     await tester.pumpAndSettle();
     final shelf = starterControl('music-starter-artist-matches');
-    expect(shelf, findsNothing);
-
-    final artists = MusicStarterArtists(db, db.profileId);
-    await tester.runAsync(() => artists.save(['ARTÍST']));
-    await tester.pumpAndSettle();
     expect(shelf, findsOneWidget);
     expect(starterControl('music-starter-artist-matches-starterhist'),
         findsOneWidget);
@@ -571,7 +804,7 @@ void main() {
     await tester.tap(discover);
     expectSongQueue([_discovered.videoId, 'priorSong01'], 0);
 
-    await tester.runAsync(() => artists.save([]));
+    await tester.runAsync(() => MusicStarterArtists(db, db.profileId).save([]));
     await tester.pumpAndSettle();
     expect(shelf, findsNothing);
     expect(catalog.discoveryArtists, [null]);

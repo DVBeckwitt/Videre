@@ -21,6 +21,7 @@ import '../../../music/services/music_lyrics_preferences.dart';
 import '../../../music/views/components/music_history_privacy.dart';
 import '../../../music/views/components/music_replay_gain_controls.dart';
 import '../../../music/views/components/music_screen_privacy.dart';
+import '../../../music/views/components/music_starter_artists.dart';
 import '../../../player/models/music_audio_quality.dart';
 import '../../../player/states/player.dart';
 import '../../../utils.dart' show selectKeys;
@@ -163,6 +164,8 @@ class MusicProviderSettings extends StatelessWidget {
     return Column(mainAxisSize: MainAxisSize.min, children: [
       MusicHistoryPrivacy(
           focusNode: _focusFor('music-history-privacy-setting')),
+      MusicStarterArtistsSection.settings(
+          focusNode: _focusFor('music-starter-artists-setting')),
       if (musicSound != null && musicSound.replayGainSupported)
         MusicReplayGainControls(
           key: const ValueKey('music-replaygain-setting'),
