@@ -16,6 +16,7 @@ import 'package:clipious/music/models/music_lyrics_match.dart';
 import 'package:clipious/music/services/local_music_library.dart';
 import 'package:clipious/music/services/local_music_lyrics_authoring.dart';
 import 'package:clipious/music/services/music_library_search.dart';
+import 'package:clipious/music/services/music_library_search_preferences.dart';
 import 'package:clipious/music/services/music_library_service.dart';
 import 'package:clipious/music/services/music_lyrics_corrections.dart';
 import 'package:clipious/music/services/music_offline_lyrics.dart';
@@ -171,6 +172,47 @@ void main() {
     expect(search(reader, 'cancion'), isEmpty);
     expect(reader.search('cancion', database: database, profileId: profile),
         isEmpty);
+  });
+
+  test('finds distinct saved types offline and reads legacy channel filters',
+      () async {
+    final reader = MusicLibrarySearch(deviceLibrary: LocalMusicLibrary());
+    addTearDown(reader.dispose);
+    const title = 'Same title';
+    const artistId = 'UC0123456789abcdefghijAB';
+    final library =
+        MusicLibraryService.forProfile(database, database.profileId);
+    for (final (kind, id) in const [
+      (MusicLibraryKind.song, 'saved-song1'),
+      (MusicLibraryKind.playlist, 'OLAK5uy_shared'),
+      (MusicLibraryKind.album, 'MPREunsupported'),
+      (MusicLibraryKind.artist, artistId),
+      (MusicLibraryKind.playlist, 'PLshared'),
+    ]) {
+      await library.save(MusicLibraryEntry(kind: kind, id: id, title: title));
+    }
+    await database.saveSetting(SettingsValue(
+        'music-library-search-categories-v1', 'channels,unknown'));
+    final preferences =
+        MusicLibrarySearchPreferences.forProfile(database, database.profileId);
+    expect(preferences.categories, {MusicLibrarySearchType.artists});
+    final artist = search(reader, title, types: preferences.categories).single
+        as MusicLibrarySearchBookmark;
+    expect(artist.entry.id, artistId);
+    expect(artist.resultKind, MusicLibraryKind.artist);
+
+    for (final (type, kind, id) in const [
+      (MusicLibrarySearchType.songs, MusicLibraryKind.song, 'saved-song1'),
+      (MusicLibrarySearchType.albums, MusicLibraryKind.album, 'OLAK5uy_shared'),
+      (MusicLibrarySearchType.playlists, MusicLibraryKind.playlist, 'PLshared'),
+    ]) {
+      final hit = search(reader, title, types: {type}).single
+          as MusicLibrarySearchBookmark;
+      expect(hit.entry.id, id);
+      expect(hit.resultKind, kind);
+    }
+    expect(search(reader, title), hasLength(4));
+    expect(search(reader, 'missing title'), isEmpty);
   });
 
   test('matches and displays live aliases for distinct saved artist IDs',

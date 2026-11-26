@@ -50,22 +50,46 @@ sealed class MusicLibrarySearchHit {
 
 final class MusicLibrarySearchBookmark extends MusicLibrarySearchHit {
   const MusicLibrarySearchBookmark(this.entry,
-      {String? artistByline, super.lyricLine})
-      : _artistByline = artistByline;
+      {String? artistByline, String? title, super.lyricLine})
+      : _artistByline = artistByline,
+        _title = title;
 
   final MusicLibraryEntry entry;
   final String? _artistByline;
+  final String? _title;
+
+  // Invidious releases use playlist IDs. Existing saves kept their playlist
+  // bookmark kind, which the collection page still uses to manage the save.
+  MusicLibraryKind get resultKind => _bookmarkResultKind(entry);
 
   @override
   String get key => 'bookmark:${entry.kind.name}:${entry.id}';
   @override
-  String get title => entry.displayTitle;
+  String get title => _title ?? entry.displayTitle;
   @override
   String? get subtitle {
     final label = _artistByline ?? entry.subtitle;
     return label.isEmpty ? null : label;
   }
 }
+
+MusicLibraryKind _bookmarkResultKind(MusicLibraryEntry entry) =>
+    entry.kind == MusicLibraryKind.playlist &&
+            validMusicAlbumPlaylistId(entry.id) != null
+        ? MusicLibraryKind.album
+        : entry.kind;
+
+MusicLibrarySearchType? _bookmarkSearchType(MusicLibraryEntry entry) =>
+    switch (_bookmarkResultKind(entry)) {
+      MusicLibraryKind.song => MusicLibrarySearchType.songs,
+      MusicLibraryKind.album when validMusicAlbumPlaylistId(entry.id) != null =>
+        MusicLibrarySearchType.albums,
+      MusicLibraryKind.artist
+          when MusicArtistIdentity.catalog(entry.id).isValid =>
+        MusicLibrarySearchType.artists,
+      MusicLibraryKind.playlist => MusicLibrarySearchType.playlists,
+      _ => null,
+    };
 
 final class MusicLibrarySearchPlaylist extends MusicLibrarySearchHit {
   const MusicLibrarySearchPlaylist(this.playlist);
@@ -384,24 +408,36 @@ class MusicLibrarySearch extends ChangeNotifier {
     final owner = (database: database, profileId: profileId);
     final includeSongs = types.contains(MusicLibrarySearchType.songs);
     final includePlaylists = types.contains(MusicLibrarySearchType.playlists);
+    final bookmarks = <MusicLibrarySearchBookmark>[];
+    for (final item in library.entries) {
+      if (!types.contains(_bookmarkSearchType(item))) continue;
+      final alias = item.kind == MusicLibraryKind.artist
+          ? library.artistAlias(MusicArtistIdentity.catalog(item.id))
+          : null;
+      if (!matches(
+          item,
+          () => [
+                item.displayTitle,
+                item.subtitle,
+                item.album,
+                ...item.artistCredits.map((credit) => credit.name),
+              ],
+          [
+            if (alias != null) alias,
+            ...catalogArtistSearchAliases(library, item.artistCredits),
+          ])) {
+        continue;
+      }
+      bookmarks.add(MusicLibrarySearchBookmark(
+        item,
+        title: alias,
+        artistByline: alias != null
+            ? item.displayTitle
+            : library.catalogArtistByline(item.subtitle, item.artistCredits),
+      ));
+    }
     return [
-      if (includeSongs || includePlaylists)
-        for (final item in library.entries)
-          if (((includeSongs && item.kind == MusicLibraryKind.song) ||
-                  (includePlaylists &&
-                      item.kind == MusicLibraryKind.playlist)) &&
-              matches(
-                  item,
-                  () => [
-                        item.displayTitle,
-                        item.subtitle,
-                        item.album,
-                        ...item.artistCredits.map((credit) => credit.name),
-                      ],
-                  catalogArtistSearchAliases(library, item.artistCredits)))
-            MusicLibrarySearchBookmark(item,
-                artistByline: library.catalogArtistByline(
-                    item.subtitle, item.artistCredits)),
+      ...bookmarks,
       if (includePlaylists)
         for (final playlist in _localPlaylists(database.forProfile(profileId)))
           if (library.isMusicPlaylist(playlist) &&

@@ -11,15 +11,17 @@ above the app-wide row, with the mini player above both rows. Tap **Search**
 to focus Music Search. The keyboard temporarily hides the rows, which return
 when it closes. From a video tab, the app-wide **Search** opens video search.
 In phone Music Search, choose **Online** or **Library** above the results.
-Online finds songs, channels, and public playlists through the selected
-Invidious instance. Library matches the active profile’s saved songs, Music
-playlists, playable completed Music downloads, and authorized device tracks.
-Library works offline and matches accents either way, so `cafe` can find
-`Café`. Hidden and excluded files stay out of the results. Choose **All**,
-**Songs**, or **Playlists** in Library. Each source keeps its query, type
-filter, and place in its results when you switch.
+Choose **Songs**, **Albums**, **Artists**, or **Playlists** to narrow either
+source. Online searches the selected Invidious instance. It shows albums
+that the instance indexes as public release playlists, and verifies artist
+identities against that instance. Library searches the active profile’s
+saved music, Music playlists, playable completed Music downloads, and
+authorized device tracks and groups. You can search this Library metadata
+offline and match accented words without their accents, such as `cafe`
+for `Café`. Hidden and excluded files stay out of results. Each source
+keeps its query, type filter, and place in the results when you switch.
 
-Choose **All** in Online to see songs, channels, and playlists together in
+Choose **All** in Online to see songs, albums, artists, and playlists in
 the instance's order. The first visible item appears under **Top result**.
 Select **Load more** at the end of the results to fetch the next page. If
 that page fails, **Retry** fetches it again and keeps the results you already
@@ -46,6 +48,12 @@ search for the address.
 On a Music catalog artist, album or playlist page, tap the back arrow to go
 up one level. Hold it to return directly to your Music Search results, or to
 the page that opened a direct link.
+
+Use **Search artist catalog** on an Online or On Device artist page to find
+that artist’s songs and releases. The catalog page uses the selected instance
+and the artist’s channel identity. On Device searches the artist’s indexed
+tracks and releases. Clear the query with the **Clear** button or go Back to
+return to the artist page at the same position.
 
 ## Home and Search
 

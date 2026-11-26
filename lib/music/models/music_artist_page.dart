@@ -50,3 +50,11 @@ class MusicArtistReleases {
 
   const MusicArtistReleases({this.releases = const [], this.continuation});
 }
+
+class MusicArtistSongSearchPage {
+  final List<MusicTrack> songs;
+  final bool hasMore;
+
+  const MusicArtistSongSearchPage(
+      {this.songs = const [], this.hasMore = false});
+}

@@ -23,10 +23,15 @@ class MusicLibrarySearchPreferences {
   Set<MusicLibrarySearchType> get categories {
     if (_pending case final pending?) return pending;
     final stored =
-        _database.getSettings(_settingName)?.value.split(',').toSet();
+        _database.getSettings(_settingName)?.value.split(',').toSet() ??
+            const <String>{};
+    final legacyArtists =
+        stored.contains('channel') || stored.contains('channels');
     final selected = {
       for (final type in MusicLibrarySearchType.categories)
-        if (stored?.contains(type.name) ?? false) type,
+        if (stored.contains(type.name) ||
+            (type == MusicLibrarySearchType.artists && legacyArtists))
+          type,
     };
     return selected.isEmpty
         ? MusicLibrarySearchType.categories

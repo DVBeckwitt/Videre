@@ -445,21 +445,21 @@ class _MusicLibrarySearchResultsState extends State<MusicLibrarySearchResults>
       AppLocalizations locals) {
     final ownsSearch = widget.isCurrent;
     final (title, kind, icon, plays) = switch (hit) {
-      MusicLibrarySearchBookmark(:final entry) => (
+      MusicLibrarySearchBookmark(:final resultKind) => (
           hit.title,
-          switch (entry.kind) {
+          switch (resultKind) {
             MusicLibraryKind.song => locals.musicSavedSongs,
-            MusicLibraryKind.artist => locals.channel,
+            MusicLibraryKind.artist => locals.musicLyricsArtist,
             MusicLibraryKind.album => locals.musicOpenAlbum,
             MusicLibraryKind.playlist => locals.musicPlaylists,
           },
-          switch (entry.kind) {
+          switch (resultKind) {
             MusicLibraryKind.song => Icons.music_note_outlined,
             MusicLibraryKind.artist => Icons.person_outline,
             MusicLibraryKind.album => Icons.album_outlined,
             MusicLibraryKind.playlist => Icons.playlist_play,
           },
-          entry.kind == MusicLibraryKind.song,
+          resultKind == MusicLibraryKind.song,
         ),
       MusicLibrarySearchPlaylist(:final playlist) => (
           playlist.playlistId == localWatchLaterId

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:clipious/music/models/music_album.dart';
 import 'package:clipious/music/models/music_artist.dart';
 import 'package:clipious/music/models/music_artist_page.dart';
 import 'package:clipious/music/models/music_catalog_search.dart';
@@ -80,6 +81,9 @@ abstract class MusicCatalogService {
   Future<List<MusicTrack>> searchSongs(String query) async =>
       throw const MusicCatalogUnsupported();
 
+  Future<List<MusicAlbum>> searchAlbums(String query) async =>
+      throw const MusicCatalogUnsupported();
+
   Future<List<MusicArtist>> searchArtists(String query) async =>
       throw const MusicCatalogUnsupported();
 
@@ -110,8 +114,10 @@ abstract class MusicCatalogService {
       MusicCatalogSearchType.all => throw const MusicCatalogUnsupported(),
       MusicCatalogSearchType.songs =>
         (await searchSongs(text)).map(MusicCatalogSongHit.new).toList(),
-      MusicCatalogSearchType.channels =>
-        (await searchArtists(text)).map(MusicCatalogChannelHit.new).toList(),
+      MusicCatalogSearchType.albums =>
+        (await searchAlbums(text)).map(MusicCatalogAlbumHit.new).toList(),
+      MusicCatalogSearchType.artists =>
+        (await searchArtists(text)).map(MusicCatalogArtistHit.new).toList(),
       MusicCatalogSearchType.playlists =>
         (await searchPlaylists(text)).map(MusicCatalogPlaylistHit.new).toList(),
     };
@@ -207,8 +213,20 @@ abstract class MusicCatalogService {
               songs: await getArtistUploads(id, isCurrent: isCurrent))
           : const MusicArtistUploads();
 
+  /// Searches one artist channel at the connection that opened the catalog.
+  Future<MusicArtistSongSearchPage> searchArtistSongs(
+    String artistId,
+    String query,
+    int page, {
+    Server? expectedServer,
+    bool Function()? isCurrent,
+  }) async =>
+      throw const MusicCatalogUnsupported();
+
   Future<MusicArtistReleases> getArtistReleases(String id,
-          {String? continuation, bool Function()? isCurrent}) async =>
+          {String? continuation,
+          Server? expectedServer,
+          bool Function()? isCurrent}) async =>
       throw const MusicCatalogUnsupported();
 
   /// Finds overlap among the profile's saved public playlist IDs. Adapters
