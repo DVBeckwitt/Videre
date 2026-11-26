@@ -74,6 +74,8 @@ class _MusicPlayerArtworkState extends State<MusicPlayerArtwork>
     with WidgetsBindingObserver {
   // A resize or queue edit resets the swipe gesture without restarting video.
   final _videoSurface = GlobalKey();
+  final _lyricsToggleFocus = FocusNode(debugLabel: 'In-player lyrics');
+  ({Object session, Widget reader})? _inlineLyrics;
   Object? _source;
   Object? _request;
   Video? _match;
@@ -154,6 +156,7 @@ class _MusicPlayerArtworkState extends State<MusicPlayerArtwork>
   @override
   void dispose() {
     _feedbackTimer?.cancel();
+    _lyricsToggleFocus.dispose();
     _filterChanges.removeListener(_filtersChanged);
     LocalMusicLibrary.instance.removeListener(_deviceLibraryChanged);
     LocalMusicVideoPairings.changes.removeListener(_localPairingChanged);
@@ -216,7 +219,8 @@ class _MusicPlayerArtworkState extends State<MusicPlayerArtwork>
   bool get _visible => widget.active && _artworkVisible;
 
   bool get _artworkVisible {
-    if (!_foreground ||
+    if (_inlineLyrics != null ||
+        !_foreground ||
         !TickerMode.of(context) ||
         ModalRoute.isCurrentOf(context) == false) {
       return false;
@@ -351,12 +355,69 @@ class _MusicPlayerArtworkState extends State<MusicPlayerArtwork>
 
   void _coverCornersChanged() => setState(() {});
 
+  void _setInlineLyrics(({Object session, Widget reader})? lyrics) {
+    final restoreFocus = _lyricsToggleFocus.hasFocus;
+    setState(() {
+      _inlineLyrics = lyrics;
+      _showVideo = false;
+      _display = null;
+      _localOpen = null;
+      _doubleTap = null;
+      _seekFeedback = null;
+    });
+    if (restoreFocus) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _inlineLyrics == lyrics) {
+          _lyricsToggleFocus.requestFocus();
+        }
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final session = context.watch<AppCubit>().state;
+    final sessionKey = (db, session.profileId, session.sessionRevision);
     final player = context.read<PlayerCubit>();
     final playing =
         context.select((PlayerCubit player) => player.state.isPlaying);
+    final locals = AppLocalizations.of(context)!;
+    if (_inlineLyrics case final lyrics?) {
+      if (lyrics.session == sessionKey &&
+          !session.globalLoading &&
+          !session.sessionRecoveryRequired) {
+        final colors = Theme.of(context).colorScheme;
+        return Center(
+          child: SizedBox(
+            key: const ValueKey('music-player-inline-lyrics-pane'),
+            width: double.infinity,
+            height: widget.size,
+            child: Material(
+              color: colors.surfaceContainer,
+              borderRadius: BorderRadius.circular(16),
+              clipBehavior: Clip.antiAlias,
+              child: Row(
+                children: [
+                  Expanded(child: lyrics.reader),
+                  Align(
+                    alignment: Alignment.topCenter,
+                    child: IconButton(
+                      key: const ValueKey('music-player-inline-lyrics-close'),
+                      focusNode: _lyricsToggleFocus,
+                      tooltip: locals.musicShowCover,
+                      onPressed: () => _setInlineLyrics(null),
+                      icon: const Icon(Icons.album_outlined),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      }
+      _inlineLyrics = null;
+    }
+
     final queueId = player.state.currentQueueId;
     final source = _currentSource();
     if (source != _source) _reset(source);
@@ -384,7 +445,6 @@ class _MusicPlayerArtworkState extends State<MusicPlayerArtwork>
     final localPairing = localActive ? _localPairing : null;
     final showing = (match != null || localPairing != null) && _showVideo;
     final display = showing ? (_display ??= Object()) : null;
-    final locals = AppLocalizations.of(context)!;
     final coverCorners = MusicCoverCorners.forDatabase(db);
     final border = showing
         ? BorderRadius.circular(12)
@@ -542,8 +602,7 @@ class _MusicPlayerArtworkState extends State<MusicPlayerArtwork>
       BoxShadow(color: Colors.black38, blurRadius: 24, offset: Offset(0, 12)),
     ]);
     final scaleCover = widget.scaleWithPlayback && !showing;
-    return Center(
-        child: Stack(children: [
+    final artwork = Stack(children: [
       Container(
           key: const ValueKey('music-player-artwork'),
           width: widget.size,
@@ -680,6 +739,29 @@ class _MusicPlayerArtworkState extends State<MusicPlayerArtwork>
                 MusicLyricsButton(loader: widget.lyricsLoader),
             ],
           )),
-    ]));
+    ]);
+    return Center(
+      child: SizedBox(
+        width: double.infinity,
+        height: widget.size,
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            artwork,
+            if (widget.interactive)
+              PositionedDirectional(
+                top: 0,
+                end: 0,
+                child: MusicLyricsButton(
+                  loader: widget.lyricsLoader,
+                  focusNode: _lyricsToggleFocus,
+                  onShowInline: (reader) =>
+                      _setInlineLyrics((session: sessionKey, reader: reader)),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
   }
 }
