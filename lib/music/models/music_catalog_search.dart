@@ -1,8 +1,18 @@
+import 'music_album.dart';
 import 'music_artist.dart';
 import 'music_playlist.dart';
 import 'music_track.dart';
 
-enum MusicCatalogSearchType { all, songs, channels, playlists }
+enum MusicCatalogSearchType {
+  all,
+  songs,
+  albums,
+  artists,
+  playlists;
+
+  // Older Music callers used the provider's channel filter name.
+  static const channels = artists;
+}
 
 sealed class MusicCatalogSearchHit {
   const MusicCatalogSearchHit();
@@ -27,17 +37,31 @@ final class MusicCatalogSongHit extends MusicCatalogSearchHit {
   String get id => track.videoId;
 }
 
-final class MusicCatalogChannelHit extends MusicCatalogSearchHit {
-  const MusicCatalogChannelHit(this.artist);
+final class MusicCatalogAlbumHit extends MusicCatalogSearchHit {
+  const MusicCatalogAlbumHit(this.album);
+
+  final MusicAlbum album;
+
+  @override
+  MusicCatalogSearchType get type => MusicCatalogSearchType.albums;
+
+  @override
+  String get id => album.id;
+}
+
+final class MusicCatalogArtistHit extends MusicCatalogSearchHit {
+  const MusicCatalogArtistHit(this.artist);
 
   final MusicArtist artist;
 
   @override
-  MusicCatalogSearchType get type => MusicCatalogSearchType.channels;
+  MusicCatalogSearchType get type => MusicCatalogSearchType.artists;
 
   @override
   String get id => artist.id;
 }
+
+typedef MusicCatalogChannelHit = MusicCatalogArtistHit;
 
 final class MusicCatalogPlaylistHit extends MusicCatalogSearchHit {
   const MusicCatalogPlaylistHit(this.playlist);

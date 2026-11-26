@@ -7,6 +7,7 @@ import 'package:clipious/music/models/local_music_album_editions.dart';
 import 'package:clipious/music/models/local_music_artist.dart';
 import 'package:clipious/music/models/music_artist_identity.dart';
 import 'package:clipious/music/models/local_music_track.dart';
+import 'package:clipious/music/models/music_search_text.dart';
 import 'package:clipious/music/models/on_device_music_entry.dart';
 import 'package:clipious/music/services/local_music_library.dart';
 import 'package:clipious/settings/states/settings.dart';
@@ -21,6 +22,7 @@ import '../components/local_music_category_sort_menu.dart';
 import '../components/device_music_artwork.dart';
 import '../components/music_collection_panes.dart';
 import 'music.dart';
+import 'music_artist_search.dart';
 import 'music_device_album.dart';
 
 class MusicDeviceArtistIndexPage extends StatelessWidget {
@@ -187,15 +189,18 @@ class _MusicDeviceArtistPageState extends State<MusicDeviceArtistPage> {
     );
   }
 
-  Future<void> _play(String? id) async {
+  Future<void> _play(String? id,
+      {BuildContext? source, List<LocalMusicTrack>? matching}) async {
     final artist = _checking ? null : _currentArtist;
     if (artist == null) return;
-    final tracks = artist.tracks;
+    final tracks = matching ?? artist.tracks;
     final index = id == null ? 0 : tracks.indexWhere((t) => t.playbackId == id);
     if (index < 0) return;
+    final playbackContext = source ?? context;
     final library = _library;
     final selection = widget.selectionId;
     bool current() =>
+        playbackContext.mounted &&
         _sourceCurrent &&
         library == _library &&
         selection == widget.selectionId &&
@@ -204,7 +209,7 @@ class _MusicDeviceArtistPageState extends State<MusicDeviceArtistPage> {
             identical(library.visibleTrackById(track.playbackId), track));
     try {
       await MusicScreen.playOnDeviceTracks(
-        context,
+        playbackContext,
         tracks.map(OnDeviceMusicEntry.device).toList(),
         startIndex: index,
         queueTitle: artist.name,
@@ -212,9 +217,10 @@ class _MusicDeviceArtistPageState extends State<MusicDeviceArtistPage> {
         isCurrent: current,
       );
     } catch (_) {
-      if (mounted && current()) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text(AppLocalizations.of(context)!.musicPlaybackError)));
+      if (playbackContext.mounted && current()) {
+        ScaffoldMessenger.of(playbackContext).showSnackBar(SnackBar(
+            content: Text(
+                AppLocalizations.of(playbackContext)!.musicPlaybackError)));
       }
     }
   }
@@ -296,19 +302,94 @@ class _MusicDeviceArtistPageState extends State<MusicDeviceArtistPage> {
     );
   }
 
-  Widget _artist(AppLocalizations locals, LocalMusicArtist artist,
-      MusicLibraryService aliases) {
-    final members = artist.tracks;
-    final albumKeys = members.map((track) => track.albumKey).nonNulls.toSet();
+  List<LocalMusicAlbum> _artistAlbums(LocalMusicArtist artist) {
+    final albumKeys =
+        artist.tracks.map((track) => track.albumKey).nonNulls.toSet();
     // Read the release kind from the whole visible release, including tracks
     // on which this artist has no credit.
-    final albums = browseLocalMusicAlbumEditions(
+    return browseLocalMusicAlbumEditions(
       groupLocalMusicAlbums(_library.visibleTracks
           .where((track) => albumKeys.contains(track.albumKey))),
       _library.albumEditionGroups,
     );
+  }
+
+  Future<void> _openArtistSearch(LocalMusicArtist artist) async {
+    final library = _library;
+    final selection = widget.selectionId;
+    bool current() =>
+        _sourceCurrent &&
+        identical(_library, library) &&
+        widget.selectionId == selection &&
+        widget.artistKey == artist.key;
+    if (!current() || ModalRoute.of(context)?.isCurrent == false) return;
+    await MusicScreen.openDeviceCollection(
+      context,
+      Builder(builder: (context) {
+        context.watch<AppCubit>();
+        final aliases = _aliases;
+        return ListenableBuilder(
+          listenable: Listenable.merge([library, aliases.changes]),
+          builder: (context, _) {
+            final scopedArtist = current() ? _currentArtist : null;
+            final albums = scopedArtist == null
+                ? const <LocalMusicAlbum>[]
+                : _artistAlbums(scopedArtist);
+            return MusicArtistSearchScaffold(
+              artistName: aliases.artistDisplayName(
+                  MusicArtistIdentity.device(artist.key), artist.name),
+              isAvailable: scopedArtist != null,
+              results: (context, query) {
+                final terms = musicSearchTerms(query);
+                if (terms.isEmpty || scopedArtist == null) {
+                  return const SizedBox.shrink();
+                }
+                final locals = AppLocalizations.of(context)!;
+                final songs = scopedArtist.tracks
+                    .where((track) =>
+                        artistSearchMatches(terms, [track.title, track.album]))
+                    .toList();
+                final releases = albums.where(
+                    (album) => artistSearchMatches(terms, [album.title]));
+                if (songs.isEmpty && releases.isEmpty) {
+                  return Center(child: Text(locals.musicNoResults));
+                }
+                return ListView(
+                  key: ValueKey(query),
+                  keyboardDismissBehavior:
+                      ScrollViewKeyboardDismissBehavior.onDrag,
+                  children: [
+                    if (songs.isNotEmpty) ...[
+                      ListTile(title: Text(locals.musicSongs)),
+                      for (final song in songs)
+                        _artistTrackTile(locals, scopedArtist, song, onTap: () {
+                          if (current()) {
+                            _play(song.playbackId,
+                                source: context, matching: songs);
+                          }
+                        }),
+                    ],
+                    if (releases.isNotEmpty) ...[
+                      ListTile(title: Text(locals.musicArtistReleases)),
+                      for (final release in releases)
+                        _releaseTile(release, aliases,
+                            source: context, isCurrent: current),
+                    ],
+                  ],
+                );
+              },
+            );
+          },
+        );
+      }),
+    );
+  }
+
+  Widget _artist(AppLocalizations locals, LocalMusicArtist artist,
+      MusicLibraryService aliases) {
+    final members = artist.tracks;
     final releases = <LocalMusicReleaseKind?, List<LocalMusicAlbum>>{};
-    for (final album in albums) {
+    for (final album in _artistAlbums(artist)) {
       (releases[album.releaseKind] ??= []).add(album);
     }
     final playAll = Padding(
@@ -355,29 +436,43 @@ class _MusicDeviceArtistPageState extends State<MusicDeviceArtistPage> {
           if (!split && index == 0) return details;
           final trackIndex = split ? index : index - 1;
           final track = members[trackIndex];
-          final selected = track.playbackId == widget.anchorId;
-          return ListTile(
-            key: ValueKey(track.playbackId),
+          return _artistTrackTile(
+            locals,
+            artist,
+            track,
             autofocus: isTv && trackIndex == 0,
-            selected: selected,
-            leading:
-                Icon(selected ? Icons.music_note : Icons.audiotrack_outlined),
-            title:
-                Text(track.title, maxLines: 1, overflow: TextOverflow.ellipsis),
-            subtitle: Text(
-              [
-                ...localMusicArtistCredit(track, artist.key)!
-                    .roles
-                    .map((role) => localMusicArtistRoleLabel(locals, role)),
-                if (track.album case final album?) album,
-              ].join(' · '),
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-            ),
             onTap: () => _play(track.playbackId),
           );
         },
       ),
+    );
+  }
+
+  Widget _artistTrackTile(
+    AppLocalizations locals,
+    LocalMusicArtist artist,
+    LocalMusicTrack track, {
+    bool autofocus = false,
+    required VoidCallback onTap,
+  }) {
+    final selected = track.playbackId == widget.anchorId;
+    return ListTile(
+      key: ValueKey(track.playbackId),
+      autofocus: autofocus,
+      selected: selected,
+      leading: Icon(selected ? Icons.music_note : Icons.audiotrack_outlined),
+      title: Text(track.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+      subtitle: Text(
+        [
+          ...localMusicArtistCredit(track, artist.key)!
+              .roles
+              .map((role) => localMusicArtistRoleLabel(locals, role)),
+          if (track.album case final album?) album,
+        ].join(' · '),
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+      ),
+      onTap: onTap,
     );
   }
 
@@ -398,16 +493,17 @@ class _MusicDeviceArtistPageState extends State<MusicDeviceArtistPage> {
         null => locals.localMusicArtistUnclassifiedReleases,
       };
 
-  Widget _releaseTile(LocalMusicAlbum album, MusicLibraryService aliases) =>
+  Widget _releaseTile(LocalMusicAlbum album, MusicLibraryService aliases,
+          {BuildContext? source, bool Function()? isCurrent}) =>
       ListTile(
         key: ValueKey(album.key),
         title: Text(album.title, maxLines: 1, overflow: TextOverflow.ellipsis),
         subtitle: _releaseByline(album, aliases),
         trailing: const Icon(Icons.chevron_right),
         onTap: () {
-          if (!_sourceCurrent) return;
+          if (!_sourceCurrent || isCurrent?.call() == false) return;
           MusicScreen.openDeviceCollection(
-            context,
+            source ?? context,
             MusicDeviceAlbumPage(
               selectionId: widget.selectionId,
               albumKey: album.key,
@@ -476,6 +572,13 @@ class _MusicDeviceArtistPageState extends State<MusicDeviceArtistPage> {
                   order: order,
                   isCurrent: () =>
                       _sourceCurrent && !_checking && _library.error == null,
+                ),
+              if (artist != null)
+                IconButton(
+                  key: const ValueKey('music-device-artist-search'),
+                  tooltip: locals.musicSearchArtistCatalog,
+                  onPressed: () => _openArtistSearch(artist),
+                  icon: const Icon(Icons.search),
                 ),
               if (artist != null &&
                   MusicArtistIdentity.device(artist.key).isValid)

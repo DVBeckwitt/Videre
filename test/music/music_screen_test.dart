@@ -14,6 +14,7 @@ import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' show isTv;
+import 'package:clipious/music/models/music_album.dart';
 import 'package:clipious/music/models/music_card_origin.dart';
 import 'package:clipious/music/models/local_music_track.dart';
 import 'package:clipious/music/services/local_music_library.dart';
@@ -132,6 +133,14 @@ class _Catalog extends MusicCatalogService {
   VideoLoadObserver? songObserver;
   final songRequests = <String>[];
   final artistRequests = <String>[];
+  final artistSongRequests = <({
+    String artistId,
+    String query,
+    int page,
+    Server? server,
+    bool Function()? isCurrent,
+    Completer<MusicArtistSongSearchPage> response,
+  })>[];
   final releaseRequests = <String?>[];
   final releasePages = <String?, MusicArtistReleases>{};
   Object? releaseFailure;
@@ -225,6 +234,22 @@ class _Catalog extends MusicCatalogService {
   }
 
   @override
+  Future<MusicArtistSongSearchPage> searchArtistSongs(
+      String artistId, String query, int page,
+      {Server? expectedServer, bool Function()? isCurrent}) {
+    final response = Completer<MusicArtistSongSearchPage>();
+    artistSongRequests.add((
+      artistId: artistId,
+      query: query,
+      page: page,
+      server: expectedServer,
+      isCurrent: isCurrent,
+      response: response,
+    ));
+    return response.future;
+  }
+
+  @override
   Future<List<MusicTrack>> getArtistUploads(String id,
       {bool Function()? isCurrent}) {
     final request = Completer<List<MusicTrack>>();
@@ -234,7 +259,9 @@ class _Catalog extends MusicCatalogService {
 
   @override
   Future<MusicArtistReleases> getArtistReleases(String id,
-      {String? continuation, bool Function()? isCurrent}) async {
+      {String? continuation,
+      Server? expectedServer,
+      bool Function()? isCurrent}) async {
     releaseRequests.add(continuation);
     if (releaseFailure case final error?) throw error;
     return releasePages[continuation] ?? const MusicArtistReleases();
@@ -643,7 +670,7 @@ void main() {
         (tester) async {
       catalog.paginate = true;
       await show(tester, screen: screen);
-      await tester.tap(find.widgetWithText(ChoiceChip, 'Channels'));
+      await tester.tap(find.widgetWithText(ChoiceChip, 'Artists'));
       await tester.pump();
       await tester.enterText(field, 'night');
       await tester.pump(const Duration(milliseconds: 499));
@@ -659,7 +686,7 @@ void main() {
       await tester.pump();
       final results = catalog.pageRequests.single;
       expect(results.query, 'night jazz radio');
-      expect(results.type, MusicCatalogSearchType.channels);
+      expect(results.type, MusicCatalogSearchType.artists);
       expect(results.page, 1);
       results.response.complete(_page(const [MusicCatalogChannelHit(artist)]));
       await tester.pumpAndSettle();
@@ -1154,7 +1181,7 @@ void main() {
     await show(tester, screen: const MusicScreen(initialQuery: '   '));
     await tester.pumpAndSettle();
     expect(catalog.searches, isEmpty);
-    expect(find.text('Search for a song, artist channel, or public playlist.'),
+    expect(find.text('Search for a song, album, artist, or public playlist.'),
         findsOneWidget);
   });
 
@@ -1162,9 +1189,11 @@ void main() {
       (tester) async {
     await show(tester);
     await tester.pumpAndSettle();
-    expect(find.text('Search songs, channels, or playlists'), findsOneWidget);
-    expect(find.text('Channels'), findsOneWidget);
-    expect(find.text('Albums'), findsNothing);
+    expect(find.text('Search songs, albums, artists, or playlists'),
+        findsOneWidget);
+    expect(find.widgetWithText(ChoiceChip, 'Artists'), findsOneWidget);
+    expect(find.widgetWithText(ChoiceChip, 'Albums'), findsOneWidget);
+    expect(find.widgetWithText(ChoiceChip, 'Channels'), findsNothing);
     expect(find.textContaining('selected Invidious instance'), findsOneWidget);
     await search(tester, 'song');
     final frame = '/vi/${first.videoId}/mqdefault.jpg';
@@ -1194,6 +1223,93 @@ void main() {
         AppLocalizations.of(tester.element(result))!.search);
   });
 
+  testWidgets('Online types open the matching result for the same title',
+      (tester) async {
+    const title = 'Same title';
+    const song = MusicTrack(videoId: 'sharedsong1', title: title);
+    const album = MusicAlbum(id: 'OLAK5uy_shared', title: title);
+    const artist = MusicArtist(id: 'UC0123456789abcdefghijAB', name: title);
+    const playlist = MusicPlaylist(id: 'PLshared', title: title);
+    catalog.paginate = true;
+    await show(tester, screen: const MusicScreen(embedded: true));
+
+    Future<void> select(String label, MusicCatalogSearchType type) async {
+      final chip = find.widgetWithText(ChoiceChip, label);
+      await tester.ensureVisible(chip);
+      await tester.tap(chip);
+      await tester.pump();
+      expect(catalog.pageRequests.last.query, title);
+      expect(catalog.pageRequests.last.type, type);
+      expect(catalog.pageRequests.last.page, 1);
+    }
+
+    Future<void> showHit(MusicCatalogSearchHit hit) async {
+      catalog.pageRequests.last.response.complete(_page([hit]));
+      await tester.pumpAndSettle();
+      expect(find.widgetWithText(ListTile, title), findsOneWidget);
+    }
+
+    Future<void> backToType(String label) async {
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(
+          tester
+              .widget<ChoiceChip>(find.widgetWithText(ChoiceChip, label))
+              .selected,
+          isTrue);
+      expect(find.widgetWithText(ListTile, title), findsOneWidget);
+    }
+
+    await search(tester, title);
+    final staleSong = catalog.pageRequests.single;
+    await select('Albums', MusicCatalogSearchType.albums);
+    expect(staleSong.isCurrent!(), isFalse);
+    staleSong.response.complete(_page(const [MusicCatalogSongHit(song)]));
+    await showHit(const MusicCatalogAlbumHit(album));
+    catalog.collection = const MusicCollection(
+        id: 'OLAK5uy_shared', title: title, tracks: [first]);
+    await tester.tap(find.byKey(const ValueKey('albums:OLAK5uy_shared')));
+    await tester.pumpAndSettle();
+    expect(catalog.playlistRequests, [album.id]);
+    expect(find.text('Release'), findsOneWidget);
+    expect(find.text(first.title), findsOneWidget);
+    await backToType('Albums');
+
+    await select('Artists', MusicCatalogSearchType.artists);
+    await showHit(const MusicCatalogArtistHit(artist));
+    catalog.pendingArtist = Completer<MusicArtistPage>()
+      ..complete(const MusicArtistPage(
+          artist: artist, description: 'Verified artist details'));
+    await tester
+        .tap(find.byKey(const ValueKey('artists:UC0123456789abcdefghijAB')));
+    await tester.pumpAndSettle();
+    expect(catalog.artistRequests, [artist.id]);
+    expect(find.text('Verified artist details'), findsOneWidget);
+    await backToType('Artists');
+
+    await select('Playlists', MusicCatalogSearchType.playlists);
+    await showHit(const MusicCatalogPlaylistHit(playlist));
+    catalog.collection =
+        const MusicCollection(id: 'PLshared', title: title, tracks: [second]);
+    await tester.tap(find.byKey(const ValueKey('playlists:PLshared')));
+    await tester.pumpAndSettle();
+    expect(catalog.playlistRequests, [album.id, playlist.id]);
+    expect(find.text('Release'), findsNothing);
+    expect(find.text(second.title), findsOneWidget);
+    await backToType('Playlists');
+
+    await select('Songs', MusicCatalogSearchType.songs);
+    await showHit(const MusicCatalogSongHit(song));
+    await tester.tap(find.widgetWithText(ListTile, title));
+    await tester.pumpAndSettle();
+    expect(player.calls.single.videos.single.videoId, song.videoId);
+
+    await select('Albums', MusicCatalogSearchType.albums);
+    catalog.pageRequests.last.response.complete(_page(const []));
+    await tester.pumpAndSettle();
+    expect(find.text('No results found.'), findsOneWidget);
+  });
+
   testWidgets('historical song album labels do not offer album navigation',
       (tester) async {
     await show(tester);
@@ -1202,7 +1318,6 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Album'), findsOneWidget);
     expect(find.widgetWithText(TextButton, 'Album'), findsNothing);
-    expect(find.text('Albums'), findsNothing);
     expect(catalog.playlistRequests, isEmpty);
     expect(player.calls, isEmpty);
   });
@@ -1244,7 +1359,7 @@ void main() {
     ];
     await show(tester, screen: const MusicScreen(embedded: true));
     await tester.pumpAndSettle();
-    const channels = 'Channels';
+    const channels = 'Artists';
     final channelFilter = find.widgetWithText(ChoiceChip, channels);
     final field = find.byKey(const ValueKey('music-search'));
     final online = find.byKey(const ValueKey('music-search-source-online'));
@@ -1343,7 +1458,7 @@ void main() {
     final all = find.widgetWithText(ChoiceChip, 'All');
     final songs = find.widgetWithText(FilterChip, 'Songs');
     final playlists = find.widgetWithText(FilterChip, 'Playlists');
-    final channels = find.widgetWithText(ChoiceChip, 'Channels');
+    final channels = find.widgetWithText(ChoiceChip, 'Artists');
     final saved = find.widgetWithText(ListTile, 'Saved rehearsal');
     final mix = find.widgetWithText(ListTile, 'Rehearsal mix');
 
@@ -1828,10 +1943,10 @@ void main() {
     await tester.pump();
     final outdatedSongAppend = catalog.pageRequests.last;
 
-    await tester.tap(find.widgetWithText(ChoiceChip, 'Channels'));
+    await tester.tap(find.widgetWithText(ChoiceChip, 'Artists'));
     await tester.pump();
     expect(outdatedSongAppend.isCurrent!(), isFalse);
-    expect(catalog.pageRequests.last.type, MusicCatalogSearchType.channels);
+    expect(catalog.pageRequests.last.type, MusicCatalogSearchType.artists);
     expect(catalog.pageRequests.last.page, 1);
     catalog.pageRequests.last.response.complete(_page(const [
       MusicCatalogChannelHit(
@@ -3152,7 +3267,7 @@ void main() {
     unawaited(navigator.push<void>(
         MaterialPageRoute(builder: (_) => const MusicScreen(embedded: true))));
     await tester.pumpAndSettle();
-    final channels = find.widgetWithText(ChoiceChip, 'Channels');
+    final channels = find.widgetWithText(ChoiceChip, 'Artists');
     await tester.tap(channels);
     await search(tester, query);
     await tester.pumpAndSettle();
@@ -3348,7 +3463,7 @@ void main() {
     });
 
     await show(tester);
-    await tester.tap(find.text('Channels'));
+    await tester.tap(find.text('Artists'));
     await search(tester, 'catalog');
     await tester.pumpAndSettle();
     await tester.tap(find.text(channel.name));
@@ -3405,10 +3520,10 @@ void main() {
     expect(find.byType(BottomSheet), findsNothing);
   });
 
-  testWidgets('channel search opens uploads and returns to its search results',
+  testWidgets('artist search opens uploads and returns to its search results',
       (tester) async {
     await show(tester);
-    await tester.tap(find.text('Channels'));
+    await tester.tap(find.text('Artists'));
     await search(tester, 'artist');
     await tester.pumpAndSettle();
     await tester.tap(find.text('Artist'));
@@ -3838,6 +3953,135 @@ void main() {
     expect(catalog.releaseRequests, [null, 'next']);
   });
 
+  testWidgets('catalog artist search pages its scoped songs and releases',
+      (tester) async {
+    const scopedArtist =
+        MusicArtist(id: 'UCabcdefghijklmnopqrstuv', name: 'Catalog artist');
+    const unrelated = MusicTrack(
+        videoId: 'mismatch001',
+        title: 'Shared song',
+        uploaderChannelId: 'UCzyxwvutsrqponmlkjihgfe');
+    const match = MusicTrack(
+        videoId: 'sharedsong1',
+        title: 'Shared song',
+        uploaderChannelId: 'UCabcdefghijklmnopqrstuv');
+    const next = MusicTrack(
+        videoId: 'sharedsong2',
+        title: 'Shared encore',
+        uploaderChannelId: 'UCabcdefghijklmnopqrstuv');
+    const release =
+        MusicCollection(id: 'OLAK5uy_shared', title: 'Shared release');
+    catalog.pendingArtist = Completer<MusicArtistPage>()
+      ..complete(MusicArtistPage(
+        artist: scopedArtist,
+        songs: [
+          unrelated,
+          for (var row = 0; row < 16; row++)
+            MusicTrack(videoId: 'artistSong$row', title: 'Original song $row'),
+        ],
+      ));
+    catalog.releasePages[null] =
+        const MusicArtistReleases(continuation: 'releases-next');
+    catalog.releasePages['releases-next'] =
+        const MusicArtistReleases(releases: [release]);
+    await show(tester, screen: MusicScreen(artistId: scopedArtist.id));
+    await tester.pumpAndSettle();
+
+    final session = app.state;
+    final trackList = find.byKey(PageStorageKey((
+      'music-catalog-artist-tracks',
+      session.profileId,
+      session.sessionRevision,
+      scopedArtist.id,
+    )));
+    final scrollable =
+        find.descendant(of: trackList, matching: find.byType(Scrollable));
+    tester.state<ScrollableState>(scrollable).position.jumpTo(75);
+    final open = find.byKey(const ValueKey('music-catalog-artist-search'));
+    await tester.tap(open);
+    await tester.pumpAndSettle();
+
+    final query = find.byKey(const ValueKey('music-artist-search-query'));
+    await tester.enterText(query, 'shared');
+    await tester.testTextInput.receiveAction(TextInputAction.search);
+    await tester.pump();
+    final firstPage = catalog.artistSongRequests.single;
+    expect((firstPage.artistId, firstPage.query, firstPage.page),
+        (scopedArtist.id, 'shared', 1));
+    expect(firstPage.server, session.server);
+    firstPage.response.complete(
+        const MusicArtistSongSearchPage(songs: [match], hasMore: true));
+    await tester.pumpAndSettle();
+    expect(find.text('Shared song'), findsOneWidget);
+    expect(find.byKey(const ValueKey('music-artist-search-song-mismatch001')),
+        findsNothing);
+
+    final more = find.widgetWithText(TextButton, 'Load more');
+    await tester.tap(more.first);
+    await tester.pump();
+    final nextPage = catalog.artistSongRequests.last;
+    expect((nextPage.artistId, nextPage.query, nextPage.page),
+        (scopedArtist.id, 'shared', 2));
+    expect(nextPage.server, session.server);
+    nextPage.response.complete(const MusicArtistSongSearchPage(songs: [next]));
+    await tester.pumpAndSettle();
+    expect(find.text('Shared encore'), findsOneWidget);
+    await tester.tap(more);
+    await tester.pumpAndSettle();
+    expect(catalog.releaseRequests, [null, 'releases-next']);
+
+    await tester.ensureVisible(find.text(release.title));
+    await tester.tap(find.text(release.title));
+    await tester.pumpAndSettle();
+    expect(catalog.playlistRequests, [release.id]);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(find.text(release.title), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('music-artist-search-clear')));
+    await tester.pumpAndSettle();
+    expect(query, findsNothing);
+    expect(tester.state<ScrollableState>(scrollable).position.pixels, 75);
+  });
+
+  testWidgets('artist search cancels stale drafts and has an offline state',
+      (tester) async {
+    await show(tester, screen: const MusicScreen(artistId: 'UCartist'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('music-catalog-artist-search')));
+    await tester.pumpAndSettle();
+
+    final query = find.byKey(const ValueKey('music-artist-search-query'));
+    Future<void> submit(String text) async {
+      await tester.enterText(query, text);
+      await tester.testTextInput.receiveAction(TextInputAction.search);
+      await tester.pump();
+    }
+
+    await submit('first');
+    final stale = catalog.artistSongRequests.single;
+    expect(stale.isCurrent!(), isTrue);
+    await submit('absent');
+    final active = catalog.artistSongRequests.last;
+    expect(stale.isCurrent!(), isFalse);
+    stale.response.complete(const MusicArtistSongSearchPage(songs: [first]));
+    active.response.completeError(const SocketException('Offline'));
+    await tester.pumpAndSettle();
+    expect(find.text('First song'), findsNothing);
+    expect(
+        find.text('Could not load music. Check your connection and try again.'),
+        findsOneWidget);
+    await tester.tap(find.widgetWithText(TextButton, 'Retry'));
+    await tester.pump();
+    catalog.artistSongRequests.last.response
+        .complete(const MusicArtistSongSearchPage());
+    await tester.pumpAndSettle();
+    expect(find.text('No results found.'), findsOneWidget);
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    expect(query, findsNothing);
+    expect(find.text('Artist description'), findsOneWidget);
+  });
+
   for (final failed in [false, true]) {
     testWidgets(
         'Back from a ${failed ? 'failed' : 'pending'} release returns to its artist',
@@ -4054,7 +4298,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(
         tester
-            .widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'Channels'))
+            .widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'Albums'))
             .selected,
         isTrue);
     isTv = false;

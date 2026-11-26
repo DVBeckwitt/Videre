@@ -69,6 +69,7 @@ class LegacyMusicCatalogFixture extends MusicCatalogService {
   Future<List<MusicTrack>> searchSongs(String query) =>
       _search(query, 'Eg-KAQwIARAAGAAgACgAMABqChAEEAMQCRAFEAo%3D', _track);
 
+  @override
   Future<List<MusicAlbum>> searchAlbums(String query) =>
       _search(query, 'Eg-KAQwIABAAGAEgACgAMABqChAEEAMQCRAFEAo%3D', _album);
 

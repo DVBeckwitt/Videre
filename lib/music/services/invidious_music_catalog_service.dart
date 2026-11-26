@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:clipious/channels/models/channel.dart';
 import 'package:clipious/content_filter/community_filter.dart';
 import 'package:clipious/globals.dart';
+import 'package:clipious/music/models/music_album.dart';
 import 'package:clipious/music/models/music_artist.dart';
 import 'package:clipious/music/models/music_artist_page.dart';
 import 'package:clipious/music/models/music_catalog_search.dart';
@@ -55,12 +56,20 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
   static const _discoverySongLimit = 6;
 
   Future<T> _inSession<T>(
-      Future<T> Function(Service, Server, Future<void> Function()) load) async {
+      Future<T> Function(Service, Server, Future<void> Function()) load,
+      {Server? expectedServer}) async {
     final owner = db;
     final profileId = owner.profileId;
     final proxy = NetworkProxy.instance.config;
     final api = _service ?? service;
-    final server = await api.preparePlaybackServer();
+    if (expectedServer != null &&
+        !BackendPlayback(expectedServer)
+            .matchesConnection(await owner.getCurrentlySelectedServer())) {
+      throw const MusicCatalogException(
+          'The music connection changed. Retry the request.');
+    }
+    final server =
+        await api.preparePlaybackServer(serverOverride: expectedServer);
     final route = BackendPlayback(server);
     bool current() =>
         identical(owner, db) &&
@@ -181,24 +190,31 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
   }
 
   @override
-  Future<List<MusicArtist>> searchArtists(String query) async {
-    if (query.trim().isEmpty) return [];
-    return _inSession((api, server, check) async =>
-        (await api.searchMusic(query.trim(), SearchType.channel, server, check))
-            .channels
-            .map(_searchArtist)
-            .toList());
-  }
+  Future<List<MusicAlbum>> searchAlbums(String query) async => [
+        for (final hit
+            in (await searchPage(query, MusicCatalogSearchType.albums, 1))
+                .hits
+                .whereType<MusicCatalogAlbumHit>())
+          hit.album,
+      ];
 
   @override
-  Future<List<MusicPlaylist>> searchPlaylists(String query) async {
-    if (query.trim().isEmpty) return [];
-    return _inSession((api, server, check) async => (await api.searchMusic(
-            query.trim(), SearchType.playlist, server, check))
-        .playlists
-        .map((playlist) => _searchPlaylist(playlist, server))
-        .toList());
-  }
+  Future<List<MusicArtist>> searchArtists(String query) async => [
+        for (final hit
+            in (await searchPage(query, MusicCatalogSearchType.artists, 1))
+                .hits
+                .whereType<MusicCatalogArtistHit>())
+          hit.artist,
+      ];
+
+  @override
+  Future<List<MusicPlaylist>> searchPlaylists(String query) async => [
+        for (final hit
+            in (await searchPage(query, MusicCatalogSearchType.playlists, 1))
+                .hits
+                .whereType<MusicCatalogPlaylistHit>())
+          hit.playlist,
+      ];
 
   static MusicArtist _searchArtist(Channel channel) => MusicArtist(
         id: channel.authorId,
@@ -310,8 +326,10 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
     final searchType = switch (type) {
       MusicCatalogSearchType.all => SearchType.all,
       MusicCatalogSearchType.songs => SearchType.video,
-      MusicCatalogSearchType.channels => SearchType.channel,
-      MusicCatalogSearchType.playlists => SearchType.playlist,
+      MusicCatalogSearchType.artists => SearchType.channel,
+      MusicCatalogSearchType.albums ||
+      MusicCatalogSearchType.playlists =>
+        SearchType.playlist,
     };
     return _inSession((api, server, checkSession) async {
       Future<void> check() => _checkDiscovery(checkSession, isCurrent);
@@ -320,6 +338,7 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
       await check();
       final hits = <String, MusicCatalogSearchHit>{};
       final rawKeys = <String>[];
+      final checkedArtists = <String>{};
       final covers = _savedCovers(server);
       for (final row in rows) {
         if (row is! Map<String, Object?>) continue;
@@ -340,10 +359,38 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
                   video.title != privateVideoString) {
                 hits[key] = MusicCatalogSongHit(_track(video, covers, server));
               }
-            case MusicCatalogSearchType.channels:
-              final channel = Channel.fromJson(row);
-              if (channel.author.trim().isNotEmpty) {
-                hits[key] = MusicCatalogChannelHit(_searchArtist(channel));
+            case MusicCatalogSearchType.albums:
+              if (row['title'] case final String title
+                  when title.trim().isNotEmpty) {
+                final author = row['author'];
+                final credit = MusicArtistCredit.forAuthor(
+                    author is String ? author : null,
+                    row['authorId'] as String?,
+                    row['authorUrl'] as String?);
+                final thumbnail = row['playlistThumbnail'];
+                hits[key] = MusicCatalogAlbumHit(MusicAlbum(
+                  id: id,
+                  title: title,
+                  artists: [
+                    if (author is String && author.trim().isNotEmpty) author
+                  ],
+                  artistLinks: [
+                    if (credit?.id case final artistId?)
+                      MusicArtist(id: artistId, name: credit!.name)
+                  ],
+                  thumbnails: [
+                    if (thumbnail is String &&
+                        invidiousImageUrl(thumbnail, server) != null)
+                      ImageObject(null, thumbnail, 0, 0),
+                  ],
+                ));
+              }
+            case MusicCatalogSearchType.artists:
+              if (!checkedArtists.add(id)) continue;
+              final channel =
+                  await api.getMusicArtistChannel(id, server, check);
+              if (channel != null) {
+                hits[key] = MusicCatalogArtistHit(_searchArtist(channel));
               }
             case MusicCatalogSearchType.playlists:
               final playlist = Playlist.fromJson(row);
@@ -353,6 +400,13 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
               }
             case MusicCatalogSearchType.all:
               break;
+          }
+        } on InvidiousServiceError catch (error) {
+          // A removed channel can still be present in the search index.
+          if (kind != MusicCatalogSearchType.artists ||
+              musicDiscoveryMustStop(error) ||
+              !const {404, 410}.contains(error.statusCode)) {
+            rethrow;
           }
         } on TypeError {
           // An isolated malformed row cannot hide the rest of the wire page.
@@ -375,10 +429,13 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
         return (MusicCatalogSearchType.songs, id);
       case {'type': 'channel', 'authorId': final String id}
           when _channelId.hasMatch(id):
-        return (MusicCatalogSearchType.channels, id);
+        return (MusicCatalogSearchType.artists, id);
       case {'type': 'playlist', 'playlistId': final String rawId}:
         final id = rawId.startsWith('VL') ? rawId.substring(2) : rawId;
-        return _playlistId.hasMatch(id)
+        if (validMusicAlbumPlaylistId(id) != null) {
+          return (MusicCatalogSearchType.albums, id);
+        }
+        return _playlistId.hasMatch(id) && !id.startsWith('OLAK')
             ? (MusicCatalogSearchType.playlists, id)
             : null;
       default:
@@ -1062,8 +1119,48 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
   }
 
   @override
+  Future<MusicArtistSongSearchPage> searchArtistSongs(
+    String artistId,
+    String query,
+    int page, {
+    Server? expectedServer,
+    bool Function()? isCurrent,
+  }) async {
+    if (!Service.canSearchChannel(artistId)) {
+      throw const MusicCatalogException('Invalid music artist.');
+    }
+    if (page < 1 || page > Service.channelSearchMaximumPage) {
+      throw ArgumentError.value(page, 'page');
+    }
+    _requireCurrentDiscovery(isCurrent);
+    final text = query.trim();
+    if (text.isEmpty) return const MusicArtistSongSearchPage();
+    return _inSession((api, server, checkSession) async {
+      Future<void> check() => _checkDiscovery(checkSession, isCurrent);
+      final result = await api.searchChannelVideos(artistId, text,
+          server: server, page: page, beforeRequest: check);
+      await check();
+      final covers = _savedCovers(server);
+      return MusicArtistSongSearchPage(
+        songs: [
+          for (final video in result.videos)
+            if (video.title?.trim().isNotEmpty == true &&
+                musicVideoAllowed(video) &&
+                (normalizeChannelId(video.authorId) ??
+                        channelIdFromAuthorUrl(video.authorUrl)) ==
+                    artistId)
+              _track(video, covers, server),
+        ],
+        hasMore: result.rawCount > 0 && page < Service.channelSearchMaximumPage,
+      );
+    }, expectedServer: expectedServer);
+  }
+
+  @override
   Future<MusicArtistReleases> getArtistReleases(String id,
-      {String? continuation, bool Function()? isCurrent}) {
+      {String? continuation,
+      Server? expectedServer,
+      bool Function()? isCurrent}) {
     if (!_channelId.hasMatch(id)) {
       throw const MusicCatalogException('Invalid music artist.');
     }
@@ -1138,7 +1235,7 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
                 ? next
                 : null,
       );
-    });
+    }, expectedServer: expectedServer);
   }
 
   static String? _nonBlank(String? value) {

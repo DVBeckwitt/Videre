@@ -100,6 +100,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:logging/logging.dart';
 
 import '../components/music_offline_filter.dart';
+import 'music_artist_search.dart';
 
 enum _MusicSearchSource { online, library }
 
@@ -152,12 +153,14 @@ class _OnlineSearchListing {
 class _ArtistReleaseListing {
   _ArtistReleaseListing(MusicArtistPage page) : uploads = page.songs;
 
+  final proxy = NetworkProxy.instance.config;
   List<MusicTrack> uploads;
   bool uploadsLoading = false;
   bool uploadsFailed = false;
   final releases = <String, MusicCollection>{};
   final requestedContinuations = <String>{};
   String? continuation;
+  bool prepared = false;
   bool loading = false;
   bool failed = false;
 }
@@ -802,19 +805,26 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
 
   void _selectOnlineType(MusicCatalogSearchType type) {
     if (_searchingLibrary || _type == type) return;
+    final query = _onlineSearch.text.trim();
+    // A pasted address or dictated draft needs a submission before changing
+    // result types can search its text.
+    final shouldSearch = !_onlineVoiceDraftPending &&
+        query.isNotEmpty &&
+        (query == _onlineListing?.query ||
+            ContentLink.completeWebAddress(query) == null);
+    _searchIntentRevision++;
     setState(() {
       _type = type;
       _onlineListing?.pending = null;
+      if (!shouldSearch && !_browseRequest) {
+        _generation++;
+        _onlineListing = null;
+        _loading = false;
+        _failure = null;
+        _retry = null;
+      }
     });
-    // A pasted address needs a submission before changing result types can
-    // search its text. The user also needs to submit a dictated draft.
-    final query = _onlineSearch.text.trim();
-    if (!_onlineVoiceDraftPending &&
-        query.isNotEmpty &&
-        (query == _onlineListing?.query ||
-            ContentLink.completeWebAddress(query) == null)) {
-      unawaited(_submit());
-    }
+    if (shouldSearch) unawaited(_submit());
   }
 
   MusicLibrarySearchPreferences? _libraryPreferences(AppState session) =>
@@ -1339,11 +1349,18 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
           identical(_onlineListing, listing) &&
           _type == listing.type;
       try {
-        final page = listing.paginated
-            ? await musicCatalogService.searchPage(query, listing.type, 1,
-                isCurrent: () => ownsResults() && listing.connectionCurrent)
-            : MusicCatalogSearchPage(
-                hits: await _legacySearch(query, listing.type), rawKeys: []);
+        // Older standalone song lists preserve distinct occurrences. Use the
+        // cancellable page endpoint for the other typed catalog lookups.
+        final page = !listing.paginated &&
+                listing.type == MusicCatalogSearchType.songs
+            ? MusicCatalogSearchPage(
+                hits: (await musicCatalogService.searchSongs(query))
+                    .map(MusicCatalogSongHit.new)
+                    .toList(),
+                rawKeys: const [],
+              )
+            : await musicCatalogService.searchPage(query, listing.type, 1,
+                isCurrent: () => ownsResults() && listing.connectionCurrent);
         if (!ownsResults()) return;
         if (!listing.connectionCurrent) {
           throw const MusicCatalogException(
@@ -1355,24 +1372,6 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
       }
     }, () => _submit(retryQuery: query));
   }
-
-  Future<List<MusicCatalogSearchHit>> _legacySearch(
-          String query, MusicCatalogSearchType type) async =>
-      switch (type) {
-        MusicCatalogSearchType.songs =>
-          (await musicCatalogService.searchSongs(query))
-              .map(MusicCatalogSongHit.new)
-              .toList(),
-        MusicCatalogSearchType.channels =>
-          (await musicCatalogService.searchArtists(query))
-              .map(MusicCatalogChannelHit.new)
-              .toList(),
-        MusicCatalogSearchType.playlists =>
-          (await musicCatalogService.searchPlaylists(query))
-              .map(MusicCatalogPlaylistHit.new)
-              .toList(),
-        MusicCatalogSearchType.all => throw const MusicCatalogUnsupported(),
-      };
 
   Future<void> _retireOnlineConnection() async {
     if (!mounted) return;
@@ -1582,7 +1581,9 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
     final continuation = listing.continuation;
     try {
       final page = await musicCatalogService.getArtistReleases(artistId,
-          continuation: continuation, isCurrent: current);
+          continuation: continuation,
+          expectedServer: session.server,
+          isCurrent: current);
       if (!current()) return;
       for (final release in page.releases) {
         listing.releases.putIfAbsent(release.id, () => release);
@@ -1594,8 +1595,10 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
           listing.requestedContinuations.contains(page.continuation)
               ? null
               : page.continuation;
+      listing.prepared = true;
     } on MusicCatalogUnsupported {
       listing.continuation = null;
+      listing.prepared = true;
     } catch (error) {
       if (!current()) return;
       listing.failed = true;
@@ -2305,7 +2308,7 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
                 numbered: false,
                 queueTitle: locals.search,
                 matches: songs.visible[songIndex].$2);
-          case MusicCatalogChannelHit(:final artist):
+          case MusicCatalogArtistHit(:final artist):
             final name = _artistName(artist);
             return ListTile(
                 key: listing.paginated ? ValueKey(hit.key) : null,
@@ -2322,6 +2325,19 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
                 subtitle: name == artist.name ? null : Text(artist.name),
                 trailing: const Icon(Icons.chevron_right),
                 onTap: () => _openArtist(artist.id));
+          case MusicCatalogAlbumHit(:final album):
+            return ListTile(
+                key: ValueKey(hit.key),
+                leading: _artwork(album.thumbnails),
+                title: MusicStatusTitle.bookmark(
+                    kind: MusicLibraryKind.playlist,
+                    id: album.id,
+                    child: Text(album.title)),
+                subtitle: album.artists.isEmpty
+                    ? null
+                    : Text(album.artists.join(', ')),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => _openCollection(album.id));
           case MusicCatalogPlaylistHit(:final playlist):
             return ListTile(
                 key: listing.paginated ? ValueKey(hit.key) : null,
@@ -2760,6 +2776,85 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
             isCurrent: isCurrent));
   }
 
+  Future<void> _openArtistSearch(MusicArtistPage page) async {
+    final listing = _artistReleases;
+    if (listing == null) return;
+    final app = context.read<AppCubit>();
+    final session = app.state;
+    final database = db;
+    final artist = page.artist;
+    final catalog = musicCatalogService;
+    final route = ModalRoute.of(context);
+    final proxy = NetworkProxy.instance.config;
+    final listingFromThisConnection = identical(listing.proxy, proxy);
+    bool current() =>
+        _sameSession(session) &&
+        route?.isActive != false &&
+        identical(_artistPage, page) &&
+        identical(_artistReleases, listing) &&
+        identical(db, database) &&
+        database.profileId == session.profileId &&
+        identical(catalog, musicCatalogService) &&
+        !NetworkProxy.instance.isChanging &&
+        identical(NetworkProxy.instance.config, proxy);
+    if (!current() || route?.isCurrent == false) return;
+    _queryFocus.unfocus();
+    final library = MusicLibrarySession(app);
+    final albums = [...page.albums, ...page.singles];
+    await MusicScreen.openDeviceCollection(
+      context,
+      MusicCatalogArtistSearch(
+        artistId: artist.id,
+        artistName: _artistName(artist),
+        server: session.server,
+        isSourceCurrent: current,
+        cachedSongs: [
+          ..._savedArtistTracks(library, artist.id),
+          if (listingFromThisConnection)
+            for (final song in listing.uploads)
+              if (song.uploaderChannelId == artist.id ||
+                  song.artistCredits.any((credit) => credit.id == artist.id))
+                song,
+        ],
+        cachedReleases: [
+          for (final album in albums)
+            MusicCollection(
+              id: album.id,
+              title: album.title,
+              artists: album.artists,
+              artistLinks: album.artistLinks,
+              thumbnails: album.thumbnails,
+            ),
+          if (listingFromThisConnection) ...listing.releases.values,
+        ],
+        releaseContinuation:
+            listingFromThisConnection ? listing.continuation : null,
+        needsFirstReleasePage: !listingFromThisConnection || !listing.prepared,
+        onPlay: (context, queue, index, selectionCurrent) async {
+          try {
+            await MusicScreen._playTracks(
+              context,
+              queue.map((song) => song.toVideo()).toList(),
+              queueTitle: artist.name,
+              startIndex: index,
+              startAt: Duration.zero,
+              songTap: true,
+              isCurrent: selectionCurrent,
+            );
+          } catch (_) {
+            if (context.mounted && selectionCurrent()) {
+              ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                  content:
+                      Text(AppLocalizations.of(context)!.musicPlaybackError)));
+            }
+          }
+        },
+        onOpenRelease: (context, id) => MusicScreen.openDeviceCollection(
+            context, MusicScreen(playlistId: id)),
+      ),
+    );
+  }
+
   Widget _artistResults(MusicArtistPage artistPage, MusicLayout layout) {
     final locals = AppLocalizations.of(context)!;
     final session = context.read<AppCubit>().state;
@@ -3009,7 +3104,8 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
       switch (search) {
         MusicCatalogSearchType.all => locals.musicSearchAll,
         MusicCatalogSearchType.songs => locals.musicSongs,
-        MusicCatalogSearchType.channels => locals.channels,
+        MusicCatalogSearchType.albums => locals.localMusicBrowseAlbums,
+        MusicCatalogSearchType.artists => locals.localMusicBrowseArtists,
         MusicCatalogSearchType.playlists => locals.musicPlaylists,
       };
 
@@ -3316,7 +3412,13 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
                         onPressed: _openPlaylistFind,
                         icon: const Icon(Icons.search),
                       ),
-                    if (_artistPage case final artistPage?)
+                    if (_artistPage case final artistPage?) ...[
+                      IconButton(
+                        key: const ValueKey('music-catalog-artist-search'),
+                        tooltip: locals.musicSearchArtistCatalog,
+                        onPressed: () => _openArtistSearch(artistPage),
+                        icon: const Icon(Icons.search),
+                      ),
                       MusicArtistLinkActions(
                         artistId: artistPage.artist.id,
                         session: session,
@@ -3324,6 +3426,7 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
                             identical(_artistPage, artistPage) &&
                             _sameSession(session),
                       ),
+                    ],
                   ],
                 ),
           body: SafeArea(
@@ -3429,7 +3532,8 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
                           MusicCatalogSearchType.songs,
                           if (_canSwitchSearchSource)
                             MusicCatalogSearchType.all,
-                          MusicCatalogSearchType.channels,
+                          MusicCatalogSearchType.albums,
+                          MusicCatalogSearchType.artists,
                           MusicCatalogSearchType.playlists,
                         ],
                         selected: _type,

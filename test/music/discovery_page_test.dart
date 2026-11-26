@@ -116,7 +116,9 @@ class _Catalog extends MusicCatalogService {
 
   @override
   Future<MusicArtistReleases> getArtistReleases(String id,
-      {String? continuation, bool Function()? isCurrent}) async {
+      {String? continuation,
+      Server? expectedServer,
+      bool Function()? isCurrent}) async {
     artistReleaseRequests.add(id);
     return artistReleases[id] ?? const MusicArtistReleases();
   }

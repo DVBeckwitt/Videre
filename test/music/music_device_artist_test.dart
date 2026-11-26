@@ -217,6 +217,48 @@ void main() {
         ['Guest opening', 'Guest reprise']);
   });
 
+  testWidgets('search a device artist’s songs and releases by membership',
+      (tester) async {
+    rows[3] = {
+      ...song(4, 'Guest opening', 'Other', 'Other', unrelatedAlbumKey),
+      'album': 'Other release',
+    };
+    await show(tester,
+        MusicDeviceArtistIndexPage(selectionId: 'original', library: library));
+    await tester.tap(find.text('Guest Band'));
+    await tester.pumpAndSettle();
+
+    final open = find.byKey(const ValueKey('music-device-artist-search'));
+    final field = find.byKey(const ValueKey('music-artist-search-query'));
+    await tester.tap(open);
+    await tester.pumpAndSettle();
+    await tester.enterText(field, 'Guest opening');
+    await tester.pumpAndSettle();
+    expect(find.text('Guest opening'), findsNWidgets(2)); // Field and song.
+    expect(find.text('Guest reprise'), findsNothing);
+    await tester.tap(find.widgetWithText(ListTile, 'Guest opening'));
+    await tester.pumpAndSettle();
+    expect(player.queue.map((entry) => entry.title), ['Guest opening']);
+    expect(player.lastSongTap, isTrue);
+
+    await tester.enterText(field, 'other release');
+    await tester.pumpAndSettle();
+    expect(find.text('No results found.'), findsOneWidget);
+    await tester.enterText(field, 'live sessions');
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(ListTile, 'Live Sessions'));
+    await tester.pumpAndSettle();
+    expect(find.text('Ensemble performance'), findsOneWidget);
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    expect(field, findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('music-artist-search-clear')));
+    await tester.pumpAndSettle();
+    expect(field, findsNothing);
+    expect(find.text('Guest reprise'), findsOneWidget);
+    expect(find.text('Unclassified releases'), findsOneWidget);
+  });
+
   testWidgets('browse and play a guest contribution or open its exact release',
       (tester) async {
     await show(tester,
