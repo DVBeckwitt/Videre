@@ -150,8 +150,8 @@ internal data class LocalMusicMoves(
         visibilityProof != null && visibilityProof == other.visibilityProof
 
     private fun comparableTag(first: String?, second: String?): Boolean? {
-        val left = localAlbumTag(first)?.lowercase(Locale.ROOT) ?: return null
-        val right = localAlbumTag(second)?.lowercase(Locale.ROOT) ?: return null
+        val left = localCollectionTag(first)?.lowercase(Locale.ROOT) ?: return null
+        val right = localCollectionTag(second)?.lowercase(Locale.ROOT) ?: return null
         return left == right
     }
 }

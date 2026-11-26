@@ -23,6 +23,7 @@ import android.util.Base64
 import android.util.Log
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.FileNotFoundException
 import java.io.IOException
 import java.security.MessageDigest
 import java.util.ArrayDeque
@@ -100,7 +101,7 @@ internal class LocalMusicCatalog(
                 editedTagFileProof = editedFileProof,
                 mediaAlbumId = draft.mediaAlbumId.takeUnless {
                     editedFileProof != null && previous?.mediaAlbumId == null &&
-                        localAlbumTag(draft.metadata?.album) != previous?.metadata?.album
+                        localCollectionTag(draft.metadata?.album) != previous?.metadata?.album
                 },
                 adjacentCover = if (!loadCovers && previous?.parentKey == draft.parentKey)
                     previous?.adjacentCover else null,
@@ -511,8 +512,8 @@ internal class LocalMusicCatalog(
             genreRead = prior.genreRead || genreEdited,
             releaseDate = releaseDate,
             artist = tag("artist", prior.artist),
-            album = localAlbumTag(tag("album", prior.album)),
-            albumArtist = localAlbumTag(tag("albumArtist", prior.albumArtist)),
+            album = localCollectionTag(tag("album", prior.album)),
+            albumArtist = localCollectionTag(tag("albumArtist", prior.albumArtist)),
             trackNumber = if ("trackNumber" in changedFields || "trackTotal" in changedFields) {
                 localAlbumPosition(edit.values["trackNumber"])
             } else prior.trackNumber,

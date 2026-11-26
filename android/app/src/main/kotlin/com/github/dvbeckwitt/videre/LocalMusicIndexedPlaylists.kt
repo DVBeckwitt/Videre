@@ -21,7 +21,7 @@ internal fun readIndexedMusicPlaylists(
     )?.use { cursor ->
         val idColumn = cursor.getColumnIndexOrThrow(Playlists._ID)
         val nameColumn = cursor.getColumnIndexOrThrow(Playlists.NAME)
-        buildList {
+        buildList<Pair<Long, String>> {
             while (cursor.moveToNext()) {
                 signal.throwIfCanceled()
                 val id = cursor.getLong(idColumn)

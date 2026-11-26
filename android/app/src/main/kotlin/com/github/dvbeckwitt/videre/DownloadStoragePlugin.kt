@@ -303,14 +303,15 @@ class DownloadStoragePlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activ
             return
         }
         val title = call.argument<String>("title")?.trim()?.take(240)?.takeIf { it.isNotEmpty() }
+        fun attachmentUri() = resolveMusicDownloadShare(context, call.arguments as Map<*, *>).first
         fun resolve(): RingtoneSource? {
-            val attachment = resolveMusicShare(call).first
+            val attachment = attachmentUri()
             val name = title ?: call.argument<String>("videoId") ?: return null
             return RingtoneSource.open(context, attachment, "$name.$extension")
         }
 
         if (probe) action.canSet(::resolve, result::success)
-        else action.set(title, ::resolve, { resolveMusicShare(call).first.scheme == "content" }, result::success)
+        else action.set(title, ::resolve, { attachmentUri().scheme == "content" }, result::success)
     }
 
     private fun shareMusicFile(call: MethodCall, result: MethodChannel.Result) {

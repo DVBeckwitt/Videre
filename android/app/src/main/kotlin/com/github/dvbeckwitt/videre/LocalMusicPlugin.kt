@@ -1031,7 +1031,6 @@ class LocalMusicPlugin : FlutterPlugin, ActivityAware, PluginRegistry.ActivityRe
         else -> "TAGS_FAILED"
     }
 
-    private fun folderName(tree: Uri, signal: CancellationSignal?): String {
     private data class PendingShare(
         val result: MethodChannel.Result,
         val requestId: Int?,
