@@ -8,6 +8,7 @@ import 'package:clipious/music/models/replay_gain.dart';
 import 'package:clipious/music/services/music_replay_gain_preferences.dart';
 import 'package:clipious/music/services/music_sound_controller.dart';
 import 'package:clipious/music/views/components/music_sound_sheet.dart';
+import 'package:clipious/player/models/named_music_queue.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/states/settings.dart';
@@ -103,6 +104,8 @@ void main() {
 
   setUp(() async {
     db = await SembastSqfDb.createInMemory();
+    await db.saveSetting(SettingsValue(
+        namedMusicQueuesSetting, NamedMusicQueue.encodeAll(const [])));
     app = TestAppCubit(AppState(0, null, HomeLayout()));
     await app.initState();
     app.intentDataStreamSubscription =
@@ -278,7 +281,13 @@ void main() {
     await show(tester, fullSheet: true);
     final slider = find.byKey(const ValueKey('music-playback-volume'));
     expect(tester.widget<Slider>(slider).value, 1);
-    tester.widget<Slider>(slider).onChanged!(0.35);
+    await tester.runAsync(() async {
+      final saved = settings.stream
+          .firstWhere((state) => state.musicPlaybackVolume == 0.35)
+          .timeout(const Duration(seconds: 5));
+      tester.widget<Slider>(slider).onChanged!(0.35);
+      await saved;
+    });
     await tester.pumpAndSettle();
     expect(tester.widget<Slider>(slider).value, 0.35);
     expect(SettingsState.init().musicPlaybackVolume, 0.35);

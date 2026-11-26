@@ -471,9 +471,9 @@ void main() {
     await tester.runAsync(() => db.useServer(server));
     const shareChannel = MethodChannel('dev.fluttercommunity.plus/share');
     final messenger = tester.binding.defaultBinaryMessenger;
-    final shared = Completer<MethodCall>();
+    final shared = <MethodCall>[];
     messenger.setMockMethodCallHandler(shareChannel, (call) async {
-      shared.complete(call);
+      shared.add(call);
       return 'dev.fluttercommunity.plus/share/unavailable';
     });
     addTearDown(() => messenger.setMockMethodCallHandler(shareChannel, null));
@@ -486,14 +486,11 @@ void main() {
     expect(find.text('Share Invidious link'), findsOneWidget);
     expect(find.text('Share YouTube link'), findsOneWidget);
     expect(find.text('Add timestamp'), findsNothing);
-    expect(shared.isCompleted, isFalse);
+    expect(shared, isEmpty);
 
-    final call = await tester.runAsync(() async {
-      await tester.tap(find.text('Share Invidious link'));
-      return shared.future.timeout(const Duration(seconds: 5));
-    });
+    await tester.tap(find.text('Share Invidious link'));
     await tester.pumpAndSettle();
-    expect(call?.arguments, {
+    expect(shared.single.arguments, {
       'text': 'https://selected.example/invidious/watch?v=${first.videoId}',
     });
   });
@@ -1542,6 +1539,34 @@ void main() {
         [first.videoId, second.videoId]);
   });
 
+  Future<void> waitForSaveFlow(
+    WidgetTester tester,
+    bool Function() ready,
+    String description,
+  ) async {
+    const timeout = Duration(seconds: 5);
+    final elapsed = Stopwatch()..start();
+    // Let the real database queue progress between fake-clock frames.
+    while (!ready() && elapsed.elapsed < timeout) {
+      await tester.pump(const Duration(milliseconds: 16));
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 1)));
+    }
+    expect(ready(), isTrue, reason: '$description did not finish in $timeout');
+  }
+
+  Future<void> saveAndWait(
+      WidgetTester tester, Finder choice, bool Function() saved) async {
+    const timeout = Duration(seconds: 5);
+    final dialog = find.byType(AlertDialog);
+    await tester.runAsync(() => tester.tap(choice));
+    await waitForSaveFlow(
+        tester, () => saved() && dialog.evaluate().isEmpty, 'Playlist save');
+    expect(dialog, findsNothing);
+    await tester.pumpAndSettle(const Duration(milliseconds: 100),
+        EnginePhase.sendSemanticsUpdate, timeout);
+  }
+
   testWidgets(
     'skip duplicates appends only new songs to a partly matching destination',
     (tester) async {
@@ -1555,18 +1580,11 @@ void main() {
       await show(tester);
       await tester.tap(find.text('Save to playlist'));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Watch Later'));
+      await tester.runAsync(() => tester.tap(find.text('Watch Later')));
       await tester.pumpAndSettle();
       expect(find.text('Duplicate songs'), findsOneWidget);
-      await tester.runAsync(() async {
-        await tester.tap(find.text('Skip duplicates'));
-        await Future.doWhile(() async {
-          await Future<void>.delayed(const Duration(milliseconds: 1));
-          await tester.pump();
-          return service.getLocalPlaylists().first.videos.length != 2;
-        }).timeout(const Duration(seconds: 5));
-      });
-      await tester.pumpAndSettle();
+      await saveAndWait(tester, find.text('Skip duplicates'),
+          () => service.getLocalPlaylists().first.videos.length == 2);
       expect(
         service.getLocalPlaylists().first.videos.map((video) => video.videoId),
         [first.videoId, second.videoId],
@@ -1601,7 +1619,8 @@ void main() {
           ),
         ),
       );
-      await show(tester, body: const MusicLibraryActions(videos: [second]));
+      await show(tester,
+          body: const MusicLibraryActions(videos: [second], compact: false));
       final save = find.text('Save to playlist');
       final olderTitle = find.text('Older list');
       final newerTitle = find.text('Newer list');
@@ -1615,21 +1634,18 @@ void main() {
         lessThan(tester.getTopLeft(olderTitle).dy),
       );
 
-      await tester.runAsync(() async {
-        await tester.tap(olderTitle);
-        await Future.doWhile(() async {
-          await Future<void>.delayed(const Duration(milliseconds: 1));
-          return service
-                  .getLocalPlaylists()
-                  .singleWhere(
-                    (playlist) => playlist.playlistId == older.playlistId,
-                  )
-                  .videos
-                  .length !=
-              2;
-        }).timeout(const Duration(seconds: 5));
-      });
-      await tester.pumpAndSettle();
+      await saveAndWait(
+        tester,
+        olderTitle,
+        () =>
+            service
+                .getLocalPlaylists()
+                .singleWhere(
+                    (playlist) => playlist.playlistId == older.playlistId)
+                .videos
+                .length ==
+            2,
+      );
       await tester.tap(save);
       await tester.pumpAndSettle();
       expect(find.text('2 songs'), findsNWidgets(2));
@@ -1652,12 +1668,16 @@ void main() {
       );
       Playlist watchLater() => service.getLocalPlaylists().first;
       final original = watchLater();
-      await show(tester, body: const MusicLibraryActions(videos: [first]));
+      final storedPlaylists = db.getSettings(localPlaylistsSetting)?.value;
+      await show(tester,
+          body: const MusicLibraryActions(videos: [first], compact: false));
       final save = find.text('Save to playlist');
       final destination = find.text('Watch Later');
+      final destinationRow =
+          find.ancestor(of: destination, matching: find.byType(ListTile));
 
       Future<void> chooseDestination() async {
-        await tester.tap(destination);
+        await tester.runAsync(() => tester.tap(destination));
         await tester.pumpAndSettle();
         expect(find.text('Duplicate songs').hitTestable(), findsOneWidget);
       }
@@ -1666,34 +1686,36 @@ void main() {
       await tester.pumpAndSettle();
       await chooseDestination();
       await tester.tap(find.text('Cancel').hitTestable());
+      await waitForSaveFlow(
+          tester,
+          () => tester
+              .widgetList<ListTile>(destinationRow)
+              .any((row) => row.enabled),
+          'Duplicate confirmation cancellation');
       await tester.pumpAndSettle();
       expect(destination.hitTestable(), findsOneWidget);
-      expect(watchLater(), original);
+      expect(db.getSettings(localPlaylistsSetting)?.value, storedPlaylists);
 
       await chooseDestination();
-      await tester.tap(find.text('Skip duplicates'));
-      await tester.pumpAndSettle();
-      expect(find.text('No songs added'), findsOneWidget);
-      expect(watchLater(), original);
+      final unchangedMessage = find.text('No songs added');
+      await saveAndWait(tester, find.text('Skip duplicates'),
+          () => unchangedMessage.evaluate().isNotEmpty);
+      expect(unchangedMessage, findsOneWidget);
+      expect(db.getSettings(localPlaylistsSetting)?.value, storedPlaylists);
 
       await tester.tap(save);
       await tester.pumpAndSettle();
       await chooseDestination();
-      await tester.runAsync(() async {
-        await tester.tap(find.text('Add anyway'));
-        await Future.doWhile(() async {
-          await Future<void>.delayed(const Duration(milliseconds: 1));
-          await tester.pump();
-          return watchLater().videos.length != 2;
-        }).timeout(const Duration(seconds: 5));
-      });
-      await tester.pumpAndSettle();
+      await saveAndWait(tester, find.text('Add anyway'),
+          () => watchLater().videos.length == 2);
       final entries = watchLater().videos;
       expect(entries.map((video) => video.videoId), [
         first.videoId,
         first.videoId,
       ]);
-      expect(entries.first, original.videos.single);
+      expect(jsonEncode(entries.first), jsonEncode(original.videos.single));
+      expect(playbackQueueId(entries.first),
+          playbackQueueId(original.videos.single));
       expect(entries.last.indexId, isNotEmpty);
       expect(entries.last.indexId, isNot(entries.first.indexId));
     },
@@ -1704,35 +1726,37 @@ void main() {
   ) async {
     await show(
       tester,
-      body: const MusicLibraryActions(videos: [second, first, second]),
+      body: const MusicLibraryActions(
+          videos: [second, first, second], compact: false),
     );
     await tester.tap(find.text('Save to playlist'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Create new playlist'));
     await tester.pumpAndSettle();
     await tester.enterText(find.byType(TextField), 'Repeated songs');
-    await tester.tap(find.text('Add'));
+    final add = find.widgetWithText(TextButton, 'Add');
+    await tester.runAsync(() => tester.tap(add));
     await tester.pumpAndSettle();
+    expect(find.text('Duplicate songs').hitTestable(), findsOneWidget);
     await tester.tap(find.text('Cancel').hitTestable());
+    await waitForSaveFlow(
+        tester,
+        () =>
+            tester.widgetList<TextButton>(add).any((button) => button.enabled),
+        'Duplicate confirmation cancellation');
     await tester.pumpAndSettle();
     expect(find.text('Repeated songs'), findsOneWidget);
     expect(service.getLocalPlaylists(), hasLength(1));
 
-    await tester.tap(find.text('Add'));
+    await tester.runAsync(() => tester.tap(add));
     await tester.pumpAndSettle();
+    expect(find.text('Duplicate songs').hitTestable(), findsOneWidget);
     Playlist? created() => service
         .getLocalPlaylists()
         .where((playlist) => playlist.title == 'Repeated songs')
         .firstOrNull;
-    await tester.runAsync(() async {
-      await tester.tap(find.text('Add anyway'));
-      await Future.doWhile(() async {
-        await Future<void>.delayed(const Duration(milliseconds: 1));
-        await tester.pump();
-        return created()?.videos.length != 3;
-      }).timeout(const Duration(seconds: 5));
-    });
-    await tester.pumpAndSettle();
+    await saveAndWait(
+        tester, find.text('Add anyway'), () => created()?.videos.length == 3);
     final entries = created()!.videos;
     expect(entries.map((video) => video.videoId), [
       second.videoId,

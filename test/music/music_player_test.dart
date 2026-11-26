@@ -43,6 +43,7 @@ import 'package:clipious/music/views/components/music_player.dart';
 import 'package:clipious/music/views/components/music_player_artwork.dart';
 import 'package:clipious/music/views/components/music_sponsor_notice.dart';
 import 'package:clipious/music/views/screens/music.dart';
+import 'package:clipious/music/views/screens/music_library.dart';
 import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/player/models/local_music_playback.dart';
 import 'package:clipious/player/models/media_command.dart';
@@ -1279,7 +1280,16 @@ void main() {
     await tester.pump();
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await tester.pumpAndSettle();
-    expect(find.text('Playlist bonus track'), findsOneWidget);
+    final localPlaylist = find.byType(MusicLibraryPage);
+    expect(localPlaylist, findsOneWidget);
+    final bonusSong = find.text('Playlist bonus track');
+    await tester.scrollUntilVisible(bonusSong, 200,
+        scrollable: find.descendant(
+            of: localPlaylist,
+            matching: find.byWidgetPredicate((widget) =>
+                widget is Scrollable &&
+                widget.axisDirection == AxisDirection.down)));
+    expect(bonusSong.hitTestable(), findsOneWidget);
     expect(find.text('Open playlist'), findsNothing);
     await pressAndroidBack(tester);
     expect(source.hitTestable(), findsOneWidget);
@@ -3592,7 +3602,16 @@ void main() {
     slider.onChangeEnd!(45000);
     await tester.pump();
     expect(player.sought, const Duration(seconds: 45));
-    await tap(tester, 'music-player-shuffle');
+    final shuffleButton = find.byKey(const ValueKey('music-player-shuffle'));
+    await tester.ensureVisible(shuffleButton);
+    await tester.pump();
+    await tester.runAsync(() async {
+      final committed =
+          settings.stream.firstWhere((state) => state.playerShuffleMode);
+      await tester.tap(shuffleButton);
+      await committed.timeout(const Duration(seconds: 5));
+    });
+    await tester.pump();
     expect(settings.state.playerShuffleMode, isTrue);
     final repeatButton = find.byKey(const ValueKey('music-player-repeat'));
     await tester.ensureVisible(repeatButton);

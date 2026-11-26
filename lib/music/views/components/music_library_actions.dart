@@ -1900,10 +1900,14 @@ class _MusicBookmarkButtonState extends State<MusicBookmarkButton> {
   }
 }
 
+enum _SaveMusicPhase { idle, reviewing, writing }
+
 class _SaveMusicDialogState extends State<_SaveMusicDialog> {
   final _name = TextEditingController();
   bool _creating = false;
-  bool _saving = false;
+  _SaveMusicPhase _phase = _SaveMusicPhase.idle;
+  bool get _busy => _phase != _SaveMusicPhase.idle;
+  bool get _writing => _phase == _SaveMusicPhase.writing;
   bool _failed = false;
 
   @override
@@ -1961,7 +1965,7 @@ class _SaveMusicDialogState extends State<_SaveMusicDialog> {
   }
 
   Future<void> _save([String? playlistId]) async {
-    if (_saving || !widget.session.isCurrent) return;
+    if (_busy || !widget.session.isCurrent) return;
     if (widget.canSave?.call() == false) {
       Navigator.of(context).pop();
       return;
@@ -1969,7 +1973,7 @@ class _SaveMusicDialogState extends State<_SaveMusicDialog> {
     final name = _name.text.trim();
     if (playlistId == null && name.isEmpty) return;
     setState(() {
-      _saving = true;
+      _phase = _SaveMusicPhase.reviewing;
       _failed = false;
     });
     try {
@@ -1997,6 +2001,7 @@ class _SaveMusicDialogState extends State<_SaveMusicDialog> {
         Navigator.of(context).pop();
         return;
       }
+      setState(() => _phase = _SaveMusicPhase.writing);
       final _SaveMusicResult result;
       if (playlistId == null) {
         final created = await widget.session.createPlaylist(
@@ -2023,7 +2028,7 @@ class _SaveMusicDialogState extends State<_SaveMusicDialog> {
     } catch (_) {
       if (mounted && widget.session.isCurrent) setState(() => _failed = true);
     } finally {
-      if (mounted) setState(() => _saving = false);
+      if (mounted) setState(() => _phase = _SaveMusicPhase.idle);
     }
   }
 
@@ -2057,7 +2062,7 @@ class _SaveMusicDialogState extends State<_SaveMusicDialog> {
                         style: Theme.of(context).textTheme.titleMedium)),
               for (final (_, playlist) in destinations)
                 ListTile(
-                  enabled: !_saving && !playlist.isEditLocked,
+                  enabled: !_busy && !playlist.isEditLocked,
                   title: Text(
                     playlist.playlistId == localWatchLaterId
                         ? locals.watchLater
@@ -2074,37 +2079,37 @@ class _SaveMusicDialogState extends State<_SaveMusicDialog> {
                 TextField(
                   controller: _name,
                   autofocus: true,
-                  enabled: !_saving,
+                  enabled: !_busy,
                   decoration: InputDecoration(labelText: locals.playListName),
                   onSubmitted: (_) => _save(),
                 )
               else
                 TextButton.icon(
                   onPressed:
-                      _saving ? null : () => setState(() => _creating = true),
+                      _busy ? null : () => setState(() => _creating = true),
                   icon: const Icon(Icons.add),
                   label: Text(locals.createNewPlaylist),
                 ),
               if (_failed) Text(locals.musicLibraryActionError),
-              if (_saving) const LinearProgressIndicator(),
+              if (_writing) const LinearProgressIndicator(),
             ],
           ),
         ),
       ),
       actions: [
         TextButton(
-          onPressed: _saving ? null : () => Navigator.of(context).pop(),
+          onPressed: _busy ? null : () => Navigator.of(context).pop(),
           child: Text(locals.cancel),
         ),
         if (_creating)
           TextButton(
-            onPressed: _saving ? null : () => _save(),
+            onPressed: _busy ? null : () => _save(),
             child: Text(locals.add),
           ),
       ],
     );
     final content = PopScope<_SaveMusicResult>(
-      canPop: !_saving,
+      canPop: !_writing,
       child: dialog,
     );
     return widget.inPlayer

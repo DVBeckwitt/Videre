@@ -30,6 +30,7 @@ import 'package:clipious/settings/models/errors/invidious_service_error.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/db/history_video_cache.dart';
+import 'package:clipious/videos/models/ided_video.dart';
 import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/material.dart';
@@ -167,6 +168,12 @@ class _Catalog extends MusicCatalogService {
 
 class _Player extends Cubit<PlayerState> implements PlayerCubit {
   _Player() : super(PlayerState.init(null));
+
+  @override
+  int get playlistGeneration => 0;
+
+  @override
+  bool canAddMusicRequest(IdedVideo entry) => false;
 
   final plays =
       <({List<String> ids, int? startIndex, bool? audio, bool fromMusic})>[];
@@ -1827,8 +1834,13 @@ void main() {
     await tester.pump();
     expect(catalog.discoveryArtists, [null, 'Saved artist', 'Saved artist']);
     await finishDiscovery(tester, [artistSong]);
-    expect(find.text(artistSong.title), findsOneWidget);
     expect(discoverShortcut, findsOneWidget);
+    expect(artistChip('Saved artist'), findsOneWidget);
+    final shelf = find.byKey(const ValueKey('music-discovery-songs'));
+    await tester.ensureVisible(shelf);
+    await tester.pumpAndSettle();
+    expect(find.descendant(of: shelf, matching: find.text(artistSong.title)),
+        findsOneWidget);
   });
 
   testWidgets('hidden discovery has a reveal and keeps its loaded selection',
@@ -2520,7 +2532,10 @@ void main() {
       (tester) async {
     await tester.runAsync(() => library.save(_saved));
     await show(tester);
-    await tester.tap(find.byTooltip('Music actions'));
+    final actions = find.byTooltip('Music actions');
+    await tester.ensureVisible(actions);
+    await tester.pumpAndSettle();
+    await tester.tap(actions);
     await tester.pumpAndSettle();
     expect(find.text('Remove saved song'), findsOneWidget);
     expect(find.text('Save to playlist'), findsOneWidget);

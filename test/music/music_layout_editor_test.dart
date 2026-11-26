@@ -68,6 +68,16 @@ void main() {
   Finder control(String key) => find.byKey(ValueKey(key));
 
   Future<void> tap(WidgetTester tester, Finder control) async {
+    if (control.evaluate().isEmpty) {
+      final editorList = find
+          .descendant(
+              of: find.byType(MusicLayoutEditor),
+              matching: find.byWidgetPredicate((widget) =>
+                  widget is Scrollable &&
+                  widget.axisDirection == AxisDirection.down))
+          .first;
+      await tester.scrollUntilVisible(control, 240, scrollable: editorList);
+    }
     await tester.ensureVisible(control);
     await tester.tap(control);
     await tester.pumpAndSettle();

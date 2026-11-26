@@ -36,6 +36,7 @@ import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/utils/models/image_object.dart';
 import 'package:clipious/utils/views/components/thumbnail.dart';
 import 'package:clipious/videos/models/db/history_video_cache.dart';
+import 'package:clipious/videos/models/ided_video.dart';
 import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:dio/dio.dart' show CancelToken;
@@ -155,6 +156,9 @@ class _Player extends Cubit<PlayerState> implements PlayerCubit {
 
   @override
   int get playlistGeneration => 1;
+
+  @override
+  bool canAddMusicRequest(IdedVideo entry) => false;
 
   @override
   bool canEnqueueMusicSongs(List<Video> selection,
@@ -706,29 +710,42 @@ void main() {
     expect(refresh, findsOneWidget);
     expect(catalog.requests, isEmpty);
 
-    await tester.runAsync(() => tester.tap(refresh));
-    await tester.pumpAndSettle();
-    await tester.runAsync(() =>
-        waitFor(() => library.savedSong(id)?.title == 'Current catalog title'));
-    await tester.pumpAndSettle();
+    Future<void> refreshUntilNotice(Finder notice) async {
+      await tester.tap(refresh);
+      // Let the library write complete while also advancing the popup route.
+      for (var frame = 0; frame < 250 && notice.evaluate().isEmpty; frame++) {
+        await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 20)));
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+      expect(notice, findsOneWidget);
+      await tester.pumpAndSettle();
+    }
+
+    final success = find.text('Saved song metadata refreshed.');
+    await refreshUntilNotice(success);
     expect(catalog.requests, [id]);
+    expect(library.savedSong(id)?.title, 'Current catalog title');
     expect(find.text('Current catalog title'), findsOneWidget);
-    expect(find.text('Saved song metadata refreshed.'), findsOneWidget);
+    expect(success, findsOneWidget);
     expect(player.online, isEmpty);
+
+    // Let the first snackbar close before expecting the next one to appear.
+    final snackbar =
+        find.widgetWithText(SnackBar, 'Saved song metadata refreshed.');
+    await tester.pump(tester.widget<SnackBar>(snackbar).duration);
+    await tester.pumpAndSettle();
+    expect(success, findsNothing);
 
     catalog.responses.clear();
     await tester.tap(menu);
     await tester.pumpAndSettle();
-    await tester.runAsync(() => tester.tap(refresh));
-    await tester.pumpAndSettle();
-    await tester.runAsync(() => waitFor(() => catalog.requests.length == 2));
-    await tester.pumpAndSettle();
+    final failure = find.text(
+        'Could not refresh song metadata from your selected Invidious server.');
+    await refreshUntilNotice(failure);
     expect(catalog.requests, [id, id]);
     expect(find.text('Current catalog title'), findsOneWidget);
-    expect(
-        find.text(
-            'Could not refresh song metadata from your selected Invidious server.'),
-        findsOneWidget);
+    expect(failure, findsOneWidget);
   });
 
   testWidgets('Now Playing opens its exact local playlist and Back returns',
@@ -2589,6 +2606,15 @@ void main() {
     });
   }
 
+  Future<void> revealLocalPlaylistTrack(
+      WidgetTester tester, Finder trackTitle) async {
+    final tracks = find.byKey(const ValueKey('music-collection-tracks-pane'));
+    await tester.scrollUntilVisible(trackTitle, 160,
+        scrollable:
+            find.descendant(of: tracks, matching: find.byType(Scrollable)));
+    await tester.pumpAndSettle();
+  }
+
   for (final tv in [false, true]) {
     testWidgets(
         'local playlist Back only consumes the active Library (TV: $tv)',
@@ -2605,6 +2631,7 @@ void main() {
                   TickerMode(enabled: value, child: child!)));
       await tester.tap(find.text('Music list'));
       await tester.pumpAndSettle();
+      await revealLocalPlaylistTrack(tester, find.text('Saved song'));
       expect(find.text('Saved song'), findsOneWidget);
       final navigator =
           Navigator.of(tester.element(find.byType(MusicLibraryPage)));
@@ -2741,7 +2768,12 @@ void main() {
       await tester.tap(find.text('Mixed music list'));
       await tester.pumpAndSettle();
       expect(find.text('Video only'), findsNothing);
-      await tester.tap(find.byTooltip('Music actions').first);
+      final savedTitle = find.text('Saved song');
+      await revealLocalPlaylistTrack(tester, savedTitle);
+      final savedTrack =
+          find.ancestor(of: savedTitle, matching: find.byType(ListTile));
+      await tester.tap(find.descendant(
+          of: savedTrack, matching: find.byTooltip('Music actions')));
       await tester.pumpAndSettle();
       expect(find.text('Remove saved song'), findsOneWidget);
       await tester.runAsync(() async {
