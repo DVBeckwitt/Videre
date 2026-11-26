@@ -16,6 +16,7 @@ import 'package:clipious/utils/views/tv/components/tv_overscan.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
+import '../components/device_music_collection_queue_menu.dart';
 import '../components/music_artist_alias_dialog.dart';
 import '../components/local_music_category_sort_menu.dart';
 import '../components/device_music_artwork.dart';
@@ -311,15 +312,31 @@ class _MusicDeviceArtistPageState extends State<MusicDeviceArtistPage> {
     for (final album in albums) {
       (releases[album.releaseKind] ??= []).add(album);
     }
+    final library = _library;
+    final selectionId = widget.selectionId;
     final playAll = Padding(
       padding: const EdgeInsets.all(16),
-      child: Align(
-        alignment: AlignmentDirectional.centerStart,
-        child: FilledButton.icon(
-          onPressed: () => _play(null),
-          icon: const Icon(Icons.play_arrow),
-          label: Text(locals.musicPlayAll),
-        ),
+      child: Wrap(
+        crossAxisAlignment: WrapCrossAlignment.center,
+        spacing: 8,
+        children: [
+          FilledButton.icon(
+            onPressed: () => _play(null),
+            icon: const Icon(Icons.play_arrow),
+            label: Text(locals.musicPlayAll),
+          ),
+          DeviceMusicCollectionQueueMenu(
+            currentTracks: () {
+              if (_checking ||
+                  !identical(library, _library) ||
+                  selectionId != widget.selectionId ||
+                  artist.key != widget.artistKey) {
+                return const [];
+              }
+              return _currentArtist?.tracks ?? const [];
+            },
+          ),
+        ],
       ),
     );
     final details = Column(

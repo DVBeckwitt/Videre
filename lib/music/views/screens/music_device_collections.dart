@@ -11,6 +11,7 @@ import '../../models/local_music_artist.dart';
 import '../../models/local_music_genre.dart';
 import '../../models/local_music_track.dart';
 import '../../services/local_music_library.dart';
+import '../components/device_music_collection_queue_menu.dart';
 import '../components/local_music_category_sort_menu.dart';
 import '../components/device_music_artwork.dart';
 import '../components/music_library_actions.dart';
@@ -231,14 +232,21 @@ class _DeviceCollectionPage extends StatelessWidget {
       children: [
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          child: Align(
-            alignment: AlignmentDirectional.centerStart,
-            child: FilledButton.icon(
-              autofocus: isTv,
-              onPressed: () => _play(context, key, title),
-              icon: const Icon(Icons.play_arrow),
-              label: Text(locals.musicPlayAll),
-            ),
+          child: Wrap(
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 8,
+            children: [
+              FilledButton.icon(
+                autofocus: isTv,
+                onPressed: () => _play(context, key, title),
+                icon: const Icon(Icons.play_arrow),
+                label: Text(locals.musicPlayAll),
+              ),
+              if (kind == MusicDeviceCollection.genres)
+                DeviceMusicCollectionQueueMenu(
+                  currentTracks: () => _members(key),
+                ),
+            ],
           ),
         ),
         Expanded(
