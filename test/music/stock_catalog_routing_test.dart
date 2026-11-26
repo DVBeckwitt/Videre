@@ -325,6 +325,37 @@ void main() {
     expect(calls.every((uri) => uri.origin == instance), isTrue);
   });
 
+  test('an empty Topic overview can open a verified artist without a hint',
+      () async {
+    final success = respond;
+    respond = (request) async => switch (request.url.path) {
+          '/api/v1/channels/$topicId' =>
+            json(request, {...topic, 'latestVideos': []}),
+          '/api/v1/search' => json(request, [topic, verifiedArtist]),
+          _ => await success(request),
+        };
+    final music = InvidiousMusicCatalogService(api: api);
+    expect((await music.getArtistOverview(topicId)).artist.id, channelId);
+    expect(calls.map((uri) => uri.path), [
+      '/api/v1/channels/$topicId',
+      '/api/v1/search',
+      '/api/v1/channels/$channelId',
+    ]);
+  });
+
+  test('an empty Topic stays available if artist recovery cannot complete',
+      () async {
+    respond = (request) async => request.url.path == '/api/v1/search'
+        ? json(request, {'error': 'Search unavailable'}, status: 503)
+        : json(request, {...topic, 'latestVideos': []});
+    final music = InvidiousMusicCatalogService(api: api);
+    expect((await music.getArtistOverview(topicId)).artist.id, topicId);
+    expect(calls.map((uri) => uri.path), [
+      '/api/v1/channels/$topicId',
+      '/api/v1/search',
+    ]);
+  });
+
   final unverifiedTopicMatches = <String, List<Object?>>{
     'the original Topic ID is missing': [
       {...topic, 'authorId': otherChannelId},

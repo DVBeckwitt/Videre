@@ -1680,6 +1680,10 @@ void main() {
     expect(selection.startAt, Duration.zero);
 
     await tester.runAsync(() => offline.remove(first.videoId));
+    for (var frame = 0; frame < 8 && hit.evaluate().isNotEmpty; frame++) {
+      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+      await tester.pump(const Duration(milliseconds: 100));
+    }
     await tester.pumpAndSettle();
     expect(hit, findsNothing);
   });
