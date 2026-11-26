@@ -18,6 +18,7 @@ class _MusicAbRepeatPlayback {
       !owner.player.state.isClosing &&
       owner._sourceAdmitted &&
       owner._loadingGeneration == null &&
+      owner._canSeekAudio &&
       !owner._terminalErrorSent;
 
   bool _isSource(AudioPlayer decoder, int revision) =>
@@ -42,10 +43,9 @@ class _MusicAbRepeatPlayback {
 
   void syncAvailability() {
     final decoder = owner.audioPlayer;
-    final duration = decoder?.duration;
+    final duration = _canUseSource ? decoder?.duration : null;
     final video = owner.state.video;
-    if (!_canUseSource ||
-        decoder == null ||
+    if (decoder == null ||
         duration == null ||
         duration < _minimumSpan ||
         video?.liveNow == true ||

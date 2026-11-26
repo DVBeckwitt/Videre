@@ -62,6 +62,7 @@ class _RetainedAudioPlayer implements AudioPlayer {
   double nativePitch = 1;
   ProcessingState nativeProcessingState = ProcessingState.idle;
   Duration nativePosition = Duration.zero;
+  Duration? nativeDuration;
   final pitchesAtPlay = <double>[];
   final speedCalls = <double>[];
   final speedsAtPlay = <double>[];
@@ -87,6 +88,9 @@ class _RetainedAudioPlayer implements AudioPlayer {
   Duration get position => nativePosition;
 
   @override
+  Duration? get duration => nativeDuration;
+
+  @override
   Future<Duration?> setAudioSource(AudioSource source,
       {bool preload = true,
       int? initialIndex,
@@ -98,7 +102,7 @@ class _RetainedAudioPlayer implements AudioPlayer {
         ? const Duration(minutes: 1)
         : await heldSource!.future;
     nativeProcessingState = ProcessingState.ready;
-    return duration;
+    return nativeDuration = duration;
   }
 
   @override

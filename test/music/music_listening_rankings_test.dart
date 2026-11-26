@@ -112,7 +112,7 @@ void main() {
           (MusicListeningRankBy.playlist, 'Playlist', null),
         ]) {
           expect(
-              rankings.rankedBy(group),
+              _display(rankings.rankedBy(group)),
               [
                 if (included) (title: title, subtitle: subtitle, plays: 1),
               ],
@@ -167,7 +167,7 @@ void main() {
         (MusicListeningRankBy.album, 'Album', 'Artist'),
         (MusicListeningRankBy.playlist, 'Playlist', null),
       ]) {
-        expect(rankings.rankedBy(group), [
+        expect(_display(rankings.rankedBy(group)), [
           (title: title, subtitle: subtitle, plays: 2),
         ]);
       }

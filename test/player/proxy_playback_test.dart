@@ -87,19 +87,25 @@ class _HeldAudioPlayer implements AudioPlayer {
   final source = Completer<Duration?>();
   final disposal = Completer<void>();
   AudioSource? requestedSource;
+  Duration? _duration;
 
   @override
   bool get playing => false;
+
+  @override
+  Duration? get duration => _duration;
 
   @override
   Future<void> pause() async {}
 
   @override
   Future<Duration?> setAudioSource(AudioSource audioSource,
-      {bool preload = true, int? initialIndex, Duration? initialPosition}) {
+      {bool preload = true,
+      int? initialIndex,
+      Duration? initialPosition}) async {
     requestedSource = audioSource;
     sourceRequested.complete();
-    return source.future;
+    return _duration = await source.future;
   }
 
   @override

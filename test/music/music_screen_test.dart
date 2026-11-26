@@ -3785,18 +3785,20 @@ void main() {
         artist: MusicArtist(id: identity, name: 'Artist'),
       ));
     final library = MusicLibraryService.forProfile(db, db.profileId);
-    await library.save(const MusicLibraryEntry(
-      kind: MusicLibraryKind.song,
-      id: 'matched0001',
-      title: 'Matching saved song',
-      artistCredits: [MusicArtistCredit(name: 'Artist', id: identity)],
-    ));
-    await library.save(const MusicLibraryEntry(
-      kind: MusicLibraryKind.song,
-      id: 'notmatch001',
-      title: 'Different saved song',
-      artistCredits: [MusicArtistCredit(name: 'Artist', id: other)],
-    ));
+    await tester.runAsync(() async {
+      await library.save(const MusicLibraryEntry(
+        kind: MusicLibraryKind.song,
+        id: 'matched0001',
+        title: 'Matching saved song',
+        artistCredits: [MusicArtistCredit(name: 'Artist', id: identity)],
+      ));
+      await library.save(const MusicLibraryEntry(
+        kind: MusicLibraryKind.song,
+        id: 'notmatch001',
+        title: 'Different saved song',
+        artistCredits: [MusicArtistCredit(name: 'Artist', id: other)],
+      ));
+    });
     await show(tester, screen: const MusicScreen(artistId: identity));
     await tester.pumpAndSettle();
     expect(find.text('Saved songs'), findsOneWidget);
@@ -4132,6 +4134,10 @@ void main() {
         case 'checkFolderAccess':
           if (!accessible) rejectedAccessChecks++;
           return accessible;
+        case 'listMovedFileRepairs':
+          return const <String, Object?>{};
+        case 'pendingRenames':
+          return const <Object?>[];
         case 'listTracks':
           if (selectingFolder) {
             throw PlatformException(code: 'SCAN_INTERRUPTED');

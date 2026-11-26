@@ -52,7 +52,6 @@ import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/settings/views/components/app_customizer.dart';
 import 'package:clipious/settings/views/components/phone_navigation_editor.dart';
 import 'package:clipious/subscription_management/models/subscription.dart';
-import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/utils/models/paginated_list.dart';
 import 'package:clipious/utils/views/tv/components/tv_horizontal_item_list.dart';
 import 'package:clipious/utils/models/image_object.dart';
@@ -670,6 +669,8 @@ void main() {
   CachedNetworkImageProvider.defaultCacheManager =
       _testDefaultThumbnailCacheManager;
   late MusicCatalogService previousCatalog;
+  const localMusicChannel =
+      MethodChannel('com.github.dvbeckwitt.videre/local_music');
 
   setUp(() async {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
@@ -701,7 +702,19 @@ void main() {
         packageName: 'com.github.dvbeckwitt.videre',
         version: '1.0.0',
         buildNumber: '1');
-    globals.db = await SembastSqfDb.createInMemory();
+    globals.db = await createPlayerTestDatabase();
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(localMusicChannel, (call) async {
+      return switch (call.method) {
+        'getFolder' => null,
+        'pendingRenames' => const <Object?>[],
+        _ => throw MissingPluginException(call.method),
+      };
+    });
+    // The app retains this Future across pages. Complete it before entering the
+    // first widget's fake clock so later shortcut routes can await it.
+    await LocalMusicLibrary.instance.initialize();
 
     final server = Server(
       url: 'https://example.com',
@@ -720,6 +733,8 @@ void main() {
     musicCatalogService = previousCatalog;
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(SystemChannels.platform, null);
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(localMusicChannel, null);
     await globals.db.close();
   });
 
@@ -1619,11 +1634,11 @@ void main() {
     await tester.enterText(field, 'cafe river');
     await tester.pumpAndSettle();
     expect(tester.getRect(field).bottom, lessThan(640 - keyboardHeight));
-    final librarySongs = find.widgetWithText(ChoiceChip, 'Songs');
+    final librarySongs = find.widgetWithText(FilterChip, 'Songs');
     expect(librarySongs.hitTestable(), findsOneWidget);
     await tester.tap(librarySongs);
     await tester.pumpAndSettle();
-    expect(tester.widget<ChoiceChip>(librarySongs).selected, isTrue);
+    expect(tester.widget<FilterChip>(librarySongs).selected, isTrue);
     expect(tester.widget<TextField>(field).controller!.text, 'cafe river');
     expect(catalog.searchSongCalls, 0);
 
@@ -1889,13 +1904,14 @@ void main() {
 
   testWidgets('launcher shuffle plays from Library and reports a revoked grant',
       (tester) async {
-    const channel = MethodChannel('com.github.dvbeckwitt.videre/local_music');
     const tree = 'content://provider/tree/music';
     const folder = {'uri': tree, 'name': 'Fixture'};
     final library = LocalMusicLibrary.instance;
     final messenger = tester.binding.defaultBinaryMessenger;
+    final nativeCalls = <String>[];
     var granted = true;
-    messenger.setMockMethodCallHandler(channel, (call) async {
+    messenger.setMockMethodCallHandler(localMusicChannel, (call) async {
+      nativeCalls.add(call.method);
       return switch (call.method) {
         'getFolder' => null,
         'pickFolder' => folder,
@@ -1903,15 +1919,19 @@ void main() {
         'listTracks' => [
             {'uri': '$tree/document/song', 'title': 'Fixture song'},
           ],
+        'listMovedFileRepairs' => const <String, Object?>{},
+        'pendingRenames' => const <Object?>[],
         'forgetFolder' => null,
         _ => throw MissingPluginException(call.method),
       };
     });
     addTearDown(() async {
       if (library.enabled) await library.disable();
-      messenger.setMockMethodCallHandler(channel, null);
+      messenger.setMockMethodCallHandler(localMusicChannel, null);
     });
-    expect(await library.chooseFolder(), isTrue);
+    final chosen = await tester.runAsync(
+        () => library.chooseFolder().timeout(const Duration(seconds: 3)));
+    expect(chosen, isTrue);
     expect(library.visibleTracks.single.title, 'Fixture song');
     late _LauncherShufflePlayer player;
     await _pumpHomepage(tester, const Size(390, 844),
@@ -1925,21 +1945,34 @@ void main() {
           canStartShuffle: () => true)));
     }
 
+    Future<void> waitForShortcut(bool Function() completed) async {
+      for (var attempt = 0; attempt < 20 && !completed(); attempt++) {
+        await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+    }
+
     launch();
     await tester.pumpAndSettle();
     expect(find.byType(MusicLibraryPage), findsOneWidget);
-    expect(player.requests, [
-      ['Fixture song'],
-    ]);
+    await waitForShortcut(() => player.requests.isNotEmpty);
+    expect(
+        player.requests,
+        [
+          ['Fixture song'],
+        ],
+        reason: 'Local music calls before shuffle: $nativeCalls');
     await tester.binding.handlePopRoute();
     await tester.pumpAndSettle();
 
     granted = false;
     launch();
     await tester.pumpAndSettle();
+    final revoked = find.textContaining('Access to this folder was lost');
+    await waitForShortcut(() => revoked.evaluate().isNotEmpty);
     expect(player.requests, hasLength(1));
-    expect(
-        find.textContaining('Access to this folder was lost'), findsOneWidget);
+    expect(revoked, findsOneWidget,
+        reason: 'Local music calls after revocation: $nativeCalls');
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
@@ -2585,6 +2618,10 @@ void main() {
       expect(find.text('Load more'), findsOneWidget);
       service.failNextFeed = true;
       if (tv) {
+        if (surface == 'TV grid') {
+          await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+          await tester.pumpAndSettle();
+        }
         await tester.sendKeyEvent(LogicalKeyboardKey.select);
       } else {
         await tester.tap(find.text('Load more'));

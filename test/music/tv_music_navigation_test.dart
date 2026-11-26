@@ -263,6 +263,30 @@ void main() {
     await tester.pumpAndSettle();
   }
 
+  Finder settingsTile(String title) =>
+      find.ancestor(of: find.text(title), matching: find.byType(ListTile));
+
+  void expectSettingsSearchFocus(WidgetTester tester) {
+    final search = find.descendant(
+      of: find.byKey(const ValueKey('open-settings-search')),
+      matching: find.byType(ListTile),
+    );
+    expect(Focus.of(tester.element(search)).hasFocus, isTrue);
+  }
+
+  Future<void> moveSettingsFocusDown(WidgetTester tester, Finder target) async {
+    for (var step = 0; step < 8; step++) {
+      if (target.evaluate().length == 1 &&
+          Focus.of(tester.element(target)).hasFocus) {
+        return;
+      }
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pumpAndSettle();
+    }
+    expect(target, findsOneWidget);
+    expect(Focus.of(tester.element(target)).hasFocus, isTrue);
+  }
+
   Finder musicMenuIcon(MusicDestination destination) => find.descendant(
       of: find.byKey(ValueKey('tv-music-page-${destination.name}')),
       matching: find.byIcon(destination == MusicDestination.library
@@ -484,12 +508,9 @@ void main() {
     await mount(tester, router: router);
     await select(tester, find.byIcon(Icons.settings));
     expect(find.byType(TVSettingsScreen), findsOneWidget);
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
-    await tester.pumpAndSettle();
-    final musicLayout = find.ancestor(
-        of: find.text('Customize Music layout'),
-        matching: find.byType(ListTile));
-    expect(Focus.of(tester.element(musicLayout)).hasFocus, isTrue);
+    expectSettingsSearchFocus(tester);
+    final musicLayout = settingsTile('Customize Music layout');
+    await moveSettingsFocusDown(tester, musicLayout);
     await tester.sendKeyEvent(LogicalKeyboardKey.select);
     await tester.pumpAndSettle();
     expect(find.byType(MusicLayoutEditor), findsOneWidget);
@@ -498,13 +519,9 @@ void main() {
     expect(Focus.of(tester.element(musicLayout)).hasFocus, isTrue);
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pumpAndSettle();
-    final homeTabs = find.text('Home tabs');
+    final homeTabs = settingsTile('Home tabs');
     expect(homeTabs, findsOneWidget);
-    expect(
-        Focus.of(tester.element(
-                find.ancestor(of: homeTabs, matching: find.byType(ListTile))))
-            .hasFocus,
-        isTrue);
+    expect(Focus.of(tester.element(homeTabs)).hasFocus, isTrue);
     await tester.sendKeyEvent(LogicalKeyboardKey.select);
     for (var i = 0; i < 6; i++) {
       await tester.pump(const Duration(milliseconds: 100));
@@ -552,13 +569,9 @@ void main() {
       await select(tester, find.byIcon(Icons.settings));
       expect(find.byType(TVSettingsScreen), findsOneWidget);
       expect(find.text('Home experience'), findsNothing);
-      final navigation = find.text(locals.customizeAppLayout);
-      expect(navigation, findsOneWidget);
-      expect(
-          Focus.of(tester.element(find.ancestor(
-                  of: navigation, matching: find.byType(ListTile))))
-              .hasFocus,
-          isTrue);
+      expectSettingsSearchFocus(tester);
+      final navigation = settingsTile(locals.customizeAppLayout);
+      await moveSettingsFocusDown(tester, navigation);
       await tester.binding.handlePopRoute();
       await tester.pumpAndSettle();
       await select(tester, modeIcon(otherMode));

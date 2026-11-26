@@ -197,6 +197,7 @@ class _NativeAudio implements AudioPlayer {
   bool nativePlaying = false;
   ProcessingState nativeProcessingState = ProcessingState.ready;
   Duration nativePosition = Duration.zero;
+  Duration? nativeDuration;
   int playCalls = 0;
   int pauseCalls = 0;
   int stopCalls = 0;
@@ -246,6 +247,9 @@ class _NativeAudio implements AudioPlayer {
   Duration get position => nativePosition;
 
   @override
+  Duration? get duration => nativeDuration;
+
+  @override
   Future<Duration?> setAudioSource(AudioSource source,
       {bool preload = true,
       int? initialIndex,
@@ -256,7 +260,7 @@ class _NativeAudio implements AudioPlayer {
     nativePosition = initialPosition ?? Duration.zero;
     await loadGate?.future;
     if (errors.isNotEmpty) throw errors.removeAt(0);
-    return const Duration(minutes: 2);
+    return nativeDuration = const Duration(minutes: 2);
   }
 
   @override
@@ -1507,9 +1511,18 @@ void main() {
     final audio = create(native,
         video: _video('song', preferred).copyWith(musicMetadata: music));
     await audio.playVideo(false, startAt: const Duration(seconds: 37));
+    expect(native.playing, isTrue);
+    final beforeStaleEvent = player.events.length;
+    audio.onStateStreamChange(
+        native_audio.PlayerState(false, ProcessingState.ready));
+    expect(player.events.skip(beforeStaleEvent).map((event) => event.type),
+        isNot(contains(MediaEventType.pause)));
+
+    native.nativePlaying = false;
     audio.onStateStreamChange(
         native_audio.PlayerState(false, ProcessingState.ready));
     expect(player.events.last.type, MediaEventType.pause);
+    native.nativePlaying = true;
     audio.onStateStreamChange(
         native_audio.PlayerState(true, ProcessingState.ready));
     expect(player.events.last.type, MediaEventType.play);

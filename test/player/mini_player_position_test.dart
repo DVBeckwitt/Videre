@@ -16,6 +16,7 @@ import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -37,6 +38,7 @@ void main() {
   late TestSettingsCubit settings;
   late _Player player;
   late ValueNotifier<MediaQueryData> viewport;
+  AudioPlayerCubit? mountedDecoder;
   const song = Video(
     videoId: 'position-test',
     title: 'Position test',
@@ -52,6 +54,7 @@ void main() {
       of: find.byType(Player), matching: find.byType(AnimatedPositioned));
 
   setUp(() async {
+    mountedDecoder = null;
     app_main.darkColorScheme = const ColorScheme.dark();
     db = await SembastSqfDb.createInMemory();
     app = TestAppCubit(AppState(0, null, HomeLayout()));
@@ -131,17 +134,40 @@ void main() {
     // Flush their zero-delay startup callbacks before inspecting or disposing.
     await tester.pump(Duration.zero);
     final decoder = tester.element(audioBuilder).read<AudioPlayerCubit>();
-    addTearDown(() async {
-      await tester.runAsync(() async {
-        final closed = decoder.stream.drain<void>();
-        await tester.pumpWidget(const SizedBox.shrink());
-        await closed.timeout(const Duration(seconds: 2));
-      });
-    });
+    mountedDecoder = decoder;
     return decoder;
   }
 
-  testWidgets('compact Music player fits a taller mixed-script title',
+  void testPosition(String description, WidgetTesterCallback check) {
+    testWidgets(description, (tester) async {
+      const output = MethodChannel('videre/music_output');
+      final messenger = tester.binding.defaultBinaryMessenger;
+      messenger.setMockMethodCallHandler(output, (call) async {
+        if (call.method != 'listen' && call.method != 'cancel') {
+          throw MissingPluginException();
+        }
+        return null;
+      });
+      addTearDown(() => messenger.setMockMethodCallHandler(output, null));
+      try {
+        await check(tester);
+      } finally {
+        final decoder = mountedDecoder;
+        if (decoder != null) {
+          // Unmount before Flutter's automatic cleanup so decoder shutdown
+          // starts on the same real clock on which we await its completion.
+          await tester.runAsync(() async {
+            final closed = decoder.stream.drain<void>();
+            await tester.pumpWidget(const SizedBox.shrink());
+            await closed.timeout(const Duration(seconds: 2));
+          });
+          expect(decoder.isClosed, isTrue);
+        }
+      }
+    });
+  }
+
+  testPosition('compact Music player fits a taller mixed-script title',
       (tester) async {
     const title = 'PSY - GANGNAM STYLE(강남스타일) M/V';
     const artist = 'officialpsy';
@@ -173,7 +199,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('mini-player drag stays within the safe viewport at both edges',
+  testPosition('mini-player drag stays within the safe viewport at both edges',
       (tester) async {
     await pumpPlayer(tester);
     for (final top in [-150.0, 900.0]) {
@@ -187,7 +213,7 @@ void main() {
     }
   });
 
-  testWidgets('tapping the mini-player restores it inside the viewport',
+  testPosition('tapping the mini-player restores it inside the viewport',
       (tester) async {
     final decoder = await pumpPlayer(tester);
     final native = decoder.audioPlayer;
@@ -212,7 +238,7 @@ void main() {
     expect(decoder.audioPlayer, same(native));
   });
 
-  testWidgets('restoring a repeatedly minimized player keeps its bounds',
+  testPosition('restoring a repeatedly minimized player keeps its bounds',
       (tester) async {
     await pumpPlayer(tester);
     for (final delay in [300, 50, 300]) {
@@ -237,7 +263,7 @@ void main() {
     }
   });
 
-  testWidgets(
+  testPosition(
       'keyboard show and hide keep mini-player visible without remounting',
       (tester) async {
     final decoder = await pumpPlayer(tester);
@@ -260,7 +286,7 @@ void main() {
     }
   });
 
-  testWidgets('viewport shrink reclamps a dragged mini-player and it settles',
+  testPosition('viewport shrink reclamps a dragged mini-player and it settles',
       (tester) async {
     await pumpPlayer(tester);
     await player.seed(player.state.copyWith(isDragging: true, top: 700));
@@ -279,7 +305,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('ordinary audio retains the existing video mini-player',
+  testPosition('ordinary audio retains the existing video mini-player',
       (tester) async {
     await player.seed(player.state
         .copyWith(currentlyPlaying: song.copyWith(musicMetadata: null)));
@@ -290,7 +316,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets(
+  testPosition(
       'expanded audio keeps Info and Queue reachable in short landscape',
       (tester) async {
     const size = Size(760, 360);
@@ -319,7 +345,7 @@ void main() {
   });
 
   for (final music in [true, false]) {
-    testWidgets(
+    testPosition(
         music
             ? 'hidden Music decoder controls cannot receive keyboard focus'
             : 'visible ordinary audio decoder controls retain keyboard focus',
@@ -352,7 +378,7 @@ void main() {
     });
   }
 
-  testWidgets('Music artwork drag expands and settles with the same decoder',
+  testPosition('Music artwork drag expands and settles with the same decoder',
       (tester) async {
     final decoder = await pumpPlayer(tester);
     final native = decoder.audioPlayer;
@@ -380,7 +406,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets(
+  testPosition(
       'expanded Music keeps artwork and controls visible after reopening',
       (tester) async {
     await player.seed(player.state.copyWith(isMini: false, top: 0));
@@ -418,7 +444,7 @@ void main() {
     expectVisibleBody();
   });
 
-  testWidgets('expanded Music follows a short pull and returns on release',
+  testPosition('expanded Music follows a short pull and returns on release',
       (tester) async {
     await player.seed(player.state.copyWith(isMini: false, top: 0));
     final decoder = await pumpPlayer(tester);
@@ -452,7 +478,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('Music minimize settles from the held position with one decoder',
+  testPosition('Music minimize settles from the held position with one decoder',
       (tester) async {
     await player.seed(player.state.copyWith(isMini: false, top: 0));
     final decoder = await pumpPlayer(tester);
@@ -485,7 +511,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('cancelled expanded Music pull returns without minimizing',
+  testPosition('cancelled expanded Music pull returns without minimizing',
       (tester) async {
     await player.seed(player.state.copyWith(isMini: false, top: 0));
     final decoder = await pumpPlayer(tester);
@@ -507,7 +533,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('Music minimize honors disabled animations at release',
+  testPosition('Music minimize honors disabled animations at release',
       (tester) async {
     viewport.value = viewport.value.copyWith(disableAnimations: true);
     await player.seed(player.state.copyWith(isMini: false, top: 0));
@@ -529,7 +555,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('cancelled Music drag beyond the threshold returns to mini',
+  testPosition('cancelled Music drag beyond the threshold returns to mini',
       (tester) async {
     await pumpPlayer(tester);
     final gesture = await tester.startGesture(
@@ -549,7 +575,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('a held mini-player pull cannot reopen a minimized player',
+  testPosition('a held mini-player pull cannot reopen a minimized player',
       (tester) async {
     final decoder = await pumpPlayer(tester);
     final gesture = await tester.startGesture(

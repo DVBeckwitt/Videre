@@ -591,7 +591,7 @@ class LocalMusicLibrary extends ChangeNotifier with WidgetsBindingObserver {
     await initialize();
     if (_disposed || !isCurrent()) return null;
     final catalogAvailable = enabled && !unavailable && !busy;
-    final catalogSelection = catalogAvailable ? selectionId : null;
+    final catalogSelection = selectionId;
     final availableRoots = roots
         .where((root) => !root.isDocumentProvider && !isRootUnavailable(root));
     final root = catalogAvailable && availableRoots.length == 1
@@ -621,7 +621,7 @@ class LocalMusicLibrary extends ChangeNotifier with WidgetsBindingObserver {
       final title = (result['title'] as String).trim();
       if (title.isEmpty) return null;
       if (result['indexedUri'] case final String indexedUri) {
-        if (catalogSelection == null) return null;
+        if (!catalogAvailable) return null;
         LocalMusicTrack? indexed() => _representativeByUri[indexedUri];
         await _waitForTracks(() => indexed() != null);
         if (!current() || !acceptsSessionSelection(catalogSelection)) {

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:collection';
+import 'dart:io';
 
 import 'package:audio_service/audio_service.dart';
 import 'package:audio_session/audio_session.dart';
@@ -726,7 +727,7 @@ void main() {
     late TestVideoPlayerCubit cubit;
     late RecordingPlayerController controller;
     setUp(() async {
-      db = await SembastSqfDb.createInMemory();
+      db = await createPlayerTestDatabase();
       const server = Server(url: 'https://inv.example');
       await db.upsertServer(server);
       await db.useServer(server);
@@ -997,19 +998,34 @@ void main() {
         (tester) async {
       const native = MethodChannel('better_player_channel');
       const events = MethodChannel('better_player_channel/videoEvents1');
+      const subtitles = MethodChannel('videre/watch_local_subtitles');
+      const pathProvider = MethodChannel('plugins.flutter.io/path_provider');
       const audioClient =
           MethodChannel('com.ryanheise.audio_service.client.methods');
       const audioHandler =
           MethodChannel('com.ryanheise.audio_service.handler.methods');
       final messenger = tester.binding.defaultBinaryMessenger;
-      final calls = StreamController<MethodCall>.broadcast();
-      final nativeCalls = <String>[];
+      final cacheDirectory = (await tester.runAsync(
+          () => Directory.systemTemp.createTemp('videre-pip-cache-')))!;
+      addTearDown(() => cacheDirectory.delete(recursive: true));
+      messenger.setMockMethodCallHandler(pathProvider, (call) async {
+        return switch (call.method) {
+          'getTemporaryDirectory' ||
+          'getApplicationSupportDirectory' =>
+            cacheDirectory.path,
+          _ => throw MissingPluginException(call.method),
+        };
+      });
+      final nativeCalls = <MethodCall>[];
       for (final channel in [events, audioClient, audioHandler]) {
         messenger.setMockMethodCallHandler(channel, (_) async => null);
       }
+      messenger.setMockMethodCallHandler(subtitles, (call) async {
+        if (call.method == 'attachment') return null;
+        throw MissingPluginException(call.method);
+      });
       messenger.setMockMethodCallHandler(native, (call) async {
-        nativeCalls.add(call.method);
-        calls.add(call);
+        nativeCalls.add(call);
         if (call.method == 'create') return {'textureId': 1};
         if (call.method == 'position') return 0;
         if (call.method == 'isPictureInPictureSupported') return true;
@@ -1027,11 +1043,17 @@ void main() {
         }
         return null;
       });
-      addTearDown(() async {
-        for (final channel in [native, events, audioClient, audioHandler]) {
+      addTearDown(() {
+        for (final channel in [
+          native,
+          events,
+          subtitles,
+          pathProvider,
+          audioClient,
+          audioHandler,
+        ]) {
           messenger.setMockMethodCallHandler(channel, null);
         }
-        await calls.close();
       });
       await tester.runAsync(() => settings.toggleDash(false));
       await tester.runAsync(player.close);
@@ -1062,19 +1084,43 @@ void main() {
       for (var i = 0; i < 20; i++) {
         await tester.pump(const Duration(milliseconds: 10));
       }
-      final decoder =
-          tester.element(find.byType(BetterPlayer)).read<VideoPlayerCubit>();
+      final videoSurface = find.byType(BetterPlayer);
+      expect(videoSurface, findsOneWidget,
+          reason: 'Native calls before entering PiP: $nativeCalls');
+      final decoder = tester.element(videoSurface).read<VideoPlayerCubit>();
       const pip = MethodChannel('puntito.simple_pip_mode');
       await messenger.handlePlatformMessage(pip.name,
           pip.codec.encodeMethodCall(const MethodCall('onPipEntered')), (_) {});
       tester.view.physicalSize = const Size(320, 180);
       await tester.pump();
       expect(player.state.isPip, isTrue);
-      expect(tester.element(find.byType(BetterPlayer)).read<VideoPlayerCubit>(),
-          same(decoder));
+      expect(
+          tester.element(videoSurface).read<VideoPlayerCubit>(), same(decoder));
+
+      Future<ByteData?> dispatch(String action, Map<String, int> arguments) =>
+          messenger.handlePlatformMessage(
+              audioHandler.name,
+              audioHandler.codec
+                  .encodeMethodCall(MethodCall(action, arguments)),
+              (reply) => audioHandler.codec.decodeEnvelope(reply!));
+
+      Future<void> waitWithoutDrawing(
+          bool Function() ready, String phase) async {
+        for (var attempt = 0; attempt < 20 && !ready(); attempt++) {
+          await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+          await tester.idle();
+        }
+        expect(ready(), isTrue,
+            reason: '$phase. Native calls in PiP: $nativeCalls');
+      }
+
       // Desktop tests default to a no-op service; exercise Android's channel.
       AudioServicePlatform.instance = MethodChannelAudioService();
-      await AudioService.init(builder: () => MediaHandler(player));
+      MediaHandler? handler;
+      unawaited(AudioService.init(builder: () => MediaHandler(player))
+          .then<void>((value) => handler = value));
+      await waitWithoutDrawing(
+          () => handler != null, 'Initializing the media handler');
       for (final lifecycle in [
         AppLifecycleState.inactive,
         AppLifecycleState.paused,
@@ -1086,29 +1132,35 @@ void main() {
           ('play', 'play', <String, int>{}),
           ('seek', 'seekTo', {'position': 17000000}),
         ]) {
-          final delivered =
-              calls.stream.firstWhere((call) => call.method == action.$2);
-          await messenger.handlePlatformMessage(
-              audioHandler.name,
-              audioHandler.codec
-                  .encodeMethodCall(MethodCall(action.$1, action.$3)),
-              (reply) => audioHandler.codec.decodeEnvelope(reply!));
-          final call = await delivered;
-          if (action.$1 == 'seek') expect(call.arguments['location'], 17000);
+          final before = nativeCalls.length;
+          bool replied = false;
+          unawaited(
+              dispatch(action.$1, action.$3).then<void>((_) => replied = true));
+          MethodCall? delivered() => nativeCalls
+              .skip(before)
+              .where((call) => call.method == action.$2)
+              .firstOrNull;
+          await waitWithoutDrawing(() => replied && delivered() != null,
+              '${lifecycle.name} ${action.$1} reply and decoder call');
+          if (action.$1 == 'seek') {
+            expect(delivered()!.arguments['location'], 17000);
+          }
         }
       }
       nativeCalls.clear();
-      await messenger.handlePlatformMessage(
-          audioHandler.name,
-          audioHandler.codec.encodeMethodCall(const MethodCall('stop', {})),
-          (reply) => audioHandler.codec.decodeEnvelope(reply!));
-      await tester.idle();
-      // Background Stop cannot depend on a widget rebuild to silence audio.
-      final stoppedWithoutFrame = nativeCalls.contains('pause');
+      bool stopReplied = false;
+      unawaited(
+          dispatch('stop', const {}).then<void>((_) => stopReplied = true));
+      // Background Stop must silence audio before any frame, even while the
+      // command is waiting for the playback checkpoint to persist.
+      await waitWithoutDrawing(
+          () => nativeCalls.any((call) => call.method == 'pause'),
+          'Stop silencing the decoder');
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
       await tester.pumpWidget(const SizedBox.shrink());
       await tester.pump(const Duration(seconds: 4));
-      expect(stoppedWithoutFrame, isTrue);
+      await waitWithoutDrawing(
+          () => stopReplied, 'Stop reply after checkpoint');
     });
 
     test('rejects unsafe external media destinations', () async {

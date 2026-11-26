@@ -1189,6 +1189,7 @@ void main() {
     expect(decoder.loadPositions[decoder.loads.indexOf('Intro.mp3')],
         Duration.zero);
     expect(player.canSeekCurrentMedia, isFalse);
+    expect(player.musicAbRepeat.value, isNull);
     final position = player.state.position;
     player.seek(start);
     audio.seek(start);

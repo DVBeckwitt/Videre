@@ -673,8 +673,14 @@ void main() {
     expect(updated.artists, ['Duo; Guest']);
     expect(updated.genres, ['Rock', 'Pop']);
     expect(updated.playbackId, original.playbackId);
-    expect(
-        calls, ['getFolder', 'listTracks', 'setTagSeparators', 'listTracks']);
+    expect(calls, [
+      'getFolder',
+      'listTracks',
+      'listMovedFileRepairs',
+      'setTagSeparators',
+      'listTracks',
+      'listMovedFileRepairs',
+    ]);
   });
 
   test('fresh installs and cancellation never scan or grant access', () async {
