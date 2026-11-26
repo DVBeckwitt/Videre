@@ -9,6 +9,7 @@ import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/music/models/music_artist.dart';
 import 'package:clipious/music/models/music_artist_identity.dart';
 import 'package:clipious/music/models/music_library_entry.dart';
+import 'package:clipious/music/models/music_lyrics.dart';
 import 'package:clipious/music/models/music_mini_player_preferences.dart';
 import 'package:clipious/music/services/music_library_service.dart';
 import 'package:clipious/music/views/components/music_mini_player.dart';
@@ -20,10 +21,12 @@ import 'package:clipious/player/states/player.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/backend_selector.dart';
+import 'package:clipious/utils/motion.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -118,7 +121,9 @@ void main() {
   });
 
   Future<void> pump(WidgetTester tester,
-      {double width = 390, double scale = 1}) async {
+      {double width = 390,
+      double scale = 1,
+      MotionPreference motion = MotionPreference.system}) async {
     tester.view.devicePixelRatio = 1;
     tester.view.physicalSize = Size(width, 844);
     addTearDown(tester.view.resetPhysicalSize);
@@ -135,7 +140,7 @@ void main() {
         builder: (context, child) => MediaQuery(
             data: MediaQuery.of(context)
                 .copyWith(textScaler: TextScaler.linear(scale)),
-            child: child!),
+            child: MotionScope(preference: motion, child: child!)),
         home: const Scaffold(
             body: Align(
                 alignment: Alignment.bottomCenter, child: MusicMiniPlayer())),
@@ -366,6 +371,138 @@ void main() {
     expect(player.expandCalls, 0);
     await tester.tap(key('music-mini-expand'));
     expect(player.expandCalls, 1);
+  });
+
+  testWidgets('Song details distinguish recordings with matching prefixes',
+      (tester) async {
+    await pump(tester);
+    final reveal = key('music-mini-song-details');
+    expect(reveal, findsNothing);
+    const titlePrefix = 'Somewhere far beyond the edge of this town';
+    const artistPrefix = 'The Somewhere Far Beyond This Town Orchestra';
+    final dialog = find.byType(AlertDialog);
+    for (final (video, suffix) in [(song, 'studio'), (next, 'live')]) {
+      final title = '$titlePrefix ($suffix recording)';
+      final artist = '$artistPrefix ($suffix lineup)';
+      await player.seed(player.state.copyWith(
+        currentlyPlaying: video.copyWith(
+            musicMetadata: MusicMetadata(title: title, artist: artist)),
+      ));
+      await tester.pump();
+      expect(
+          tester
+              .renderObject<RenderParagraph>(find.text(title))
+              .didExceedMaxLines,
+          isTrue);
+      expect(
+          tester
+              .renderObject<RenderParagraph>(find.text(artist))
+              .didExceedMaxLines,
+          isTrue);
+      expect(find.bySemanticsLabel('Now playing, $title, $artist'),
+          findsOneWidget);
+      expect(reveal.hitTestable(), findsOneWidget);
+      tester.semantics.tap(find.semantics.byPredicate((node) =>
+          node.label == 'Song details' ||
+          node.getSemanticsData().tooltip == 'Song details'));
+      await tester.pumpAndSettle();
+      expect(find.descendant(of: dialog, matching: find.text(title)),
+          findsOneWidget);
+      expect(find.descendant(of: dialog, matching: find.text(artist)),
+          findsOneWidget);
+      final closeLabel =
+          MaterialLocalizations.of(tester.element(dialog)).closeButtonLabel;
+      await tester.tap(find.widgetWithText(TextButton, closeLabel));
+      await tester.pumpAndSettle();
+    }
+    expect(player.expandCalls, 0);
+    await tester.tap(key('music-mini-expand'));
+    expect(player.expandCalls, 1);
+  });
+
+  testWidgets('large text reveals an overflowing artist with reduced motion',
+      (tester) async {
+    const artist = 'The Artist With a Long Name and a Distinct Ending';
+    await player.seed(player.state.copyWith(
+      currentlyPlaying: song.copyWith(
+        musicMetadata: const MusicMetadata(title: 'A', artist: artist),
+      ),
+    ));
+    await pump(tester,
+        width: 320, scale: 2.5, motion: MotionPreference.reduced);
+    expect(find.text(artist), findsNothing);
+    expect(
+        tester.renderObject<RenderParagraph>(find.text('A')).didExceedMaxLines,
+        isFalse);
+    await tester.tap(key('music-mini-song-details'));
+    await tester.pumpAndSettle();
+    final dialog = find.byType(AlertDialog);
+    expect(tester.widget<AlertDialog>(dialog).scrollable, isTrue);
+    expect(ModalRoute.of(tester.element(dialog))!.transitionDuration,
+        const Duration(milliseconds: 100));
+    final fullArtist = find.descendant(of: dialog, matching: find.text(artist));
+    expect(tester.renderObject<RenderParagraph>(fullArtist).didExceedMaxLines,
+        isFalse);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('narrow transport preserves expand and details during a failure',
+      (tester) async {
+    await miniPreferences(tester, MusicMiniPlayerLayout.transport,
+        MusicMiniPlayerShortcut.shuffle);
+    const title = 'A very long title for the recording that failed';
+    await player.seed(player.state.copyWith(
+      currentlyPlaying: song.copyWith(
+        musicMetadata: const MusicMetadata(title: title, artist: 'Singer'),
+      ),
+    ));
+    player.setEvent(const MediaEvent(state: MediaState.error));
+    await pump(tester, width: 240, motion: MotionPreference.off);
+
+    for (final control in [
+      'music-mini-expand',
+      'music-mini-song-details',
+      'music-mini-shuffle',
+      'music-mini-play',
+      'music-mini-more',
+    ]) {
+      expect(key(control).hitTestable(), findsOneWidget);
+    }
+    expect(key('music-mini-error'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+
+    await tester.tap(key('music-mini-expand'));
+    await tester.pump();
+    expect(player.expandCalls, 1);
+    await tester.tap(key('music-mini-song-details'));
+    await tester.pumpAndSettle();
+    final dialog = find.byType(AlertDialog);
+    expect(ModalRoute.of(tester.element(dialog))!.transitionDuration,
+        Duration.zero);
+    expect(find.descendant(of: dialog, matching: find.text(title)),
+        findsOneWidget);
+    expect(player.expandCalls, 1);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('an overflowing lyric keeps its place without Song details',
+      (tester) async {
+    const lyric = 'This lyric is longer than the space in the compact subtitle';
+    await tester.runAsync(() => settings.setMusicMiniPlayerLyrics(true));
+    player.publishResolvedMusicLyrics(
+      const MusicLyrics.synced([(start: Duration(seconds: 1), text: lyric)]),
+      Duration.zero,
+      mayRead: () => true,
+      sourceChanges: Listenable.merge(const []),
+    );
+    await pump(tester);
+    expect(
+        tester
+            .renderObject<RenderParagraph>(find.text(lyric))
+            .didExceedMaxLines,
+        isTrue);
+    expect(find.text('Singer'), findsNothing);
+    expect(key('music-mini-song-details'), findsNothing);
   });
 
   testWidgets('compact music can save and unsave the current online song',
@@ -663,6 +800,7 @@ void main() {
       expect(key('music-mini-error'),
           phase == BackendRecoveryPhase.failed ? findsOneWidget : findsNothing);
       expect(find.text('Singer'), findsNothing);
+      expect(key('music-mini-song-details'), findsNothing);
       expect(tester.takeException(), isNull);
     });
   }
