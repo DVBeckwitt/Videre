@@ -17,6 +17,7 @@ import 'package:clipious/player/views/components/playback_speed_controls.dart';
 import 'package:clipious/player/views/components/playback_speed_quick_controls.dart';
 import 'package:clipious/player/views/components/flow_watch_transport.dart';
 import 'package:clipious/player/views/components/flow_video_gestures.dart';
+import 'package:clipious/player/views/components/fullscreen_video_zoom.dart';
 import 'package:clipious/player/views/components/minimize_on_swipe_down.dart';
 import 'package:clipious/player/views/components/remote_control.dart';
 import 'package:clipious/player/views/components/system_setting_slider.dart';
@@ -520,6 +521,7 @@ class PlayerControls extends StatelessWidget {
                 !isMini &&
                 !isPip &&
                 videoPlayer is VideoPlayerCubit;
+            final zoom = FullscreenVideoZoomScope.maybeOf(context);
             final indicatorStyle = Theme.of(context).textTheme.bodySmall;
             final indicatorLineHeight = MediaQuery.textScalerOf(context)
                     .scale(indicatorStyle?.fontSize ?? 12) *
@@ -847,6 +849,22 @@ class PlayerControls extends StatelessWidget {
                                                 )),
                                               RemoteControlButton(
                                                   player: player),
+                                              if (zoom != null)
+                                                ListenableBuilder(
+                                                  listenable: zoom,
+                                                  builder: (context, child) =>
+                                                      zoom.scale > 1
+                                                          ? IconButton(
+                                                              tooltip: locals
+                                                                  .resetVideoZoom,
+                                                              onPressed:
+                                                                  zoom.reset,
+                                                              icon: const Icon(Icons
+                                                                  .zoom_out_map),
+                                                            )
+                                                          : const SizedBox
+                                                              .shrink(),
+                                                ),
                                               IconButton(
                                                   onPressed: () =>
                                                       player.enterPip(),

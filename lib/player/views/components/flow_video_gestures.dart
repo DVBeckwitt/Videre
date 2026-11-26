@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../../videos/models/video.dart';
+import 'fullscreen_video_zoom.dart';
 import 'seek_preview.dart';
 
 // Dart translation of Flow 565d1f7a (GPL-3.0): PlayerTapGestures.kt,
@@ -186,7 +187,7 @@ class _FlowVideoGesturesState extends State<FlowVideoGestures> {
   Widget build(BuildContext context) {
     final gestureSettings = MediaQuery.maybeGestureSettingsOf(context);
     final target = _dragTarget;
-    return RawGestureDetector(
+    final surface = RawGestureDetector(
       behavior: HitTestBehavior.translucent,
       excludeFromSemantics: true,
       gestures: {
@@ -236,6 +237,10 @@ class _FlowVideoGesturesState extends State<FlowVideoGestures> {
             ),
         ],
       ),
+    );
+    return FullscreenVideoZoomGestures(
+      zoom: FullscreenVideoZoomScope.maybeOf(context),
+      child: surface,
     );
   }
 }
