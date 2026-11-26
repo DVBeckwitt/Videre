@@ -14,6 +14,7 @@ import '../../services/local_music_library.dart';
 import '../components/local_music_category_sort_menu.dart';
 import '../components/device_music_artwork.dart';
 import '../components/device_music_song_selection.dart';
+import '../components/music_collection_panes.dart';
 import '../components/music_library_actions.dart';
 import 'music.dart';
 import 'music_device_artist.dart';
@@ -225,29 +226,26 @@ class _DeviceCollectionPage extends StatelessWidget {
       String title,
       List<LocalMusicTrack> tracks,
       DeviceMusicSongSelectionState selection) {
-    if (tracks.isEmpty) return Center(child: Text(locals.musicNoResults));
     final artists = kind == MusicDeviceCollection.genres
         ? (groupLocalMusicArtists(tracks)
           ..sort((a, b) => a.key.compareTo(b.key)))
         : const <LocalMusicArtist>[];
     final songStart = artists.isEmpty ? 0 : artists.length + 2;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          child: Align(
-            alignment: AlignmentDirectional.centerStart,
-            child: FilledButton.icon(
-              autofocus: isTv,
-              onPressed: () => _play(context, key, title),
-              icon: const Icon(Icons.play_arrow),
-              label: Text(locals.musicPlayAll),
-            ),
-          ),
+    final playAll = Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: Align(
+        alignment: AlignmentDirectional.centerStart,
+        child: FilledButton.icon(
+          autofocus: isTv,
+          onPressed: () => _play(context, key, title),
+          icon: const Icon(Icons.play_arrow),
+          label: Text(locals.musicPlayAll),
         ),
-        Expanded(
-          child: ListView.builder(
+      ),
+    );
+    final songList = tracks.isEmpty
+        ? Center(child: Text(locals.musicNoResults))
+        : ListView.builder(
             key: PageStorageKey((kind, key)),
             itemCount: songStart + tracks.length,
             itemBuilder: (context, index) {
@@ -298,9 +296,32 @@ class _DeviceCollectionPage extends StatelessWidget {
                 onLongPress: () => selection.start(songIndex),
               );
             },
+          );
+    return MusicCollectionPanes(
+      details: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+            child: Semantics(
+              header: true,
+              child:
+                  Text(title, style: Theme.of(context).textTheme.headlineSmall),
+            ),
           ),
-        ),
-      ],
+          if (tracks.isNotEmpty) playAll,
+        ],
+      ),
+      buildTracks: (_, split) => Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (!split && tracks.isNotEmpty) playAll,
+          Expanded(
+            key: const ValueKey('music-device-collection-tracks'),
+            child: songList,
+          ),
+        ],
+      ),
     );
   }
 
@@ -317,8 +338,8 @@ class _DeviceCollectionPage extends StatelessWidget {
               ? LocalMusicCategorySortMenu.readOrder(
                   context, _genreOrderSetting)
               : null;
-          final title =
-              (key == null ? null : _labelFor(key)) ?? kind._label(locals);
+          final categoryTitle = kind._label(locals);
+          final collectionTitle = key == null ? null : _labelFor(key);
           final tracks =
               key == null ? const <LocalMusicTrack>[] : _members(key);
           return DeviceMusicSongSelection(
@@ -327,9 +348,12 @@ class _DeviceCollectionPage extends StatelessWidget {
             source: (library, selectionId, profile, kind, key),
             currentTracks: () => key == null || !_active ? null : _members(key),
             builder: (context, selection) {
-              final page = Scaffold(
+              final page = LayoutBuilder(builder: (context, constraints) {
+                final contentWidth = constraints.maxWidth - MediaQuery.paddingOf(context).horizontal;
+                final split = MusicCollectionPanes.shouldSplit(contentWidth);
+                return Scaffold(
                 appBar: AppBar(
-                  title: Text(title),
+                  title: Text(split ? categoryTitle : collectionTitle ?? categoryTitle),
                   actions: [
                     if (selection.selectButton case final button?) button,
                     if (order != null)
@@ -346,12 +370,13 @@ class _DeviceCollectionPage extends StatelessWidget {
                     Expanded(
                       child: key == null
                           ? _browse(locals, _indexCollections(order))
-                          : _trackList(
-                              context, locals, key, title, tracks, selection),
+                          : collectionTitle == null ? Center(child: Text(locals.musicNoResults)) : _trackList(
+                              context, locals, key, collectionTitle, tracks, selection),
                     ),
                   ]),
                 ),
               );
+              });
               return Shortcuts(shortcuts: {
                 for (final key in selectKeys)
                   SingleActivator(key): const ActivateIntent(),
