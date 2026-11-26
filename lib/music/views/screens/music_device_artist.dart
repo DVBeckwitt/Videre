@@ -5,6 +5,7 @@ import 'package:clipious/main.dart' show isTv;
 import 'package:clipious/music/models/local_music_album.dart';
 import 'package:clipious/music/models/local_music_album_editions.dart';
 import 'package:clipious/music/models/local_music_artist.dart';
+import 'package:clipious/music/models/local_music_browse.dart';
 import 'package:clipious/music/models/music_artist_identity.dart';
 import 'package:clipious/music/models/local_music_track.dart';
 import 'package:clipious/music/models/music_search_text.dart';
@@ -17,11 +18,14 @@ import 'package:clipious/utils/views/tv/components/tv_overscan.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
+import '../components/device_music_collection_queue_menu.dart';
 import '../components/music_artist_alias_dialog.dart';
 import '../components/local_music_category_sort_menu.dart';
+import '../components/local_music_detail_song_sort_menu.dart';
 import '../components/device_music_artwork.dart';
 import '../components/device_music_song_selection.dart';
 import '../components/music_collection_panes.dart';
+import '../components/music_fast_scroll.dart';
 import 'music.dart';
 import 'music_artist_search.dart';
 import 'music_device_album.dart';
@@ -70,6 +74,7 @@ class _MusicDeviceArtistPageState extends State<MusicDeviceArtistPage> {
   late final AppState _session;
   bool _checking = true;
   int _request = 0;
+  var _songOrder = const LocalMusicDetailSongOrder();
 
   LocalMusicLibrary get _library =>
       widget.library ?? LocalMusicLibrary.instance;
@@ -118,10 +123,12 @@ class _MusicDeviceArtistPageState extends State<MusicDeviceArtistPage> {
   @override
   void didUpdateWidget(MusicDeviceArtistPage oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.library != widget.library ||
-        oldWidget.selectionId != widget.selectionId) {
-      _load();
+    final sourceChanged = oldWidget.library != widget.library ||
+        oldWidget.selectionId != widget.selectionId;
+    if (sourceChanged || oldWidget.artistKey != widget.artistKey) {
+      _songOrder = const LocalMusicDetailSongOrder();
     }
+    if (sourceChanged) _load();
   }
 
   Future<void> _load({bool refresh = false}) async {
@@ -190,11 +197,16 @@ class _MusicDeviceArtistPageState extends State<MusicDeviceArtistPage> {
     );
   }
 
+  List<LocalMusicTrack>? _currentArtistSongs() {
+    final artist = _checking ? null : _currentArtist;
+    return artist == null ? null : _songOrder.order(artist.tracks);
+  }
+
   Future<void> _play(String? id,
       {BuildContext? source, List<LocalMusicTrack>? matching}) async {
     final artist = _checking ? null : _currentArtist;
     if (artist == null) return;
-    final tracks = matching ?? artist.tracks;
+    final tracks = matching ?? _songOrder.order(artist.tracks);
     final index = id == null ? 0 : tracks.indexWhere((t) => t.playbackId == id);
     if (index < 0) return;
     final playbackContext = source ?? context;
@@ -215,6 +227,7 @@ class _MusicDeviceArtistPageState extends State<MusicDeviceArtistPage> {
         startIndex: index,
         queueTitle: artist.name,
         songTap: id != null,
+        retainQueueOrder: _songOrder.isSorted,
         isCurrent: current,
       );
     } catch (_) {
@@ -226,8 +239,12 @@ class _MusicDeviceArtistPageState extends State<MusicDeviceArtistPage> {
     }
   }
 
-  Widget _filteredIndex(BuildContext context, AppLocalizations locals,
-      List<LocalMusicArtist> artists, MusicLibraryService aliases) {
+  Widget _filteredIndex(
+      BuildContext context,
+      AppLocalizations locals,
+      List<LocalMusicArtist> artists,
+      MusicLibraryService aliases,
+      LocalMusicCategoryOrder order) {
     final settings = context.read<SettingsCubit?>();
     final albumArtistsOnly = context.select((SettingsCubit? settings) =>
         settings?.state.settings[_albumArtistsOnlySetting]?.value == 'true');
@@ -256,7 +273,23 @@ class _MusicDeviceArtistPageState extends State<MusicDeviceArtistPage> {
         Expanded(
           child: visibleArtists.isEmpty
               ? Center(child: Text(locals.musicNoResults))
-              : _index(visibleArtists, aliases),
+              : MusicFastScroll(
+                  scope: (
+                    _library,
+                    widget.selectionId,
+                    order.value,
+                    albumArtistsOnly,
+                  ),
+                  sections: musicDeviceCategoryFastScrollSections(
+                    context,
+                    visibleArtists,
+                    sort: order.field,
+                    name: (artist) => aliases.artistDisplayName(
+                        MusicArtistIdentity.device(artist.key), artist.name),
+                    tracks: (artist) => artist.tracks,
+                  ),
+                  child: _index(visibleArtists, aliases),
+                ),
         ),
       ],
     );
@@ -346,7 +379,8 @@ class _MusicDeviceArtistPageState extends State<MusicDeviceArtistPage> {
                   return const SizedBox.shrink();
                 }
                 final locals = AppLocalizations.of(context)!;
-                final songs = scopedArtist.tracks
+                final songs = _songOrder
+                    .order(scopedArtist.tracks)
                     .where((track) =>
                         artistSearchMatches(terms, [track.title, track.album]))
                     .toList();
@@ -386,22 +420,45 @@ class _MusicDeviceArtistPageState extends State<MusicDeviceArtistPage> {
     );
   }
 
-  Widget _artist(AppLocalizations locals, LocalMusicArtist artist,
-      MusicLibraryService aliases, DeviceMusicSongSelectionState selection) {
-    final members = artist.tracks;
+  Widget _artist(
+      AppLocalizations locals,
+      LocalMusicArtist artist,
+      MusicLibraryService aliases,
+      List<LocalMusicTrack> members,
+      DeviceMusicSongSelectionState selection) {
+    final indexes = {
+      for (final (index, track) in members.indexed)
+        ValueKey(track.playbackId): index,
+    };
     final releases = <LocalMusicReleaseKind?, List<LocalMusicAlbum>>{};
     for (final album in _artistAlbums(artist)) {
       (releases[album.releaseKind] ??= []).add(album);
     }
+    final library = _library;
+    final selectionId = widget.selectionId;
     final playAll = Padding(
       padding: const EdgeInsets.all(16),
-      child: Align(
-        alignment: AlignmentDirectional.centerStart,
-        child: FilledButton.icon(
-          onPressed: () => _play(null),
-          icon: const Icon(Icons.play_arrow),
-          label: Text(locals.musicPlayAll),
-        ),
+      child: Wrap(
+        crossAxisAlignment: WrapCrossAlignment.center,
+        spacing: 8,
+        children: [
+          FilledButton.icon(
+            onPressed: () => _play(null),
+            icon: const Icon(Icons.play_arrow),
+            label: Text(locals.musicPlayAll),
+          ),
+          DeviceMusicCollectionQueueMenu(
+            currentTracks: () {
+              if (_checking ||
+                  !identical(library, _library) ||
+                  selectionId != widget.selectionId ||
+                  artist.key != widget.artistKey) {
+                return const [];
+              }
+              return _currentArtistSongs() ?? const [];
+            },
+          ),
+        ],
       ),
     );
     final details = Column(
@@ -433,6 +490,10 @@ class _MusicDeviceArtistPageState extends State<MusicDeviceArtistPage> {
           widget.artistKey,
         )),
         itemCount: members.length + (split ? 0 : 1),
+        findChildIndexCallback: (key) {
+          final index = indexes[key];
+          return index == null ? null : index + (split ? 0 : 1);
+        },
         itemBuilder: (context, index) {
           if (!split && index == 0) return details;
           final trackIndex = split ? index : index - 1;
@@ -553,11 +614,14 @@ class _MusicDeviceArtistPageState extends State<MusicDeviceArtistPage> {
             ? locals.localMusicBrowseArtists
             : aliases.artistDisplayName(
                 MusicArtistIdentity.device(artist.key), artist.name);
+        final members = artist == null
+            ? const <LocalMusicTrack>[]
+            : _songOrder.order(artist.tracks);
         return DeviceMusicSongSelection(
           library: _library,
-          tracks: artist?.tracks ?? const [],
+          tracks: members,
           source: (_library, widget.selectionId, widget.artistKey, _request),
-          currentTracks: () => _checking ? null : _currentArtist?.tracks,
+          currentTracks: _currentArtistSongs,
           builder: (context, selection) {
             final Widget body;
             if (!_isCurrent) {
@@ -565,7 +629,7 @@ class _MusicDeviceArtistPageState extends State<MusicDeviceArtistPage> {
             } else if (_checking) {
               body = const Center(child: CircularProgressIndicator());
             } else if (artist != null) {
-              body = _artist(locals, artist, aliases, selection);
+              body = _artist(locals, artist, aliases, members, selection);
             } else if (order != null &&
                 _sourceCurrent &&
                 _library.error == null) {
@@ -576,7 +640,7 @@ class _MusicDeviceArtistPageState extends State<MusicDeviceArtistPage> {
                 key: (artist) => artist.key,
                 tracks: (artist) => artist.tracks,
               );
-              body = _filteredIndex(context, locals, artists, aliases);
+              body = _filteredIndex(context, locals, artists, aliases, order);
             } else {
               body = _unavailable(locals);
             }
@@ -593,6 +657,15 @@ class _MusicDeviceArtistPageState extends State<MusicDeviceArtistPage> {
                           _sourceCurrent &&
                           !_checking &&
                           _library.error == null,
+                    ),
+                  if (artist != null)
+                    LocalMusicDetailSongSortMenu(
+                      order: _songOrder,
+                      onChanged: (order) {
+                        if (_checking || _currentArtist?.key != artist.key)
+                          return;
+                        setState(() => _songOrder = order);
+                      },
                     ),
                   if (artist != null && !selection.active)
                     IconButton(

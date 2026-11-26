@@ -63,6 +63,36 @@ void main() {
     expect(expected.last, (index: 25, label: '26-30'));
   });
 
+  test('position ranges can retain the category at each jump target', () {
+    final rows = List.filled(30, '3 songs');
+    final sections = musicFastScrollSections(
+      rows,
+      rangeLabel: _rangeLabel,
+      sectionLabel: (label) => label,
+      unknownLabel: 'Unknown',
+      labelRangesWithCategory: true,
+    );
+
+    expect(sections.first, (index: 0, label: '3 songs · 1-5'));
+    expect(sections.last, (index: 25, label: '3 songs · 26-30'));
+  });
+
+  test('many distinct sort values use a bounded list of labeled ranges', () {
+    final rows = List.generate(100, (index) => index + 1);
+    final sections = musicFastScrollSections(
+      rows,
+      rangeLabel: _rangeLabel,
+      sectionLabel: (count) => '$count songs',
+      unknownLabel: 'Unknown',
+      labelRangesWithCategory: true,
+      maxCategories: 20,
+    );
+
+    expect(sections, hasLength(20));
+    expect(sections[1], (index: 5, label: '6 songs · 6-10'));
+    expect(sections.last, (index: 95, label: '96 songs · 96-100'));
+  });
+
   test('position ranges cover every row once and are bounded on long lists',
       () {
     final numbered = <int>[];

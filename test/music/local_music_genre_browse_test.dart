@@ -6,8 +6,10 @@ import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/music/models/device_music_artwork_preferences.dart';
 import 'package:clipious/music/models/local_music_album.dart';
+import 'package:clipious/music/models/local_music_browse.dart';
 import 'package:clipious/music/models/local_music_artist.dart';
 import 'package:clipious/music/models/local_music_track.dart';
+import 'package:clipious/music/models/on_device_music_entry.dart';
 import 'package:clipious/music/services/local_music_library.dart';
 import 'package:clipious/music/views/components/device_music_artwork.dart';
 import 'package:clipious/music/views/components/local_music_folder.dart';
@@ -32,7 +34,39 @@ class _Player extends Cubit<PlayerState> implements PlayerCubit {
   _Player() : super(PlayerState.init(null));
 
   final queues = <({List<LocalMusicTrack> tracks, int start, String? title})>[];
+  final copies = <({List<String> titles, bool next})>[];
   bool? lastSongTap;
+  bool? lastRetainQueueOrder;
+
+  @override
+  final musicSelectionFailureRevision = ValueNotifier(0);
+
+  @override
+  Future<void> playOnDeviceMusic(List<OnDeviceMusicEntry> tracks,
+      {int startIndex = 0,
+      String? queueTitle,
+      bool collectionDetail = false,
+      bool retainQueueOrder = false,
+      bool Function()? isCurrent,
+      bool songTap = false}) async {
+    if (isCurrent?.call() == false) return;
+    await playLocalMusic(tracks.map((entry) => entry.deviceTrack!).toList(),
+        startIndex: startIndex, queueTitle: queueTitle, songTap: songTap);
+    lastRetainQueueOrder = retainQueueOrder;
+  }
+
+  @override
+  bool get isLocalMusicSession => queues.isNotEmpty;
+
+  @override
+  int get playlistGeneration => queues.length;
+
+  @override
+  Future<bool> enqueueLocalMusicCopies(List<LocalMusicTrack> tracks,
+      {required bool next}) async {
+    copies.add((titles: [for (final track in tracks) track.title], next: next));
+    return true;
+  }
 
   @override
   Future<void> playLocalMusic(List<LocalMusicTrack> tracks,
@@ -42,6 +76,12 @@ class _Player extends Cubit<PlayerState> implements PlayerCubit {
       bool collectionDetail = false}) async {
     queues.add((tracks: List.of(tracks), start: startIndex, title: queueTitle));
     lastSongTap = songTap;
+  }
+
+  @override
+  Future<void> close() async {
+    musicSelectionFailureRevision.dispose();
+    await super.close();
   }
 
   @override
@@ -489,6 +529,214 @@ void main() {
     expect(player.queues, hasLength(2));
   });
 
+  testWidgets('genre song sorts set the visible and Play all order',
+      (tester) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(800, 1000);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    const source = 'content://provider/tree/music';
+    const titles = ['Zulu', 'Alpha', 'Middle', 'Beta'];
+    final (library: _, :player, reopen: _) = await showLibrary(
+      tester,
+      source: source,
+      tracks: [
+        {
+          'uri': '$source/document/1',
+          'title': titles[0],
+          'artist': 'Alpha artist',
+          'album': 'Middle album',
+          'releaseDate': '2005',
+          'durationMs': 4001,
+          'genre': 'Jazz',
+        },
+        {
+          'uri': '$source/document/2',
+          'title': titles[1],
+          'artist': 'Zulu artist',
+          'album': 'Zulu album',
+          'originalReleaseDate': '1995-04',
+          'durationMs': 3000,
+          'genre': 'Jazz',
+        },
+        {
+          'uri': '$source/document/3',
+          'title': titles[2],
+          'releaseDate': '2005-13',
+          'genre': 'Jazz',
+        },
+        {
+          'uri': '$source/document/4',
+          'title': titles[3],
+          'artist': 'Middle artist',
+          'album': 'Alpha album',
+          'releaseDate': '2005',
+          'durationMs': 4000,
+          'genre': 'Jazz',
+        },
+      ],
+    );
+
+    await tester.tap(find.text('Genres'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Jazz'));
+    await tester.pumpAndSettle();
+
+    List<String> visibleSongs() => [...titles]..sort((a, b) => tester
+        .getTopLeft(find.text(a))
+        .dy
+        .compareTo(tester.getTopLeft(find.text(b)).dy));
+
+    Future<void> sortBy(String choice) async {
+      await tester.tap(find.byTooltip('Sort by'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(
+          CheckedPopupMenuItem<LocalMusicDetailSongOrder>, choice));
+      await tester.pumpAndSettle();
+    }
+
+    Future<void> playAll(List<String> expected) async {
+      expect(visibleSongs(), expected);
+      await tester.tap(find.text('Play all'));
+      await tester.pumpAndSettle();
+      expect(player.queues.last.tracks.map((track) => track.title), expected);
+      expect(player.queues.last.start, 0);
+      expect(player.queues.last.title, 'Jazz');
+    }
+
+    final defaultSongs = visibleSongs();
+    await playAll(defaultSongs);
+
+    for (final (choice, expected) in [
+      ('Title', ['Alpha', 'Beta', 'Middle', 'Zulu']),
+      ('Artist', ['Zulu', 'Beta', 'Alpha', 'Middle']),
+      ('Album', ['Beta', 'Zulu', 'Alpha', 'Middle']),
+      ('Release date', ['Alpha', 'Beta', 'Zulu', 'Middle']),
+      ('Duration', ['Alpha', 'Beta', 'Zulu', 'Middle']),
+      ('Descending', ['Zulu', 'Beta', 'Alpha', 'Middle']),
+      ('Release date', ['Beta', 'Zulu', 'Alpha', 'Middle']),
+      ('Artist', ['Alpha', 'Beta', 'Zulu', 'Middle']),
+      ('Album', ['Alpha', 'Zulu', 'Beta', 'Middle']),
+      ('Title', ['Zulu', 'Middle', 'Beta', 'Alpha']),
+    ]) {
+      final playing = player.queues.last;
+      final playCount = player.queues.length;
+      await sortBy(choice);
+      expect(player.queues, hasLength(playCount));
+      expect(player.queues.last.tracks, same(playing.tracks));
+      await playAll(expected);
+      expect(player.lastRetainQueueOrder, isTrue);
+    }
+
+    final songs = visibleSongs();
+    await tester.tap(find.text('Beta'));
+    await tester.pumpAndSettle();
+    expect(player.queues.last.tracks.map((track) => track.title), songs);
+    expect(player.queues.last.start, songs.indexOf('Beta'));
+    expect(player.lastSongTap, isTrue);
+
+    await tester.tap(find.byTooltip('Music actions'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Play next'));
+    await tester.pumpAndSettle();
+    expect(player.copies.single.titles, songs);
+    expect(player.copies.single.next, isTrue);
+
+    final beta = find.widgetWithText(ListTile, 'Beta');
+    await tester.longPress(beta);
+    await tester.pumpAndSettle();
+    await sortBy('Ascending');
+    expect(visibleSongs(), ['Alpha', 'Beta', 'Middle', 'Zulu']);
+    expect(find.text('1 selected'), findsOneWidget);
+    expect(tester.widget<ListTile>(beta).selected, isTrue);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+
+    await sortBy('Default order');
+    await playAll(defaultSongs);
+  });
+
+  testWidgets(
+      'whole artist and genre queue actions use current displayed order',
+      (tester) async {
+    const source = 'content://provider/tree/music';
+    const artist = 'The Quartet';
+    const genre = 'Jazz';
+    const first = 'Zulu recording';
+    const second = 'Alpha recording';
+    const hidden = 'Private recording';
+    const genreOnly = 'Other artist recording';
+    const artistOnly = 'Other genre recording';
+    Map<String, Object> song(int id, String title, String artist, String genre,
+            {String? visibilityKey}) =>
+        {
+          'uri': '$source/document/$id',
+          'title': title,
+          'artist': artist,
+          'genre': genre,
+          if (visibilityKey != null) 'visibilityKey': visibilityKey,
+        };
+
+    final (:library, :player, reopen: _) = await showLibrary(
+      tester,
+      source: source,
+      tracks: [
+        song(1, first, artist, genre),
+        song(2, second, artist, genre),
+        song(3, hidden, artist, genre, visibilityKey: 'a' * 64),
+        song(4, genreOnly, 'Other singer', genre),
+        song(5, artistOnly, artist, 'Folk'),
+      ],
+    );
+
+    Future<void> tap(Finder finder) async {
+      await tester.tap(finder);
+      await tester.pumpAndSettle();
+    }
+
+    final actions = find.byTooltip('Music actions');
+    await tap(find.text('Genres'));
+    await tap(find.text(genre));
+    expect(find.text('Play all'), findsOneWidget);
+    expect(find.text(hidden), findsOneWidget);
+    await tap(find.text(first));
+    final playing = player.queues.single;
+    expect(playing.tracks[playing.start].title, first);
+
+    await tap(actions);
+    final privateTrack =
+        library.visibleTracks.singleWhere((track) => track.title == hidden);
+    expect(await tester.runAsync(() => library.hideTrack(privateTrack)),
+        isNotNull);
+    await tester.pumpAndSettle();
+    await tap(find.text('Play next'));
+    expect(find.text(hidden), findsNothing);
+    await tap(actions);
+    await tap(find.text('Add to queue'));
+
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    await tap(find.text('Artists'));
+    await tap(find.text(artist));
+    expect(find.text('Play all'), findsOneWidget);
+    expect(find.text(hidden), findsNothing);
+    await tap(actions);
+    await tap(find.text('Play next'));
+    await tap(actions);
+    await tap(find.text('Add to queue'));
+
+    expect(player.queues, [playing]);
+    expect(player.copies.map((copy) => copy.next), [true, false, true, false]);
+    expect(player.copies.map((copy) => copy.titles), [
+      [first, second, genreOnly],
+      [first, second, genreOnly],
+      [first, second, artistOnly],
+      [first, second, artistOnly],
+    ]);
+  });
+
   testWidgets(
       'genre artist links use visible credits and preserve scroll on Back',
       (tester) async {
@@ -548,7 +796,8 @@ void main() {
 
     final guest = artistRow('guest soloist');
     final hidden = artistRow('hidden soloist');
-    final scrollable = find.byType(Scrollable);
+    final scrollable = find.descendant(
+        of: find.byType(ListView), matching: find.byType(Scrollable));
     await tester.scrollUntilVisible(hidden, 250, scrollable: scrollable);
     expect(hidden, findsOneWidget);
     expect(artistRow('house band'), findsOneWidget);
@@ -780,5 +1029,140 @@ void main() {
     expect(find.text('Opening song'), findsNothing);
     expect(find.text('Play all'), findsNothing);
     expect(player.queues, hasLength(2));
+  });
+
+  testWidgets('genre details stay beside scrolling songs on a wide tablet',
+      (tester) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(960, 640);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(tester.view.resetPhysicalSize);
+    const source = 'content://provider/tree/music';
+    final (:player, library: _, reopen: _) = await showLibrary(
+      tester,
+      source: source,
+      tracks: [
+        {
+          'uri': '$source/document/ambient',
+          'title': 'Unrelated track',
+          'genre': 'Ambient',
+        },
+        for (var index = 0; index < 32; index++)
+          {
+            'uri': '$source/document/jazz-$index',
+            'title': 'Jazz recording $index',
+            'artist': 'Quartet',
+            'genre': 'Jazz',
+          },
+      ],
+    );
+
+    await tester.tap(find.text('Genres'));
+    await tester.pumpAndSettle();
+    final title = find.text('Jazz');
+    await tester.tap(title);
+    await tester.pumpAndSettle();
+
+    final details = find.byKey(const ValueKey('music-collection-details-pane'));
+    final tracks = find.byType(ListView);
+    final playAll = find.text('Play all');
+    expect(find.descendant(of: details, matching: title), findsOneWidget);
+    expect(find.descendant(of: details, matching: playAll), findsOneWidget);
+    expect(
+        tester.getRect(details).right, lessThan(tester.getRect(tracks).left));
+    final scrollable =
+        find.descendant(of: tracks, matching: find.byType(Scrollable));
+    final position = tester.state<ScrollableState>(scrollable).position;
+    final titlePosition = tester.getTopLeft(title);
+    final actionPosition = tester.getTopLeft(playAll);
+
+    await tester.drag(tracks, const Offset(0, -260));
+    await tester.pumpAndSettle();
+    final offset = position.pixels;
+    expect(offset, greaterThan(0));
+    expect(tester.getTopLeft(title), titlePosition);
+    expect(tester.getTopLeft(playAll), actionPosition);
+
+    tester.view.physicalSize = const Size(640, 960);
+    await tester.pumpAndSettle();
+    expect(details, findsNothing);
+    expect(find.descendant(of: find.byType(AppBar), matching: title),
+        findsOneWidget);
+    expect(playAll.hitTestable(), findsOneWidget);
+    expect(tester.state<ScrollableState>(scrollable).position, same(position));
+    expect(position.pixels, closeTo(offset, 1));
+
+    tester.view.physicalSize = const Size(960, 640);
+    await tester.pumpAndSettle();
+    expect(find.descendant(of: details, matching: title), findsOneWidget);
+    expect(tester.state<ScrollableState>(scrollable).position, same(position));
+    expect(position.pixels, closeTo(offset, 1));
+    await tester.tap(playAll);
+    await tester.pumpAndSettle();
+    expect(player.queues.single.title, 'Jazz');
+    expect(player.queues.single.tracks, hasLength(32));
+    expect(player.queues.single.tracks.map((track) => track.title),
+        isNot(contains('Unrelated track')));
+  });
+
+  testWidgets('indexed playlist keeps its entries from phone to tablet',
+      (tester) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(390, 844);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(tester.view.resetPhysicalSize);
+    const source = 'content://media/external/audio/media';
+    const primary = 'content://media/external_primary/audio/media';
+    final (:player, library: _, reopen: _) = await showLibrary(
+      tester,
+      source: source,
+      tracks: [
+        {'uri': '$primary/1', 'title': 'Opening song'},
+        {'uri': '$primary/2', 'title': 'Looped song'},
+      ],
+      playlists: [
+        {
+          'id': 1,
+          'name': 'Road set',
+          'memberUris': ['$primary/2', '$primary/1', '$primary/2'],
+        },
+      ],
+    );
+
+    await tester.tap(find.text('Device playlists'));
+    await tester.pumpAndSettle();
+    final title = find.text('Road set');
+    await tester.tap(title);
+    await tester.pumpAndSettle();
+
+    final details = find.byKey(const ValueKey('music-collection-details-pane'));
+    final repeated = find.text('Looped song');
+    final opening = find.text('Opening song');
+    expect(details, findsNothing);
+    expect(find.descendant(of: find.byType(AppBar), matching: title),
+        findsOneWidget);
+    expect(find.text('Play all').hitTestable(), findsOneWidget);
+    expect(repeated.hitTestable(), findsNWidgets(2));
+    expect(tester.getTopLeft(repeated.first).dy,
+        lessThan(tester.getTopLeft(opening).dy));
+    expect(tester.getTopLeft(opening).dy,
+        lessThan(tester.getTopLeft(repeated.last).dy));
+
+    tester.view.physicalSize = const Size(960, 640);
+    await tester.pumpAndSettle();
+    expect(find.descendant(of: details, matching: title), findsOneWidget);
+    expect(repeated.hitTestable(), findsNWidgets(2));
+    expect(tester.getTopLeft(repeated.first).dy,
+        lessThan(tester.getTopLeft(opening).dy));
+    expect(tester.getTopLeft(opening).dy,
+        lessThan(tester.getTopLeft(repeated.last).dy));
+    await tester.tap(repeated.last);
+    await tester.pumpAndSettle();
+
+    final queue = player.queues.single;
+    expect(queue.title, 'Road set');
+    expect(queue.start, 2);
+    expect(queue.tracks.map((track) => track.uri),
+        ['$primary/2', '$primary/1', '$primary/2']);
   });
 }

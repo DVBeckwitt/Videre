@@ -4,11 +4,15 @@ import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' as app_globals;
 import 'package:clipious/music/models/local_music_artist.dart';
+import 'package:clipious/music/models/local_music_browse.dart';
 import 'package:clipious/music/models/local_music_track.dart';
+import 'package:clipious/music/models/music_artist_identity.dart';
 import 'package:clipious/music/models/on_device_music_entry.dart';
 import 'package:clipious/music/services/local_music_library.dart';
 import 'package:clipious/music/services/music_library_search.dart';
+import 'package:clipious/music/services/music_library_service.dart';
 import 'package:clipious/music/views/components/local_music_folder.dart';
+import 'package:clipious/music/views/components/music_fast_scroll.dart';
 import 'package:clipious/music/views/components/music_playing_device_artists.dart';
 import 'package:clipious/music/views/screens/music_device_artist.dart';
 import 'package:clipious/player/models/local_music_playback.dart';
@@ -22,6 +26,8 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../test_settings_cubit.dart';
+
+const _fastScroll = ValueKey('music-fast-scroll');
 
 class _App extends Cubit<AppState> implements AppCubit {
   _App() : super(AppState(0, null, HomeLayout(), profileId: db.profileId));
@@ -49,6 +55,8 @@ class _Player extends Cubit<PlayerState> implements PlayerCubit {
   String? title;
   int? start;
   bool? lastSongTap;
+  bool? lastRetainQueueOrder;
+  int playCalls = 0;
 
   void showTrack(LocalMusicTrack track) => emit(state.copyWith(
         offlineCurrentlyPlaying: localMusicPlaybackEntry(track, db.profileId),
@@ -66,10 +74,12 @@ class _Player extends Cubit<PlayerState> implements PlayerCubit {
       bool Function()? isCurrent,
       bool songTap = false}) async {
     if (isCurrent?.call() == false) return;
+    playCalls++;
     queue = tracks;
     title = queueTitle;
     start = startIndex;
     lastSongTap = songTap;
+    lastRetainQueueOrder = retainQueueOrder;
   }
 
   @override
@@ -296,6 +306,125 @@ void main() {
     expect(find.text('Album artist · Live Sessions'), findsNWidgets(2));
   });
 
+  testWidgets('artist detail sorts songs and plays the visible order',
+      (tester) async {
+    const track10 = 'Track 10';
+    const track2 = 'Track 2';
+    const middle = 'Middle';
+    const untagged = 'Untagged';
+    const alpha = 'Alpha';
+    const members = [track10, track2, middle, untagged, alpha];
+
+    rows = [
+      {
+        'uri': '$folder/document/1',
+        'title': track10,
+        'artist': 'Fixture Artist',
+        'album': 'Album A',
+        'releaseDate': '1991-03',
+        'durationMs': 1900,
+      },
+      {
+        'uri': '$folder/document/2',
+        'title': track2,
+        'artist': 'Fixture Artist',
+        'album': 'Album Z',
+        'originalReleaseDate': '2005',
+        'durationMs': 900,
+      },
+      {
+        'uri': '$folder/document/3',
+        'title': middle,
+        'artist': 'Fixture Artist',
+        'album': 'Album A',
+        'releaseDate': '1999-09-15',
+        'originalReleaseDate': '1988',
+        'durationMs': 1900,
+      },
+      {
+        'uri': '$folder/document/4',
+        'title': untagged,
+        'artist': 'Fixture Artist',
+      },
+      {
+        'uri': '$folder/document/5',
+        'title': alpha,
+        'artist': 'Fixture Artist',
+        'album': 'Album B',
+        'releaseDate': '1996',
+        'durationMs': 3100,
+      },
+    ];
+    await show(
+        tester,
+        MusicDeviceArtistPage(
+          selectionId: 'original',
+          artistKey: 'fixture artist',
+          library: library,
+        ));
+
+    Future<void> sortBy(String label) async {
+      await tester.tap(find.byTooltip('Sort by'));
+      await tester.pumpAndSettle();
+      expect(find.text('Artist'), findsNothing);
+      await tester.tap(find.widgetWithText(
+          CheckedPopupMenuItem<LocalMusicDetailSongOrder>, label));
+      await tester.pumpAndSettle();
+    }
+
+    Future<void> expectOrderAndPlay(List<String> expected,
+        {bool retainQueueOrder = true}) async {
+      final visible = [...members]..sort((a, b) => tester
+          .getCenter(find.text(a).hitTestable())
+          .dy
+          .compareTo(tester.getCenter(find.text(b).hitTestable()).dy));
+      expect(visible, expected);
+      await tester.tap(find.text('Play all'));
+      await tester.pumpAndSettle();
+      expect(player.queue.map((entry) => entry.title), visible);
+      expect(player.start, 0);
+      expect(player.lastSongTap, isFalse);
+      expect(player.lastRetainQueueOrder, retainQueueOrder);
+    }
+
+    await expectOrderAndPlay(members, retainQueueOrder: false);
+    player.showTrack(player.queue.first.deviceTrack!);
+    await tester.pumpAndSettle();
+    final playingQueue = player.queue;
+    final playingState = player.state;
+    final playCalls = player.playCalls;
+    await sortBy('Title');
+    expect(player.playCalls, playCalls);
+    expect(player.queue, same(playingQueue));
+    expect(player.state, same(playingState));
+    await expectOrderAndPlay([alpha, middle, track2, track10, untagged]);
+
+    await sortBy('Album');
+    await expectOrderAndPlay([middle, track10, alpha, track2, untagged]);
+    await sortBy('Release date');
+    await expectOrderAndPlay([track10, alpha, middle, track2, untagged]);
+    await sortBy('Duration');
+    await expectOrderAndPlay([track2, middle, track10, alpha, untagged]);
+
+    await sortBy('Descending');
+    const durationDescending = [alpha, middle, track10, track2, untagged];
+    await expectOrderAndPlay(durationDescending);
+    await tester.tap(find.text(track2));
+    await tester.pumpAndSettle();
+    expect(player.queue.map((entry) => entry.title), durationDescending);
+    expect(player.start, 3);
+    expect(player.lastSongTap, isTrue);
+
+    await sortBy('Release date');
+    await expectOrderAndPlay([track2, middle, alpha, track10, untagged]);
+    await sortBy('Album');
+    await expectOrderAndPlay([track2, alpha, middle, track10, untagged]);
+    await sortBy('Title');
+    await expectOrderAndPlay([untagged, track10, track2, middle, alpha]);
+    await sortBy('Default order');
+    await expectOrderAndPlay(members, retainQueueOrder: false);
+  });
+
   testWidgets('Artists index remembers and applies explicit album credits',
       (tester) async {
     // Keep The Ensemble as an album-only credit.
@@ -350,6 +479,127 @@ void main() {
     expect(find.text('Guest Band'), findsOneWidget);
   });
 
+  for (final (page, kind) in const [
+    ('Artists', 'Artist'),
+    ('Genres', 'Genre')
+  ]) {
+    testWidgets('$page jump to sections for each sort with scaled text',
+        (tester) async {
+      final previousTv = app_globals.isTv;
+      app_globals.isTv = true;
+      addTearDown(() => app_globals.isTv = previousTv);
+      tester.platformDispatcher.textScaleFactorTestValue = 2;
+      addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+      const groups = [('A', 1, 4500000), ('M', 2, 300000), ('Z', 3, 30000)];
+      rows = [
+        for (final (initial, count, durationMs) in groups)
+          for (var offset = 0; offset < 12; offset++)
+            for (var track = 0; track < count; track++)
+              {
+                'uri': '$folder/document/$initial-$offset-$track',
+                'title': 'Song $offset-$track',
+                'artist': '$initial Artist $offset',
+                'genre': '$initial Genre $offset',
+                'durationMs': durationMs,
+              },
+      ];
+      final artists = page == 'Artists';
+      if (artists) {
+        final aliases = MusicLibraryService.forProfile(db, db.profileId);
+        final saved = await tester.runAsync(() => aliases.setArtistAlias(
+              MusicArtistIdentity.device('a artist 0'),
+              'The Yellow Alias',
+              isCurrent: () => true,
+            ));
+        expect(saved, isTrue);
+      }
+
+      await show(
+          tester, Scaffold(body: LocalMusicFolder.library(library: library)));
+      await tester.tap(find.text(page).hitTestable());
+      await tester.pumpAndSettle();
+
+      final jump = find.byKey(_fastScroll);
+      Finder option(String label) => find.descendant(
+          of: find.byType(SimpleDialog), matching: find.text(label));
+
+      Future<void> sortBy(String choice) async {
+        await tester.tap(find.byTooltip('Sort by'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.widgetWithText(
+            CheckedPopupMenuItem<Future<void> Function()>, choice));
+        await tester.pumpAndSettle();
+      }
+
+      Future<void> jumpTo(String label) async {
+        await tester.tap(jump);
+        await tester.pumpAndSettle();
+        await tester.tap(option(label));
+        await tester.pumpAndSettle();
+      }
+
+      final firstRow = find.text(artists ? 'A Artist 1' : 'A Genre 0');
+      final nameTarget = find.text(artists ? 'The Yellow Alias' : 'Z Genre 0');
+      expect(Focus.of(tester.element(firstRow)).hasFocus, isTrue);
+      expect(nameTarget.hitTestable(), findsNothing);
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+      await tester.pumpAndSettle();
+      expect(Focus.of(tester.element(find.text('Jump to section'))).hasFocus,
+          isTrue);
+      await tester.sendKeyEvent(LogicalKeyboardKey.select);
+      await tester.pumpAndSettle();
+      // The name sort strips the leading article from `A Genre`.
+      final firstLabel = artists ? 'A' : 'G';
+      expect(Focus.of(tester.element(option(firstLabel))).hasFocus, isTrue);
+      for (var step = 0; step < 2; step++) {
+        await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+        await tester.pumpAndSettle();
+      }
+      final nameLabel = artists ? 'Y' : 'Z';
+      expect(Focus.of(tester.element(option(nameLabel))).hasFocus, isTrue);
+      await tester.sendKeyEvent(LogicalKeyboardKey.select);
+      await tester.pumpAndSettle();
+      expect(nameTarget.hitTestable(), findsOneWidget);
+
+      await sortBy('Song count');
+      await sortBy('Descending');
+      final medium = find.text('M $kind 0');
+      expect(medium.hitTestable(), findsNothing);
+      await jumpTo('2 songs');
+      expect(medium.hitTestable(), findsOneWidget);
+
+      await sortBy('Duration');
+      final fewMinutes = find.text('Z $kind 0');
+      expect(fewMinutes.hitTestable(), findsNothing);
+      await jumpTo('01:30');
+      expect(fewMinutes.hitTestable(), findsOneWidget);
+      await tester.tap(fewMinutes.hitTestable());
+      await tester.pumpAndSettle();
+      expect(find.widgetWithText(AppBar, 'Z $kind 0'), findsOneWidget);
+      expect(find.byType(MusicFastScroll), findsNothing);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  testWidgets('short and empty Genres indexes have no jump control',
+      (tester) async {
+    rows = [
+      {...rows.first, 'genre': 'Ambient'},
+    ];
+    await show(
+        tester, Scaffold(body: LocalMusicFolder.library(library: library)));
+    await tester.tap(find.text('Genres').hitTestable());
+    await tester.pumpAndSettle();
+    expect(find.text('Ambient'), findsOneWidget);
+    expect(find.byKey(_fastScroll), findsNothing);
+
+    rows.clear();
+    await tester.runAsync(() => library.refresh(force: true));
+    await tester.pumpAndSettle();
+    expect(find.text('No results found.'), findsOneWidget);
+    expect(find.byKey(_fastScroll), findsNothing);
+  });
+
   testWidgets('TV can clear the Artists index filter when no credits match',
       (tester) async {
     final previousTv = app_globals.isTv;
@@ -361,6 +611,7 @@ void main() {
     await show(tester,
         MusicDeviceArtistIndexPage(selectionId: 'original', library: library));
 
+    expect(find.byKey(_fastScroll), findsNothing);
     final artist = find.text('Untagged Performer');
     final filterLabel = find.text('Show only album artists');
     expect(Focus.of(tester.element(artist)).hasFocus, isTrue);
@@ -371,6 +622,7 @@ void main() {
     await tester.sendKeyEvent(LogicalKeyboardKey.select);
     await tester.pumpAndSettle();
     expect(find.text('No results found.'), findsOneWidget);
+    expect(find.byKey(_fastScroll), findsNothing);
     expect(artist, findsNothing);
     expect(Focus.of(tester.element(filterLabel)).hasFocus, isTrue);
 
