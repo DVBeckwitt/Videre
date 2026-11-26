@@ -4055,7 +4055,7 @@ void main() {
       final songs =
           assignPlaybackQueueIds([next, song, zulu, repeated, alpha, repeated]);
       final ids = songs.map(playbackQueueId).toList();
-      await settings.setShuffle(true);
+      await tester.runAsync(() => settings.setShuffle(true));
       await player.seed(player.state.copyWith(
           videos: songs,
           currentlyPlaying: songs[1],
