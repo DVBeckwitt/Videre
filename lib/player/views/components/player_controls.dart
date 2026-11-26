@@ -1173,7 +1173,7 @@ class _PlayerControlsState extends State<PlayerControls> {
                             video: currentlyPlaying,
                             position: playerState.position,
                             duration: playerState.duration,
-                            width: min(160, constraints.maxWidth * 0.4),
+                            width: min(320, constraints.maxWidth * 0.8),
                           )),
                         ),
                       if (!isMini &&

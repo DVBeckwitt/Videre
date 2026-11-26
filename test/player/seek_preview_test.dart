@@ -31,13 +31,21 @@ import '../test_app_cubit.dart';
 import '../test_player_cubit.dart';
 import '../test_settings_cubit.dart';
 
+const _firstSheetUrl = 'https://instance.example/sb/i/id/L2/M0.png';
+const _secondSheetUrl = 'https://instance.example/sb/i/id/L2/M1.png';
+
 class _SpriteCache extends cache.BaseCacheManager {
   final requests =
       <({String url, String? key, Map<String, String>? headers})>[];
-  bool fail = false;
-  final file = MemoryFileSystem.test().file('sprite.png')
+  final shortSheets = <String>{};
+  final failedSheets = <String>{};
+  final _fileSystem = MemoryFileSystem.test();
+  late final _fullSprite = _fileSystem.file('sprite.png')
     ..writeAsBytesSync(base64Decode(
         'iVBORw0KGgoAAAANSUhEUgAAACAAAAASCAIAAAC1qksFAAAAKklEQVR4nGP4z8BAEiJNNRlo1IJRC4ajBaTq+P+fgSQ0asGoBaMW/GcAAMouzU/PxmgLAAAAAElFTkSuQmCC'));
+  late final _shortSprite = _fileSystem.file('partial-sprite.png')
+    ..writeAsBytesSync(base64Decode(
+        'iVBORw0KGgoAAAANSUhEUgAAACAAAAAJCAIAAADcu7ldAAAAGUlEQVR4nGP4z8BAEiJNNRlo1IJRC4ahBQDUcB7w0UWv5gAAAABJRU5ErkJggg=='));
 
   @override
   Stream<cache.FileResponse> getFileStream(String url,
@@ -45,7 +53,8 @@ class _SpriteCache extends cache.BaseCacheManager {
       Map<String, String>? headers,
       bool withProgress = false}) async* {
     requests.add((url: url, key: key, headers: headers));
-    if (fail) throw StateError('unavailable storyboard');
+    if (failedSheets.contains(url)) throw StateError('unavailable storyboard');
+    final file = shortSheets.contains(url) ? _shortSprite : _fullSprite;
     yield cache.FileInfo(file, cache.FileSource.Cache, DateTime.utc(2100), url);
   }
 
@@ -128,64 +137,122 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  for (final shortSheet in [false, true]) {
-    testWidgets(
-        'crops and reuses ${shortSheet ? 'a partial final' : 'a full'} sprite sheet',
-        (tester) async {
-      if (shortSheet) {
-        cacheManager.file.writeAsBytesSync(base64Decode(
-            'iVBORw0KGgoAAAANSUhEUgAAACAAAAAJCAIAAADcu7ldAAAAGUlEQVR4nGP4z8BAEiJNNRlo1IJRC4ahBQDUcB7w0UWv5gAAAABJRU5ErkJggg=='));
-      }
-      final previewVideo = shortSheet
-          ? video.copyWith(storyboards: [
-              Storyboard.fromJson({...board.toJson(), 'count': 2})
-            ])
-          : video;
-      const boundaryKey = ValueKey('preview-image');
-      Future<void> preview(int seconds) async {
-        await tester.pumpWidget(host(RepaintBoundary(
-            key: boundaryKey,
-            child: SeekPreview(
-                video: previewVideo,
-                position: Duration(seconds: seconds),
-                duration: const Duration(seconds: 40)))));
-        await settleImage(tester);
-      }
+  const previewBoundaryKey = ValueKey('preview-image');
 
-      Future<List<int>?> pixel() => tester.runAsync(() async {
-            final boundary = tester
-                .renderObject<RenderRepaintBoundary>(find.byKey(boundaryKey));
-            final image = await boundary.toImage(pixelRatio: 1);
-            final bytes =
-                (await image.toByteData(format: ui.ImageByteFormat.rawRgba))!;
-            final offset = (49 * image.width + 84) * 4;
-            final color =
-                List<int>.generate(3, (i) => bytes.getUint8(offset + i));
-            image.dispose();
-            return color;
-          });
-      await preview(0);
-      expect(await pixel(), [255, 0, 0]);
-      await preview(10);
-      expect(await pixel(), [0, 255, 0]);
-      if (!shortSheet) {
-        await preview(20);
-        expect(await pixel(), [0, 0, 255]);
-      }
-      expect(cacheManager.requests, hasLength(1));
-      expect(cacheManager.requests.single.url,
-          'https://instance.example/sb/i/id/L2/M0.png');
-      expect(cacheManager.requests.single.headers, {
-        ...server.customHeaders,
-        gatewayContextHeader: GatewayRequestContext.forAccount(
-                server.profileId, server.accountId, server.url)!
-            .encoded,
-      });
-      expect(cacheManager.requests.single.key,
-          invidiousImageCacheKey(cacheManager.requests.single.url, server));
-      await tester.pumpWidget(const SizedBox.shrink());
-    });
+  Future<void> showPreview(WidgetTester tester, Video previewVideo, int seconds,
+      {int duration = 40}) async {
+    await tester.pumpWidget(host(RepaintBoundary(
+        key: previewBoundaryKey,
+        child: SeekPreview(
+            video: previewVideo,
+            position: Duration(seconds: seconds),
+            duration: Duration(seconds: duration)))));
+    await settleImage(tester);
   }
+
+  Future<void> expectTiles(
+      WidgetTester tester, List<List<int>?> expectedColors) async {
+    final tiles = find.byWidgetPredicate(
+        (widget) => widget is RawImage && widget.image != null);
+    final expectedCount = expectedColors.nonNulls.length;
+    // A neighboring sheet starts loading after the current tile is decoded.
+    for (var i = 0; i < 10 && tiles.evaluate().length < expectedCount; i++) {
+      await settleImage(tester);
+    }
+    expect(tiles, findsNWidgets(expectedCount));
+
+    final colors = await tester.runAsync(() async {
+      final boundary = tester
+          .renderObject<RenderRepaintBoundary>(find.byKey(previewBoundaryKey));
+      final image = await boundary.toImage(pixelRatio: 1);
+      final bytes =
+          (await image.toByteData(format: ui.ImageByteFormat.rawRgba))!;
+      final y = image.height ~/ 3;
+      final colors = [
+        for (var slot = 0; slot < 3; slot++)
+          [
+            for (var channel = 0; channel < 3; channel++)
+              bytes.getUint8(
+                  (y * image.width + (2 * slot + 1) * image.width ~/ 6) * 4 +
+                      channel),
+          ],
+      ];
+      image.dispose();
+      return colors;
+    });
+    for (var slot = 0; slot < 3; slot++) {
+      final expected = expectedColors[slot];
+      expect(colors![slot], expected ?? everyElement(lessThan(64)),
+          reason: 'filmstrip tile ${slot + 1}');
+    }
+  }
+
+  const red = [255, 0, 0];
+  const green = [0, 255, 0];
+  const blue = [0, 0, 255];
+  const yellow = [255, 255, 0];
+
+  testWidgets('centers the current tile and reuses its sheet for nearby tiles',
+      (tester) async {
+    await showPreview(tester, video, 0);
+    await expectTiles(tester, [null, red, green]);
+    await showPreview(tester, video, 10);
+    await expectTiles(tester, [red, green, blue]);
+    await showPreview(tester, video, 20);
+    await expectTiles(tester, [green, blue, yellow]);
+    await showPreview(tester, video, 40);
+    await expectTiles(tester, [blue, yellow, null]);
+
+    expect(cacheManager.requests, hasLength(1));
+    expect(cacheManager.requests.single.url, _firstSheetUrl);
+    expect(cacheManager.requests.single.headers, {
+      ...server.customHeaders,
+      gatewayContextHeader: GatewayRequestContext.forAccount(
+              server.profileId, server.accountId, server.url)!
+          .encoded,
+    });
+    expect(cacheManager.requests.single.key,
+        invidiousImageCacheKey(_firstSheetUrl, server));
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  final twoSheetVideo = video.copyWith(lengthSeconds: 60, storyboards: [
+    Storyboard.fromJson({...board.toJson(), 'count': 6, 'storyboardCount': 2}),
+  ]);
+
+  testWidgets('cropped tiles cross into a partial final sheet', (tester) async {
+    cacheManager.shortSheets.add(_secondSheetUrl);
+    await showPreview(tester, twoSheetVideo, 30, duration: 60);
+    await expectTiles(tester, [blue, yellow, red]);
+    await showPreview(tester, twoSheetVideo, 40, duration: 60);
+    await expectTiles(tester, [yellow, red, green]);
+    await showPreview(tester, twoSheetVideo, 60, duration: 60);
+    await expectTiles(tester, [red, green, null]);
+
+    expect(cacheManager.requests.map((request) => request.url),
+        unorderedEquals([_firstSheetUrl, _secondSheetUrl]));
+    expect(
+        cacheManager.requests.map((request) => request.key),
+        unorderedEquals([
+          invidiousImageCacheKey(_firstSheetUrl, server),
+          invidiousImageCacheKey(_secondSheetUrl, server),
+        ]));
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('a missing neighbor sheet keeps the usable current preview',
+      (tester) async {
+    cacheManager.failedSheets.add(_secondSheetUrl);
+    await showPreview(tester, twoSheetVideo, 30, duration: 60);
+    await expectTiles(tester, [blue, yellow, null]);
+    expect(find.text('00:30'), findsOneWidget);
+
+    await showPreview(tester, twoSheetVideo, 40, duration: 60);
+    expect(find.text('00:40'), findsOneWidget);
+    expect(tester.getSize(find.byType(SeekPreview)).height, lessThan(50));
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
 
   testWidgets('missing and failed storyboards retain the time without crashing',
       (tester) async {
@@ -195,7 +262,7 @@ void main() {
         duration: Duration(seconds: 40))));
     expect(find.text('00:10'), findsOneWidget);
     expect(cacheManager.requests, isEmpty);
-    cacheManager.fail = true;
+    cacheManager.failedSheets.add(_firstSheetUrl);
     await tester.pumpWidget(host(const SeekPreview(
         video: video,
         position: Duration(seconds: 10),
@@ -240,9 +307,8 @@ void main() {
         duration: const Duration(seconds: 40))));
     await settleImage(tester);
     expect(cacheManager.requests, hasLength(1));
-    expect(cacheManager.requests.single.url,
-        'https://instance.example/sb/i/id/L2/M0.png');
-    expect(find.byType(ClipRRect), findsOneWidget);
+    expect(cacheManager.requests.single.url, _firstSheetUrl);
+    expect(find.byType(ClipRRect), findsWidgets);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
   });

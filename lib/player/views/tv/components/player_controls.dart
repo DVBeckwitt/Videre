@@ -416,7 +416,7 @@ class TvPlayerControls extends StatelessWidget {
                         video: currentlyPlaying,
                         position: playerState.seekPreviewPosition!,
                         duration: player.duration,
-                        width: 240,
+                        width: 480,
                       )),
                     ),
                   Positioned(

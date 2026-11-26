@@ -77,14 +77,23 @@ class Storyboard {
         sorted.lastOrNull;
   }
 
-  StoryboardFrame? frameAt(Duration position, Duration duration) {
+  StoryboardFrame? frameAt(Duration position, Duration duration,
+      {int offset = 0}) {
     // Older instances can leave the evenly spaced overview interval at zero.
-    final step = interval > 0 ? interval : duration.inMilliseconds ~/ count;
+    final length = duration.inMilliseconds;
+    final step = interval > 0 ? interval : length ~/ count;
     if (step <= 0) return null;
     final perSheet = columns * rows;
     // Cap before multiplying: malformed counts must not overflow the limit.
-    final frames = sheets > count ~/ perSheet ? count : perSheet * sheets;
-    final index = (position.inMilliseconds ~/ step).clamp(0, frames - 1);
+    var frames = sheets > count ~/ perSheet ? count : perSheet * sheets;
+    if (length > 0) {
+      final playableFrames = (length - 1) ~/ step + 1;
+      if (playableFrames < frames) frames = playableFrames;
+    }
+    final center = (position.inMilliseconds ~/ step).clamp(0, frames - 1);
+    // Resolve neighbors from the clamped center without repeating edge frames.
+    if (offset < -center || offset >= frames - center) return null;
+    final index = center + offset;
     final sheet = index ~/ perSheet;
     final url = templateUrl.replaceAll(
         RegExp(r'\$M|%24M', caseSensitive: false), '$sheet');
