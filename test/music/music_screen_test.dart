@@ -1,7 +1,8 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:ui' show SemanticsAction, SemanticsRole;
+import 'dart:ui' show SemanticsAction, SemanticsRole, TextBox;
 
+import 'package:auto_route/auto_route.dart' show AutoRoute, DeepLink;
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/content_filter/community_filter.dart';
 import 'package:clipious/content_filter/community_filter_widgets.dart';
@@ -48,6 +49,7 @@ import 'package:clipious/player/models/playback_session.dart';
 import 'package:clipious/playlists/models/playlist.dart';
 import 'package:clipious/playlists/models/playlist_reference.dart';
 import 'package:clipious/playlists/services/playlist_load_session.dart';
+import 'package:clipious/router.dart';
 import 'package:clipious/service.dart' show Service, VideoLoadObserver;
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/settings/models/db/settings.dart';
@@ -63,6 +65,7 @@ import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:clipious/videos/models/sponsor_segment.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show RenderParagraph;
 import 'package:flutter/semantics.dart' show CustomSemanticsAction;
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -276,6 +279,15 @@ MusicCatalogSearchPage _page(List<MusicCatalogSearchHit> hits,
         {List<String>? rawKeys}) =>
     MusicCatalogSearchPage(
         hits: hits, rawKeys: rawKeys ?? [for (final hit in hits) hit.key]);
+
+class _ArtistBiographyRouter extends AppRouter {
+  _ArtistBiographyRouter() : super(hasServer: true);
+
+  @override
+  List<AutoRoute> get routes => [
+        AutoRoute(page: MusicRoute.page, initial: true),
+      ];
+}
 
 class _Downloads extends Cubit<DownloadManagerState>
     implements DownloadManagerCubit {
@@ -521,7 +533,9 @@ void main() {
   });
 
   Future<void> show(WidgetTester tester,
-      {Widget screen = const MusicScreen(), _Downloads? downloads}) async {
+      {Widget screen = const MusicScreen(),
+      _Downloads? downloads,
+      Widget? appShell}) async {
     await tester.pumpWidget(MultiBlocProvider(
       providers: [
         BlocProvider<AppCubit>.value(value: app),
@@ -530,11 +544,12 @@ void main() {
         if (downloads != null)
           BlocProvider<DownloadManagerCubit>.value(value: downloads),
       ],
-      child: MaterialApp(
-        localizationsDelegates: AppLocalizations.localizationsDelegates,
-        supportedLocales: AppLocalizations.supportedLocales,
-        home: screen,
-      ),
+      child: appShell ??
+          MaterialApp(
+            localizationsDelegates: AppLocalizations.localizationsDelegates,
+            supportedLocales: AppLocalizations.supportedLocales,
+            home: screen,
+          ),
     ));
     await tester.pump();
   }
@@ -3765,6 +3780,142 @@ void main() {
     expect(find.text('Public playlist'), findsOneWidget);
     expect(catalog.playlistRequests, ['PLpublic', 'PLpublic']);
   });
+
+  List<TextBox> biographyLinkBoxes(
+    RenderParagraph paragraph,
+    String linkLabel,
+  ) {
+    final start = paragraph.text.toPlainText().indexOf(linkLabel);
+    expect(start, isNonNegative);
+    return paragraph.getBoxesForSelection(
+      TextSelection(baseOffset: start, extentOffset: start + linkLabel.length),
+    );
+  }
+
+  testWidgets('an external link is tappable in the artist biography preview', (
+    tester,
+  ) async {
+    const url = 'https://www.example.com/artist';
+    const urlLabel = 'example.com/artist';
+    const artistName = 'https://example.com/name';
+    const biography = 'Official site: $urlLabel';
+    catalog.pendingArtist = Completer<MusicArtistPage>()
+      ..complete(
+        const MusicArtistPage(
+          artist: MusicArtist(id: 'UCartist', name: artistName),
+          description: 'Official site: $url',
+        ),
+      );
+    await show(tester, screen: const MusicScreen(artistId: 'UCartist'));
+    await tester.pumpAndSettle();
+    expect(find.text('About'), findsNothing);
+    expect(tester.widget<Text>(find.text(artistName)).data, artistName);
+
+    final paragraph = tester.renderObject<RenderParagraph>(
+      find.text(biography),
+    );
+    final boxes = biographyLinkBoxes(paragraph, urlLabel);
+    await tester.tapAt(paragraph.localToGlobal(boxes.first.toRect().center));
+    await tester.pumpAndSettle();
+    final dialog = find.byType(AlertDialog);
+    final locals = AppLocalizations.of(tester.element(dialog))!;
+    expect(find.text(locals.externalLinkTitle), findsOneWidget);
+    expect(
+      find.descendant(of: dialog, matching: find.text(url)),
+      findsOneWidget,
+    );
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(dialog, findsNothing);
+    expect(find.text(artistName), findsOneWidget);
+    expect(find.text(biography), findsOneWidget);
+  });
+
+  for (final expanded in [false, true]) {
+    testWidgets(
+      'artist biography opens Music from the ${expanded ? 'expanded text' : 'preview'}',
+      (tester) async {
+        const destination = MusicArtist(
+          id: 'UCabcdefghijklmnopqrstuv',
+          name: 'Linked artist',
+        );
+        const server = Server(url: 'https://instance.example', inUse: true);
+        const external = 'https://example.com/artist';
+        final link = 'https://music.youtube.com/channel/${destination.id}';
+        final linkLabel = 'https://instance.example/channel/${destination.id}';
+        final lines = [
+          'Artist biography',
+          if (expanded) external,
+          if (expanded)
+            for (var i = 1; i < 8; i++) 'Biography line $i',
+          link,
+        ];
+        catalog.pendingArtist = Completer<MusicArtistPage>()
+          ..complete(
+            MusicArtistPage(artist: artist, description: lines.join('\n')),
+          );
+        await tester.runAsync(() => db.upsertServer(server));
+        app.setServer(server);
+        final router = appRouter = _ArtistBiographyRouter();
+        addTearDown(router.dispose);
+        await show(
+          tester,
+          appShell: MaterialApp.router(
+            localizationsDelegates: AppLocalizations.localizationsDelegates,
+            supportedLocales: AppLocalizations.supportedLocales,
+            routerConfig: router.config(
+              deepLinkBuilder: (_) =>
+                  DeepLink([MusicRoute(artistId: artist.id)]),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        final about = find.text('About');
+        final biography = find.textContaining('Artist biography');
+        var paragraph = tester.renderObject<RenderParagraph>(biography);
+        if (expanded) {
+          expect(paragraph.didExceedMaxLines, isTrue);
+          expect(biographyLinkBoxes(paragraph, linkLabel), isEmpty);
+          Focus.of(tester.element(about)).requestFocus();
+          await tester.pump();
+          await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+          await tester.pumpAndSettle();
+          paragraph = tester.renderObject<RenderParagraph>(
+            find.descendant(of: find.byType(AlertDialog), matching: biography),
+          );
+          expect(paragraph.didExceedMaxLines, isFalse);
+          final externalBox =
+              biographyLinkBoxes(paragraph, 'example.com/artist').first;
+          await tester
+              .tapAt(paragraph.localToGlobal(externalBox.toRect().center));
+          await tester.pumpAndSettle();
+          expect(find.text(external), findsOneWidget);
+          await tester.binding.handlePopRoute();
+          await tester.pumpAndSettle();
+          expect(find.byType(AlertDialog), findsOneWidget);
+          expect(paragraph.attached, isTrue);
+        } else {
+          expect(about, findsNothing);
+        }
+
+        catalog.pendingArtist = Completer<MusicArtistPage>()
+          ..complete(const MusicArtistPage(artist: destination));
+        final boxes = biographyLinkBoxes(paragraph, linkLabel);
+        await tester.tapAt(
+          paragraph.localToGlobal(boxes.first.toRect().center),
+        );
+        await tester.pumpAndSettle();
+        expect(find.text(destination.name), findsOneWidget);
+        expect(catalog.artistRequests, [artist.id, destination.id]);
+        await tester.binding.handlePopRoute();
+        await tester.pumpAndSettle();
+        expect(find.byType(AlertDialog), findsNothing);
+        expect(find.text(artist.name), findsOneWidget);
+        expect(biography, findsOneWidget);
+      },
+    );
+  }
 
   testWidgets('artist uploads can retry independently of releases and bio',
       (tester) async {
