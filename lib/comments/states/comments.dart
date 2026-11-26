@@ -15,6 +15,31 @@ class CommentsCubit extends Cubit<CommentsState> {
     if (loadInitial) onReady();
   }
 
+  factory CommentsCubit.forVideo(
+    Video video, {
+    String? continuation,
+    String? source,
+    String? sortBy,
+    VideoComments? initialPage,
+  }) {
+    final initial = CommentsState.init(
+      video: video,
+      continuation: continuation,
+      source: source,
+      sortBy: sortBy,
+    );
+    return CommentsCubit(
+      initialPage == null
+          ? initial
+          : initial.copyWith(
+              comments: initialPage,
+              continuation: initialPage.continuation,
+              loadingComments: false,
+            ),
+      loadInitial: initialPage == null,
+    );
+  }
+
   void onReady() {
     getComments();
   }

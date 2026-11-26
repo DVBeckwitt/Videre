@@ -232,6 +232,15 @@
   "@loadMore": {
     "description": "CTA to load more"
   },
+  "timedCommentsSorting": "Timed",
+  "@timedCommentsSorting": {
+    "description": "Watch comments filter for comments with video timestamps."
+  },
+  "followTimedComments": "Follow playback",
+  "pauseTimedCommentsFollow": "Pause follow",
+  "timedCommentsPartialCoverage": "Uses loaded Top comments from your provider. More comments are available.",
+  "timedCommentsCoverage": "Uses Top comments available from your provider.",
+  "noTimedComments": "No valid timestamps in the loaded comments.",
   "topSorting": "Top",
   "@topSorting": {
     "description": "Content sorting: top"

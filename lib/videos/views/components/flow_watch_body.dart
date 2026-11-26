@@ -98,6 +98,35 @@ class FlowWatchBody extends StatelessWidget {
     }
   }
 
+  void _openComments(BuildContext context, Widget comments) {
+    final player = context.read<PlayerCubit>();
+    if (inPlayer && player.state.currentlyPlaying?.videoId != video.videoId) {
+      return;
+    }
+
+    // The wide Watch pane already closes when its queue occurrence changes.
+    final panel = inPlayer && onOpenPanel == null
+        ? BlocListener<PlayerCubit, PlayerState>(
+            bloc: player,
+            listenWhen: (_, state) =>
+                state.currentlyPlaying?.videoId != video.videoId,
+            listener: (context, _) {
+              final route = ModalRoute.of(context);
+              if (route == null || !route.isActive) return;
+              if (route.isCurrent) {
+                route.navigator?.pop();
+              } else {
+                route.navigator?.removeRoute(route);
+              }
+            },
+            child: comments,
+          )
+        : comments;
+
+    _openPanel(context, AppLocalizations.of(context)!.comments, panel,
+        scrollable: false);
+  }
+
   void _openChapters(BuildContext context, List<VideoChapter> chapters) {
     final player = context.read<PlayerCubit>();
     final generation = player.playbackOccurrenceRevision;
@@ -339,8 +368,7 @@ class FlowWatchBody extends StatelessWidget {
             _FlowCommentsPreview(
               key: ValueKey(video.videoId),
               video: video,
-              onOpen: (context, comments) =>
-                  _openPanel(context, locals.comments, comments),
+              onOpen: _openComments,
             ),
             if (showRelated) ...[
               const SizedBox(height: 14),

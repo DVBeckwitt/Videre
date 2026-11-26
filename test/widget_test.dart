@@ -4035,6 +4035,37 @@ void main() {
     });
   }
 
+  testWidgets('phone Watch closes Timed comments when the video changes',
+      (tester) async {
+    final videos = (globals.service as _TestService).videos.take(2).toList();
+    final playerState = PlayerState.init(videos).copyWith(
+      currentlyPlaying: videos.first,
+      isMini: false,
+      isHidden: false,
+      selectedFullScreenIndex: 0,
+      top: 0,
+    );
+    await _pumpHomepage(
+      tester,
+      const Size(390, 844),
+      createPlayer: (settings) => _QueueSelectionPlayer(playerState, settings),
+    );
+    final player =
+        tester.element(find.byType(ExpandedPlayer)).read<PlayerCubit>();
+    await tester.tap(find.byKey(const ValueKey('watch-open-comments')));
+    await tester.pumpAndSettle();
+    final timed = find.widgetWithText(ChoiceChip, 'Timed');
+    await tester.tap(timed);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('timed-comments-list')), findsOneWidget);
+
+    await player.skipToVideo(1);
+    await tester.pumpAndSettle();
+    expect(player.state.currentlyPlaying?.videoId, videos.last.videoId);
+    expect(timed, findsNothing);
+    expect(player.state.isMini, isFalse);
+  });
+
   testWidgets('Android Back closes comments before minimizing playback',
       (tester) async {
     await _pumpExpandedPlayer(tester, const Size(390, 844), selectedIndex: 0);
