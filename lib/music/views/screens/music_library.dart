@@ -55,6 +55,7 @@ import 'package:clipious/music/views/components/music_playlist_hidden_songs.dart
 import 'package:clipious/music/views/components/music_playlist_undo.dart';
 import 'package:clipious/music/views/components/music_song_selection_bar.dart';
 import 'package:clipious/music/views/components/music_status_title.dart';
+import 'package:clipious/music/views/components/music_voice_filter.dart';
 import 'package:clipious/music/views/components/takeout_import_dialog.dart';
 import 'package:clipious/music/views/screens/music.dart';
 import 'package:clipious/music/views/screens/music_history.dart';
@@ -765,10 +766,9 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
     required FocusNode focusNode,
     required VoidCallback onQueryChanged,
     bool compact = false,
-  }) =>
-      Padding(
-        padding: EdgeInsetsDirectional.fromSTEB(16, 4, compact ? 0 : 16, 8),
-        child: ValueListenableBuilder(
+    Object? voiceScope,
+  }) {
+    Widget field(Widget? microphone) => ValueListenableBuilder(
           valueListenable: controller,
           builder: (context, input, _) => TextField(
             key: key,
@@ -779,7 +779,8 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
             decoration: InputDecoration(
               isDense: true,
               labelText: label,
-              prefixIcon: compact ? null : const Icon(Icons.search),
+              prefixIcon:
+                  microphone ?? (compact ? null : const Icon(Icons.search)),
               suffixIcon: input.text.isEmpty
                   ? null
                   : IconButton(
@@ -794,15 +795,29 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                     ),
             ),
           ),
-        ),
-      );
+        );
+    return Padding(
+      padding: EdgeInsetsDirectional.fromSTEB(16, 4, compact ? 0 : 16, 8),
+      child: voiceScope == null
+          ? field(null)
+          : MusicVoiceFilter(
+              controller: controller,
+              focusNode: focusNode,
+              onQueryChanged: onQueryChanged,
+              scope: voiceScope,
+              builder: field,
+            ),
+    );
+  }
 
-  Widget _playlistSearchField() => _collectionSearchField(
+  Widget _playlistSearchField(PlaylistReference reference) =>
+      _collectionSearchField(
         key: const ValueKey('music-local-playlist-query'),
         label: AppLocalizations.of(context)!.musicSearchPlaylist,
         controller: _playlistQuery,
         focusNode: _playlistQueryFocus,
         onQueryChanged: _jumpToPlaylistResults,
+        voiceScope: reference,
       );
 
   Widget _libraryFindButton(Key key, _LibraryFilter filter, String label) {
@@ -858,6 +873,25 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
             ),
           ),
       ]);
+
+  Widget _collectionFindToolbar(Widget field, List<Widget> actions) =>
+      LayoutBuilder(builder: (context, constraints) {
+        final stacked = constraints.maxWidth <
+            160 + actions.length * kMinInteractiveDimension;
+        return Flex(
+          direction: stacked ? Axis.vertical : Axis.horizontal,
+          crossAxisAlignment:
+              stacked ? CrossAxisAlignment.stretch : CrossAxisAlignment.center,
+          children: [
+            Flexible(
+              flex: stacked ? 0 : 1,
+              fit: FlexFit.tight,
+              child: field,
+            ),
+            Wrap(alignment: WrapAlignment.end, children: actions),
+          ],
+        );
+      });
 
   Widget _libraryFindView({
     required Key key,
@@ -1607,20 +1641,23 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                                         ]
                                       : selectedSongs))
                           : _playlistSearching
-                              ? Row(children: [
-                                  Expanded(child: _playlistSearchField()),
-                                  if (terms.isNotEmpty && visible.isNotEmpty)
-                                    _saveFilteredPlaylistButton(
-                                        visible.map((index) => songs[index]),
-                                        library.profileId),
-                                  offlineButton,
-                                  if (widget.source == null)
-                                    _playlistSelectButton(),
-                                  if (widget.source == null)
-                                    _playlistSearchButton(),
-                                  if (widget.source == null && songs.isNotEmpty)
-                                    sortMenu,
-                                ])
+                              ? _collectionFindToolbar(
+                                  _playlistSearchField(reference),
+                                  [
+                                    if (terms.isNotEmpty && visible.isNotEmpty)
+                                      _saveFilteredPlaylistButton(
+                                          visible.map((index) => songs[index]),
+                                          library.profileId),
+                                    offlineButton,
+                                    if (widget.source == null)
+                                      _playlistSelectButton(),
+                                    if (widget.source == null)
+                                      _playlistSearchButton(),
+                                    if (widget.source == null &&
+                                        songs.isNotEmpty)
+                                      sortMenu,
+                                  ],
+                                )
                               : ListTile(
                                   leading: IconButton(
                                       tooltip: MaterialLocalizations.of(context)
@@ -3382,23 +3419,24 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
 
           Widget toolbar({Widget? saveResults}) => Padding(
                 padding: const EdgeInsetsDirectional.only(end: 8),
-                child: Row(children: [
-                  Expanded(
-                    child: _collectionSearchField(
-                      key: const ValueKey('music-downloads-query'),
-                      label: locals.musicSearchDownloads,
-                      controller: _libraryQuery,
-                      focusNode: _libraryQueryFocus,
-                      onQueryChanged: _jumpToLibraryFindStart,
-                      compact: true,
-                    ),
+                child: _collectionFindToolbar(
+                  _collectionSearchField(
+                    key: const ValueKey('music-downloads-query'),
+                    label: locals.musicSearchDownloads,
+                    controller: _libraryQuery,
+                    focusNode: _libraryQueryFocus,
+                    onQueryChanged: _jumpToLibraryFindStart,
+                    compact: true,
+                    voiceScope: profileId,
                   ),
-                  if (saveResults != null) saveResults,
-                  _downloadsSortButton(order, settings, compact: true),
-                  actions,
-                  if (videos.isNotEmpty) select,
-                  search,
-                ]),
+                  [
+                    if (saveResults != null) saveResults,
+                    _downloadsSortButton(order, settings, compact: true),
+                    actions,
+                    if (videos.isNotEmpty) select,
+                    search,
+                  ],
+                ),
               );
           return ValueListenableBuilder(
             valueListenable: _libraryQuery,

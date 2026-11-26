@@ -15,6 +15,7 @@ import 'package:clipious/music/services/music_listening_history.dart';
 import 'package:clipious/music/views/components/music_history_privacy.dart';
 import 'package:clipious/music/views/components/music_history_transfer.dart';
 import 'package:clipious/music/views/components/music_listening_timeline.dart';
+import 'package:clipious/music/views/components/music_voice_filter.dart';
 import 'package:clipious/player/models/local_music_playback.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/player/views/tv/screens/tv_player_view.dart';
@@ -419,27 +420,34 @@ class _MusicHistoryScreenState extends State<MusicHistoryScreen> {
 
   Widget _queryField(AppLocalizations locals) => Padding(
         padding: const EdgeInsetsDirectional.fromSTEB(16, 4, 16, 4),
-        child: TextField(
-          key: const ValueKey('music-history-query'),
+        child: MusicVoiceFilter(
           controller: _query,
           focusNode: _queryFocus,
-          onChanged: (_) => _queryChanged(),
-          textInputAction: TextInputAction.search,
-          decoration: InputDecoration(
-            labelText: locals.musicHistoryFind,
-            isDense: true,
-            suffixIcon: _query.text.isEmpty
-                ? null
-                : IconButton(
-                    tooltip:
-                        MaterialLocalizations.of(context).clearButtonTooltip,
-                    icon: const Icon(Icons.clear),
-                    onPressed: () {
-                      _query.clear();
-                      _queryChanged();
-                      _queryFocus.requestFocus();
-                    },
-                  ),
+          onQueryChanged: _queryChanged,
+          scope: _everyListen,
+          builder: (microphone) => TextField(
+            key: const ValueKey('music-history-query'),
+            controller: _query,
+            focusNode: _queryFocus,
+            onChanged: (_) => _queryChanged(),
+            textInputAction: TextInputAction.search,
+            decoration: InputDecoration(
+              labelText: locals.musicHistoryFind,
+              isDense: true,
+              prefixIcon: microphone,
+              suffixIcon: _query.text.isEmpty
+                  ? null
+                  : IconButton(
+                      tooltip:
+                          MaterialLocalizations.of(context).clearButtonTooltip,
+                      icon: const Icon(Icons.clear),
+                      onPressed: () {
+                        _query.clear();
+                        _queryChanged();
+                        _queryFocus.requestFocus();
+                      },
+                    ),
+            ),
           ),
         ),
       );

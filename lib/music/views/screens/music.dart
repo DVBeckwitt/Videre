@@ -8,7 +8,6 @@ import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/downloads/services/download_playback_source.dart';
 import 'package:clipious/downloads/services/explicit_music_download.dart';
 import 'package:clipious/globals.dart';
-import 'package:clipious/l10n/app_languages.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' show isTv;
 import 'package:clipious/music/models/music_card_origin.dart';
@@ -56,6 +55,8 @@ import 'package:clipious/music/views/components/music_sound_sheet.dart';
 import 'package:clipious/music/views/components/music_playlist_overlap_shelf.dart';
 import 'package:clipious/music/views/components/music_status_title.dart';
 import 'package:clipious/music/views/components/music_track_results.dart';
+import 'package:clipious/music/views/components/music_voice_filter.dart';
+import 'package:clipious/music/views/components/music_voice_input.dart';
 import 'package:clipious/network/content_link.dart';
 import 'package:clipious/network/network_proxy.dart';
 import 'package:clipious/network/socks_proxy.dart';
@@ -93,7 +94,7 @@ import 'package:clipious/videos/views/components/offline_video_thumbnail.dart';
 import 'package:clipious/videos/views/components/video_watch_progress.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart'
-    show defaultTargetPlatform, kIsWeb, listEquals, setEquals;
+    show defaultTargetPlatform, listEquals, setEquals;
 import 'package:flutter/semantics.dart' show CustomSemanticsAction;
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -682,7 +683,6 @@ class MusicScreen extends StatefulWidget {
 }
 
 class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
-  static const _voiceSearchChannel = MethodChannel('videre/music_voice_search');
   final _onlineSearch = TextEditingController();
   final _librarySearch = TextEditingController();
   final _queryFocus = FocusNode();
@@ -976,27 +976,14 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _checkVoiceSearchAvailability() async {
-    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
-    try {
-      final available =
-          await _voiceSearchChannel.invokeMethod<bool>('isAvailable');
-      if (mounted && available == true) {
-        setState(() => _voiceSearchAvailable = true);
-      }
-    } on MissingPluginException {
-      // Builds without an Android recognizer use the regular search field.
-    } on PlatformException {
-      // Typed search is available if the device cannot check for a provider.
+    if (await musicVoiceInputAvailable() && mounted) {
+      setState(() => _voiceSearchAvailable = true);
     }
   }
 
   Future<void> _startVoiceSearch() async {
     if (_voiceSearchPending || _searchingLyrics) return;
-    final locals = AppLocalizations.of(context)!;
     final session = context.read<AppCubit>().state;
-    final languageTag =
-        parseSavedLocale(context.read<SettingsCubit>().state.locale)
-            ?.toLanguageTag();
     final generation = _generation;
     final intent = _searchIntentRevision;
     final controller = _search;
@@ -1009,40 +996,14 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
         TickerMode.of(context) &&
         ModalRoute.of(context)?.isCurrent != false;
 
-    void showFailure() {
-      if (!current()) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(locals.musicVoiceSearchFailed)),
-      );
-    }
-
     setState(() => _voiceSearchPending = true);
     try {
-      final consent = await showDialog<bool>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: Text(locals.musicVoiceSearch),
-          content: Text(locals.musicVoiceSearchPrivacy),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(false),
-              child: Text(locals.cancel),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.of(context).pop(true),
-              child: Text(locals.musicVoiceSearchStart),
-            ),
-          ],
-        ),
+      final transcript = await requestMusicVoiceInput(
+        context,
+        isCurrent: current,
+        onConsent: _queryFocus.unfocus,
       );
-      if (consent != true || !current()) return;
-      _queryFocus.unfocus();
-      final transcript = (await _voiceSearchChannel.invokeMethod<String>(
-        'recognize',
-        {if (languageTag != null) 'languageTag': languageTag},
-      ))
-          ?.trim();
-      if (transcript == null || transcript.isEmpty || !current()) return;
+      if (transcript == null || !current()) return;
       if (_searchingLibrary) {
         controller.value = TextEditingValue(
           text: transcript,
@@ -1053,10 +1014,6 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
         _onlineVoiceDraftPending = true;
         _fillOnlineQuery(transcript);
       }
-    } on MissingPluginException {
-      showFailure();
-    } on PlatformException {
-      showFailure();
     } finally {
       if (mounted) setState(() => _voiceSearchPending = false);
     }
@@ -2700,27 +2657,33 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
             children: [
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-                child: TextField(
-                  key: const ValueKey('music-public-playlist-query'),
+                child: MusicVoiceFilter(
+                  scope: (session.profileId, collection.id),
                   controller: _playlistFindQuery,
                   focusNode: _playlistFindInput,
-                  textInputAction: TextInputAction.search,
-                  onChanged: (_) => setState(() {}),
-                  onSubmitted: (_) => _playlistFindInput.unfocus(),
-                  decoration: InputDecoration(
-                    labelText: locals.musicSearchPlaylist,
-                    prefixIcon: const Icon(Icons.search),
-                    suffixIcon: query.isEmpty
-                        ? null
-                        : IconButton(
-                            tooltip: MaterialLocalizations.of(context)
-                                .clearButtonTooltip,
-                            icon: const Icon(Icons.clear),
-                            onPressed: () {
-                              setState(_playlistFindQuery.clear);
-                              _playlistFindInput.requestFocus();
-                            },
-                          ),
+                  onQueryChanged: () => setState(() {}),
+                  builder: (microphone) => TextField(
+                    key: const ValueKey('music-public-playlist-query'),
+                    controller: _playlistFindQuery,
+                    focusNode: _playlistFindInput,
+                    textInputAction: TextInputAction.search,
+                    onChanged: (_) => setState(() {}),
+                    onSubmitted: (_) => _playlistFindInput.unfocus(),
+                    decoration: InputDecoration(
+                      labelText: locals.musicSearchPlaylist,
+                      prefixIcon: microphone ?? const Icon(Icons.search),
+                      suffixIcon: query.isEmpty
+                          ? null
+                          : IconButton(
+                              tooltip: MaterialLocalizations.of(context)
+                                  .clearButtonTooltip,
+                              icon: const Icon(Icons.clear),
+                              onPressed: () {
+                                setState(_playlistFindQuery.clear);
+                                _playlistFindInput.requestFocus();
+                              },
+                            ),
+                    ),
                   ),
                 ),
               ),
