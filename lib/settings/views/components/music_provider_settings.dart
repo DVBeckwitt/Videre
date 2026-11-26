@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../../app/states/app.dart';
@@ -351,6 +352,24 @@ class MusicProviderSettings extends StatelessWidget {
               : null,
           optionKey: (value) => ValueKey('music-audio-offload-${value.name}'),
           save: settings.setMusicAudioOffload,
+        ),
+        _MusicAndroidSettingsTile(
+          key: const ValueKey('music-android-notifications-setting'),
+          focusNode: _focusFor('music-android-notifications-setting'),
+          method: 'openNotifications',
+          icon: Icons.notifications_outlined,
+          title: locals.musicAndroidNotificationSettings,
+          description: locals.musicAndroidNotificationSettingsHelp,
+          fallback: locals.musicAndroidNotificationSettingsFallback,
+        ),
+        _MusicAndroidSettingsTile(
+          key: const ValueKey('music-android-battery-setting'),
+          focusNode: _focusFor('music-android-battery-setting'),
+          method: 'openBattery',
+          icon: Icons.battery_charging_full_outlined,
+          title: locals.musicAndroidBatterySettings,
+          description: locals.musicAndroidBatterySettingsHelp,
+          fallback: locals.musicAndroidBatterySettingsFallback,
         ),
       ],
       _MusicChoice<MusicNowPlayingStyle>(
@@ -834,6 +853,76 @@ class _MusicChoiceState<T extends Object> extends State<_MusicChoice<T>> {
           ),
         ));
   }
+}
+
+class _MusicAndroidSettingsTile extends StatelessWidget {
+  const _MusicAndroidSettingsTile({
+    super.key,
+    required this.focusNode,
+    required this.method,
+    required this.icon,
+    required this.title,
+    required this.description,
+    required this.fallback,
+  });
+
+  static const _channel = MethodChannel('videre/music_android_settings');
+  final FocusNode? focusNode;
+  final String method, title, description, fallback;
+  final IconData icon;
+
+  Future<bool> _tryOpen(String method) async {
+    try {
+      return await _channel.invokeMethod<bool>(method) == true;
+    } on MissingPluginException {
+      return false;
+    } on PlatformException {
+      return false;
+    }
+  }
+
+  Future<void> _open(BuildContext context) async {
+    if (await _tryOpen(method) || !context.mounted) return;
+    final locals = AppLocalizations.of(context)!;
+    final openAppInfo = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(title),
+        content: Text(fallback),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: Text(locals.cancel),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: Text(locals.musicAndroidOpenAppInfo),
+          ),
+        ],
+      ),
+    );
+    if (openAppInfo != true || !context.mounted) return;
+    if (await _tryOpen('openAppDetails') || !context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(locals.musicAndroidAppInfoUnavailable)),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) => Shortcuts(
+        shortcuts: {
+          for (final key in selectKeys)
+            SingleActivator(key): const ActivateIntent(),
+        },
+        child: ListTile(
+          focusNode: focusNode,
+          leading: Icon(icon),
+          title: Text(title),
+          subtitle: Text(description),
+          trailing: const Icon(Icons.open_in_new),
+          onTap: () => _open(context),
+        ),
+      );
 }
 
 class _ProviderSwitch extends StatelessWidget {

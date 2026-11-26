@@ -46,6 +46,7 @@ class MainActivity : AudioServiceActivity() {
     private var gatewayChannel: MethodChannel? = null
     private var gatewayBrowser: GatewayAuthBrowser? = null
     private var torBrowserChannel: MethodChannel? = null
+    private var musicAndroidSettingsChannel: MethodChannel? = null
     private var autoPip = false
     private var watchSubtitlePickerActive = false
     private var pipAspectRatio = Rational(16, 9)
@@ -131,6 +132,10 @@ class MainActivity : AudioServiceActivity() {
         val torBrowser = TorBrowserLauncher(this)
         torBrowserChannel = MethodChannel(messenger, "videre/tor_browser").also {
             it.setMethodCallHandler(torBrowser::handle)
+        }
+        val musicAndroidSettings = MusicAndroidSettingsLauncher(this)
+        musicAndroidSettingsChannel = MethodChannel(messenger, "videre/music_android_settings").also {
+            it.setMethodCallHandler(musicAndroidSettings::handle)
         }
     }
 
@@ -371,6 +376,8 @@ class MainActivity : AudioServiceActivity() {
     }
 
     private fun releaseChannels() {
+        musicAndroidSettingsChannel?.setMethodCallHandler(null)
+        musicAndroidSettingsChannel = null
         torBrowserChannel?.setMethodCallHandler(null)
         torBrowserChannel = null
         gatewayChannel?.setMethodCallHandler(null)
