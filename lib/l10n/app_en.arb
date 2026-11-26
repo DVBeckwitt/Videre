@@ -2797,6 +2797,8 @@
   "musicPlayerBackground": "Now Playing background",
   "musicPlayerBackgroundArtwork": "Artwork",
   "musicPlayerBackgroundSolid": "Solid",
+  "musicPlayerBackgroundGradient": "Artwork gradient",
+  "musicPlayerBackgroundMovingArtwork": "Moving artwork",
   "musicScrubberStyle": "Scrubber style",
   "musicScrubberGapped": "Gapped",
   "musicScrubberContinuous": "Continuous",

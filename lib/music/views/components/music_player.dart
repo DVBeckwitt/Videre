@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:math' as math;
-import 'dart:ui' as ui;
 
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
@@ -52,6 +51,7 @@ import 'music_audio_quality_button.dart';
 import 'music_duration_label.dart';
 import 'music_library_actions.dart';
 import 'music_player_artwork.dart';
+import 'music_player_background.dart';
 import 'music_player_scrubber.dart';
 import 'music_playback_artwork.dart';
 import 'music_playing_device_artists.dart';
@@ -1048,54 +1048,20 @@ class _MusicPlayerState extends State<MusicPlayer>
     return Stack(
       fit: StackFit.expand,
       children: [
-        if (background == MusicPlayerBackground.artwork)
-          IgnorePointer(
+        if (background != MusicPlayerBackground.solid)
+          MusicPlayerBackgroundView(
             key: const ValueKey('music-player-artwork-background'),
-            child: ExcludeSemantics(
-              child: RepaintBoundary(
-                child: ClipRect(
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      ColoredBox(color: colors.surface),
-                      ImageFiltered(
-                        imageFilter: ui.ImageFilter.blur(
-                          sigmaX: 52,
-                          sigmaY: 52,
-                        ),
-                        child: FittedBox(
-                          fit: BoxFit.cover,
-                          child: SizedBox.square(
-                            dimension: 180,
-                            child: MusicPlaybackArtwork(
-                              music: music,
-                              video: video,
-                              offline: offline,
-                              showPlaceholder: false,
-                            ),
-                          ),
-                        ),
-                      ),
-                      // Keep controls and secondary text legible over vivid covers.
-                      DecoratedBox(
-                        decoration: BoxDecoration(
-                          gradient: LinearGradient(
-                            begin: Alignment.topCenter,
-                            end: Alignment.bottomCenter,
-                            colors: [
-                              colors.surface,
-                              colors.surface.withAlpha(0xbc),
-                              colors.surface.withAlpha(0xcf),
-                              colors.surface,
-                            ],
-                            stops: const [0, 0.27, 0.76, 1],
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
+            style: background,
+            visible: state.isAudio &&
+                !state.isMini &&
+                !state.isHidden &&
+                !state.isClosing,
+            artwork: (imageBuilder) => MusicPlaybackArtwork(
+              music: music,
+              video: video,
+              offline: offline,
+              showPlaceholder: false,
+              artworkImageBuilder: imageBuilder,
             ),
           ),
         Column(

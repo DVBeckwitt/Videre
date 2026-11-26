@@ -93,7 +93,9 @@ List<SettingsSearchEntry> musicSettingsSearchEntries(
     setting('music-player-background-setting', locals.musicPlayerBackground,
         keywords: [
           locals.musicPlayerBackgroundArtwork,
-          locals.musicPlayerBackgroundSolid
+          locals.musicPlayerBackgroundSolid,
+          locals.musicPlayerBackgroundGradient,
+          locals.musicPlayerBackgroundMovingArtwork,
         ]),
     setting('music-scrubber-style-setting', locals.musicScrubberStyle,
         keywords: [

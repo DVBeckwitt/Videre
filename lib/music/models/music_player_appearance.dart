@@ -26,7 +26,9 @@ enum MusicNowPlayingStyle {
 
 enum MusicPlayerBackground {
   artwork,
-  solid;
+  solid,
+  gradient,
+  movingArtwork;
 
   static MusicPlayerBackground? fromStorage(String? name) =>
       values.asNameMap()[name];

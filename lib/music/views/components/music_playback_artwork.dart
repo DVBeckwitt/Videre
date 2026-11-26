@@ -8,6 +8,7 @@ import 'package:clipious/music/models/song_artwork.dart';
 import 'package:clipious/music/services/local_music_library.dart';
 import 'package:clipious/music/views/components/community_music_artwork.dart';
 import 'package:clipious/player/models/local_music_playback.dart';
+import 'package:clipious/utils/views/components/artwork_image_builder.dart';
 import 'package:clipious/utils/views/components/thumbnail.dart';
 import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:clipious/videos/models/video.dart';
@@ -24,6 +25,7 @@ class MusicPlaybackArtwork extends StatelessWidget {
   final bool allowCommunityLookup;
   final double placeholderSize;
   final Widget? placeholder;
+  final ArtworkImageBuilder? artworkImageBuilder;
 
   const MusicPlaybackArtwork(
       {super.key,
@@ -33,7 +35,8 @@ class MusicPlaybackArtwork extends StatelessWidget {
       this.showPlaceholder = true,
       this.allowCommunityLookup = false,
       this.placeholderSize = 72,
-      this.placeholder});
+      this.placeholder,
+      this.artworkImageBuilder});
 
   @override
   Widget build(BuildContext context) {
@@ -57,7 +60,8 @@ class MusicPlaybackArtwork extends StatelessWidget {
           : _LocalSongCover(
               key: ValueKey(download),
               download: download,
-              placeholder: placeholder);
+              placeholder: placeholder,
+              artworkImageBuilder: artworkImageBuilder);
     }
     final deviceId = isLocalMusicPlaybackId(offlineId) ? offlineId : videoId;
     if (isLocalMusicPlaybackId(deviceId)) {
@@ -67,7 +71,10 @@ class MusicPlaybackArtwork extends StatelessWidget {
             final track = localMusicTrackForPlayback(deviceId);
             return track == null
                 ? placeholder
-                : DeviceMusicArtwork(track: track, placeholder: placeholder);
+                : DeviceMusicArtwork(
+                    track: track,
+                    placeholder: placeholder,
+                    artworkImageBuilder: artworkImageBuilder);
           });
     }
     final local = offline != null || video?.downloadPlaybackOnly == true;
@@ -80,7 +87,8 @@ class MusicPlaybackArtwork extends StatelessWidget {
       stock = _LocalSongCover(
           key: ValueKey((download, video?.playbackSourceId)),
           download: download,
-          placeholder: placeholder);
+          placeholder: placeholder,
+          artworkImageBuilder: artworkImageBuilder);
     } else {
       final images = displaySongThumbnails(videoId ?? '',
           music?.thumbnails ?? const [], video?.videoThumbnails ?? const [],
@@ -94,6 +102,7 @@ class MusicPlaybackArtwork extends StatelessWidget {
               musicArtwork: true,
               images: images,
               fallback: placeholder,
+              artworkImageBuilder: artworkImageBuilder,
               decoration: const BoxDecoration());
     }
     return CommunityMusicArtwork(
@@ -101,16 +110,21 @@ class MusicPlaybackArtwork extends StatelessWidget {
         music: music,
         durationSeconds: video?.lengthSeconds ?? offline?.lengthSeconds,
         fallback: stock,
+        artworkImageBuilder: artworkImageBuilder,
         allowLookup: allowCommunityLookup && !local);
   }
 }
 
 class _LocalSongCover extends StatefulWidget {
   const _LocalSongCover(
-      {super.key, required this.download, required this.placeholder});
+      {super.key,
+      required this.download,
+      required this.placeholder,
+      this.artworkImageBuilder});
 
   final DownloadedVideo download;
   final Widget placeholder;
+  final ArtworkImageBuilder? artworkImageBuilder;
 
   @override
   State<_LocalSongCover> createState() => _LocalSongCoverState();
@@ -125,15 +139,19 @@ class _LocalSongCoverState extends State<_LocalSongCover> {
         future: _cover,
         builder: (context, snapshot) {
           final file = snapshot.data;
-          return file == null
-              ? widget.placeholder
-              : _fileArtwork(file, widget.placeholder);
+          if (file == null) return widget.placeholder;
+          final provider = FileImage(file);
+          return Image(
+            image: provider,
+            fit: BoxFit.cover,
+            frameBuilder: (context, child, frame, synchronous) {
+              if (!synchronous && frame == null) return widget.placeholder;
+              return widget.artworkImageBuilder
+                      ?.call(context, provider, child) ??
+                  child;
+            },
+            errorBuilder: (context, error, stack) => widget.placeholder,
+          );
         });
   }
 }
-
-Widget _fileArtwork(File file, Widget placeholder) => Image.file(file,
-    fit: BoxFit.cover,
-    frameBuilder: (context, child, frame, synchronous) =>
-        synchronous || frame != null ? child : placeholder,
-    errorBuilder: (context, error, stack) => placeholder);
