@@ -2759,6 +2759,7 @@
   "musicCatalogPlaylistAuthor": "Playlist by {name}",
   "@musicCatalogPlaylistAuthor": {"placeholders": {"name": {"type": "String"}}},
   "musicCatalogViewChannel": "View channel",
+  "musicArtistChooseChannel": "Choose an artist channel",
   "musicStarterArtists": "Starter artists",
   "musicStarterArtistsHint": "Choose up to three artists to find matching songs on Music Home.",
   "musicStarterArtistsChoose": "Choose artists",

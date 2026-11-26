@@ -81,7 +81,7 @@ import 'package:clipious/settings/models/db/settings.dart' show browsingCountry;
 import 'package:clipious/settings/models/errors/invidious_service_error.dart';
 import 'package:clipious/settings/states/settings.dart';
 import '../../models/music_layout.dart';
-import 'package:clipious/utils.dart' show DeviceType, getDeviceType;
+import 'package:clipious/utils.dart' show DeviceType, getDeviceType, selectKeys;
 import 'package:clipious/utils/models/image_object.dart';
 import 'package:clipious/utils/motion.dart';
 import 'package:clipious/utils/views/components/thumbnail.dart';
@@ -1513,17 +1513,33 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
     _playlistFindButton.requestFocus();
   }
 
-  Future<void> _openArtist(String id, {String? name}) async {
+  Future<void> _openArtist(String id,
+      {String? name, String? selectedId}) async {
     if (!_loading &&
         (_artistPage?.artist.id == id ||
             _artistReleases?.requestedArtistId == id)) {
       return;
     }
+    var selected = selectedId;
     await _run(
       (generation, session) async {
-        final artist =
-            await musicCatalogService.getArtistOverview(id, artistName: name);
-        if (_active(generation, session)) {
+        bool current() => _active(generation, session);
+        MusicArtistPage artist;
+        try {
+          artist = await musicCatalogService.getArtistOverview(selected ?? id,
+              artistName: selected == null ? name : null);
+        } on MusicArtistChoiceRequired catch (choice) {
+          if (!current()) return;
+          final chosen = await _chooseArtistChannel(choice.matches);
+          if (!current()) return;
+          if (chosen == null) {
+            _backToSearch();
+            return;
+          }
+          selected = chosen;
+          artist = await musicCatalogService.getArtistOverview(chosen);
+        }
+        if (current()) {
           final releases = _ArtistReleaseListing(artist, id);
           setState(() {
             _artistPage = artist;
@@ -1535,8 +1551,58 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
           unawaited(_loadArtistReleases(artist.artist.id, releases, session));
         }
       },
-      () => _openArtist(id, name: name),
+      () => _openArtist(id, name: name, selectedId: selected),
       browse: true,
+    );
+  }
+
+  Future<String?> _chooseArtistChannel(List<MusicArtistMatch> matches) {
+    final locals = AppLocalizations.of(context)!;
+    final material = MaterialLocalizations.of(context);
+    return showDialog<String>(
+      context: context,
+      useRootNavigator: false,
+      animationStyle: AppMotion.dialogStyle(context),
+      builder: (context) => Shortcuts(
+        shortcuts: {
+          for (final key in selectKeys)
+            SingleActivator(key): const ActivateIntent(),
+        },
+        child: AlertDialog(
+          title: Text(locals.musicArtistChooseChannel),
+          scrollable: true,
+          contentPadding: const EdgeInsets.symmetric(vertical: 8),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (final match in matches)
+                ListTile(
+                  key: ValueKey(('music-artist-match', match.artist.id)),
+                  leading: ChannelAvatar(
+                    name: match.artist.name,
+                    images: match.artist.thumbnails,
+                    size: 44,
+                    musicArtwork: true,
+                    instanceOnly: true,
+                  ),
+                  title: Text(match.artist.name),
+                  subtitle: Text([
+                    if (match.subscriberCount case final subscribers?)
+                      locals.nSubscribers(material.formatDecimal(subscribers)),
+                    match.artist.id,
+                  ].join('\n')),
+                  onTap: () => Navigator.of(context).pop(match.artist.id),
+                ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: Text(locals.cancel),
+            ),
+          ],
+        ),
+      ),
     );
   }
 

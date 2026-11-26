@@ -3875,6 +3875,50 @@ void main() {
     expect(more, findsNothing);
   });
 
+  for (final cancel in [false, true]) {
+    testWidgets('ambiguous artist waits for a channel choice (cancel: $cancel)',
+        (tester) async {
+      const topic = 'UC1234567890123456789012';
+      const sameName =
+          MusicArtist(id: 'UCzzzzzzzzzzzzzzzzzzzzzz', name: 'Artist');
+      final pending = catalog.pendingArtist = Completer<MusicArtistPage>();
+      await show(tester,
+          screen:
+              const MusicScreen(artistId: topic, artistName: 'Artist - Topic'));
+      pending.completeError(MusicArtistChoiceRequired(const [
+        MusicArtistMatch(artist: artist, subscriberCount: 4300),
+        MusicArtistMatch(artist: sameName, subscriberCount: 250),
+      ]));
+      await tester.pumpAndSettle();
+
+      final choices = find.byType(AlertDialog);
+      expect(find.text('Choose an artist channel'), findsOneWidget);
+      expect(find.descendant(of: choices, matching: find.text('Artist')),
+          findsNWidgets(2));
+      expect(catalog.artistRequests, [topic]);
+      expect(catalog.releaseArtistIds, isEmpty);
+
+      if (cancel) {
+        await tester.tap(find.text('Cancel'));
+        await tester.pumpAndSettle();
+        expect(catalog.artistRequests, [topic]);
+        expect(catalog.releaseArtistIds, isEmpty);
+      } else {
+        catalog.pendingArtist = Completer<MusicArtistPage>()
+          ..complete(const MusicArtistPage(artist: sameName, songs: [second]));
+        final selected =
+            find.byKey(ValueKey(('music-artist-match', sameName.id)));
+        await tester.ensureVisible(selected);
+        await tester.tap(selected);
+        await tester.pumpAndSettle();
+        expect(catalog.artistRequests, [topic, sameName.id]);
+        expect(catalog.releaseArtistIds, [sameName.id]);
+        expect(find.text(second.title), findsOneWidget);
+      }
+      expect(choices, findsNothing);
+    });
+  }
+
   testWidgets('artist releases page into the existing playlist flow',
       (tester) async {
     const album =

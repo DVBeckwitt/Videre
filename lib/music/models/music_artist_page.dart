@@ -21,6 +21,20 @@ class MusicArtistPage {
   });
 }
 
+/// A verified artist channel offered when the Topic identity is ambiguous.
+class MusicArtistMatch {
+  final MusicArtist artist;
+  final int? subscriberCount;
+
+  const MusicArtistMatch({required this.artist, this.subscriberCount});
+}
+
+class MusicArtistChoiceRequired implements Exception {
+  final List<MusicArtistMatch> matches;
+
+  const MusicArtistChoiceRequired(this.matches);
+}
+
 /// One page of uploads exposed by the artist's channel.
 class MusicArtistUploads {
   final List<MusicTrack> songs;

@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:clipious/globals.dart';
+import 'package:clipious/music/models/music_artist_page.dart';
 import 'package:clipious/music/models/music_charts.dart';
 import 'package:clipious/music/services/invidious_music_catalog_service.dart';
 import 'package:clipious/music/services/music_catalog_service.dart';
@@ -59,6 +60,12 @@ const topic = {
   'authorVerified': false,
 };
 const verifiedArtist = {...channel, 'authorVerified': true};
+final emptyTopic = {
+  ...channel,
+  ...topic,
+  'authorUrl': '/channel/$topicId',
+  'latestVideos': [],
+};
 const playlist = {
   'type': 'playlist',
   'playlistId': playlistId,
@@ -329,8 +336,7 @@ void main() {
       () async {
     final success = respond;
     respond = (request) async => switch (request.url.path) {
-          '/api/v1/channels/$topicId' =>
-            json(request, {...topic, 'latestVideos': []}),
+          '/api/v1/channels/$topicId' => json(request, emptyTopic),
           '/api/v1/search' => json(request, [topic, verifiedArtist]),
           _ => await success(request),
         };
@@ -347,7 +353,7 @@ void main() {
       () async {
     respond = (request) async => request.url.path == '/api/v1/search'
         ? json(request, {'error': 'Search unavailable'}, status: 503)
-        : json(request, {...topic, 'latestVideos': []});
+        : json(request, emptyTopic);
     final music = InvidiousMusicCatalogService(api: api);
     expect((await music.getArtistOverview(topicId)).artist.id, topicId);
     expect(calls.map((uri) => uri.path), [
@@ -370,11 +376,6 @@ void main() {
       topic,
       {...verifiedArtist, 'author': 'Artist Fan'},
     ],
-    'two verified channels match': [
-      topic,
-      verifiedArtist,
-      {...verifiedArtist, 'authorId': otherChannelId},
-    ],
   };
   for (final entry in unverifiedTopicMatches.entries) {
     test('Topic recovery stops when ${entry.key}', () async {
@@ -384,6 +385,63 @@ void main() {
       final music = InvidiousMusicCatalogService(api: api);
       await expectLater(music.getArtistOverview(topicId, artistName: 'Artist'),
           throwsA(isA<InvidiousServiceError>()));
+      expect(calls.map((uri) => uri.path), [
+        '/api/v1/channels/$topicId',
+        '/api/v1/search',
+      ]);
+    });
+  }
+
+  for (final emptyOverview in [false, true]) {
+    test(
+        'multiple verified artists require a choice after ${emptyOverview ? 'an empty' : 'a failed'} Topic overview',
+        () async {
+      const portrait = 'https://yt3.ggpht.com/artist';
+      respond = (request) async => switch (request.url.path) {
+            '/api/v1/channels/$topicId' => emptyOverview
+                ? json(request, emptyTopic)
+                : json(request, {'error': 'Topic unavailable'}, status: 500),
+            '/api/v1/search' => json(request, [
+                topic,
+                channel,
+                {
+                  ...verifiedArtist,
+                  'subCount': 2000,
+                  'authorThumbnails': [
+                    {'url': portrait, 'width': 80, 'height': 80},
+                    {
+                      'url': 'https://other.example/asset',
+                      'width': 1,
+                      'height': 1
+                    },
+                    {'url': '', 'width': 80, 'height': 80},
+                  ],
+                },
+                {...verifiedArtist, 'authorId': otherChannelId, 'subCount': -1},
+                verifiedArtist,
+              ]),
+            _ => throw StateError('Artist must be selected before fetching'),
+          };
+      final music = InvidiousMusicCatalogService(api: api);
+      await expectLater(
+        music.getArtistOverview(topicId,
+            artistName: emptyOverview ? null : 'Artist'),
+        throwsA(isA<MusicArtistChoiceRequired>().having(
+            (error) => error.matches.map((match) => match.artist.id),
+            'artist IDs', [
+          channelId,
+          otherChannelId
+        ]).having(
+            (error) => error.matches.map((match) => match.subscriberCount),
+            'subscriber counts', [
+          2000,
+          null
+        ]).having(
+            (error) =>
+                error.matches.first.artist.thumbnails.map((image) => image.url),
+            'safe portraits',
+            [portrait])),
+      );
       expect(calls.map((uri) => uri.path), [
         '/api/v1/channels/$topicId',
         '/api/v1/search',
