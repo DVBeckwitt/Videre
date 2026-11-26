@@ -554,8 +554,8 @@ class MusicLibrarySearch extends ChangeNotifier {
     return hits;
   }
 
-  /// Reads one authorized recording at a time and keeps only matching lines.
-  /// The caller retires the scan when its query or session changes.
+  /// Reads one authorized local recording at a time and keeps matching lines.
+  /// Provider-backed rows can contribute drafts already stored on this device.
   Stream<({LocalMusicTrack track, String line})> findDeviceLyricMatches(
     String query, {
     required IDbClient database,
@@ -604,8 +604,11 @@ class MusicLibrarySearch extends ChangeNotifier {
         current() &&
         identical(_device.visibleTrackById(track.playbackId), track);
     if (terms.isEmpty || !trackCurrent()) return null;
-    final raw = await _device.readTrackLyrics(track);
-    if (raw == null || !trackCurrent()) return null;
+    final raw =
+        track.isDocumentProvider ? null : await _device.readTrackLyrics(track);
+    if (!trackCurrent() || (raw == null && !track.isDocumentProvider)) {
+      return null;
+    }
 
     final editor = LocalMusicLyricsAuthoring.forTrack(
         database: owner, track: track, isCurrent: trackCurrent);
@@ -614,6 +617,7 @@ class MusicLibrarySearch extends ChangeNotifier {
     if (editor?.readPlainDraft() case final plain?) {
       return _matchingLyricLine(MusicLyrics.plain(plain), terms);
     }
+    if (raw == null) return null;
     final sidecar = decodeLocalTimedLyrics(raw.timedSidecar, source: '');
     if (sidecar != null) return _matchingLyricLine(sidecar, terms);
 

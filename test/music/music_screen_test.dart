@@ -453,20 +453,6 @@ void main() {
   late TestSettingsCubit settings;
   late _Player player;
 
-  setUpAll(() async {
-    const channel = MethodChannel('com.github.dvbeckwitt.videre/local_music');
-    final messenger =
-        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
-    messenger.setMockMethodCallHandler(channel, (_) async => null);
-    try {
-      // The permission-free search fixtures share the app's library singleton.
-      // Complete its one-time startup on the same clock as fixture setup.
-      await LocalMusicLibrary.instance.initialize();
-    } finally {
-      messenger.setMockMethodCallHandler(channel, null);
-    }
-  });
-
   setUp(() async {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(const MethodChannel('videre/recommendations'),
@@ -475,6 +461,16 @@ void main() {
     previousService = service;
     service = Service();
     db = await SembastSqfDb.createInMemory();
+    const channel = MethodChannel('com.github.dvbeckwitt.videre/local_music');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(channel, (_) async => null);
+    try {
+      // Library startup reads this profile's cover preference on the real clock.
+      await LocalMusicLibrary.instance.initialize();
+    } finally {
+      messenger.setMockMethodCallHandler(channel, null);
+    }
     // Run the profile's queue setup on the real database clock.
     await db.saveSetting(SettingsValue(
         namedMusicQueuesSetting, NamedMusicQueue.encodeAll(const [])));
@@ -1641,7 +1637,7 @@ void main() {
     final lyrics = find.widgetWithText(ChoiceChip, 'Lyrics');
     await tester.ensureVisible(lyrics);
     await tester.tap(lyrics);
-    // The shared device catalog initializes in setUpAll outside fake async.
+    // The shared device catalog initializes during setup outside fake async.
     for (var frame = 0; frame < 8; frame++) {
       await tester.runAsync(() => Future<void>.delayed(Duration.zero));
       await tester.pump(const Duration(milliseconds: 100));
@@ -3526,12 +3522,32 @@ void main() {
 
     final edit = find.byKey(const ValueKey('music-edit-catalog-artist-alias'));
     final input = find.byKey(const ValueKey('music-artist-alias-input'));
+    Future<void> commitAlias(String action, String? expected) async {
+      await tester.runAsync(() async {
+        final committed = Completer<void>();
+        void onChanged() {
+          if (!committed.isCompleted &&
+              library.artistAlias(identity) == expected) {
+            committed.complete();
+          }
+        }
+
+        library.changes.addListener(onChanged);
+        try {
+          await tester.tap(find.text(action));
+          await committed.future.timeout(const Duration(seconds: 5));
+        } finally {
+          library.changes.removeListener(onChanged);
+        }
+      });
+      await tester.pumpAndSettle();
+    }
+
     await tester.tap(edit);
     await tester.pumpAndSettle();
     expect(tester.widget<TextField>(input).controller!.text, original.name);
     await tester.enterText(input, '  Listening Alias  ');
-    await tester.tap(find.text('Save'));
-    await tester.pumpAndSettle();
+    await commitAlias('Save', 'Listening Alias');
 
     expect(library.artistAlias(identity), 'Listening Alias');
     expect(find.text('Listening Alias'), findsOneWidget);
@@ -3539,8 +3555,7 @@ void main() {
 
     await tester.tap(edit);
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Reset to original'));
-    await tester.pumpAndSettle();
+    await commitAlias('Reset to original', null);
 
     expect(library.artistAlias(identity), isNull);
     expect(find.text('Listening Alias'), findsNothing);

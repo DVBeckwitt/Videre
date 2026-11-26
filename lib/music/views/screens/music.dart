@@ -3772,6 +3772,105 @@ class _MusicTvAudio extends StatelessWidget {
   Widget build(BuildContext context) {
     final player = context.read<PlayerCubit>();
     final locals = AppLocalizations.of(context)!;
+    final controls = BlocBuilder<AudioPlayerCubit, AudioPlayerState>(
+      builder: (context, audio) {
+        final state = context.watch<PlayerCubit>().state;
+        final current = state.currentlyPlaying ?? video;
+        final offline = state.offlineCurrentlyPlaying ?? offlineVideo;
+        final metadata = current?.musicMetadata ?? offline?.musicMetadata;
+        final musicImages = metadata?.thumbnails ?? const <ImageObject>[];
+        if (audio.error != null || state.mediaEvent.state == MediaState.error) {
+          return _MusicPlaybackFailure(
+              reason: player.playbackFailureReason,
+              onRetry: current == null && offline == null
+                  ? player.resumeSession
+                  : player.retryCurrentVideo);
+        }
+        if ((state.currentlyPlaying?.musicMetadata ??
+                state.offlineCurrentlyPlaying?.musicMetadata) !=
+            null) {
+          return television
+              ? const TvOverscan(child: MusicPlayer(television: true))
+              : const MusicPlayer();
+        }
+        // The TV video route also hosts Listen mode for ordinary videos.
+        // Its simpler transport works without inventing Music metadata.
+        return Padding(
+          padding: EdgeInsets.symmetric(
+              horizontal: TvOverscan.horizontal, vertical: TvOverscan.vertical),
+          child: Column(children: [
+            Expanded(
+              child: Center(
+                child: AspectRatio(
+                  aspectRatio: 1,
+                  child: offline != null
+                      ? OfflineVideoThumbnail(borderRadius: 16, video: offline)
+                      : Thumbnail(
+                          images: musicImages.isNotEmpty
+                              ? musicImages
+                              : current?.videoThumbnails,
+                          decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(16))),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(metadata?.title ?? current?.title ?? offline?.title ?? '',
+                maxLines: 2,
+                textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.titleLarge),
+            Text(metadata?.artist ?? current?.author ?? offline?.author ?? '',
+                maxLines: 1),
+            if (metadata?.album case final String album)
+              Text(album, maxLines: 1),
+            const MusicSponsorNotice(),
+            if (audio.loading) const LinearProgressIndicator(),
+            if (state.backendRecovery case final recovery?)
+              BackendRecoveryNotice(recovery: recovery, compact: true),
+            const PlaylistLoadingNotice(),
+            Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+              IconButton(
+                  tooltip: locals.musicPrevious,
+                  onPressed: state.hasQueue ? player.playPrevious : null,
+                  icon: const Icon(Icons.skip_previous)),
+              IconButton(
+                  tooltip: locals.musicRewind,
+                  onPressed: player.rewind,
+                  icon: const Icon(Icons.fast_rewind)),
+              IconButton.filled(
+                  autofocus: true,
+                  tooltip:
+                      state.isPlaying ? locals.musicPause : locals.musicPlay,
+                  onPressed: player.togglePlaying,
+                  icon: Icon(state.isPlaying ? Icons.pause : Icons.play_arrow)),
+              IconButton(
+                  tooltip: locals.musicForward,
+                  onPressed: player.fastForward,
+                  icon: const Icon(Icons.fast_forward)),
+              IconButton(
+                  tooltip: locals.musicNext,
+                  onPressed: state.hasQueue || player.hasMusicRequestSuccessor
+                      ? player.playNext
+                      : null,
+                  icon: const Icon(Icons.skip_next)),
+            ]),
+            TextButton.icon(
+                key: const ValueKey('music-tv-sound'),
+                onPressed: () => showMusicSoundSheet(context, player),
+                icon: const Icon(Icons.tune),
+                label: Text(locals.musicSound)),
+          ]),
+        );
+      },
+    );
+    if (!television && player.ownsAudioDecoder) {
+      final decoder = context.select((PlayerCubit p) => p.runtimeAudioDecoder);
+      if (decoder == null) {
+        return const Center(child: CircularProgressIndicator());
+      }
+      return BlocProvider.value(value: decoder, child: controls);
+    }
+
     return BlocProvider(
       create: (_) => AudioPlayerCubit(
           AudioPlayerState(video: video, offlineVideo: offlineVideo),
@@ -3783,107 +3882,7 @@ class _MusicTvAudio extends StatelessWidget {
             after.mediaCommand != null,
         listener: (context, state) =>
             context.read<AudioPlayerCubit>().handleCommand(state.mediaCommand!),
-        child: BlocBuilder<AudioPlayerCubit, AudioPlayerState>(
-          builder: (context, audio) {
-            final state = context.watch<PlayerCubit>().state;
-            final current = state.currentlyPlaying ?? video;
-            final offline = state.offlineCurrentlyPlaying ?? offlineVideo;
-            final metadata = current?.musicMetadata ?? offline?.musicMetadata;
-            final musicImages = metadata?.thumbnails ?? const <ImageObject>[];
-            if (audio.error != null ||
-                state.mediaEvent.state == MediaState.error) {
-              return _MusicPlaybackFailure(
-                  reason: player.playbackFailureReason,
-                  onRetry: current == null && offline == null
-                      ? player.resumeSession
-                      : player.retryCurrentVideo);
-            }
-            if ((state.currentlyPlaying?.musicMetadata ??
-                    state.offlineCurrentlyPlaying?.musicMetadata) !=
-                null) {
-              return television
-                  ? const TvOverscan(child: MusicPlayer(television: true))
-                  : const MusicPlayer();
-            }
-            // The TV video route also hosts Listen mode for ordinary videos.
-            // Its simpler transport works without inventing Music metadata.
-            return Padding(
-              padding: EdgeInsets.symmetric(
-                  horizontal: TvOverscan.horizontal,
-                  vertical: TvOverscan.vertical),
-              child: Column(children: [
-                Expanded(
-                  child: Center(
-                    child: AspectRatio(
-                      aspectRatio: 1,
-                      child: offline != null
-                          ? OfflineVideoThumbnail(
-                              borderRadius: 16, video: offline)
-                          : Thumbnail(
-                              images: musicImages.isNotEmpty
-                                  ? musicImages
-                                  : current?.videoThumbnails,
-                              decoration: BoxDecoration(
-                                  borderRadius: BorderRadius.circular(16))),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                Text(metadata?.title ?? current?.title ?? offline?.title ?? '',
-                    maxLines: 2,
-                    textAlign: TextAlign.center,
-                    style: Theme.of(context).textTheme.titleLarge),
-                Text(
-                    metadata?.artist ??
-                        current?.author ??
-                        offline?.author ??
-                        '',
-                    maxLines: 1),
-                if (metadata?.album case final String album)
-                  Text(album, maxLines: 1),
-                const MusicSponsorNotice(),
-                if (audio.loading) const LinearProgressIndicator(),
-                if (state.backendRecovery case final recovery?)
-                  BackendRecoveryNotice(recovery: recovery, compact: true),
-                const PlaylistLoadingNotice(),
-                Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                  IconButton(
-                      tooltip: locals.musicPrevious,
-                      onPressed: state.hasQueue ? player.playPrevious : null,
-                      icon: const Icon(Icons.skip_previous)),
-                  IconButton(
-                      tooltip: locals.musicRewind,
-                      onPressed: player.rewind,
-                      icon: const Icon(Icons.fast_rewind)),
-                  IconButton.filled(
-                      autofocus: true,
-                      tooltip: state.isPlaying
-                          ? locals.musicPause
-                          : locals.musicPlay,
-                      onPressed: player.togglePlaying,
-                      icon: Icon(
-                          state.isPlaying ? Icons.pause : Icons.play_arrow)),
-                  IconButton(
-                      tooltip: locals.musicForward,
-                      onPressed: player.fastForward,
-                      icon: const Icon(Icons.fast_forward)),
-                  IconButton(
-                      tooltip: locals.musicNext,
-                      onPressed:
-                          state.hasQueue || player.hasMusicRequestSuccessor
-                              ? player.playNext
-                              : null,
-                      icon: const Icon(Icons.skip_next)),
-                ]),
-                TextButton.icon(
-                    key: const ValueKey('music-tv-sound'),
-                    onPressed: () => showMusicSoundSheet(context, player),
-                    icon: const Icon(Icons.tune),
-                    label: Text(locals.musicSound)),
-              ]),
-            );
-          },
-        ),
+        child: controls,
       ),
     );
   }

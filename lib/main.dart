@@ -144,6 +144,7 @@ class MyApp extends StatefulWidget {
 
 class _MyAppState extends State<MyApp> {
   Route<void>? _openedAudioPage;
+  VoidCallback? _retireOpenedAudio;
 
   Future<void> _openAudio(
       PlayerCubit player, Uri uri, bool Function() isCurrent) async {
@@ -170,10 +171,25 @@ class _MyAppState extends State<MyApp> {
       unawaited(navigator.push(page).then((_) {
         if (!identical(_openedAudioPage, page)) return;
         _openedAudioPage = null;
-        player.hide();
+        final retire = _retireOpenedAudio;
+        _retireOpenedAudio = null;
+        retire?.call();
       }));
     }
-    await player.playOpenedAudio(file, isCurrent: isCurrent);
+    final page = _openedAudioPage;
+    if (page?.isActive != true) {
+      await player.playOpenedAudio(file, isCurrent: isCurrent);
+      return;
+    }
+    bool ownsPage() => identical(_openedAudioPage, page) && page!.isActive;
+    final retire = await player.playOpenedAudio(file,
+        isCurrent: () => isCurrent() && ownsPage());
+    if (retire == null) return;
+    if (ownsPage()) {
+      _retireOpenedAudio = retire;
+    } else {
+      retire();
+    }
   }
 
   @override

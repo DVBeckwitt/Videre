@@ -14,6 +14,7 @@ import 'package:clipious/music/models/music_library_entry.dart';
 import 'package:clipious/music/models/music_lyrics.dart';
 import 'package:clipious/music/models/music_lyrics_match.dart';
 import 'package:clipious/music/services/local_music_library.dart';
+import 'package:clipious/music/services/local_music_lyrics_authoring.dart';
 import 'package:clipious/music/services/music_library_search.dart';
 import 'package:clipious/music/services/music_library_service.dart';
 import 'package:clipious/music/services/music_lyrics_corrections.dart';
@@ -255,7 +256,9 @@ void main() {
     addTearDown(reader.dispose);
     await reader.refreshFiles(
         database: database, profileId: database.profileId, downloads: [file]);
-    expect(search(reader, 'credit'), hasLength(2));
+    List<MusicLibrarySearchHit> songs(String query) =>
+        search(reader, query, types: {MusicLibrarySearchType.songs});
+    expect(songs('credit'), hasLength(2));
 
     final library =
         MusicLibraryService.forProfile(database, database.profileId);
@@ -268,15 +271,14 @@ void main() {
     await library.setArtistAlias(
         MusicArtistIdentity.catalog(catalogId), 'Online Alias',
         isCurrent: () => true);
-    expect(search(reader, 'device credit local alias').single.subtitle,
-        'Local Alias');
-    expect(search(reader, 'album alias').single.title, 'Device file');
-    expect(search(reader, 'catalog credit online alias').single.subtitle,
-        'Online Alias');
+    expect(songs('device credit local alias').single.subtitle, 'Local Alias');
+    expect(songs('album alias').single.title, 'Device file');
+    expect(
+        songs('catalog credit online alias').single.subtitle, 'Online Alias');
     await library.setArtistAlias(deviceArtist, null, isCurrent: () => true);
-    expect(search(reader, 'local alias'), isEmpty);
-    expect(search(reader, 'device credit').single.subtitle, 'Device credit');
-    expect(search(reader, 'online alias').single.title, 'Catalog download');
+    expect(songs('local alias'), isEmpty);
+    expect(songs('device credit').single.subtitle, 'Device credit');
+    expect(songs('online alias').single.title, 'Catalog download');
   });
 
   test('searches combinations of actual visible device groups', () async {
@@ -533,6 +535,49 @@ void main() {
             database: database, profileId: profile, isCurrent: () => true),
         isNull);
     expect(readCalls, 3);
+  });
+
+  test(
+      'lyric search uses a provider row’s local draft without opening its file',
+      () async {
+    messenger.setMockMethodCallHandler(local, (call) async {
+      return switch (call.method) {
+        'getFolder' => {
+            'uri': tree,
+            'name': 'Documents',
+            'selectionId': 'provider-grant',
+            'isDocumentProvider': true,
+          },
+        'checkFolderAccess' => true,
+        'listTracks' => [
+            {'uri': shared, 'title': 'Provider song', 'durationMs': 20000},
+          ],
+        'readTrackLyrics' => fail('A lyric search opened a provider file'),
+        _ => null,
+      };
+    });
+    final device = LocalMusicLibrary(visibilityDatabase: () => database);
+    final reader = MusicLibrarySearch(deviceLibrary: device);
+    addTearDown(device.dispose);
+    addTearDown(reader.dispose);
+    final profile = database.profileId;
+    await reader.refreshFiles(
+        database: database, profileId: profile, downloads: const []);
+    final track = device.visibleTracks.single;
+    expect(track.isDocumentProvider, isTrue);
+    final lyrics = LocalMusicLyricsAuthoring.forTrack(
+        database: database, track: track, isCurrent: () => true)!;
+    expect(
+        await lyrics.savePlain('A saved verse', previousDraft: null), isTrue);
+    final matches = await reader
+        .findDeviceLyricMatches('saved verse',
+            database: database, profileId: profile, isCurrent: () => true)
+        .toList();
+    expect(matches.single, (track: track, line: 'A saved verse'));
+    expect(
+        await reader.recheckDeviceLyric('saved verse', track,
+            database: database, profileId: profile, isCurrent: () => true),
+        'A saved verse');
   });
 
   test('an in-flight device lyric read cannot publish to another profile',

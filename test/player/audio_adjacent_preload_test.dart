@@ -1003,6 +1003,31 @@ void main() {
     return library.tracks;
   }
 
+  test('closing an Android Files page only retires its own queue', () async {
+    final tracks = await scanDeviceMusic();
+    final track = tracks.first;
+    final file =
+        (uri: Uri.parse(track.uri), title: track.title, indexedTrack: track);
+    player.manualMusicPreparer = null;
+
+    final retire = await player.playOpenedAudio(file, isCurrent: () => true);
+    expect(retire, isNotNull);
+    final occurrence = player.state.currentQueueId;
+    expect(occurrence, track.playbackId);
+
+    await player.playLocalMusic(tracks);
+    expect(player.state.currentQueueId, occurrence);
+    retire!();
+    expect(player.state.isClosing, isFalse);
+    expect(player.state.offlineVideos, hasLength(2));
+
+    final retireReopened =
+        await player.playOpenedAudio(file, isCurrent: () => true);
+    expect(retireReopened, isNotNull);
+    retireReopened!();
+    expect(player.state.isClosing, isTrue);
+  });
+
   test('decoder preamps distinguish valid, missing and malformed gain tags',
       () async {
     final tracks = await scanDeviceMusic(tagsByTitle: {

@@ -725,7 +725,14 @@ void main() {
 
     await tester.tap(find.byTooltip('Music actions'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Set as ringtone'));
+    final ringtoneAction = find.ancestor(
+      of: find.text('Set as ringtone'),
+      matching: find.byWidgetPredicate((widget) => widget is PopupMenuItem),
+    );
+    await tester.ensureVisible(ringtoneAction);
+    await tester.pumpAndSettle();
+    expect(ringtoneAction.hitTestable(), findsOneWidget);
+    await tester.tap(ringtoneAction.hitTestable());
     await tester.pumpAndSettle();
     expect(find.text('Phone ringtone updated.'), findsOneWidget);
     final ringtone =
@@ -2539,11 +2546,19 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Duplicate songs'), findsOneWidget);
       await tester.tap(find.text('Cancel').hitTestable());
+      await waitForSaveFlow(
+        tester,
+        () => tester
+            .widgetList<ChoiceChip>(recentSort)
+            .any((chip) => chip.onSelected != null),
+        'Playlist destination sort after duplicate review',
+      );
       await tester.pumpAndSettle();
       expect(tester.widget<ChoiceChip>(countSort).selected, isTrue);
 
-      await tester.tap(recentSort);
+      await tester.tap(recentSort.hitTestable());
       await tester.pumpAndSettle();
+      expect(tester.widget<ChoiceChip>(recentSort).selected, isTrue);
       expect(titles(),
           ['Recent list', 'Locked list', 'Larger list', 'Watch Later']);
     },

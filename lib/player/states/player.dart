@@ -6347,7 +6347,8 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       bool collectionDetail = false,
       bool retainQueueOrder = false,
       bool shuffleOnce = false,
-      bool Function()? isCurrent}) async {
+      bool Function()? isCurrent,
+      ValueChanged<String>? onQueueBound}) async {
     if (startIndex < 0 || startIndex >= tracks.length) return;
     final requested = List.of(tracks);
     final library = LocalMusicLibrary.instance;
@@ -6361,7 +6362,8 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     }
     final usesDevice =
         files.any((entry) => isLocalMusicPlaybackId(entry.videoId));
-    await _playVideos(_assignDeviceQueueOccurrences(files),
+    final entries = _assignDeviceQueueOccurrences(files);
+    await _playVideos(entries,
         startIndex: startIndex,
         audio: true,
         fromMusic: true,
@@ -6370,9 +6372,12 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         retainQueueOrder: retainQueueOrder,
         shuffleOnce: shuffleOnce,
         canCommit: () => resolve() != null,
-        bindQueue: () => _bindOfflineQueue(
-            queueTitle: queueTitle,
-            deviceSelectionId: usesDevice ? selection : null));
+        bindQueue: () {
+          _bindOfflineQueue(
+              queueTitle: queueTitle,
+              deviceSelectionId: usesDevice ? selection : null);
+          onQueueBound?.call(playbackQueueId(entries[startIndex]));
+        });
   }
 
   List<DownloadedVideo>? _resolveOnDeviceMusic(
@@ -6536,9 +6541,10 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
           ? openedAudioTrack(id)
           : localMusicTrackForPlayback(id);
 
-  Future<void> playOpenedAudio(OpenedMusicFile file,
+  /// Returns a cleanup action scoped to the queue installed for this open.
+  Future<VoidCallback?> playOpenedAudio(OpenedMusicFile file,
       {required bool Function() isCurrent}) async {
-    if (!isCurrent() || isClosed) return;
+    if (!isCurrent() || isClosed) return null;
     if (!_hasAudioSession) {
       final session = await AudioSession.instance;
       if (!isClosed && !_hasAudioSession) audioSession = session;
@@ -6548,7 +6554,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         _switchingProfile ||
         _profileDatabase.profileId != db.profileId ||
         !isCurrent()) {
-      return;
+      return null;
     }
     final previous = _sessionOwner;
     if (previous != null &&
@@ -6557,22 +6563,41 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         previous.state.hasVideo) {
       previous.pause();
     }
+    ({String id, int generation})? openedQueue;
+    void rememberQueue(String id) =>
+        openedQueue = (id: id, generation: _playlistGeneration);
+
     if (file.indexedTrack case final track?) {
-      await playOnDeviceMusic([OnDeviceMusicEntry.device(track)],
-          isCurrent: isCurrent);
-      return;
+      await _playOnDeviceMusic([OnDeviceMusicEntry.device(track)],
+          startIndex: 0, isCurrent: isCurrent, onQueueBound: rememberQueue);
+    } else {
+      final id = 'device:open:${_nextLocalOccurrence++}';
+      final track =
+          LocalMusicTrack(uri: file.uri.toString(), title: file.title);
+      _pendingOpenedAudio = (id: id, track: track);
+      try {
+        await _playVideos([
+          localMusicPlaybackEntry(track, _profileDatabase.profileId,
+              occurrenceId: id),
+        ], audio: true, canCommit: isCurrent, bindQueue: () {
+          _bindOfflineQueue();
+          rememberQueue(id);
+        });
+      } finally {
+        if (_pendingOpenedAudio?.id == id) _pendingOpenedAudio = null;
+      }
     }
-    final id = 'device:open:${_nextLocalOccurrence++}';
-    final track = LocalMusicTrack(uri: file.uri.toString(), title: file.title);
-    _pendingOpenedAudio = (id: id, track: track);
-    try {
-      await _playVideos([
-        localMusicPlaybackEntry(track, _profileDatabase.profileId,
-            occurrenceId: id),
-      ], audio: true, canCommit: isCurrent, bindQueue: _bindOfflineQueue);
-    } finally {
-      if (_pendingOpenedAudio?.id == id) _pendingOpenedAudio = null;
-    }
+    final queue = openedQueue;
+    if (queue == null) return null;
+    bool ownsPlayback() =>
+        !isClosed &&
+        _sessionOwner == this &&
+        _playlistGeneration == queue.generation &&
+        state.currentQueueId == queue.id;
+    if (!ownsPlayback()) return null;
+    return () {
+      if (ownsPlayback()) hide();
+    };
   }
 
   String _newLocalOccurrence(String trackId, bool Function(String) isUsed) {

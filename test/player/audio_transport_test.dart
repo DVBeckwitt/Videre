@@ -221,6 +221,18 @@ Video _playableVideo(String id, Server server, {bool music = false}) => Video(
       ],
     );
 
+void _mockIdleMusicOutput(WidgetTester tester) {
+  const channel = MethodChannel('videre/music_output');
+  final messenger = tester.binding.defaultBinaryMessenger;
+  messenger.setMockMethodCallHandler(channel, (call) async {
+    if (call.method != 'listen' && call.method != 'cancel') {
+      throw MissingPluginException();
+    }
+    return null;
+  });
+  addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -920,6 +932,7 @@ void main() {
 
   testWidgets('mounted Music transports several songs with the screen off',
       (tester) async {
+    _mockIdleMusicOutput(tester);
     await tester.runAsync(() async {
       final originalPlatform = JustAudioPlatform.instance;
       final originalTarget = debugDefaultTargetPlatformOverride;
@@ -1030,6 +1043,7 @@ void main() {
   testWidgets(
       'Android transport starts without frames and survives UI attachment',
       (tester) async {
+    _mockIdleMusicOutput(tester);
     await tester.runAsync(() async {
       final originalPlatform = JustAudioPlatform.instance;
       final originalTarget = debugDefaultTargetPlatformOverride;

@@ -75,6 +75,7 @@ internal class LocalMusicCatalog(
         val pendingTargets = snapshot.pending.groupBy { it.name }
         val pendingSources = snapshot.pending.mapTo(mutableSetOf()) { it.previous.uri }
         val held = mutableSetOf<String>()
+        var moves = snapshot.moves
 
         fun publishDiscovered(row: LocalMusicRow) {
             if (force || isDocumentProvider) return
@@ -112,7 +113,11 @@ internal class LocalMusicCatalog(
                     row.copy(identityKey = newIdentityKey())
                 else -> row
             }
-            val protected = snapshot.moves.protectIdentity(inherited, previous, ::newIdentityKey)
+            if (previous != null && editedFileProof != null) {
+                // MediaStore may publish its new revision after a verified tag write.
+                moves = moves.verifiedRename(previous, inherited)
+            }
+            val protected = moves.protectIdentity(inherited, previous, ::newIdentityKey)
             val indexed = if (previous != null && protected.identityKey != inherited.identityKey) {
                 protected.copy(addedMs = if (draft.firstSeen) scanTime else draft.addedMs,
                     firstSeen = draft.firstSeen, metadata = draft.metadata)
@@ -175,7 +180,6 @@ internal class LocalMusicCatalog(
         val pending = mutableListOf<PendingLocalMusicRename>()
         val changes = snapshot.unacknowledged.toMutableList()
         val recovered = mutableSetOf<String>()
-        var moves = snapshot.moves
         if (incompleteListing) {
             // A missing subtree can contain a competing rename match. Keep
             // the journal and the last known identities until a full listing.
@@ -528,7 +532,10 @@ internal class LocalMusicCatalog(
                 prior.album == metadata.album && prior.albumArtist == metadata.albumArtist
             },
         ).retainsEditedFileVisibility(previous)
-        index.write(key, snapshot.copy(tracks = snapshot.tracks + (updated.uri to updated)))
+        index.write(key, snapshot.copy(
+            tracks = snapshot.tracks + (updated.uri to updated),
+            moves = snapshot.moves.verifiedRename(previous, updated),
+        ))
         retainTagVisibility(updated, edit.fileProof)
         return channelValue(updated, key)
     }
