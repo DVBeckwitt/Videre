@@ -32,7 +32,21 @@ class _Player extends Cubit<PlayerState> implements PlayerCubit {
   _Player() : super(PlayerState.init(null));
 
   final queues = <({List<LocalMusicTrack> tracks, int start, String? title})>[];
+  final copies = <({List<String> titles, bool next})>[];
   bool? lastSongTap;
+
+  @override
+  bool get isLocalMusicSession => queues.isNotEmpty;
+
+  @override
+  int get playlistGeneration => queues.length;
+
+  @override
+  Future<bool> enqueueLocalMusicCopies(List<LocalMusicTrack> tracks,
+      {required bool next}) async {
+    copies.add((titles: [for (final track in tracks) track.title], next: next));
+    return true;
+  }
 
   @override
   Future<void> playLocalMusic(List<LocalMusicTrack> tracks,
@@ -487,6 +501,87 @@ void main() {
     await tester.pumpAndSettle();
     expect(piano, findsNothing);
     expect(player.queues, hasLength(2));
+  });
+
+  testWidgets(
+      'whole artist and genre queue actions use current displayed order',
+      (tester) async {
+    const source = 'content://provider/tree/music';
+    const artist = 'The Quartet';
+    const genre = 'Jazz';
+    const first = 'Zulu recording';
+    const second = 'Alpha recording';
+    const hidden = 'Private recording';
+    const genreOnly = 'Other artist recording';
+    const artistOnly = 'Other genre recording';
+    Map<String, Object> song(int id, String title, String artist, String genre,
+            {String? visibilityKey}) =>
+        {
+          'uri': '$source/document/$id',
+          'title': title,
+          'artist': artist,
+          'genre': genre,
+          if (visibilityKey != null) 'visibilityKey': visibilityKey,
+        };
+
+    final (:library, :player, reopen: _) = await showLibrary(
+      tester,
+      source: source,
+      tracks: [
+        song(1, first, artist, genre),
+        song(2, second, artist, genre),
+        song(3, hidden, artist, genre, visibilityKey: 'a' * 64),
+        song(4, genreOnly, 'Other singer', genre),
+        song(5, artistOnly, artist, 'Folk'),
+      ],
+    );
+
+    Future<void> tap(Finder finder) async {
+      await tester.tap(finder);
+      await tester.pumpAndSettle();
+    }
+
+    final actions = find.byTooltip('Music actions');
+    await tap(find.text('Genres'));
+    await tap(find.text(genre));
+    expect(find.text('Play all'), findsOneWidget);
+    expect(find.text(hidden), findsOneWidget);
+    await tap(find.text(first));
+    final playing = player.queues.single;
+    expect(playing.tracks[playing.start].title, first);
+
+    await tap(actions);
+    final privateTrack =
+        library.visibleTracks.singleWhere((track) => track.title == hidden);
+    expect(await tester.runAsync(() => library.hideTrack(privateTrack)),
+        isNotNull);
+    await tester.pumpAndSettle();
+    await tap(find.text('Play next'));
+    expect(find.text(hidden), findsNothing);
+    await tap(actions);
+    await tap(find.text('Add to queue'));
+
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    await tap(find.text('Artists'));
+    await tap(find.text(artist));
+    expect(find.text('Play all'), findsOneWidget);
+    expect(find.text(hidden), findsNothing);
+    await tap(actions);
+    await tap(find.text('Play next'));
+    await tap(actions);
+    await tap(find.text('Add to queue'));
+
+    expect(player.queues, [playing]);
+    expect(player.copies.map((copy) => copy.next), [true, false, true, false]);
+    expect(player.copies.map((copy) => copy.titles), [
+      [first, second, genreOnly],
+      [first, second, genreOnly],
+      [first, second, artistOnly],
+      [first, second, artistOnly],
+    ]);
   });
 
   testWidgets(
