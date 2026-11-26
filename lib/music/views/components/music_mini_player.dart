@@ -18,6 +18,7 @@ import 'package:clipious/player/views/components/player_modal_back_handler.dart'
 import 'package:clipious/settings/models/theme_palette.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils.dart' show DeviceType, getDeviceType;
+import 'package:clipious/utils/motion.dart';
 import 'package:clipious/videos/models/ided_video.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/material.dart';
@@ -30,6 +31,13 @@ import 'music_playback_artwork.dart';
 import 'music_playback_toggles.dart';
 import 'music_playing_source.dart';
 import 'music_track_swipe.dart';
+
+const _metadataPadding = EdgeInsets.symmetric(horizontal: 8);
+const _artworkBreakpoint = 110.0;
+const _artworkSize = 48.0;
+const _artworkSpacing = 10.0;
+const _errorIconPadding = EdgeInsets.only(left: 4);
+const _errorIconSize = 20.0;
 
 /// Compact presentation for the already-mounted shared audio player.
 class MusicMiniPlayer extends StatelessWidget {
@@ -135,7 +143,9 @@ class MusicMiniPlayer extends StatelessWidget {
     final visibleLyric = pending == null && !largeText ? lyric : null;
     final subtitle = statusLabel ?? visibleLyric ?? artist;
     const errorIcon = Icon(Icons.error_outline,
-        key: ValueKey('music-mini-error'), size: 20, color: error);
+        key: ValueKey('music-mini-error'), size: _errorIconSize, color: error);
+    final supportingStyle =
+        text.bodySmall?.copyWith(fontSize: 12, color: supporting);
     final title = Text(displayTitle,
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
@@ -192,103 +202,112 @@ class MusicMiniPlayer extends StatelessWidget {
                       bookmark: inlineSave ? null : bookmark);
                   return Row(children: [
                     Expanded(
-                      child: Semantics(
-                        button: true,
-                        label: [
-                          locals.musicNowPlaying,
-                          displayTitle,
-                          if (artist.isNotEmpty) artist,
-                          if ((statusLabel ?? visibleLyric) case final line?)
-                            line,
-                        ].join(', '),
-                        onTap: player.showBigPlayer,
-                        onLongPress: openAlbum,
-                        customSemanticsActions: openAlbum == null
-                            ? null
-                            : {
-                                CustomSemanticsAction(
-                                    label: locals.musicOpenAlbum): openAlbum,
-                              },
-                        excludeSemantics: true,
-                        child: InkWell(
-                          key: const ValueKey('music-mini-expand'),
+                      child: _MiniPlayerMetadataOverflow(
+                        title: title,
+                        artist: artist,
+                        artistStyle: supportingStyle,
+                        measureArtist:
+                            statusLabel == null && visibleLyric == null,
+                        failed: failed,
+                        controlStyle: controlStyle,
+                        child: Semantics(
+                          button: true,
+                          label: [
+                            locals.musicNowPlaying,
+                            displayTitle,
+                            if (artist.isNotEmpty) artist,
+                            if ((statusLabel ?? visibleLyric) case final line?)
+                              line,
+                          ].join(', '),
                           onTap: player.showBigPlayer,
                           onLongPress: openAlbum,
-                          excludeFromSemantics: true,
-                          child: LayoutBuilder(
-                              builder: (context, constraints) => Padding(
-                                    padding: const EdgeInsets.symmetric(
-                                        horizontal: 8),
-                                    child: Row(children: [
-                                      if (constraints.maxWidth >= 110) ...[
-                                        ClipRRect(
-                                          borderRadius:
-                                              BorderRadius.circular(6),
-                                          child: SizedBox.square(
-                                            key: const ValueKey(
-                                                'music-mini-artwork'),
-                                            dimension: 48,
-                                            child: Stack(
-                                              fit: StackFit.expand,
-                                              children: [
-                                                artwork,
-                                                if (failed)
-                                                  ColoredBox(
-                                                    color: Colors.black
-                                                        .withValues(alpha: 0.6),
-                                                    child: Center(
-                                                        child: errorIcon),
-                                                  ),
-                                              ],
-                                            ),
-                                          ),
-                                        ),
-                                        const SizedBox(width: 10),
-                                      ],
-                                      Expanded(
-                                        child: Column(
-                                          mainAxisAlignment:
-                                              MainAxisAlignment.center,
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.start,
+                          customSemanticsActions: openAlbum == null
+                              ? null
+                              : {
+                                  CustomSemanticsAction(
+                                      label: locals.musicOpenAlbum): openAlbum,
+                                },
+                          excludeSemantics: true,
+                          child: InkWell(
+                            key: const ValueKey('music-mini-expand'),
+                            onTap: player.showBigPlayer,
+                            onLongPress: openAlbum,
+                            excludeFromSemantics: true,
+                            child:
+                                LayoutBuilder(builder: (context, constraints) {
+                              final width = constraints.maxWidth;
+                              final showArtwork = width >= _artworkBreakpoint;
+                              final showError = failed && !showArtwork;
+                              final padding =
+                                  _metadataHorizontalPadding(width, showError);
+                              return Padding(
+                                padding: padding,
+                                child: Row(children: [
+                                  if (showArtwork) ...[
+                                    ClipRRect(
+                                      borderRadius: BorderRadius.circular(6),
+                                      child: SizedBox.square(
+                                        key: const ValueKey(
+                                            'music-mini-artwork'),
+                                        dimension: _artworkSize,
+                                        child: Stack(
+                                          fit: StackFit.expand,
                                           children: [
-                                            if (largeText)
-                                              Flexible(
-                                                child: LayoutBuilder(
-                                                  builder: (context, bounds) =>
-                                                      FittedBox(
-                                                    fit: BoxFit.scaleDown,
-                                                    alignment:
-                                                        Alignment.centerLeft,
-                                                    child: SizedBox(
-                                                        width: bounds.maxWidth,
-                                                        child: title),
-                                                  ),
-                                                ),
-                                              )
-                                            else
-                                              title,
-                                            if (!largeText &&
-                                                subtitle.isNotEmpty)
-                                              Text(subtitle,
-                                                  maxLines: 1,
-                                                  overflow:
-                                                      TextOverflow.ellipsis,
-                                                  style: text.bodySmall
-                                                      ?.copyWith(
-                                                          fontSize: 12,
-                                                          color: supporting)),
+                                            artwork,
+                                            if (failed)
+                                              ColoredBox(
+                                                color: Colors.black
+                                                    .withValues(alpha: 0.6),
+                                                child: Center(child: errorIcon),
+                                              ),
                                           ],
                                         ),
                                       ),
-                                      if (failed && constraints.maxWidth < 110)
-                                        Padding(
-                                          padding:
-                                              const EdgeInsets.only(left: 4),
-                                          child: errorIcon,
-                                        ),
-                                    ]),
-                                  )),
+                                    ),
+                                    const SizedBox(width: _artworkSpacing),
+                                  ],
+                                  Expanded(
+                                    child: Column(
+                                      mainAxisAlignment:
+                                          MainAxisAlignment.center,
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        if (largeText)
+                                          Flexible(
+                                            child: LayoutBuilder(
+                                              builder: (context, bounds) =>
+                                                  FittedBox(
+                                                fit: BoxFit.scaleDown,
+                                                alignment: Alignment.centerLeft,
+                                                child: SizedBox(
+                                                    width: bounds.maxWidth,
+                                                    child: title),
+                                              ),
+                                            ),
+                                          )
+                                        else
+                                          title,
+                                        if (!largeText && subtitle.isNotEmpty)
+                                          Text(subtitle,
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: supportingStyle),
+                                      ],
+                                    ),
+                                  ),
+                                  if (showError &&
+                                      width - padding.horizontal >=
+                                          _errorIconSize +
+                                              _errorIconPadding.horizontal)
+                                    Padding(
+                                      padding: _errorIconPadding,
+                                      child: errorIcon,
+                                    ),
+                                ]),
+                              );
+                            }),
+                          ),
                         ),
                       ),
                     ),
@@ -469,6 +488,130 @@ class _MiniLikeButtonState extends State<_MiniLikeButton> {
       },
     );
   }
+}
+
+EdgeInsets _metadataHorizontalPadding(double width, bool showError) =>
+    showError &&
+            width <
+                _metadataPadding.horizontal +
+                    _errorIconPadding.horizontal +
+                    _errorIconSize
+        ? EdgeInsets.zero
+        : _metadataPadding;
+
+/// Adds a separate action without taking over the metadata's expand gesture.
+class _MiniPlayerMetadataOverflow extends StatelessWidget {
+  const _MiniPlayerMetadataOverflow({
+    required this.title,
+    required this.artist,
+    required this.artistStyle,
+    required this.measureArtist,
+    required this.failed,
+    required this.controlStyle,
+    required this.child,
+  });
+
+  final Text title;
+  final String artist;
+  final TextStyle? artistStyle;
+  final bool measureArtist;
+  final bool failed;
+  final ButtonStyle controlStyle;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+        builder: (context, constraints) {
+          final width = constraints.maxWidth;
+          // Measure the labels at the width they have before adding the action.
+          final hasArtwork = width >= _artworkBreakpoint;
+          final showError = failed && !hasArtwork;
+          final padding = _metadataHorizontalPadding(width, showError);
+          final nonTextWidth = hasArtwork
+              ? _artworkSize + _artworkSpacing
+              : showError
+                  ? _errorIconSize + _errorIconPadding.horizontal
+                  : 0.0;
+          final labelWidth = (width - padding.horizontal - nonTextWidth)
+              .clamp(0.0, double.infinity);
+          const standardActionWidth = 48.0;
+          // At narrow widths keep half the space available for single-tap expand.
+          final actionWidth = (width / 2).clamp(0.0, standardActionWidth);
+          final showDetails =
+              _overflows(context, title.data!, title.style, labelWidth) ||
+                  (measureArtist &&
+                      _overflows(context, artist, artistStyle, labelWidth));
+          return Row(children: [
+            Expanded(child: child),
+            if (showDetails)
+              SizedBox(
+                width: actionWidth,
+                child: IconButton(
+                  key: const ValueKey('music-mini-song-details'),
+                  tooltip: AppLocalizations.of(context)!.musicTrackDetails,
+                  style: actionWidth == standardActionWidth
+                      ? controlStyle
+                      : controlStyle.copyWith(
+                          padding:
+                              const WidgetStatePropertyAll(EdgeInsets.zero),
+                        ),
+                  onPressed: () => _showDetails(context),
+                  icon: const Icon(Icons.info_outline_rounded, size: 20),
+                ),
+              ),
+          ]);
+        },
+      );
+
+  bool _overflows(
+      BuildContext context, String value, TextStyle? style, double width) {
+    if (value.isEmpty) return false;
+    var effectiveStyle = DefaultTextStyle.of(context).style.merge(style);
+    if (MediaQuery.boldTextOf(context)) {
+      effectiveStyle = effectiveStyle.copyWith(fontWeight: FontWeight.bold);
+    }
+    final painter = TextPainter(
+      text: TextSpan(text: value, style: effectiveStyle),
+      textDirection: Directionality.of(context),
+      textScaler: MediaQuery.textScalerOf(context),
+      locale: Localizations.localeOf(context),
+      maxLines: 1,
+      ellipsis: '…',
+    )..layout(maxWidth: width);
+    final overflows = painter.didExceedMaxLines;
+    painter.dispose();
+    return overflows;
+  }
+
+  Future<void> _showDetails(BuildContext context) => showDialog<void>(
+        context: context,
+        animationStyle: AppMotion.dialogStyle(context),
+        builder: (context) => PlayerModalBackHandler(
+          child: AlertDialog(
+            title: Text(AppLocalizations.of(context)!.musicTrackDetails),
+            scrollable: true,
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title.data!,
+                    style: Theme.of(context).textTheme.titleMedium),
+                if (artist.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Text(artist),
+                ],
+              ],
+            ),
+            actions: [
+              TextButton(
+                autofocus: isTv,
+                onPressed: () => Navigator.of(context).pop(),
+                child: Text(MaterialLocalizations.of(context).closeButtonLabel),
+              ),
+            ],
+          ),
+        ),
+      );
 }
 
 bool _canAdvance(PlayerCubit player, PlayerRepeat repeat) =>
