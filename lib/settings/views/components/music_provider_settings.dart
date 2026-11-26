@@ -418,6 +418,10 @@ class MusicProviderSettings extends StatelessWidget {
         label: (value) => switch (value) {
           MusicPlayerBackground.artwork => locals.musicPlayerBackgroundArtwork,
           MusicPlayerBackground.solid => locals.musicPlayerBackgroundSolid,
+          MusicPlayerBackground.gradient =>
+            locals.musicPlayerBackgroundGradient,
+          MusicPlayerBackground.movingArtwork =>
+            locals.musicPlayerBackgroundMovingArtwork,
         },
         optionKey: (value) => ValueKey('music-player-background-${value.name}'),
         save: (value) => value.save(db),

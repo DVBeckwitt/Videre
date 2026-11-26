@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:clipious/utils/views/components/artwork_image_builder.dart';
 import 'package:flutter/material.dart';
 
 import '../../../globals.dart' show db;
@@ -15,6 +16,7 @@ class DeviceMusicArtwork extends StatelessWidget {
     required LocalMusicTrack track,
     required this.placeholder,
     this.thumbnail = false,
+    this.artworkImageBuilder,
   }) : _paths = (embedded: track.artPath, adjacent: track.adjacentArtPath);
 
   DeviceMusicArtwork.album({
@@ -22,7 +24,8 @@ class DeviceMusicArtwork extends StatelessWidget {
     required Iterable<LocalMusicTrack> tracks,
     required this.placeholder,
     this.thumbnail = false,
-  }) : _paths = (
+  })  : artworkImageBuilder = null,
+        _paths = (
           embedded: tracks.map((track) => track.artPath).nonNulls.firstOrNull,
           adjacent:
               tracks.map((track) => track.adjacentArtPath).nonNulls.firstOrNull,
@@ -30,11 +33,13 @@ class DeviceMusicArtwork extends StatelessWidget {
 
   DeviceMusicArtwork._thumbnail(this._paths, {required this.placeholder})
       : thumbnail = true,
+        artworkImageBuilder = null,
         super(key: ValueKey(_paths));
 
   final _CoverPaths _paths;
   final Widget placeholder;
   final bool thumbnail;
+  final ArtworkImageBuilder? artworkImageBuilder;
 
   @override
   Widget build(BuildContext context) {
@@ -79,17 +84,20 @@ class DeviceMusicArtwork extends StatelessWidget {
   Widget _image(String path, BoxFit fit, Widget Function() fallback,
       {required int? decodeExtent}) {
     final ImageProvider<Object> file = FileImage(File(path));
+    final provider = decodeExtent == null
+        ? file
+        : ResizeImage(file,
+            width: decodeExtent,
+            height: decodeExtent,
+            policy: ResizeImagePolicy.fit);
     return Image(
-      image: decodeExtent == null
-          ? file
-          : ResizeImage(file,
-              width: decodeExtent,
-              height: decodeExtent,
-              policy: ResizeImagePolicy.fit),
+      image: provider,
       fit: fit,
       excludeFromSemantics: true,
-      frameBuilder: (context, child, frame, synchronous) =>
-          synchronous || frame != null ? child : placeholder,
+      frameBuilder: (context, child, frame, synchronous) {
+        if (!synchronous && frame == null) return placeholder;
+        return artworkImageBuilder?.call(context, provider, child) ?? child;
+      },
       errorBuilder: (context, error, stack) => fallback(),
     );
   }

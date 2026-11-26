@@ -513,7 +513,13 @@ void main() {
     }
 
     await choose('now-playing-style', 'Classic', 'Large artwork');
-    await choose('player-background', 'Artwork', 'Solid');
+    await choose('player-background', 'Artwork', 'Artwork gradient');
+    expect(
+        MusicPlayerBackground.forDatabase(db), MusicPlayerBackground.gradient);
+    await choose('player-background', 'Artwork gradient', 'Moving artwork');
+    expect(MusicPlayerBackground.forDatabase(db),
+        MusicPlayerBackground.movingArtwork);
+    await choose('player-background', 'Moving artwork', 'Solid');
     await choose('scrubber-style', 'Gapped', 'Wave');
     expect(
       MusicNowPlayingStyle.forDatabase(db),
@@ -521,7 +527,7 @@ void main() {
     );
     expect(MusicPlayerBackground.forDatabase(db), MusicPlayerBackground.solid);
     expect(MusicScrubberStyle.forDatabase(db), MusicScrubberStyle.wave);
-    expect(MusicPlayerAppearance.revision.value, revision + 3);
+    expect(MusicPlayerAppearance.revision.value, revision + 5);
   });
 
   test(
@@ -554,6 +560,20 @@ void main() {
         MusicPlayerBackground.solid,
       );
       expect(MusicScrubberStyle.forDatabase(db), MusicScrubberStyle.continuous);
+
+      var otherBackground = MusicPlayerBackground.solid;
+      for (final background in [
+        MusicPlayerBackground.gradient,
+        MusicPlayerBackground.movingArtwork,
+      ]) {
+        await background.save(original);
+        expect(MusicPlayerBackground.forDatabase(db), otherBackground);
+        final artworkBackup =
+            UserBackup.parse((await original.exportBackup()).encode());
+        await db.restoreBackup(artworkBackup, replace: true);
+        expect(MusicPlayerBackground.forDatabase(db), background);
+        otherBackground = background;
+      }
 
       for (final key in [
         musicNowPlayingStyleSettingName,
