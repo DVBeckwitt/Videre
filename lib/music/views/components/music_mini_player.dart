@@ -18,6 +18,7 @@ import 'package:clipious/player/views/components/player_modal_back_handler.dart'
 import 'package:clipious/settings/models/theme_palette.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils.dart' show DeviceType, getDeviceType;
+import 'package:clipious/videos/models/ided_video.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/semantics.dart' show CustomSemanticsAction;
@@ -56,8 +57,7 @@ class MusicMiniPlayer extends StatelessWidget {
     final player = context.read<PlayerCubit>();
     final state = context.watch<PlayerCubit>().state;
     final pending = player.openingMusicEntry;
-    final entry =
-        pending ?? state.currentlyPlaying ?? state.offlineCurrentlyPlaying;
+    final entry = _displayedEntry(player);
     final video = entry is Video ? entry : null;
     final offline = entry is DownloadedVideo ? entry : null;
     final music = video?.musicMetadata ?? offline?.musicMetadata;
@@ -353,6 +353,9 @@ class MusicMiniPlayer extends StatelessWidget {
                         selectedBackgroundColor:
                             foreground.withValues(alpha: 0.22),
                       ),
+                    if (shortcut == MusicMiniPlayerShortcut.like &&
+                        entry != null)
+                      _MiniLikeButton(entry: entry, style: controlStyle),
                     if (!compact) customControls ? menu : close,
                   ]);
                 }),
@@ -368,6 +371,103 @@ class MusicMiniPlayer extends StatelessWidget {
             ]),
           ),
         ));
+  }
+}
+
+IdedVideo? _displayedEntry(PlayerCubit player) =>
+    player.openingMusicEntry ??
+    player.state.currentlyPlaying ??
+    player.state.offlineCurrentlyPlaying;
+
+class _MiniLikeButton extends StatefulWidget {
+  final IdedVideo entry;
+  final ButtonStyle style;
+
+  const _MiniLikeButton({required this.entry, required this.style});
+
+  @override
+  State<_MiniLikeButton> createState() => _MiniLikeButtonState();
+}
+
+class _MiniLikeButtonState extends State<_MiniLikeButton> {
+  bool _saving = false;
+
+  MusicLibraryEntry? _songForProfile(IdedVideo entry, String profileId) {
+    final owner = switch (entry) {
+      Video() =>
+        (entry.playbackConnection ?? entry.backendPlayback)?.server.profileId,
+      DownloadedVideo() => entry.profileId,
+      _ => null,
+    };
+    if (owner != null && owner != profileId) return null;
+    final deviceTrack = localMusicTrackForPlayback(entry.videoId);
+    if (deviceTrack != null) return MusicLibraryEntry.deviceSong(deviceTrack);
+    final catalogSong = catalogMusicVideoForPlayback(entry);
+    return catalogSong == null ? null : MusicLibraryEntry.song(catalogSong);
+  }
+
+  Future<void> _setLiked(
+      MusicLibrarySession session, MusicLibraryEntry song, bool liked) async {
+    setState(() => _saving = true);
+    try {
+      await session.library
+          .setSongLiked(song, liked: liked, isCurrent: () => session.isCurrent);
+    } catch (_) {
+      if (mounted && session.isCurrent) {
+        final locals = AppLocalizations.of(context)!;
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(locals.musicLibraryActionError)));
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final app = context.watch<AppCubit>();
+    final session = MusicLibrarySession(app);
+    final library = session.library;
+    final entry = widget.entry;
+    final song = session.isCurrent && library.profileId == app.state.profileId
+        ? _songForProfile(entry, library.profileId)
+        : null;
+    final player = context.read<PlayerCubit>();
+    final generation = player.playlistGeneration;
+    final occurrence = playbackQueueId(entry);
+    final locals = AppLocalizations.of(context)!;
+    return ListenableBuilder(
+      listenable: library.changes,
+      builder: (context, _) {
+        final liked = song != null && library.isLiked(song.id);
+        return IconButton(
+          key: const ValueKey('music-mini-like'),
+          tooltip: liked ? locals.musicUnlikeSong : locals.musicLikeSong,
+          onPressed: _saving || song == null
+              ? null
+              : () {
+                  final current = _displayedEntry(player);
+                  if (!mounted ||
+                      _saving ||
+                      !session.isCurrent ||
+                      player.isClosed ||
+                      player.playlistGeneration != generation ||
+                      !player.state.isMini ||
+                      player.state.isHidden ||
+                      player.state.isClosing ||
+                      current == null ||
+                      current.videoId != entry.videoId ||
+                      playbackQueueId(current) != occurrence) {
+                    return;
+                  }
+                  unawaited(_setLiked(session, song, !liked));
+                },
+          style: widget.style,
+          isSelected: liked,
+          icon: Icon(liked ? Icons.favorite : Icons.favorite_border),
+        );
+      },
+    );
   }
 }
 

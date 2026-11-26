@@ -82,12 +82,12 @@ void main() {
     }
 
     await choose('layout', ['Automatic', 'Compact', 'Transport'], 'Transport');
-    await choose(
-        'shortcut', ['Automatic', 'Next', 'Repeat', 'Shuffle'], 'Repeat');
+    await choose('shortcut',
+        ['Automatic', 'Next', 'Repeat', 'Shuffle', 'Like song'], 'Like song');
     expect(
         settings.state.musicMiniPlayerLayout, MusicMiniPlayerLayout.transport);
     expect(
-        settings.state.musicMiniPlayerShortcut, MusicMiniPlayerShortcut.repeat);
+        settings.state.musicMiniPlayerShortcut, MusicMiniPlayerShortcut.like);
   });
 
   testWidgets('artwork swiping starts enabled and can be turned off',
