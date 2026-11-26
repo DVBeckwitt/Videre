@@ -2717,6 +2717,104 @@ void main() {
     await pressAndroidBack(tester);
   });
 
+  testWidgets('Inline lyrics follow the song and keep transport in reach',
+      (tester) async {
+    const ready = MediaEvent(state: MediaState.ready);
+    const firstLine = 'First timed line';
+    const secondLine = 'Second timed line';
+    const thirdLine = 'Another song’s timed line';
+    final third = next.copyWith(
+        videoId: 'third',
+        title: 'Third',
+        musicMetadata: const MusicMetadata(title: 'Third', artist: 'Singer'));
+    final previousService = service;
+    service = _ReleasePlaybackService(lengthSeconds: 180);
+    addTearDown(() => service = previousService);
+    await tester.runAsync(() async {
+      await setLrclibEnabled(true);
+      await MusicLyricsTimingPreference(db, song.videoId).save(100);
+      player.audioSession = await AudioSession.instance;
+      player.transportZone = Zone.current;
+    });
+    await player.seed(player.state.copyWith(
+        videos: [song, next, third],
+        playQueue: ListQueue.of([next.videoId, third.videoId])));
+    await pump(tester, child: MusicPlayer(lyricsLoader: (_, __, id) async {
+      if (id == next.videoId) return const MusicLyrics.unavailable();
+      if (id == third.videoId) {
+        return const MusicLyrics.synced([
+          (start: Duration.zero, text: thirdLine),
+        ]);
+      }
+      return const MusicLyrics.synced([
+        (start: Duration(seconds: 29), text: firstLine),
+        (start: Duration(seconds: 30), text: secondLine),
+      ]);
+    }));
+
+    final artwork = find.byKey(const ValueKey('music-player-artwork'));
+    final inline =
+        find.byKey(const ValueKey('music-player-inline-lyrics-pane'));
+    Finder line(String text) => find.descendant(
+        of: inline, matching: find.widgetWithText(ListTile, text));
+    bool selected(String text) => tester.widget<ListTile>(line(text)).selected;
+    await tap(tester, 'music-player-inline-lyrics');
+    await tester.pumpAndSettle();
+    expect(inline, findsOneWidget);
+    expect(artwork.hitTestable(), findsNothing);
+    expect(selected(firstLine), isTrue);
+    await player.seed(
+        player.state.copyWith(position: const Duration(milliseconds: 30100)));
+    await tester.pumpAndSettle();
+    expect(selected(secondLine), isTrue);
+
+    Future<void> pressTransport(String key) async {
+      final button = find.byKey(ValueKey(key));
+      expect(button.hitTestable(), findsOneWidget);
+      await tester.runAsync(() => tester.tap(button));
+      await tester.pump();
+    }
+
+    expect(find.byKey(const ValueKey('music-player-previous')).hitTestable(),
+        findsOneWidget);
+    await pressTransport('music-player-play');
+    expect(player.state.mediaCommand?.type, MediaCommandType.play);
+    await tester.runAsync(() async => player.setEvent(const MediaEvent(
+        type: MediaEventType.play, state: MediaState.playing)));
+    await tester.pumpAndSettle();
+    await pressTransport('music-player-play');
+    expect(player.state.mediaCommand?.type, MediaCommandType.pause);
+    await tester.runAsync(() async => player.setEvent(
+        const MediaEvent(type: MediaEventType.pause, state: MediaState.pause)));
+    await tester.pumpAndSettle();
+
+    Future<void> skipTo(Video track) async {
+      await pressTransport('music-player-next');
+      await tester.runAsync(() async {
+        await player.switching;
+        player.setEvent(ready);
+      });
+      await tester.pumpAndSettle();
+      expect(player.state.currentlyPlaying?.videoId, track.videoId);
+      expect(inline, findsOneWidget);
+    }
+
+    await skipTo(next);
+    expect(find.text('No lyrics available for this track'), findsOneWidget);
+    expect(find.text(firstLine), findsNothing);
+    expect(find.text(secondLine), findsNothing);
+    await skipTo(third);
+    expect(selected(thirdLine), isTrue);
+    expect(player.nextCalls, 2);
+
+    await tap(tester, 'music-player-inline-lyrics-close');
+    await tester.pumpAndSettle();
+    expect(inline, findsNothing);
+    expect(artwork.hitTestable(), findsOneWidget);
+    expect(find.byKey(const ValueKey('music-player-lyrics')).hitTestable(),
+        findsOneWidget);
+  });
+
   testWidgets('Lyrics skips a missing song and ignores a retired response',
       (tester) async {
     await tester.runAsync(() => setLrclibEnabled(true));

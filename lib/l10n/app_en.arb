@@ -1930,6 +1930,7 @@
   "musicAudioQualitySaved": "Playing the downloaded audio file.",
   "musicAudioQualityFailed": "That quality is unavailable.",
   "musicLyrics": "Lyrics",
+  "musicShowLyricsInPlayer": "Show lyrics in player",
   "musicShowVideo": "Show music video",
   "musicShowCover": "Show cover art",
   "musicVideoLabel": "Video",

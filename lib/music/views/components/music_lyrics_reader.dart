@@ -35,6 +35,7 @@ enum _AppearanceToggle { multiline, trim }
 class MusicLyricsReader extends StatefulWidget {
   final MusicMetadata track;
   final String recordingId;
+  final bool inline;
   final Future<MusicLyrics> Function(Future<void> retired) load;
   final bool Function() isCurrent;
   final IDbClient preferencesDatabase;
@@ -53,6 +54,7 @@ class MusicLyricsReader extends StatefulWidget {
     required this.load,
     required this.isCurrent,
     required this.preferencesDatabase,
+    this.inline = false,
     this.localDuration,
     this.correctionTarget,
     this.offlineLyrics,
@@ -408,7 +410,10 @@ class _MusicLyricsReaderState extends State<MusicLyricsReader> {
         ? TextAlign.center
         : TextAlign.start;
     return ListView.builder(
-      padding: const EdgeInsets.fromLTRB(24, 16, 24, 32),
+      primary: widget.inline ? false : null,
+      padding: widget.inline
+          ? const EdgeInsets.all(8)
+          : const EdgeInsets.fromLTRB(24, 16, 24, 32),
       itemCount: lyrics.text != null ? 1 : lyrics.cues.length,
       itemBuilder: (context, index) {
         final child = SelectableText(
@@ -431,12 +436,22 @@ class _MusicLyricsReaderState extends State<MusicLyricsReader> {
     );
   }
 
-  Widget _page(AppLocalizations locals,
+  Widget _present(AppLocalizations locals,
       {required Widget body,
       MusicLyrics? lyrics,
       bool hasText = false,
       bool ready = false,
       bool hasTiming = false}) {
+    if (widget.inline) {
+      if (hasText) return body;
+      return Center(
+        child: SingleChildScrollView(
+          primary: false,
+          padding: const EdgeInsets.all(8),
+          child: body,
+        ),
+      );
+    }
     final theme = Theme.of(context);
     return Scaffold(
       key: const ValueKey('music-lyrics-reader'),
@@ -544,75 +559,74 @@ class _MusicLyricsReaderState extends State<MusicLyricsReader> {
         child:
             Text(locals.musicLyricsUnavailable, textAlign: TextAlign.center));
 
-    return PlayerModalBackHandler(
-      child: !currentTrack || !currentSession
-          ? _page(locals, body: unavailable)
-          : FutureBuilder<MusicLyrics>(
-              future: _request,
-              builder: (context, snapshot) {
-                if (!widget.isCurrent()) {
-                  return _page(locals, body: unavailable);
-                }
-                if (snapshot.connectionState != ConnectionState.done) {
-                  return _page(locals,
-                      body: const Center(
-                          child: MotionLoadingIndicator(
-                              child: CircularProgressIndicator())));
-                }
-                if (snapshot.hasError) {
-                  return _page(locals,
-                      ready: true,
-                      body: Center(
-                          child:
-                              Column(mainAxisSize: MainAxisSize.min, children: [
-                        Text(locals.musicLyricsLoadFailed),
-                        TextButton(
-                          onPressed: _reload,
-                          child: Text(locals.retry),
-                        ),
-                      ])));
-                }
-                final lyrics = snapshot.requireData;
-                final hasText = switch (lyrics.kind) {
-                  MusicLyricsKind.synced ||
-                  MusicLyricsKind.plain =>
-                    lyrics.cues.isNotEmpty ||
-                        lyrics.text?.trim().isNotEmpty == true,
-                  _ => false,
-                };
-                final body = switch (lyrics.kind) {
-                  MusicLyricsKind.synced
-                      when seekLimit != null &&
-                          lyrics.cues.isNotEmpty &&
-                          lyrics.cues.last.start <= seekLimit =>
-                    MusicTimedLyrics(
-                      lyrics: lyrics,
-                      track: widget.track,
-                      edited: _correction?.edited == true,
-                      preferences: _preferences,
-                      loadShareArtwork: widget.loadShareArtwork,
-                      seekLimit: seekLimit,
-                      delay: Duration(milliseconds: _delayMilliseconds),
-                      isCurrent: widget.isCurrent,
-                      onSeek: _seek,
-                    ),
-                  MusicLyricsKind.synced ||
-                  MusicLyricsKind.plain =>
-                    hasText ? _plainLyrics(lyrics) : unavailable,
-                  MusicLyricsKind.instrumental =>
-                    Center(child: Text(locals.musicLyricsInstrumental)),
-                  MusicLyricsKind.unavailable => _correction == null
-                      ? unavailable
-                      : Center(child: Text(locals.musicLyricsMatchDiscarded)),
-                };
-                return _page(locals,
-                    body: body,
+    final content = !currentTrack || !currentSession
+        ? _present(locals, body: unavailable)
+        : FutureBuilder<MusicLyrics>(
+            future: _request,
+            builder: (context, snapshot) {
+              if (!widget.isCurrent()) {
+                return _present(locals, body: unavailable);
+              }
+              if (snapshot.connectionState != ConnectionState.done) {
+                return _present(locals,
+                    body: const Center(
+                        child: MotionLoadingIndicator(
+                            child: CircularProgressIndicator())));
+              }
+              if (snapshot.hasError) {
+                final retry = Column(mainAxisSize: MainAxisSize.min, children: [
+                  Text(locals.musicLyricsLoadFailed,
+                      textAlign: TextAlign.center),
+                  TextButton(
+                    onPressed: _reload,
+                    child: Text(locals.retry),
+                  ),
+                ]);
+                return _present(locals,
+                    ready: true, body: Center(child: retry));
+              }
+              final lyrics = snapshot.requireData;
+              final hasText = switch (lyrics.kind) {
+                MusicLyricsKind.synced ||
+                MusicLyricsKind.plain =>
+                  lyrics.cues.isNotEmpty ||
+                      lyrics.text?.trim().isNotEmpty == true,
+                _ => false,
+              };
+              final body = switch (lyrics.kind) {
+                MusicLyricsKind.synced
+                    when seekLimit != null &&
+                        lyrics.cues.isNotEmpty &&
+                        lyrics.cues.last.start <= seekLimit =>
+                  MusicTimedLyrics(
                     lyrics: lyrics,
-                    hasText: hasText,
-                    ready: true,
-                    hasTiming: body is MusicTimedLyrics);
-              },
-            ),
-    );
+                    inline: widget.inline,
+                    track: widget.track,
+                    edited: _correction?.edited == true,
+                    preferences: _preferences,
+                    loadShareArtwork: widget.loadShareArtwork,
+                    seekLimit: seekLimit,
+                    delay: Duration(milliseconds: _delayMilliseconds),
+                    isCurrent: widget.isCurrent,
+                    onSeek: _seek,
+                  ),
+                MusicLyricsKind.synced ||
+                MusicLyricsKind.plain =>
+                  hasText ? _plainLyrics(lyrics) : unavailable,
+                MusicLyricsKind.instrumental =>
+                  Center(child: Text(locals.musicLyricsInstrumental)),
+                MusicLyricsKind.unavailable => _correction == null
+                    ? unavailable
+                    : Center(child: Text(locals.musicLyricsMatchDiscarded)),
+              };
+              return _present(locals,
+                  body: body,
+                  lyrics: lyrics,
+                  hasText: hasText,
+                  ready: true,
+                  hasTiming: body is MusicTimedLyrics);
+            },
+          );
+    return widget.inline ? content : PlayerModalBackHandler(child: content);
   }
 }

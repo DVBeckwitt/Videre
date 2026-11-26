@@ -26,7 +26,15 @@ import 'music_lyrics_reader.dart';
 
 class MusicLyricsButton extends StatefulWidget {
   final MusicLyricsLoader? loader;
-  const MusicLyricsButton({super.key, required this.loader});
+  final ValueChanged<Widget>? onShowInline;
+  final FocusNode? focusNode;
+
+  const MusicLyricsButton({
+    super.key,
+    required this.loader,
+    this.onShowInline,
+    this.focusNode,
+  });
 
   @override
   State<MusicLyricsButton> createState() => _MusicLyricsButtonState();
@@ -96,7 +104,20 @@ class _MusicLyricsButtonState extends State<MusicLyricsButton> {
         await setLrclibEnabled(true, expectedProfileId: profile);
       }
       if (!mounted || !stillOpening()) return;
-      final loader = widget.loader;
+      final showInline = widget.onShowInline;
+      final reader = _FollowingLyricsReader(
+        owner: owner,
+        loader: widget.loader,
+        corrections: corrections,
+        offlineLyrics: offlineLyrics,
+        ownsSession: ownsSession,
+        inline: showInline != null,
+      );
+      if (showInline != null) {
+        showInline(reader);
+        return;
+      }
+
       final navigator = Navigator.of(context);
       final themes =
           InheritedTheme.capture(from: context, to: navigator.context);
@@ -107,13 +128,7 @@ class _MusicLyricsButtonState extends State<MusicLyricsButton> {
             BlocProvider.value(value: app),
             BlocProvider.value(value: player),
           ],
-          child: _FollowingLyricsReader(
-            owner: owner,
-            loader: loader,
-            corrections: corrections,
-            offlineLyrics: offlineLyrics,
-            ownsSession: ownsSession,
-          ),
+          child: reader,
         )),
       ));
     } catch (_) {
@@ -128,12 +143,24 @@ class _MusicLyricsButtonState extends State<MusicLyricsButton> {
   }
 
   @override
-  Widget build(BuildContext context) => FilledButton.tonalIcon(
-        key: const ValueKey('music-player-lyrics'),
+  Widget build(BuildContext context) {
+    final locals = AppLocalizations.of(context)!;
+    if (widget.onShowInline != null) {
+      return IconButton.filledTonal(
+        key: const ValueKey('music-player-inline-lyrics'),
+        focusNode: widget.focusNode,
+        tooltip: locals.musicShowLyricsInPlayer,
         onPressed: _open,
-        icon: const Icon(Icons.lyrics_outlined, size: 20),
-        label: Text(AppLocalizations.of(context)!.musicLyrics),
+        icon: const Icon(Icons.subtitles_outlined),
       );
+    }
+    return FilledButton.tonalIcon(
+      key: const ValueKey('music-player-lyrics'),
+      onPressed: _open,
+      icon: const Icon(Icons.lyrics_outlined, size: 20),
+      label: Text(locals.musicLyrics),
+    );
+  }
 }
 
 typedef _PlayingLyricsSong = ({
@@ -182,6 +209,7 @@ class _FollowingLyricsReader extends StatelessWidget {
   final MusicLyricsCorrections corrections;
   final MusicOfflineLyrics offlineLyrics;
   final bool Function() ownsSession;
+  final bool inline;
 
   const _FollowingLyricsReader({
     required this.owner,
@@ -189,6 +217,7 @@ class _FollowingLyricsReader extends StatelessWidget {
     required this.corrections,
     required this.offlineLyrics,
     required this.ownsSession,
+    required this.inline,
   });
 
   @override
@@ -198,17 +227,25 @@ class _FollowingLyricsReader extends StatelessWidget {
         (_activeSong(player), player.openingMusicEntry != null));
     final locals = AppLocalizations.of(context)!;
     if (!currentSession || song == null) {
+      final body = Center(
+        child: currentSession && opening
+            ? const MotionLoadingIndicator(child: CircularProgressIndicator())
+            : Text(locals.musicLyricsUnavailable, textAlign: TextAlign.center),
+      );
+      if (inline) {
+        return Center(
+          child: SingleChildScrollView(
+            primary: false,
+            padding: const EdgeInsets.all(8),
+            child: body,
+          ),
+        );
+      }
       return PlayerModalBackHandler(
         child: Scaffold(
           key: const ValueKey('music-lyrics-reader'),
           appBar: AppBar(title: Text(locals.musicLyrics)),
-          body: Center(
-            child: currentSession && opening
-                ? const MotionLoadingIndicator(
-                    child: CircularProgressIndicator())
-                : Text(locals.musicLyricsUnavailable,
-                    textAlign: TextAlign.center),
-          ),
+          body: body,
         ),
       );
     }
@@ -282,6 +319,7 @@ class _FollowingLyricsReader extends StatelessWidget {
             localTrack?.uri,
             localDuration
           )),
+          inline: inline,
           track: track,
           recordingId: local ? localMusicTrackId(song.videoId) : song.videoId,
           load: (retired) {
