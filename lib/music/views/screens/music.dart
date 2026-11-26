@@ -2818,6 +2818,7 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
               child: MusicCatalogDescription(
                 title: artistPage.artist.name,
                 text: description,
+                linkify: true,
               ),
             ),
         ],

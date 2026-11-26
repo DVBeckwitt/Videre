@@ -10,6 +10,24 @@ import '../../models/invidious_linkifier.dart';
 import '../../models/timestamp_linkifier.dart';
 import 'external_link.dart';
 
+const textLinkifyOptions = LinkifyOptions(humanize: true, removeWww: true);
+
+void openLinkifiedUrl(
+  BuildContext context,
+  String url, {
+  VoidCallback? beforeOpeningInApp,
+}) {
+  final uri = Uri.tryParse(url);
+  if (uri == null) return;
+  final app = context.read<AppCubit?>();
+  if (app?.canOpenAppLink(uri) == true) {
+    beforeOpeningInApp?.call();
+    unawaited(app!.openAppLink(url, false));
+  } else {
+    unawaited(openExternalLink(context, uri));
+  }
+}
+
 class TextLinkified extends StatefulWidget {
   final String text;
   final Video? video;
@@ -22,14 +40,7 @@ class TextLinkified extends StatefulWidget {
 
   void openLink(BuildContext context, LinkableElement link) {
     if (link is UrlElement) {
-      final uri = Uri.tryParse(link.url);
-      if (uri == null) return;
-      final app = context.read<AppCubit?>();
-      if (app?.canOpenAppLink(uri) == true) {
-        unawaited(app!.openAppLink(link.url, false));
-      } else {
-        unawaited(openExternalLink(context, uri));
-      }
+      openLinkifiedUrl(context, link.url);
     } else if (link is TimestampElement) {
       final player = this.player;
       if (player == null) return;
@@ -91,7 +102,7 @@ class _TextLinkifiedState extends State<TextLinkified> {
       linkStyle: TextStyle(
           color: colorScheme.primary, decoration: TextDecoration.none),
       onOpen: (link) => widget.openLink(context, link),
-      options: const LinkifyOptions(humanize: true, removeWww: true),
+      options: textLinkifyOptions,
       linkifiers: [
         linkifier,
         if (widget.player != null) const TimestampLinkifier(),
