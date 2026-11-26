@@ -1153,10 +1153,39 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     hide();
   }
 
+  static bool _remembersMusicQueue(IDbClient database) =>
+      database.getSettings(musicRememberQueueAfterRestartSettingName)?.value !=
+      'false';
+
+  bool get _rememberMusicQueue => _remembersMusicQueue(_profileDatabase);
+
+  static bool _isMusicSession(PlaybackSession session, IDbClient database,
+      {DownloadedVideo? currentDownload}) {
+    if (!session.audio) return false;
+    if (currentDownload?.musicMetadata != null ||
+        session.currentDeviceId != null ||
+        session.namedQueueId != null ||
+        session.androidResumption != null ||
+        session.musicHistoryPlaylist ||
+        session.musicHistoryEntries?.contains(session.currentId) == true ||
+        session.offlineFingerprints.containsKey(session.currentId) ||
+        session.videos.any((video) =>
+            playbackQueueId(video) == session.currentId &&
+            video.musicMetadata != null)) {
+      return true;
+    }
+    final downloadId = session.currentSavedDownloadId;
+    return downloadId != null &&
+        database.getDownloadByVideoId(downloadId)?.musicMetadata != null;
+  }
+
   PlaybackSession? get savedSession {
     final saved = PlaybackSession.decode(
         _profileDatabase.getSettings(playbackSessionSetting)?.value);
-    if (saved == null) return null;
+    if (saved == null ||
+        (!_rememberMusicQueue && _isMusicSession(saved, _profileDatabase))) {
+      return null;
+    }
     final cached = saved.videos.map(CachedMusicPlayback.of).nonNulls;
     if (cached.isEmpty) return saved;
     final server = settings.appCubit.state.server;
@@ -1286,12 +1315,84 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     _notifyNamedMusicQueues(database);
   }
 
-  Future<T> _queueSessionWrite<T>(Future<T> Function() write) {
+  static Future<T> _queueSessionWrite<T>(Future<T> Function() write) {
     final result = _sessionWrite.then((_) => write());
     _sessionWrite = result.then<void>((_) {}, onError: (Object error) {
       log.warning('Could not save playback queues', error.runtimeType);
     });
     return result;
+  }
+
+  static Future<void> saveMusicQueueRestartPreference(
+      IDbClient database, SettingsValue preference) async {
+    final enabled = preference.value != 'false';
+    await _queueSessionWrite(() async {
+      final wasEnabled = _remembersMusicQueue(database);
+      final raw = database.getSettings(playbackSessionSetting)?.value;
+      final saved = PlaybackSession.decode(raw);
+      final forget = !enabled || !wasEnabled;
+      final expired =
+          forget && saved != null && _isMusicSession(saved, database)
+              ? saved
+              : null;
+      String? updatedSession;
+      if (expired != null) {
+        updatedSession = '';
+      } else if (forget && saved != null) {
+        updatedSession = _MusicRequests.removeFromSession(raw!);
+      }
+      // Clear the previous Music checkpoint in the same write as opting out.
+      await database.saveSettings([
+        preference,
+        if (updatedSession != null)
+          SettingsValue(playbackSessionSetting, updatedSession),
+      ]);
+      if (!enabled) {
+        for (final player in _runtimePlayers) {
+          if (player._profileDatabase.profileId == database.profileId &&
+              !player.state.hasVideo) {
+            player.cancelPendingAndroidMusicResumption();
+            if (expired != null) {
+              player._discardDormantMusicQueue(expired.currentId);
+            }
+          }
+        }
+      }
+    });
+    final owner = _sessionOwner;
+    if (enabled &&
+        owner != null &&
+        owner._profileDatabase.profileId == database.profileId &&
+        !owner.state.isHidden &&
+        owner._inMusicQueue) {
+      await owner._saveSession(owner.state);
+    }
+  }
+
+  void _discardDormantMusicQueue(String occurrence) {
+    if (isClosed ||
+        _isDisposing ||
+        _switchingProfile ||
+        !state.isHidden ||
+        !state.isAudio ||
+        ![...state.videos, ...state.offlineVideos]
+            .any((entry) => playbackQueueId(entry) == occurrence)) {
+      return;
+    }
+    _setActiveNamedMusicQueue(null);
+    _queuedDeviceSelectionId = null;
+    _musicHistoryEntries.clear();
+    _musicHistoryPlaylist = false;
+    _musicRecommendationSources.clear();
+    _bindPlaylist(null, []);
+    emit(state.copyWith(
+      videos: [],
+      offlineVideos: [],
+      playedVideos: [],
+      playQueue: ListQueue<String>(),
+      startAt: null,
+      position: Duration.zero,
+    ));
   }
 
   void _initializeNamedMusicQueues() {
@@ -1809,24 +1910,13 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     final database = _profileDatabase;
     final watchRepository = _watchRepository;
     final watchRevision = _watchRevision;
-    final encoded = _musicRequests.encodeWithSession(saved.encode());
+    final encoded = saved.encode();
+    final withRequests = _musicRequests.encodeWithSession(encoded);
     final source = _androidResumeSource;
     final resumeRevision = _androidResumeRevision;
     // An older TV screen may close after its replacement has begun playing.
     return _queueSessionWrite(() async {
       if (_sessionOwner != this) return;
-      var value = encoded;
-      if (saved.audio &&
-          source != null &&
-          _isMusicEntry(
-              snapshot.currentlyPlaying ?? snapshot.offlineCurrentlyPlaying) &&
-          source.occurrence == saved.currentId &&
-          resumeRevision == _androidResumeRevision) {
-        final json = jsonDecode(encoded) as Map<String, dynamic>;
-        json['androidResumption'] = source.toJson();
-        value = jsonEncode(json);
-      }
-      final setting = SettingsValue(playbackSessionSetting, value);
       final namedId = saved.namedQueueId;
       if (namedId != null) {
         final queues = _readNamedMusicQueues(database);
@@ -1839,6 +1929,25 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
           ]);
         }
       }
+      final rememberMusic = _remembersMusicQueue(database);
+      if (!rememberMusic &&
+          _isMusicSession(saved, database,
+              currentDownload: snapshot.offlineCurrentlyPlaying)) {
+        return;
+      }
+      var value = rememberMusic ? withRequests : encoded;
+      if (rememberMusic &&
+          saved.audio &&
+          source != null &&
+          _isMusicEntry(
+              snapshot.currentlyPlaying ?? snapshot.offlineCurrentlyPlaying) &&
+          source.occurrence == saved.currentId &&
+          resumeRevision == _androidResumeRevision) {
+        final json = jsonDecode(value) as Map<String, dynamic>;
+        json['androidResumption'] = source.toJson();
+        value = jsonEncode(json);
+      }
+      final setting = SettingsValue(playbackSessionSetting, value);
       if (!isLocalMusicPlaybackId(id) &&
           watchRepository != null &&
           watchRevision != null) {

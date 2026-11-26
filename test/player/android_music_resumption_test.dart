@@ -297,6 +297,59 @@ void main() {
       expect(media.playbackState.value.playing, isFalse);
     });
 
+    test(
+        'opt-out keeps a cold Android checkpoint unavailable after re-enabling',
+        () async {
+      await settings.saveSetting(
+          SettingsValue(musicRememberQueueAfterRestartSettingName, 'false'));
+      await save(_onlineSession(), _onlineSource(_instance));
+
+      final controller = player();
+      final media = MediaHandler(controller);
+      expect(controller.state.videos, isEmpty);
+      expect(await media.getChildren(_recentRoot), isEmpty);
+      var foregroundRequested = false;
+      expect(
+          await controller.resumeMusicFromAndroid(() async {
+            foregroundRequested = true;
+            return false;
+          }),
+          isFalse);
+      expect(foregroundRequested, isFalse);
+      await controller.close();
+
+      await settings.setMusicRememberQueueAfterRestart(true);
+      final reopened = player();
+      expect(reopened.state.videos, isEmpty);
+      expect(await reopened.androidRecentMusic(), isNull);
+    });
+
+    test('opting out invalidates Android Play waiting for foreground',
+        () async {
+      var probes = 0;
+      await seedOfflineDuplicate(() {
+        probes++;
+        return true;
+      });
+      final controller = player();
+      final starting = Completer<void>();
+      final foreground = Completer<bool>();
+      final attempt = controller.resumeMusicFromAndroid(() {
+        starting.complete();
+        return foreground.future;
+      });
+      await starting.future.timeout(const Duration(seconds: 5));
+
+      await settings.setMusicRememberQueueAfterRestart(false);
+      final probesBeforeForeground = probes;
+      foreground.complete(true);
+
+      expect(await attempt, isFalse);
+      expect(probes, probesBeforeForeground);
+      expect(controller.state.hasVideo, isFalse);
+      expect(await controller.androidRecentMusic(), isNull);
+    });
+
     test('Stop revokes system playback and preserves the manual queue',
         () async {
       await save(_onlineSession(), _onlineSource(_instance));

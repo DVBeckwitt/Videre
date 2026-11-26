@@ -1895,6 +1895,9 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
 
   Widget _resumeAction() =>
       BlocBuilder<PlayerCubit, PlayerState>(builder: (context, state) {
+        // Re-read the saved checkpoint when the preference changes.
+        context.select((SettingsCubit settings) =>
+            settings.state.musicRememberQueueAfterRestart);
         final player = context.read<PlayerCubit>();
         final locals = AppLocalizations.of(context)!;
         final activeMusic = !state.isHidden &&

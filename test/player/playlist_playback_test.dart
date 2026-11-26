@@ -276,6 +276,40 @@ void main() {
     expect(player.state.position, const Duration(seconds: 4));
   });
 
+  test('explicit Music playlist resume works with automatic restore disabled',
+      () async {
+    await settings.setMusicRememberQueueAfterRestart(false);
+    final songs = [
+      for (final video in entries)
+        video.copyWith(
+            musicMetadata: MusicMetadata(title: video.videoId, artist: 'Band')),
+    ];
+    await player.playPlaylist(songs,
+        reference: reference, startIndex: 2, fromMusic: true);
+    await player.saveProgress(9);
+    player.pause();
+    await player.close();
+
+    player = TestPlayerCubit(PlayerState.init(null), settings);
+    player.audioSession = await AudioSession.instance;
+    app_main.mediaHandler = MediaHandler(player);
+    player.restoreSession();
+    expect(player.savedSession, isNull);
+    final checkpoint =
+        PlaylistProgressService.forProfile(db, db.profileId).get(reference)!;
+    final target = checkpoint.resolve(songs)!;
+    expect(target.index, 2);
+    await player.playPlaylist(songs,
+        reference: reference,
+        startIndex: target.index,
+        startAt:
+            db.getVideoPlaybackProgress(target.video.videoId).resumePosition(),
+        audio: checkpoint.audio,
+        fromMusic: true);
+    expect(player.state.isAudio, isTrue);
+    expect(player.state.position, const Duration(seconds: 9));
+  });
+
   for (final replaceWithPlaylist in [true, false]) {
     test(
         'pending ${replaceWithPlaylist ? 'playlist' : 'video'} replacement keeps a coherent saved session',
