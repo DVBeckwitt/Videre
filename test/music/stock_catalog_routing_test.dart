@@ -363,6 +363,30 @@ void main() {
     ]);
   });
 
+  test('a full Topic search confirms a channel missing from the artist search',
+      () async {
+    final success = respond;
+    respond = (request) async => switch (request.url.path) {
+          '/api/v1/channels/$topicId' => json(request, emptyTopic),
+          '/api/v1/search' => json(
+              request,
+              request.url.queryParameters['q'] == 'Artist'
+                  ? [
+                      verifiedArtist,
+                      {...topic, 'authorId': otherChannelId}
+                    ]
+                  : [topic]),
+          _ => await success(request),
+        };
+    final music = InvidiousMusicCatalogService(api: api);
+    expect((await music.getArtistOverview(topicId)).artist.id, channelId);
+    expect(
+        calls
+            .where((uri) => uri.path.endsWith('/search'))
+            .map((uri) => uri.queryParameters['q']),
+        ['Artist', 'Artist - Topic']);
+  });
+
   final unverifiedTopicMatches = <String, List<Object?>>{
     'the original Topic ID is missing': [
       {...topic, 'authorId': otherChannelId},
@@ -389,6 +413,7 @@ void main() {
       expect(calls.map((uri) => uri.path), [
         '/api/v1/channels/$topicId',
         '/api/v1/search',
+        if (entry.value.contains(verifiedArtist)) '/api/v1/search',
       ]);
     });
   }
