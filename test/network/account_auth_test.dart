@@ -28,6 +28,19 @@ const _disabledGateway = {
   'needsSignIn': false,
 };
 
+class _ObservedLoginService extends Service {
+  _ObservedLoginService({required super.httpClient});
+
+  final loginStarted = Completer<void>();
+
+  @override
+  Future<String?> logIn(String accountId, {String? profileId}) {
+    final pending = super.logIn(accountId, profileId: profileId);
+    loginStarted.complete();
+    return pending;
+  }
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   final messenger =
@@ -326,11 +339,15 @@ void main() {
       return Future.value(_disabledGateway);
     });
     browser((_) => 'newer-login');
+    final observed = _ObservedLoginService(httpClient: client);
+    service = observed;
 
     final loggingOut = oldSettings.logOut();
     await statusStarted.future;
     final loggingIn = reopened.logInWithToken();
-    await Future<void>.delayed(Duration.zero);
+    // Reopened settings clear cached recommendations before starting the login.
+    // Hold the old status response until the ordinary account has a new intent.
+    await observed.loginStarted.future;
     statusResponse.complete(_disabledGateway);
     await loggingIn;
     await loggingOut;
