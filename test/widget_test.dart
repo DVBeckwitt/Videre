@@ -3027,6 +3027,74 @@ void main() {
     );
   });
 
+  testWidgets('phone Music shelves own swipes on their cards', (tester) async {
+    final library =
+        MusicLibraryService.forProfile(globals.db, globals.db.profileId);
+    await tester.runAsync(() async {
+      for (var i = 0; i < 6; i++) {
+        await library.save(MusicLibraryEntry(
+            kind: MusicLibraryKind.song,
+            id: 'shelfsong0$i',
+            title: 'Shelf song $i'));
+      }
+    });
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+            const MethodChannel('videre/recommendations'),
+            (_) async => {
+                  'ranked': [
+                    {'id': 'shelfsong00', 'score': 1.0, 'reason': 'Saved song'},
+                  ],
+                });
+    await _pumpHomepage(tester, const Size(390, 1000));
+    final pager = _tabPosition(tester);
+    await _selectPhoneTab(tester, PhoneNavigationItem.music);
+    final quickPicks = find.byKey(const ValueKey('music-quick-picks'));
+    final speedDial = find.byKey(const ValueKey('music-speed-dial'));
+    final speedDialPosition = tester
+        .state<ScrollableState>(
+            find.descendant(of: speedDial, matching: find.byType(Scrollable)))
+        .position;
+    final musicPage = pager.pixels;
+
+    // Even one column of picks owns swipes in both directions.
+    for (final dx in [280.0, -280.0]) {
+      final row = tester.getRect(quickPicks);
+      final start = dx > 0 ? row.left + 25 : row.right - 25;
+      await tester.dragFrom(Offset(start, row.center.dy), Offset(dx, 0));
+      await tester.pumpAndSettle();
+      expect(pager.pixels, musicPage);
+    }
+
+    await tester.drag(speedDial, const Offset(-160, 0));
+    await tester.pumpAndSettle();
+    expect(speedDialPosition.pixels, greaterThan(0));
+    expect(pager.pixels, musicPage);
+
+    // Let a swipe from the heading start moving the app pager, then grab
+    // Speed Dial while Music is still painted and the pager is settling.
+    final heading = tester.getCenter(find.text('Quick picks'));
+    final gesture = await tester.startGesture(heading);
+    await gesture.moveBy(const Offset(25, 0));
+    await gesture.moveBy(const Offset(55, 0));
+    await tester.pump();
+    await gesture.up();
+    await tester.pump(const Duration(milliseconds: 16));
+    expect(pager.pixels, lessThan(musicPage));
+    expect(pager.isScrollingNotifier.value, isTrue);
+    final offset = speedDialPosition.pixels;
+    await tester.drag(speedDial, const Offset(140, 0));
+    await tester.pumpAndSettle();
+    expect(speedDialPosition.pixels, lessThan(offset));
+    expect(pager.pixels, musicPage);
+
+    // A swipe on the heading still changes the app tab.
+    await tester.drag(find.text('Quick picks'), const Offset(280, 0));
+    await tester.pumpAndSettle();
+    expect(pager.pixels, lessThan(musicPage));
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets(
       'landscape configured feeds preserve their layout without extra resume sections',
       (tester) async {

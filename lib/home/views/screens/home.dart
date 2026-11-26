@@ -219,6 +219,21 @@ class _MainScreenState extends State<MainContentScreen> {
     );
   }
 
+  bool _keepMusicPageInteractive(ScrollUpdateNotification update, int index) {
+    final metrics = update.metrics;
+    final source = update.context;
+    if (update.depth == 0 &&
+        metrics is PageMetrics &&
+        source != null &&
+        metrics.page != null &&
+        (metrics.page! - index).abs() < 1) {
+      // The pager normally ignores hits on its children while dragging and
+      // settling. A new swipe on a visible Music shelf must reach that shelf.
+      Scrollable.of(source).position.context.setIgnorePointer(false);
+    }
+    return false;
+  }
+
   Widget _tabletRail(
       BuildContext context,
       List<PhoneNavigationItem> items,
@@ -534,7 +549,17 @@ class _MainScreenState extends State<MainContentScreen> {
                                                   PhoneNavigationItem.music
                                           ? 0
                                           : innerHorizontalPadding),
-                              child: child,
+                              child: phoneMusicTab
+                                  ? NotificationListener<
+                                      ScrollUpdateNotification>(
+                                      onNotification: (update) =>
+                                          _keepMusicPageInteractive(
+                                              update,
+                                              tabItems.indexOf(
+                                                  PhoneNavigationItem.music)),
+                                      child: child,
+                                    )
+                                  : child,
                             ),
                           ),
                         ],

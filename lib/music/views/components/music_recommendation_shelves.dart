@@ -1069,7 +1069,9 @@ class _QuickPickRowsState extends State<_QuickPickRows> {
               // All three TV lanes can receive returning remote focus,
               // including a song that moved outside the viewport.
               cacheExtent: widget.focusForSlot == null ? null : columns * step,
-              physics: _QuickPickScrollPhysics(() => _dragColumn),
+              // Keep shelf gestures local even when all picks fit.
+              physics: _QuickPickScrollPhysics(() => _dragColumn,
+                  parent: const AlwaysScrollableScrollPhysics()),
               itemCount: columns,
               separatorBuilder: (_, __) => const SizedBox(width: _quickPickGap),
               itemBuilder: (context, lane) => SizedBox(
