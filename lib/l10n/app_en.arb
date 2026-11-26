@@ -240,6 +240,8 @@
   "@newSorting": {
     "description": "Content sorting: new"
   },
+  "videoSeekBack10": "Back 10 seconds",
+  "videoSeekForward10": "Forward 10 seconds",
   "streamIsLive": "Live",
   "@streamIsLive": {
     "description": "Label when a video is a live stream"

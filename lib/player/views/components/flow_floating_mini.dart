@@ -28,6 +28,7 @@ class FlowFloatingMiniMotion {
   Object? _viewport;
 
   bool get interacting => _preview != null;
+  bool get isWide => _wide;
   double scale(FlowMiniGeometry geometry) => _wide ? geometry.maxScale : 1;
 
   /// A resize or inset change leaves the saved corner in control again.
@@ -294,11 +295,34 @@ class _FlowFloatingMiniSurfaceState extends State<FlowFloatingMiniSurface> {
 /// The controls in Flow's MiniPlayerSlot and MiniPlayerControls, backed by
 /// the current PlayerCubit and painted over its existing video surface.
 class FlowFloatingMiniControls extends StatelessWidget {
+  static const _seekStep = Duration(seconds: 10);
+
   final bool largeWindow;
+  final bool wide;
   final double scale;
 
-  const FlowFloatingMiniControls(
-      {super.key, required this.largeWindow, required this.scale});
+  const FlowFloatingMiniControls({
+    super.key,
+    required this.largeWindow,
+    required this.wide,
+    required this.scale,
+  });
+
+  bool _canSeek(PlayerCubit player) {
+    final state = player.state;
+    final video = state.currentlyPlaying;
+    final length = video?.lengthSeconds ??
+        state.offlineCurrentlyPlaying?.lengthSeconds ??
+        0;
+    return player.canSeekCurrentMedia &&
+        video?.liveNow != true &&
+        video?.isUpcoming != true &&
+        length > 0;
+  }
+
+  void _seekBy(PlayerCubit player, Duration offset) {
+    if (_canSeek(player)) player.seek(player.state.position + offset);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -310,6 +334,7 @@ class FlowFloatingMiniControls extends StatelessWidget {
           ended: p.state.mediaEvent.state == MediaState.completed,
           previous: p.state.playedVideos.isNotEmpty,
           next: p.state.playQueue.isNotEmpty,
+          canSeek: _canSeek(p),
           duration: p.duration,
           position: p.state.position,
         ));
@@ -328,6 +353,11 @@ class FlowFloatingMiniControls extends StatelessWidget {
       final smallTouch = math.min(
           (largeWindow ? 44.0 : 36.0) * scale.clamp(1, 1.6),
           size.height - touch - 8);
+      final queueButtons = (state.previous ? 1 : 0) + (state.next ? 1 : 0);
+      final seekTouch =
+          math.min(smallTouch, (size.width - 2 * inset) / (queueButtons + 2));
+      final showTimeSeek = wide && state.canSeek && seekTouch >= 34;
+      final transportTouch = showTimeSeek ? seekTouch : smallTouch;
       return Stack(children: [
         Positioned(
           left: inset,
@@ -365,7 +395,7 @@ class FlowFloatingMiniControls extends StatelessWidget {
             onPressed: player.hide,
           ),
         ),
-        if (smallTouch >= 34 && (state.previous || state.next))
+        if (transportTouch >= 34 && (showTimeSeek || queueButtons > 0))
           Positioned(
             left: 0,
             right: 0,
@@ -376,15 +406,31 @@ class FlowFloatingMiniControls extends StatelessWidget {
                   if (state.previous)
                     _roundControl(
                       context,
-                      size: smallTouch,
+                      size: transportTouch,
                       label: locals.musicPrevious,
                       icon: Icons.skip_previous_rounded,
                       onPressed: player.playPrevious,
                     ),
+                  if (showTimeSeek) ...[
+                    _roundControl(
+                      context,
+                      size: transportTouch,
+                      label: locals.videoSeekBack10,
+                      icon: Icons.replay_10_rounded,
+                      onPressed: () => _seekBy(player, -_seekStep),
+                    ),
+                    _roundControl(
+                      context,
+                      size: transportTouch,
+                      label: locals.videoSeekForward10,
+                      icon: Icons.forward_10_rounded,
+                      onPressed: () => _seekBy(player, _seekStep),
+                    ),
+                  ],
                   if (state.next)
                     _roundControl(
                       context,
-                      size: smallTouch,
+                      size: transportTouch,
                       label: locals.musicNext,
                       icon: Icons.skip_next_rounded,
                       onPressed: player.playNext,

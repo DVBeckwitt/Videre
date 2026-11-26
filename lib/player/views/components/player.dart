@@ -715,6 +715,7 @@ class _PlayerState extends State<Player> {
                                                                                                     onDismiss: cubit.hide,
                                                                                                     child: FlowFloatingMiniControls(
                                                                                                       largeWindow: isTablet,
+                                                                                                      wide: _floatingMotion.isWide,
                                                                                                       scale: miniBounds.width / geometry.sizeAt(1).width,
                                                                                                     ),
                                                                                                   ),
