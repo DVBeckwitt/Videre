@@ -930,6 +930,8 @@
   "@rememberSubtitleLanguageDescription": {
     "description": "Settings description for remembering subtitle language"
   },
+  "playerLockTouchControls": "Lock touch controls",
+  "playerUnlockTouchControls": "Unlock touch controls",
   "lockFullScreenToLandscape": "Lock full screen orientation to video aspect ratio",
   "@lockFullScreenToLandscape": {
     "description": "Title to force full screen to landscape"

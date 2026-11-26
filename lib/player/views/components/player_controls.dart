@@ -21,6 +21,7 @@ import 'package:clipious/player/views/components/minimize_on_swipe_down.dart';
 import 'package:clipious/player/views/components/remote_control.dart';
 import 'package:clipious/player/views/components/system_setting_slider.dart';
 import 'package:clipious/player/views/components/seek_preview.dart';
+import 'package:clipious/player/views/components/subtitle_failure_notice.dart';
 import 'package:clipious/player/views/components/subtitle_size_picker.dart';
 import 'package:clipious/player/views/components/subtitle_timing_picker.dart';
 import 'package:clipious/player/views/components/video_display_mode_picker.dart';
@@ -40,10 +41,35 @@ import '../../states/audio_player.dart';
 import '../../states/player_controls.dart';
 import '../../states/video_player.dart';
 
-class PlayerControls extends StatelessWidget {
+class PlayerControls extends StatefulWidget {
   final MediaPlayerCubit? mediaPlayerCubit;
 
   const PlayerControls({super.key, this.mediaPlayerCubit});
+
+  @override
+  State<PlayerControls> createState() => _PlayerControlsState();
+}
+
+class _PlayerControlsState extends State<PlayerControls> {
+  bool _touchLocked = false;
+
+  MediaPlayerCubit? get mediaPlayerCubit => widget.mediaPlayerCubit;
+
+  bool _inFullscreenVideo(PlayerState state) =>
+      state.fullScreenState == FullScreenState.fullScreen &&
+      !state.isMini &&
+      !state.isPip &&
+      !state.isAudio &&
+      !state.isHidden &&
+      !state.isClosing;
+
+  void _lockTouchControls(PlayerCubit player, PlayerControlsCubit controls) {
+    if (!_inFullscreenVideo(player.state) ||
+        controls.state.draggingPositionSlider) {
+      return;
+    }
+    setState(() => _touchLocked = true);
+  }
 
   Future<void> showPlaybackSpeedSelection(
       BuildContext context, MediaPlayerCubit player) async {
@@ -434,6 +460,14 @@ class PlayerControls extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    return BlocListener<PlayerCubit, PlayerState>(
+      listenWhen: (_, current) => _touchLocked && !_inFullscreenVideo(current),
+      listener: (context, state) => setState(() => _touchLocked = false),
+      child: _buildControls(context),
+    );
+  }
+
+  Widget _buildControls(BuildContext context) {
     var locals = AppLocalizations.of(context)!;
     var textTheme = Theme.of(context).textTheme;
     var player = context.read<PlayerCubit>();
@@ -520,6 +554,11 @@ class PlayerControls extends StatelessWidget {
                 !isMini &&
                 !isPip &&
                 videoPlayer is VideoPlayerCubit;
+            final fullscreenVideo = context.select(
+              (PlayerCubit cubit) => _inFullscreenVideo(cubit.state),
+            );
+            final canLockTouch = flowGestures && fullscreenVideo;
+            final touchLocked = canLockTouch && _touchLocked;
             final indicatorStyle = Theme.of(context).textTheme.bodySmall;
             final indicatorLineHeight = MediaQuery.textScalerOf(context)
                     .scale(indicatorStyle?.fontSize ?? 12) *
@@ -563,6 +602,33 @@ class PlayerControls extends StatelessWidget {
                 cubit.onStreamEvent(state.mediaEvent);
               },
               child: _PlayerSurface(
+                videoPlayer:
+                    videoPlayer is VideoPlayerCubit ? videoPlayer : null,
+                lockedChild: touchLocked
+                    ? Listener(
+                        behavior: HitTestBehavior.opaque,
+                        child: SafeArea(
+                          child: Align(
+                            alignment: AlignmentDirectional.topEnd,
+                            child: Padding(
+                              padding: const EdgeInsets.all(8),
+                              child: FilledButton.tonalIcon(
+                                autofocus: true,
+                                onPressed: () {
+                                  setState(() => _touchLocked = false);
+                                  cubit.showControls();
+                                },
+                                icon: const Icon(Icons.lock_open),
+                                label: Semantics(
+                                  liveRegion: true,
+                                  child: Text(locals.playerUnlockTouchControls),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      )
+                    : null,
                 wrapVideoGestures: flowGestures
                     ? (child) => FlowVideoGestures(
                           key: ValueKey(player.state.currentQueueId),
@@ -594,7 +660,8 @@ class PlayerControls extends StatelessWidget {
                           child: child,
                         )
                     : null,
-                speedBoostPlayer: !isMini &&
+                speedBoostPlayer: !touchLocked &&
+                        !isMini &&
                         !isPip &&
                         isPlaying &&
                         !playerState.errored &&
@@ -845,6 +912,18 @@ class PlayerControls extends StatelessWidget {
                                                                         0.8)),
                                                   ),
                                                 )),
+                                              if (canLockTouch)
+                                                IconButton(
+                                                  tooltip: locals
+                                                      .playerLockTouchControls,
+                                                  onPressed: playerState
+                                                          .draggingPositionSlider
+                                                      ? null
+                                                      : () =>
+                                                          _lockTouchControls(
+                                                              player, cubit),
+                                                  icon: const Icon(Icons.lock),
+                                                ),
                                               RemoteControlButton(
                                                   player: player),
                                               IconButton(
@@ -1311,6 +1390,8 @@ class PlayerControls extends StatelessWidget {
 
 class _PlayerSurface extends StatefulWidget {
   const _PlayerSurface({
+    required this.videoPlayer,
+    required this.lockedChild,
     required this.wrapVideoGestures,
     required this.speedBoostPlayer,
     required this.onVerticalDragStart,
@@ -1320,6 +1401,8 @@ class _PlayerSurface extends StatefulWidget {
     required this.child,
   });
 
+  final VideoPlayerCubit? videoPlayer;
+  final Widget? lockedChild;
   final Widget Function(Widget)? wrapVideoGestures;
   final VideoPlayerCubit? speedBoostPlayer;
   final GestureDragStartCallback? onVerticalDragStart;
@@ -1370,9 +1453,12 @@ class _PlayerSurfaceState extends State<_PlayerSurface> {
 
   @override
   Widget build(BuildContext context) {
+    // Replacing the surface drops pending gestures as well as new input.
+    if (widget.lockedChild case final lockedChild?) return lockedChild;
+
     // Keep the recognizer above the overlays so auto-hide cannot end the hold.
     final canBoost = widget.speedBoostPlayer != null;
-    return RawGestureDetector(
+    final controls = RawGestureDetector(
       behavior: HitTestBehavior.translucent,
       gestures: {
         if (canBoost)
@@ -1431,6 +1517,10 @@ class _PlayerSurfaceState extends State<_PlayerSurface> {
         ),
       ),
     );
+    final videoPlayer = widget.videoPlayer;
+    return videoPlayer == null
+        ? controls
+        : SubtitleFailureOverlay(player: videoPlayer, child: controls);
   }
 }
 

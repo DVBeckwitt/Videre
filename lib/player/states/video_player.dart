@@ -1577,13 +1577,13 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
       final reusedController = videoController != null;
       if (!reusedController) {
         videoController = BetterPlayerController(BetterPlayerConfiguration(
-            overlay: SubtitleFailureOverlay(
-              player: this,
-              autofocus: isTv,
-              child: isTv
-                  ? const TvPlayerControls()
-                  : PlayerControls(mediaPlayerCubit: this),
-            ),
+            overlay: isTv
+                ? SubtitleFailureOverlay(
+                    player: this,
+                    autofocus: true,
+                    child: const TvPlayerControls(),
+                  )
+                : PlayerControls(mediaPlayerCubit: this),
             deviceOrientationsOnFullScreen: [
               DeviceOrientation.landscapeLeft,
               DeviceOrientation.landscapeRight,

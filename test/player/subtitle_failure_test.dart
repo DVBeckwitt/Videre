@@ -186,11 +186,13 @@ void main() {
             child: SizedBox(
               width: width,
               height: height,
-              child: SubtitleFailureOverlay(
-                player: video,
-                autofocus: autofocus,
-                child: child ?? const ColoredBox(color: Colors.black),
-              ),
+              child: child is PlayerControls
+                  ? child
+                  : SubtitleFailureOverlay(
+                      player: video,
+                      autofocus: autofocus,
+                      child: child ?? const ColoredBox(color: Colors.black),
+                    ),
             ),
           ),
         ),
@@ -412,7 +414,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('fullscreen caption retry leaves the seek bar reachable',
+  testWidgets('fullscreen caption retry stays reachable unless touch locked',
       (tester) async {
     const viewport = Size(1000, 400);
     const padding = FakeViewPadding(left: 32, right: 48, bottom: 30);
@@ -447,6 +449,16 @@ void main() {
     expect(seekBar.hitTestable(), findsOneWidget);
     expect(retry.hitTestable(), findsOneWidget);
     expect(dismiss.hitTestable(), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Lock touch controls'));
+    await tester.pumpAndSettle();
+    expect(retry, findsNothing);
+    expect(dismiss, findsNothing);
+    expect(video.state.subtitleFailed, isTrue);
+    await tester.tap(find.text('Unlock touch controls'));
+    await tester.pumpAndSettle();
+    expect(retry.hitTestable(), findsOneWidget);
+
     await tester.tap(dismiss);
     await tester.pumpAndSettle();
     expect(retry, findsNothing);
@@ -503,10 +515,7 @@ void main() {
                 child: SizedBox(
                   width: state.isMini ? 117 : 390,
                   height: state.isMini ? 66 : 220,
-                  child: SubtitleFailureOverlay(
-                    player: gestureVideo,
-                    child: PlayerControls(mediaPlayerCubit: gestureVideo),
-                  ),
+                  child: PlayerControls(mediaPlayerCubit: gestureVideo),
                 ),
               ),
             ),

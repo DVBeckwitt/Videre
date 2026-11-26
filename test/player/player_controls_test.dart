@@ -852,6 +852,114 @@ void main() {
     });
   }
 
+  testWidgets('fullscreen touch lock shields playback and has a focused Unlock',
+      (tester) async {
+    final video = await createPlayingVideo(tester, lengthSeconds: 180);
+    const position = Duration(seconds: 60);
+    player.seek(position);
+    player.setFullScreen(FullScreenState.fullScreen);
+    var underlyingTaps = 0;
+    await tester.pumpWidget(hostControls(Stack(
+      fit: StackFit.expand,
+      children: [
+        GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () => underlyingTaps++,
+        ),
+        PlayerControls(mediaPlayerCubit: video),
+      ],
+    )));
+    await tester.pump();
+
+    final lock = find.byTooltip('Lock touch controls');
+    final unlock = find.bySemanticsLabel('Unlock touch controls');
+    final bounds = tester.getRect(find.byType(PlayerControls));
+    final edge = Offset(bounds.width * .85, bounds.height * .35);
+    final seekStart = Offset(bounds.width * .3, bounds.height * .35);
+    final timeline = tester.getCenter(find.byType(Slider));
+    final baseline = player.state.mediaCommand;
+    await tester.tap(lock);
+    await tester.pumpAndSettle();
+
+    expect(lock, findsNothing);
+    expect(find.byType(Slider), findsNothing);
+    expect(
+      tester.getSemantics(unlock),
+      containsSemantics(isButton: true, isFocused: true, isLiveRegion: true),
+    );
+
+    await tester.tapAt(bounds.center);
+    await tester.tapAt(edge);
+    await tester.pump(const Duration(milliseconds: 50));
+    await tester.tapAt(edge);
+    await tester.tapAt(timeline);
+    final swipe = await tester.startGesture(seekStart);
+    await swipe.moveBy(const Offset(30, 0));
+    await swipe.moveBy(const Offset(140, 0));
+    await tester.pump();
+    expect(find.byType(SeekPreview), findsNothing);
+    await swipe.up();
+    await tester.longPressAt(edge);
+    await tester.pump(const Duration(seconds: 4));
+
+    expect(player.state.position, position);
+    expect(player.state.isPlaying, isTrue);
+    expect(player.state.mediaCommand, baseline);
+    expect(video.speedChanges, isEmpty);
+    expect(underlyingTaps, 0);
+    expect(unlock, findsOneWidget);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+    expect(unlock, findsNothing);
+    expect(lock, findsOneWidget);
+
+    final forward = Duration(seconds: player.state.forwardStep);
+    await tester.tapAt(edge);
+    await tester.pump(const Duration(milliseconds: 50));
+    await tester.tapAt(edge);
+    await tester.pump();
+    expect(player.state.position, position + forward);
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('touch lock clears when leaving fullscreen and re-entering',
+      (tester) async {
+    final video = await createPlayingVideo(tester);
+    await tester.pumpWidget(hostControls(
+      PlayerControls(mediaPlayerCubit: video),
+    ));
+    final lock = find.byTooltip('Lock touch controls');
+    final unlock = find.text('Unlock touch controls');
+    expect(lock, findsNothing);
+
+    player.setFullScreen(FullScreenState.fullScreen);
+    await tester.pumpAndSettle();
+    await tester.tap(lock);
+    await tester.pumpAndSettle();
+    expect(unlock, findsOneWidget);
+
+    player.setFullScreen(FullScreenState.notFullScreen);
+    await tester.pumpAndSettle();
+    expect(unlock, findsNothing);
+    expect(lock, findsNothing);
+
+    player.setFullScreen(FullScreenState.fullScreen);
+    await tester.pumpAndSettle();
+    await tester.tap(lock);
+    await tester.pumpAndSettle();
+    expect(unlock, findsOneWidget);
+
+    // An exit and re-entry can arrive before the controls build again.
+    player.setFullScreen(FullScreenState.notFullScreen);
+    player.setFullScreen(FullScreenState.fullScreen);
+    await tester.pumpAndSettle();
+    expect(unlock, findsNothing);
+    expect(lock, findsOneWidget);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
   testWidgets('video options apply a new display mode during playback',
       (tester) async {
     final videoPlayer = await createPlayingVideo(tester);
