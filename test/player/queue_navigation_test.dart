@@ -2640,6 +2640,8 @@ void main() {
               200,
               headers: {'content-type': 'application/json'});
         });
+        // Keep adjacent queue preparation out of the selected song's HTTP mock.
+        player.removeAdjacentMusicListener(remember);
         addTearDown(client.close);
         addTearDown(() {
           if (!response.isCompleted) response.complete();
