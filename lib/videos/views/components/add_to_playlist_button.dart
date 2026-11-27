@@ -5,9 +5,9 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/videos/states/add_to_playlist.dart';
 import 'package:clipious/videos/models/video.dart';
-import 'package:clipious/utils.dart';
 
 import 'add_to_playlist_dialog.dart';
+import 'video_metrics.dart';
 
 enum AddToPlayListButtonType {
   appBar,
@@ -23,6 +23,7 @@ class AddToPlayListButton extends StatelessWidget {
   final AddToPlayListButtonType type;
   final Function? afterAdd;
   final Widget? reactionMetric;
+  final int? estimatedLikes;
   final bool inPlayer;
 
   const AddToPlayListButton(
@@ -32,6 +33,7 @@ class AddToPlayListButton extends StatelessWidget {
       this.type = AddToPlayListButtonType.appBar,
       this.afterAdd,
       this.reactionMetric,
+      this.estimatedLikes,
       this.inPlayer = false});
 
   showAddToPlaylistDialog(BuildContext context) async {
@@ -73,9 +75,9 @@ class AddToPlayListButton extends StatelessWidget {
                           ? Icons.thumb_up
                           : Icons.thumb_up_outlined,
                       size: 20),
-                  label: Text(video?.likeCount == null
-                      ? '–'
-                      : compactCurrency.format(video!.likeCount!)),
+                  label: Text(watchLikeCountLabel(
+                          locals, video?.likeCount, estimatedLikes) ??
+                      '–'),
                 ),
                 if (reactionMetric case final metric?) ...[
                   const SizedBox(width: 4),

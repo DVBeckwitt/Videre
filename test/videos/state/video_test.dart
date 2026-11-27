@@ -634,6 +634,13 @@ void main() {
         expect(video.state.loadingVideo, isFalse);
         expect(video.state.downloading, isTrue);
         expect(video.state.error, isEmpty);
+
+        await video.onReady();
+        final estimateUpdated =
+            video.stream.firstWhere((state) => state.estimatedLikes == 123);
+        dislikes.responses.last.complete(Dislike(null, likes: 123));
+        await estimateUpdated;
+        expect(video.state.dislikes, 42);
       });
 
       test('ignores dislike responses from an older load or after close',
@@ -642,17 +649,19 @@ void main() {
         expect(dislikes.responses, hasLength(2));
         final updated =
             video.stream.firstWhere((state) => state.dislikes == 42);
-        dislikes.responses.last.complete(Dislike(42));
+        dislikes.responses.last.complete(Dislike(42, likes: 123));
         await updated;
-        dislikes.responses.first.complete(Dislike(7));
+        dislikes.responses.first.complete(Dislike(7, likes: 456));
         await Future<void>.delayed(Duration.zero);
         expect(video.state.dislikes, 42);
+        expect(video.state.estimatedLikes, 123);
 
         await video.onReady();
         await video.close();
-        dislikes.responses.last.complete(Dislike(99));
+        dislikes.responses.last.complete(Dislike(99, likes: 789));
         await Future<void>.delayed(Duration.zero);
         expect(video.state.dislikes, 42);
+        expect(video.state.estimatedLikes, 123);
       });
     });
 

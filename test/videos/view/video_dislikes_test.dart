@@ -12,6 +12,7 @@ import 'package:clipious/player/views/tablet/expanded_player.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/states/settings.dart';
+import 'package:clipious/utils.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/dislike.dart';
 import 'package:clipious/videos/models/video.dart';
@@ -29,6 +30,9 @@ import '../../test_player_cubit.dart';
 import '../../test_settings_cubit.dart';
 
 const _video = Video(videoId: 'first', title: 'First video');
+
+Finder _estimatedLikes(int count) =>
+    find.text('${compactCurrency.format(count)} (estimated)');
 
 class _DislikeService extends Service {
   final requests = <String>[];
@@ -209,16 +213,18 @@ void main() {
     ('phone', const ExpandedPlayer(), Icons.thumb_down_outlined),
     ('tablet', const TabletExpandedPlayer(), Icons.thumb_down),
   ]) {
-    testWidgets('$label expanded player displays delayed dislikes once',
+    testWidgets('$label expanded player displays delayed reactions once',
         (tester) async {
       await show(tester, widget);
       expect(dislikes.requests, ['first']);
       expect(find.byIcon(dislikeIcon), findsNothing);
+      expect(_estimatedLikes(123), findsNothing);
 
-      dislikes.responses.single.complete(Dislike(71));
+      dislikes.responses.single.complete(Dislike(71, likes: 123));
       await tester.pumpAndSettle();
       expect(find.byIcon(dislikeIcon), findsOneWidget);
       expect(find.text('71'), findsOneWidget);
+      expect(_estimatedLikes(123), findsOneWidget);
 
       await show(tester, widget);
       expect(dislikes.requests, ['first']);
@@ -235,39 +241,75 @@ void main() {
     expect(find.byIcon(Icons.thumb_down), findsNothing);
     expect(dislikes.requests, ['first']);
 
-    dislikes.responses.single.complete(Dislike(0));
+    dislikes.responses.single.complete(Dislike(0, likes: 123));
     await tester.pumpAndSettle();
     expect(find.byIcon(Icons.thumb_down), findsOneWidget);
     expect(find.text('0'), findsOneWidget);
+    expect(_estimatedLikes(123), findsOneWidget);
 
     await tester.runAsync(() => settings.setUseReturnYoutubeDislike(false));
     await tester.pumpAndSettle();
     expect(find.byIcon(Icons.thumb_down), findsNothing);
+    expect(_estimatedLikes(123), findsNothing);
     await tester.runAsync(() => settings.setUseReturnYoutubeDislike(true));
     await tester.pumpAndSettle();
     expect(dislikes.requests, ['first', 'first']);
     dislikes.responses.last.complete(Dislike(82));
     await tester.pumpAndSettle();
     expect(find.text('82'), findsOneWidget);
+    expect(find.byIcon(Icons.thumb_up), findsNothing);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Watch prefers current instance likes including a real zero',
+      (tester) async {
+    const zero = Video(videoId: 'first', likeCount: 0);
+    await show(tester, const VideoDislikeMetrics(video: zero));
+    dislikes.responses.single.complete(Dislike(71, likes: 123));
+    await tester.pumpAndSettle();
+    expect(find.text(compactCurrency.format(0)), findsOneWidget);
+    expect(_estimatedLikes(123), findsNothing);
+    expect(find.text('71'), findsOneWidget);
+
+    const present = Video(videoId: 'first', likeCount: 25);
+    await show(tester, const VideoDislikeMetrics(video: present));
+    expect(find.text(compactCurrency.format(25)), findsOneWidget);
+    expect(_estimatedLikes(123), findsNothing);
+
+    await show(tester, const VideoDislikeMetrics(video: _video));
+    expect(_estimatedLikes(123), findsOneWidget);
+    expect(dislikes.requests, ['first']);
+
+    await show(tester, const VideoDislikeMetrics(video: present));
+    expect(find.text(compactCurrency.format(25)), findsOneWidget);
+    expect(_estimatedLikes(123), findsNothing);
+    expect(dislikes.requests, ['first']);
   });
 
   testWidgets('player metrics hide disabled results and ignore late responses',
       (tester) async {
+    await tester.runAsync(() => settings.setUseReturnYoutubeDislike(false));
     await show(tester, const VideoDislikeMetrics(video: _video));
+    expect(dislikes.requests, isEmpty);
+
+    await tester.runAsync(() => settings.setUseReturnYoutubeDislike(true));
+    await tester.pumpAndSettle();
+    expect(dislikes.requests, ['first']);
     await tester.runAsync(() => settings.setUseReturnYoutubeDislike(false));
     await tester.pumpAndSettle();
-    dislikes.responses.first.complete(Dislike(71));
+    dislikes.responses.first.complete(Dislike(71, likes: 123));
     await tester.pumpAndSettle();
     expect(find.byIcon(Icons.thumb_down), findsNothing);
+    expect(_estimatedLikes(123), findsNothing);
 
     await tester.runAsync(() => settings.setUseReturnYoutubeDislike(true));
     await tester.pumpAndSettle();
     expect(dislikes.requests, ['first', 'first']);
-    dislikes.responses.last.complete(Dislike(0));
+    dislikes.responses.last.complete(Dislike(0, likes: 0));
     await tester.pumpAndSettle();
     expect(find.text('0'), findsOneWidget);
     expect(find.byIcon(Icons.thumb_down), findsOneWidget);
+    expect(_estimatedLikes(0), findsOneWidget);
   });
 
   testWidgets('details discard pending results after changing the RYD endpoint',
@@ -280,12 +322,14 @@ void main() {
     await tester.pumpAndSettle();
     expect(dislikes.requests, ['first', 'first']);
 
-    dislikes.responses.first.complete(Dislike(71));
+    dislikes.responses.first.complete(Dislike(71, likes: 123));
     await tester.pumpAndSettle();
     expect(find.byIcon(Icons.thumb_down), findsNothing);
-    dislikes.responses.last.complete(Dislike(82));
+    expect(_estimatedLikes(123), findsNothing);
+    dislikes.responses.last.complete(Dislike(82, likes: 124));
     await tester.pumpAndSettle();
     expect(find.text('82'), findsOneWidget);
+    expect(_estimatedLikes(124), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -294,21 +338,25 @@ void main() {
     await show(tester, const VideoDislikeMetrics(video: _video));
     const second = Video(videoId: 'second');
     await show(tester, const VideoDislikeMetrics(video: second));
-    dislikes.responses.first.complete(Dislike(71));
+    dislikes.responses.first.complete(Dislike(71, likes: 123));
     await tester.pumpAndSettle();
     expect(find.byIcon(Icons.thumb_down), findsNothing);
-    dislikes.responses.last.complete(Dislike(82));
+    expect(_estimatedLikes(123), findsNothing);
+    dislikes.responses.last.complete(Dislike(82, likes: 124));
     await tester.pumpAndSettle();
     expect(find.text('82'), findsOneWidget);
+    expect(_estimatedLikes(124), findsOneWidget);
 
     await tester.runAsync(
         () => settings.setReturnYoutubeDislikeUrl('https://ryd.example/'));
     await tester.pumpAndSettle();
     expect(dislikes.requests, ['first', 'second', 'second']);
     expect(find.text('82'), findsNothing);
-    dislikes.responses.last.complete(Dislike(93));
+    expect(_estimatedLikes(124), findsNothing);
+    dislikes.responses.last.complete(Dislike(93, likes: 125));
     await tester.pumpAndSettle();
     expect(find.text('93'), findsOneWidget);
+    expect(_estimatedLikes(125), findsOneWidget);
   });
 
   testWidgets('failed and disposed requests do not show a false zero',

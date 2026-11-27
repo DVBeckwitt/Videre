@@ -17,6 +17,7 @@ import 'video_dislike_metrics.dart';
 class VideoInfo extends StatelessWidget {
   final Video video;
   final int? dislikes;
+  final int? estimatedLikes;
   final bool loadDislikes;
   final bool titleAndChannelInfo, descriptionAndTags;
 
@@ -24,6 +25,7 @@ class VideoInfo extends StatelessWidget {
       {super.key,
       required this.video,
       this.dislikes,
+      this.estimatedLikes,
       this.loadDislikes = false,
       this.titleAndChannelInfo = true,
       this.descriptionAndTags = true});
@@ -77,6 +79,7 @@ class VideoInfo extends StatelessWidget {
                   : VideoMetrics(
                       video: video,
                       dislikes: useDislikes ? dislikes : null,
+                      estimatedLikes: useDislikes ? estimatedLikes : null,
                       style: textTheme.bodyMedium,
                       iconSize: 15,
                     ),

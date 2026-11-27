@@ -11,7 +11,7 @@ class VideoDislikeMetrics extends StatefulWidget {
   final Video video;
   final TextStyle? style;
   final double iconSize;
-  final Widget Function(BuildContext, int?)? builder;
+  final Widget Function(BuildContext, Dislike?)? builder;
 
   const VideoDislikeMetrics({
     super.key,
@@ -62,11 +62,12 @@ class _VideoDislikeMetricsState extends State<VideoDislikeMetrics> {
       key: ValueKey(_requestKey),
       future: _request,
       builder: (context, snapshot) {
-        final count = snapshot.data?.dislikes;
-        return widget.builder?.call(context, count) ??
+        final votes = snapshot.data;
+        return widget.builder?.call(context, votes) ??
             VideoMetrics(
               video: widget.video,
-              dislikes: count,
+              dislikes: votes?.dislikes,
+              estimatedLikes: votes?.likes,
               style: widget.style,
               iconSize: widget.iconSize,
             );

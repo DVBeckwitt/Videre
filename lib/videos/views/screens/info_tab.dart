@@ -20,10 +20,11 @@ class VideoInfoTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final currentDislikes = context.select((VideoCubit cubit) =>
-        cubit.state.video?.videoId == video?.videoId
-            ? cubit.state.dislikes
-            : dislikes);
+    final (currentDislikes, estimatedLikes) = context.select(
+      (VideoCubit cubit) => cubit.state.video?.videoId == video?.videoId
+          ? (cubit.state.dislikes, cubit.state.estimatedLikes)
+          : (dislikes, null),
+    );
     return video == null
         ? const SizedBox.shrink()
         : MinimizeOnSwipeDown(
@@ -36,6 +37,7 @@ class VideoInfoTab extends StatelessWidget {
             child: VideoInfo(
               video: video!,
               dislikes: currentDislikes,
+              estimatedLikes: estimatedLikes,
               titleAndChannelInfo: titleAndChannelInfo,
             ),
           );

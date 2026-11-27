@@ -46,7 +46,7 @@ class VideoCubit extends Cubit<VideoState> {
       if (isClosed || value == dislikeSettings) return;
       dislikeSettings = value;
       final generation = ++_dislikeGeneration;
-      emit(state.copyWith(dislikes: null));
+      emit(state.copyWith(dislikes: null, estimatedLikes: null));
       final video = state.video;
       if (value.$1 && !state.loadingVideo && video != null) {
         unawaited(_loadDislikes(video.videoId, _loadGeneration, generation));
@@ -170,11 +170,13 @@ class VideoCubit extends Cubit<VideoState> {
   Future<void> _loadDislikes(
       String videoId, int generation, int dislikeGeneration) async {
     try {
-      final dislikes = await service.getDislikes(videoId);
+      final votes = await service.getDislikes(videoId);
       if (!isClosed &&
           generation == _loadGeneration &&
           dislikeGeneration == _dislikeGeneration) {
-        emit(state.copyWith(dislikes: dislikes.dislikes));
+        emit(state.copyWith(
+            dislikes: votes.dislikes ?? state.dislikes,
+            estimatedLikes: votes.likes));
       }
     } catch (_) {
       log.info('Failed to get dislikes for video $videoId');
@@ -253,6 +255,7 @@ sealed class VideoState with _$VideoState {
       {Video? video,
       BackendPlayback? requestedBackend,
       int? dislikes,
+      int? estimatedLikes,
       @Default(true) loadingVideo,
       @Default(false) bool retryingVideo,
       required String videoId,

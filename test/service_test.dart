@@ -321,6 +321,56 @@ void main() {
     });
   });
 
+  test('the votes request parses valid like estimates independently', () async {
+    db = await SembastSqfDb.createInMemory();
+    Map<String, Object?> payload = {};
+    final requests = <Uri>[];
+    final client = MockClient((request) async {
+      requests.add(request.url);
+      return http.Response(jsonEncode(payload), 200);
+    });
+    addTearDown(() async {
+      client.close();
+      await db.close();
+    });
+    final service = Service(httpClient: client);
+
+    const cases = <(Map<String, Object?>, int?, int?)>[
+      ({'dislikes': 71}, null, 71),
+      ({'likes': null, 'dislikes': 71}, null, 71),
+      ({'likes': -1, 'dislikes': 71}, null, 71),
+      ({'likes': 10.5, 'dislikes': 71}, null, 71),
+      ({'likes': '10', 'dislikes': 71}, null, 71),
+      ({'likes': true, 'dislikes': 71}, null, 71),
+      ({'likes': 0, 'dislikes': 71}, 0, 71),
+      ({'likes': 123, 'dislikes': 0}, 123, 0),
+      ({'likes': 123}, 123, null),
+      ({'likes': 123, 'dislikes': 'unknown'}, 123, null),
+    ];
+    for (final (data, expectedLikes, expectedDislikes) in cases) {
+      payload = data;
+      final votes = await service.getDislikes('video-id');
+      expect(votes.likes, expectedLikes, reason: '$data');
+      expect(votes.dislikes, expectedDislikes, reason: '$data');
+    }
+    expect(
+        requests,
+        List.filled(
+            cases.length,
+            Uri.parse(
+                'https://returnyoutubedislikeapi.com/votes?videoId=video-id')));
+
+    await db.saveSetting(SettingsValue(
+        returnYoutubeDislikeUrlSettingName, 'https://votes.example/custom/'));
+    payload = {'likes': 123, 'dislikes': 71};
+    final customVotes = await service.getDislikes('video-id');
+    expect(customVotes.likes, 123);
+    expect(customVotes.dislikes, 71);
+    expect(requests.last,
+        Uri.parse('https://votes.example/custom/votes?videoId=video-id'));
+    expect(requests, hasLength(cases.length + 1));
+  });
+
   test('a stalled dislike request times out', () async {
     db = await SembastSqfDb.createInMemory();
     final client = MockClient((_) => Completer<http.Response>().future);
