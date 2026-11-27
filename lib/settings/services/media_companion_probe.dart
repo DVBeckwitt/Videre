@@ -13,9 +13,29 @@ import '../../videos/models/video.dart';
 import '../models/db/server.dart';
 
 const setupSampleVideoId = 'dQw4w9WgXcQ';
+const chocolateMooInstanceUrl = 'https://yt.chocolatemoo53.com';
+
+// The operator rotates these hosts independently of the sample video.
+// Only show them as candidates. The existing consent flow grants access.
+// https://status.chocolatemoo53.com/
+const _chocolateMooCompanions = {
+  'https://yt-comp1.chocolatemoo53.com',
+  'https://yt-comp2.chocolatemoo53.com',
+  'https://yt-comp3.chocolatemoo53.com',
+  'https://yt-comp4.chocolatemoo53.com',
+  'https://yt-comp5.chocolatemoo53.com',
+  'https://yt-comp6.chocolatemoo53.com',
+};
 
 bool get supportsMediaCompanionDiscovery =>
     !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+
+Set<String> knownMediaCompanionCandidates(Server server) =>
+    supportsMediaCompanionDiscovery &&
+            mediaCompanionInstanceAddress(server) == chocolateMooInstanceUrl
+        ? _chocolateMooCompanions
+            .difference(trustedMediaCompanionOrigins(server))
+        : const {};
 
 // Check one primary video route and one primary audio route from the sample.
 // Uncertain results leave setup usable. Only an origin is presented for consent.
@@ -37,12 +57,12 @@ Future<Set<String>> discoverSetupMediaCompanions(
   const budget = Duration(seconds: 4);
   final clock = Stopwatch()..start();
   var expired = false;
-  bool current() =>
-      !expired &&
-      clock.elapsed < budget &&
+  bool sameContext() =>
       isCurrent() &&
       !NetworkProxy.instance.isChanging &&
       identical(NetworkProxy.instance.config, proxy);
+  bool current() => !expired && clock.elapsed < budget && sameContext();
+  final trusted = trustedMediaCompanionOrigins(server);
 
   Future<Set<String>?> inspect() async {
     final combined = (video.formatStreams ?? [])
@@ -160,7 +180,7 @@ Future<Set<String>> discoverSetupMediaCompanions(
       }
     }
     if (!current()) return null;
-    final candidates = found.difference(trustedMediaCompanionOrigins(server));
+    final candidates = found.difference(trusted);
     return incomplete && candidates.isEmpty ? null : candidates;
   }
 
@@ -172,6 +192,16 @@ Future<Set<String>> discoverSetupMediaCompanions(
     });
   } catch (_) {
     // Network exceptions can contain signed stream URLs.
+  }
+  if (!sameContext()) return unavailable();
+  final known = knownMediaCompanionCandidates(server);
+  if (known.isNotEmpty) {
+    return {
+      ...known,
+      ...?result
+          ?.difference(known)
+          .take(maxMediaCompanionOrigins - known.length),
+    };
   }
   return result ?? unavailable();
 }

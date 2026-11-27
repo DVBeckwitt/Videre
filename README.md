@@ -40,14 +40,15 @@ Add or switch instances in **Settings → Manage servers**. Saved logins stay wi
 
 When your instance offers multiple backends and automatic fallback is enabled, Videre tries your selected backend first. For an eligible playback or download failure, it can try up to two alternatives on the same account. It favors backends that worked recently and temporarily skips ones that reported they were blocked or still starting. It learns from ordinary requests and respects the server’s retry deadline. **Connection help** checks the video API and offers retry, instance switching, or a link to the instance’s video page.
 
-Videre suggests F5 and NerdVPN. These are dated checks, and availability can change.
+Videre suggests NerdVPN and ChocolateMoo from the official Invidious directory, plus the project-verified DVBeckwitt instance. Test your choice before saving, since availability can change. [Official Invidious directory](https://docs.invidious.io/instances/)
 
-| Instance | Last recorded check |
+| Instance | Recorded Android check |
 |---|---|
-| [F5](https://invidious.f5.si) | October 9, 2026 — search, video data, and a media sample passed. Full Android playback remains unverified. |
-| [NerdVPN](https://invidious.nerdvpn.de) | November 10, 2026 — Android emulator checks covered video and Music playback, captions, background controls, and downloaded audio. An API key is required. [Coverage and limits](./docs/verification/nerdvpn-default-privacy.md) |
+| [NerdVPN](https://invidious.nerdvpn.de) | November 10, 2026 — Video and Music playback, captions, background controls, and downloaded audio. An API key is required. [Coverage and limits](./docs/verification/nerdvpn-default-privacy.md) |
+| [DVBeckwitt](https://invidious.dvbeckwitt.duckdns.org) | Search, Watch, and Music playback have passed on a credential-free account. [Watch verification](./docs/verification/issue-49-sign-in.md#https-and-saved-nerdvpn-follow-up) · [Music verification](./docs/verification/bug-regression-pass.md#final-apk-android-acceptance) |
+| [ChocolateMoo](https://yt.chocolatemoo53.com) | November 26, 2026 — Music search, Music and Watch playback, and a Watch request using Backend4 after approving the media hosts. [Operator status](https://status.chocolatemoo53.com/) |
 
-Nadeko is excluded from suggestions while its operator disables third-party API access. Existing saved entries remain available. [Verification](./docs/verification/issue-38-nadeko.md)
+You can still enter an instance address manually, including F5 or Nadeko. Saved entries remain available. [Nadeko verification](./docs/verification/issue-38-nadeko.md)
 
 To run your own instance, follow the [Invidious installation guide](https://docs.invidious.io/installation/).
 
@@ -68,6 +69,8 @@ Some Invidious instances use a separate HTTPS server, called a *media companion*
 1. Open **Settings → Manage servers**, select an account, and find **Media companion hosts**.
 2. Choose **Find media hosts** to check one sample video on Android. Videre shows the addresses it finds and lets you choose which to allow. The advanced check when adding a server can also suggest hosts. Other videos on the same instance may use a different host.
 3. If the sample misses a host, ask the instance operator for its public HTTPS address. For example, if they give you `https://media.example.org:8443/companion`, enter `https://media.example.org:8443`. If you run the instance, look up `invidious_companion.public_url` in your configuration. A companion served at the instance’s own origin needs no separate approval. [Invidious Companion configuration](https://docs.invidious.io/installation/#advanced-improve-performance)
+
+For ChocolateMoo, setup and **Find media hosts** offer the six known hosts unchecked. When you select a ChocolateMoo backend, Videre requests fresh video details from that backend. ChocolateMoo chooses the host that delivers the stream. Downloads that redirect to a separate host fail under the current download policy.
 
 An approved host can see the media it serves and the IP address used to reach it. Instance credentials, downloads, artwork, and browsing stay with the selected instance. Accounts on the same instance share their approvals within a Videre profile. Another profile, instance port, or instance path has its own approvals.
 

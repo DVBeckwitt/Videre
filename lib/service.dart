@@ -257,16 +257,29 @@ class Service {
     // Compare the prepared connection with the saved record after migration.
     final prepared = await preparePlaybackServer(serverOverride: server);
     final connection = BackendPlayback(prepared);
-    bool current() {
-      if (!sessionCurrent()) return false;
+    Server? currentAccount() {
+      if (!sessionCurrent()) return null;
       final saved = owner.getAccount(server.accountId);
-      return saved != null && connection.matchesConnection(saved);
+      return saved != null && connection.matchesConnection(saved)
+          ? saved
+          : null;
     }
 
-    final video =
-        await _getScopedVideoMetadata(setupSampleVideoId, prepared, () {
-      if (!current()) throw StateError('Media host check cancelled');
-    });
+    bool current() => currentAccount() != null;
+
+    final Video video;
+    try {
+      video = await _getScopedVideoMetadata(setupSampleVideoId, prepared, () {
+        if (!current()) throw StateError('Media host check cancelled');
+      });
+    } catch (_) {
+      final saved = currentAccount();
+      if (saved != null) {
+        final candidates = knownMediaCompanionCandidates(saved);
+        if (candidates.isNotEmpty) return candidates;
+      }
+      rethrow;
+    }
     return _probeMediaCompanions(prepared, video,
         isCurrent: current, reportUnavailable: true);
   }
@@ -556,6 +569,19 @@ class Service {
         // disable media proxying. There is no direct YouTube transport mode.
         'local': 'true',
       };
+      final selector = server.backendSelector;
+      if (baseUrl == urlGetVideo &&
+          server.url == chocolateMooInstanceUrl &&
+          selector != null &&
+          selector.preferenceField == 'current_companion') {
+        final value = selector.selectedValue(server);
+        if (value != null && selector.labelFor(value) != null) {
+          // ChocolateMoo's video API expects a one-based companion number.
+          // An explicit companion bypasses the shared metadata cache on that
+          // server, including when Videre retries using another selection.
+          queryParameters['companion'] = (int.parse(value) + 1).toString();
+        }
+      }
       if (queryParameters.isNotEmpty) {
         uri = uri.replace(queryParameters: queryParameters);
       }

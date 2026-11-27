@@ -169,13 +169,16 @@ void main() {
           () => AddServerCubit.parsePublicInstances({}), throwsFormatException);
     });
 
-    test('requests the official directory without server headers', () async {
+    test('offers the project instance without sending server headers',
+        () async {
       final client = MockClient((request) async {
         expect(request.url.toString(), AddServerCubit.directoryUrl);
         expect(request.headers, isEmpty);
         return http.Response('[]', 200);
       });
-      expect(await AddServerCubit.getPublicInstances(client: client), isEmpty);
+      expect(await AddServerCubit.getPublicInstances(client: client), [
+        (url: 'https://invidious.dvbeckwitt.duckdns.org', api: true),
+      ]);
     });
 
     test('suggests only curated hosts regardless of API reporting', () async {
@@ -186,6 +189,7 @@ void main() {
             jsonEncode([
               entry('https://invidious.f5.si'),
               entry('https://inv.nadeko.net', api: true),
+              entry('https://invidious.dvbeckwitt.duckdns.org'),
               entry('https://invidious.nerdvpn.de', api: false),
               entry('https://yt.chocolatemoo53.com', api: true),
               entry('https://invidious.tiekoetter.com', api: true),
@@ -198,8 +202,9 @@ void main() {
       expect(
           instances,
           unorderedEquals([
-            (url: 'https://invidious.f5.si', api: false),
+            (url: 'https://invidious.dvbeckwitt.duckdns.org', api: true),
             (url: 'https://invidious.nerdvpn.de', api: false),
+            (url: 'https://yt.chocolatemoo53.com', api: true),
           ]));
       expect(requests, [Uri.parse(AddServerCubit.directoryUrl)]);
     });
@@ -818,10 +823,14 @@ void main() {
       service = Service(httpClient: MockClient((_) async {
         fail('Selecting an instance must not contact it');
       }));
+      cubit.urlController.text = 'https://invidious.nerdvpn.de';
+      cubit.apiKeyController.text = 'draft-api-key';
       cubit.addHeader('Authorization', 'Basic private');
       cubit.addHeader('X-Private', 'secret');
-      cubit.selectPublicInstance('https://public.example');
-      expect(cubit.urlController.text, 'https://public.example');
+      cubit.selectPublicInstance('https://yt.chocolatemoo53.com');
+      expect(cubit.urlController.text, 'https://yt.chocolatemoo53.com');
+      expect(cubit.usesNerdVpn, isFalse);
+      expect(cubit.apiKeyController.text, isEmpty);
       expect(cubit.state.headers, isEmpty);
       expect(cubit.state.advancedTest, isTrue);
       cubit.setAdvancedTest(false);

@@ -222,6 +222,10 @@ void main() {
       expect(requests.single.followRedirects, isFalse);
 
       final selector = discovered;
+      final defaultRequest = await api.buildRequest(urlGetVideo,
+          pathParams: {':id': 'contract-video'},
+          serverOverride: selector.withSelection(original, null));
+      expect(defaultRequest.uri.queryParameters, {'local': 'true'});
       await db.upsertServer(selector.withSelection(original, '2'));
       final saved = await db.getCurrentlySelectedServer();
       expect(saved.backendSelector, selector);
@@ -254,6 +258,15 @@ void main() {
       expect(metadataRequests.map((request) => request.url.origin),
           everyElement(fixture.origin));
       expect(
+          metadataRequests.map((request) => request.url.queryParameters),
+          fixture.name == 'ChocolateMoo'
+              ? [
+                  {'local': 'true', 'companion': '3'},
+                  {'local': 'true', 'companion': '1'},
+                  {'local': 'true', 'companion': '2'},
+                ]
+              : List.filled(3, {'local': 'true'}));
+      expect(
           metadataRequests
               .map((request) => _normalizedHeaders(request.headers)),
           ['2', '0', '1'].map((choice) => _expectedHeaders(fixture, choice)));
@@ -274,6 +287,8 @@ void main() {
       await api.getSubscriptions();
       expect(_normalizedHeaders(requests.last.headers),
           _expectedHeaders(fixture, '2', authenticated: true));
+      expect(
+          requests.last.url.queryParameters.containsKey('companion'), isFalse);
       expect(await db.getCurrentlySelectedServer(), saved);
       expect(db.getServer(fixture.origin), saved);
 

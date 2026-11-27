@@ -8,6 +8,7 @@ import '../../../utils/motion.dart';
 import '../../../utils/views/components/external_link.dart';
 import '../../../utils/views/tv/components/tv_text_field.dart';
 import '../../models/db/server.dart';
+import '../../services/media_companion_probe.dart';
 import '../../states/server_settings.dart';
 
 Future<Set<String>?> chooseSetupMediaCompanions(
@@ -179,8 +180,10 @@ class _MediaCompanionChoiceState extends State<_MediaCompanionChoice> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(locals.mediaCompanionSetupHelp(
-                widget.instance, origins.length)),
+            Text(widget.instance == chocolateMooInstanceUrl
+                ? locals.mediaCompanionExplain
+                : locals.mediaCompanionSetupHelp(
+                    widget.instance, origins.length)),
             const SizedBox(height: 12),
             if (single)
               Text(origins.single,

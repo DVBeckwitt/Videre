@@ -1,9 +1,11 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
+import 'package:clipious/network/network_proxy.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/backend_selector.dart';
 import 'package:clipious/settings/models/db/server.dart';
@@ -214,6 +216,67 @@ void main() {
         expect(
             db.getAccount(instance.accountId)!.mediaCompanionOrigins, isEmpty);
         expect(app.state.server!.url, other.url);
+      });
+    }
+
+    for (final change in ['none', 'account', 'session', 'proxy', 'other']) {
+      test('sample metadata failure with $change during host lookup', () async {
+        final platform = debugDefaultTargetPlatformOverride;
+        debugDefaultTargetPlatformOverride = TargetPlatform.android;
+        addTearDown(() => debugDefaultTargetPlatformOverride = platform);
+        final account = Server(
+            url: change == 'other' ? other.url : chocolateMooInstanceUrl,
+            id: 'host-check-account');
+        await db.upsertServer(account);
+        final editor =
+            ServerSettingsCubit(ServerSettingsState(server: account), app);
+        addTearDown(editor.close);
+
+        final started = Completer<void>();
+        final response = Completer<http.Response>();
+        final client = MockClient((request) {
+          expect(request.url.origin, account.url);
+          expect(request.url.path, '/api/v1/videos/$setupSampleVideoId');
+          started.complete();
+          return response.future;
+        });
+        final previous = service;
+        service = Service(httpClient: client);
+        addTearDown(() {
+          client.close();
+          service = previous;
+        });
+
+        final check =
+            editor.findMediaCompanions(account, isCurrent: () => true);
+        final result = expectLater(
+            check,
+            switch (change) {
+              'none' => completion({
+                  for (var index = 1; index <= 6; index++)
+                    'https://yt-comp$index.chocolatemoo53.com',
+                }),
+              'other' => throwsA(isA<InvidiousServiceError>()),
+              _ => throwsStateError,
+            });
+        await started.future.timeout(const Duration(seconds: 3));
+        if (change == 'account') {
+          await db.upsertServer(account.copyWith(authToken: 'replacement'));
+        } else if (change == 'session') {
+          service.clearSessionCaches();
+        } else if (change == 'proxy') {
+          final proxy = NetworkProxy.instance;
+          final saved = jsonEncode(proxy.config.toJson());
+          addTearDown(
+              () => proxy.initialize(saved: saved, configureNative: false));
+          await proxy.initialize(saved: saved, configureNative: false);
+        }
+        response.complete(http.Response('{"error":"Unavailable"}', 503,
+            headers: {'content-type': 'application/json'}));
+        await result;
+
+        expect(
+            db.getAccount(account.accountId)!.mediaCompanionOrigins, isEmpty);
       });
     }
 

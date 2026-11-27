@@ -124,6 +124,60 @@ void main() {
         {'https://media.example:8443'});
   });
 
+  test('ChocolateMoo discovery offers the rotation without visiting it',
+      () async {
+    const instance = 'https://yt.chocolatemoo53.com';
+    const approved = 'https://yt-comp2.chocolatemoo53.com';
+    const unknown = 'https://new-media.example';
+    const account = Server(url: instance, mediaCompanionOrigins: [approved]);
+    final client = MockClient((request) async {
+      expect(request.url.origin, instance);
+      expect(request.followRedirects, isFalse);
+      return http.Response('', 302,
+          headers: {'location': '$unknown/videoplayback'});
+    });
+    const sample = Video(
+        videoId: 'sample', dashUrl: '$instance/api/manifest/dash/id/sample');
+    final candidates = await discoverSetupMediaCompanions(
+        account, sample, client,
+        isCurrent: () => true, reportUnavailable: true);
+    expect(candidates, {
+      'https://yt-comp1.chocolatemoo53.com',
+      'https://yt-comp3.chocolatemoo53.com',
+      'https://yt-comp4.chocolatemoo53.com',
+      'https://yt-comp5.chocolatemoo53.com',
+      'https://yt-comp6.chocolatemoo53.com',
+      unknown,
+    });
+    expect(account.mediaCompanionOrigins, [approved]);
+  });
+
+  test('ChocolateMoo rotation is scoped to its exact instance', () async {
+    final unavailable = MockClient((_) async => http.Response('', 503));
+    const sample = Video(videoId: 'sample');
+    expect(
+        await discoverSetupMediaCompanions(
+            const Server(url: 'https://yt.chocolatemoo53.com'),
+            sample,
+            unavailable,
+            isCurrent: () => true,
+            reportUnavailable: true),
+        hasLength(6));
+    for (final instance in [
+      'https://yt.chocolatemoo53.com:8443',
+      'https://yt.chocolatemoo53.com/other',
+      'https://eu.yt.chocolatemoo53.com',
+      'https://yt.chocolatemoo53.com.other.example',
+    ]) {
+      expect(
+          await discoverSetupMediaCompanions(
+              Server(url: instance), sample, unavailable,
+              isCurrent: () => true),
+          isEmpty,
+          reason: instance);
+    }
+  });
+
   test('saved check separates a healthy sample from an unavailable sample',
       () async {
     const sample = Video(videoId: 'sample', dashUrl: manifest);
