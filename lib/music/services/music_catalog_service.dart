@@ -65,6 +65,12 @@ class MusicCatalogUnsupported extends MusicCatalogException {
       : super('This catalog feature is not available through Invidious.');
 }
 
+/// The loaded playlist can no longer be displayed on this connection.
+class MusicPlaylistAccessChanged extends MusicCatalogException {
+  const MusicPlaylistAccessChanged()
+      : super('The playlist access changed. Retry the request.');
+}
+
 enum MusicRecordingAvailability { available, missing }
 
 /// Standard Invidious Music catalog contract with no network implementation. An
@@ -252,4 +258,12 @@ abstract class MusicCatalogService {
           {required void Function(MusicCollection) onProgress,
           required bool Function() isCurrent}) =>
       getPlaylist(id);
+
+  /// Opens a saved playlist, which may publish its last complete snapshot first.
+  Future<MusicCollection> getSavedPlaylistProgressively(String id,
+          {required void Function(MusicCollection) onProgress,
+          required bool Function() isCurrent,
+          bool forceRefresh = false}) =>
+      getPlaylistProgressively(id,
+          onProgress: onProgress, isCurrent: isCurrent);
 }

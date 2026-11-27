@@ -731,6 +731,7 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
   bool _foreground = true;
   bool _androidKeyboardVisible = false;
   MusicCollection? _collection;
+  String? _pendingPlaylistId;
   bool _findingPlaylist = false;
   MusicArtistPage? _artistPage;
   _ArtistReleaseListing? _artistReleases;
@@ -1147,6 +1148,7 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
       _tvSong = null;
       _resolvedSong = null;
       _loading = false;
+      _pendingPlaylistId = null;
       _retryingSong = false;
       _failure = null;
       _retry = null;
@@ -1214,6 +1216,7 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
       _starting = false;
       _tvSong = null;
       _collection = null;
+      _pendingPlaylistId = null;
       _artistPage = null;
       _artistReleases = null;
       _browseHistory.clear();
@@ -1240,7 +1243,7 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
 
   Future<void> _run(Future<void> Function(int, AppState) operation,
       Future<void> Function() retry,
-      {bool browse = false}) async {
+      {bool browse = false, String? playlistId}) async {
     final session = context.read<AppCubit>().state;
     if (!_sameSession(session)) return;
     if (browse) _clearOnlineSuggestions();
@@ -1264,6 +1267,7 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
         _artistReleases = null;
       }
       _loading = true;
+      _pendingPlaylistId = playlistId;
       _browseRequest = browse;
       _retryingSong = false;
       _failure = null;
@@ -1273,12 +1277,16 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
       await operation(generation, session);
     } catch (error) {
       if (_active(generation, session)) {
-        setState(() => _failure = error);
+        setState(() {
+          if (error is MusicPlaylistAccessChanged) _collection = null;
+          _failure = error;
+        });
       }
     } finally {
       if (_active(generation, session)) {
         setState(() {
           _loading = false;
+          _pendingPlaylistId = null;
           _retryingSong = false;
         });
       }
@@ -1378,6 +1386,22 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
     if (!mounted) return;
     if (!_searchingLibrary && _songSelection.active) _closeSongSelection();
     _clearOnlineSuggestions();
+    final id = _pendingPlaylistId ?? _collection?.id;
+    if (id != null || _browseHistory.any((page) => page.collection != null)) {
+      setState(() {
+        _browseHistory.removeWhere((page) => page.collection != null);
+        if (id != null) {
+          _generation++;
+          _clearSongSelection();
+          _resetPlaylistFind();
+          _collection = null;
+          _pendingPlaylistId = null;
+          _loading = false;
+          _failure = const MusicPlaylistAccessChanged();
+          _retry = () => _openCollection(id, retrying: true);
+        }
+      });
+    }
     await _retireOnlinePagination();
   }
 
@@ -1474,20 +1498,42 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _openCollection(String id, {bool retrying = false}) async {
+  bool _isSavedPublicPlaylist(String id) {
+    final playlistId = id.startsWith('VL') ? id.substring(2) : id;
+    return isMusicPlaylistOverlapCandidate(playlistId) &&
+        MusicLibraryService.forProfile(db, db.profileId)
+            .contains(MusicLibraryKind.playlist, playlistId);
+  }
+
+  Future<void> _openCollection(String id,
+      {bool retrying = false, bool forceRefresh = false}) async {
     await _run((generation, session) async {
       bool current() => _active(generation, session);
       final previousLength = _collection?.tracks.length ?? 0;
-      final collection = await musicCatalogService.getPlaylistProgressively(id,
-          isCurrent: current, onProgress: (snapshot) {
-        // On retry, keep the previous prefix visible while it is reloaded.
-        if (current() && snapshot.tracks.length >= previousLength) {
+      void progress(MusicCollection snapshot) {
+        // Keep a complete snapshot visible until the refresh is complete.
+        if (current() &&
+            (snapshot.loadingComplete ||
+                (_collection?.loadingComplete != true &&
+                    snapshot.tracks.length >= previousLength))) {
           setState(() => _collection = snapshot);
         }
-      });
+      }
+
+      final catalog = musicCatalogService;
+      final collection = await (_isSavedPublicPlaylist(id)
+          ? catalog.getSavedPlaylistProgressively(id,
+              isCurrent: current,
+              onProgress: progress,
+              forceRefresh: forceRefresh)
+          : catalog.getPlaylistProgressively(id,
+              isCurrent: current, onProgress: progress));
       if (current()) setState(() => _collection = collection);
-    }, () => _openCollection(id, retrying: _collection != null),
-        browse: !retrying);
+    },
+        () => _openCollection(id,
+            retrying: _collection != null, forceRefresh: true),
+        browse: !retrying,
+        playlistId: id);
   }
 
   void _openPlaylistFind() {
@@ -1919,6 +1965,7 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
         _artistReleases = null;
       }
       _loading = false;
+      _pendingPlaylistId = null;
       _browseRequest = false;
       _retryingSong = false;
       _failure = null;
@@ -2767,8 +2814,13 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
               ? entries[index]!
               : videos[index],
         );
+    final refreshStatus = _loading
+        ? const LinearProgressIndicator()
+        : _failure == null
+            ? null
+            : Text(locals.musicDiscoverRefreshFailed);
     final loadStatus = collection.loadingComplete
-        ? null
+        ? refreshStatus
         : Padding(
             padding: const EdgeInsets.symmetric(vertical: 8),
             child: Column(
@@ -3738,6 +3790,18 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
                   title: Text(locals.music),
                   leading: _hasBrowsePage ? _browseUp(context, locals) : null,
                   actions: [
+                    if (_collection case final collection?
+                        when collection.loadingComplete &&
+                            _isSavedPublicPlaylist(collection.id))
+                      IconButton(
+                        key: const ValueKey('music-saved-playlist-refresh'),
+                        tooltip: locals.refresh,
+                        onPressed: _loading
+                            ? null
+                            : () => _openCollection(collection.id,
+                                retrying: true, forceRefresh: true),
+                        icon: const Icon(Icons.refresh),
+                      ),
                     if (_collection != null && !_findingPlaylist)
                       IconButton(
                         key: const ValueKey('music-public-playlist-find'),
