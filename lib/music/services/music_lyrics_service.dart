@@ -13,6 +13,7 @@ import '../../network/reloadable_http_client.dart';
 import '../../videos/models/music_metadata.dart';
 import '../models/music_lyrics.dart';
 import '../models/music_lyrics_match.dart';
+import '../models/music_search_text.dart';
 import 'lrc_lyrics.dart';
 import 'music_lyrics_preferences.dart';
 
@@ -119,10 +120,10 @@ class LrclibMusicLyricsService {
         _now = now ?? DateTime.now;
 
   Future<MusicLyrics> load(MusicMetadata track, int? playbackSeconds,
-      {required bool Function() isCurrent, Future<void>? retired}) {
+      {required bool Function() isCurrent, Future<void>? retired}) async {
     const unavailable = MusicLyrics.unavailable();
     final signature = _signature(track);
-    if (signature == null) return Future.value(unavailable);
+    if (signature == null) return unavailable;
     final (title, artist, album) = signature;
     final duration =
         playbackSeconds != null && playbackSeconds > 0 ? playbackSeconds : null;
@@ -132,7 +133,11 @@ class LrclibMusicLyricsService {
       if (album.isNotEmpty) 'album_name': album,
       if (duration != null && duration <= 3600) 'duration': '$duration',
     });
-    return _request(uri, _maxResponseBytes, unavailable, isCurrent, (json) {
+    var readerRetired = false;
+    retired?.then((_) => readerRetired = true);
+    bool current() => !readerRetired && isCurrent();
+    final lyrics =
+        await _request(uri, _maxResponseBytes, unavailable, current, (json) {
       if (json is! Map<String, dynamic>) {
         throw const MusicLyricsRequestException();
       }
@@ -146,6 +151,16 @@ class LrclibMusicLyricsService {
       }
       return _parseLyrics(json, duration);
     }, retired: retired);
+    if (!current()) return unavailable;
+    if (lyrics.kind != MusicLyricsKind.unavailable) return lyrics;
+    if (duration == null && album.isEmpty) return unavailable;
+    return _request(
+        _searchUri(title, artist, ''),
+        _maxSearchResponseBytes,
+        unavailable,
+        current,
+        (json) => _bestRecordingLyrics(json, title, artist, album, duration),
+        retired: retired);
   }
 
   Future<List<MusicLyricsMatch>> search({
@@ -154,48 +169,53 @@ class LrclibMusicLyricsService {
     required String albumName,
     required int? durationSeconds,
     required bool Function() isCurrent,
-  }) {
+  }) async {
     const unavailable = <MusicLyricsMatch>[];
-    final title = _label(trackName);
-    final artist = _label(artistName);
+    final (title, artist) = _recordingLabels(trackName, artistName);
     final album = _label(albumName);
-    if (title.isEmpty) return Future.value(unavailable);
-    final uri = Uri.https(_host, _searchPath, {
-      'track_name': title,
-      if (artist.isNotEmpty) 'artist_name': artist,
-      if (album.isNotEmpty) 'album_name': album,
-    });
-    return _request(uri, _maxSearchResponseBytes, unavailable, isCurrent,
-        (json) {
-      if (json is! List) throw const MusicLyricsRequestException();
-      final matches = <MusicLyricsMatch>[];
-      final ids = <int>{};
-      for (final entry in json.take(_maxSearchResults)) {
-        if (entry is! Map<String, dynamic>) continue;
-        final result = _recordMetadata(entry);
-        if (result == null ||
-            result.duration > _maxCandidateDuration.inSeconds) {
-          continue;
-        }
-        final canSync = durationSeconds != null &&
-            (result.duration - durationSeconds).abs() <= 2;
-        final lyrics = _parseLyrics(entry, canSync ? durationSeconds : null);
-        if (lyrics.kind == MusicLyricsKind.unavailable || !ids.add(result.id)) {
-          continue;
-        }
-        matches.add(MusicLyricsMatch(
-          id: result.id,
-          trackName: result.title,
-          artistName: result.artist,
-          albumName: result.album,
-          duration: Duration(
-              microseconds:
-                  (result.duration * Duration.microsecondsPerSecond).round()),
-          lyrics: lyrics,
-        ));
-      }
-      return List.unmodifiable(matches);
-    });
+    if (title.isEmpty) return unavailable;
+    Future<List<MusicLyricsMatch>> lookup(String release) => _request(
+            _searchUri(title, artist, release),
+            _maxSearchResponseBytes,
+            unavailable,
+            isCurrent, (json) {
+          if (json is! List) throw const MusicLyricsRequestException();
+          final matches = <MusicLyricsMatch>[];
+          final ids = <int>{};
+          for (final entry in json.take(_maxSearchResults)) {
+            if (entry is! Map<String, dynamic>) continue;
+            final result = _recordMetadata(entry);
+            if (result == null ||
+                result.duration > _maxCandidateDuration.inSeconds) {
+              continue;
+            }
+            final canSync = durationSeconds != null &&
+                (result.duration - durationSeconds).abs() <= 2;
+            final lyrics =
+                _parseLyrics(entry, canSync ? durationSeconds : null);
+            if (lyrics.kind == MusicLyricsKind.unavailable ||
+                !ids.add(result.id)) {
+              continue;
+            }
+            matches.add(MusicLyricsMatch(
+              id: result.id,
+              trackName: result.title,
+              artistName: result.artist,
+              albumName: result.album,
+              duration: Duration(
+                  microseconds:
+                      (result.duration * Duration.microsecondsPerSecond)
+                          .round()),
+              lyrics: lyrics,
+            ));
+          }
+          return List.unmodifiable(matches);
+        });
+    final matches = await lookup(album);
+    if (matches.isNotEmpty || album.isEmpty || artist.isEmpty || !isCurrent()) {
+      return matches;
+    }
+    return lookup('');
   }
 
   Future<T> _request<T>(
@@ -298,22 +318,42 @@ class LrclibMusicLyricsService {
   }
 }
 
+const _uploadLabel =
+    r'(?:official(?: music)? (?:video|audio)|music video|official lyrics?(?: video)?|lyrics?(?: video)?|visuali[sz]er|(?:hd|4k)(?: remaster(?:ed)?)?)';
 final _uploadSuffix = RegExp(
-    r'\s*\((?:official(?: music)? (?:video|audio)|lyric video|lyrics|visuali[sz]er|4k remaster|hd|4k)\)\s*$',
+    r'(?:\s*\(\s*' +
+        _uploadLabel +
+        r'\s*\)|\s*\[\s*' +
+        _uploadLabel +
+        r'\s*\]|\s+[-–—|]\s*' +
+        _uploadLabel +
+        r')\s*$',
     caseSensitive: false);
-final _artistSuffix = RegExp(r'(?:\s+-\s+Topic|VEVO)$', caseSensitive: false);
+final _artistSuffix =
+    RegExp(r'(?:\s+[-–—]\s+Topic|VEVO)$', caseSensitive: false);
 final _separator = RegExp(r'\s+[-–—]\s+');
 final _spaces = RegExp(r'\s+');
+final _dashes = RegExp(r'[‐‑–—−]');
+final _lyricsWord = RegExp(r'[\p{L}\p{M}\p{N}]+', unicode: true);
 
 String _label(Object? value) => value is String && value.length <= 320
     ? cleanLyricsText(value).replaceAll(_spaces, ' ')
     : '';
 
-String _key(Object? value) => _label(value).toLowerCase().replaceAll('’', "'");
+String _key(String value) => normalizeMusicSearchText(value)
+    .replaceAll('’', "'")
+    .replaceAll(_dashes, '-');
 
-(String, String, String)? _signature(MusicMetadata track) {
-  var title = _label(track.title);
-  var artist = _label(track.artist).replaceFirst(_artistSuffix, '');
+Uri _searchUri(String title, String artist, String album) =>
+    Uri.https(_host, _searchPath, {
+      'track_name': title,
+      if (artist.isNotEmpty) 'artist_name': artist,
+      if (album.isNotEmpty) 'album_name': album,
+    });
+
+(String, String) _recordingLabels(String rawTitle, String rawArtist) {
+  var title = _label(rawTitle);
+  var artist = _label(rawArtist).replaceFirst(_artistSuffix, '').trim();
   while (_uploadSuffix.hasMatch(title)) {
     title = title.replaceFirst(_uploadSuffix, '').trim();
   }
@@ -321,12 +361,104 @@ String _key(Object? value) => _label(value).toLowerCase().replaceAll('’', "'")
   if (separator != null) {
     final prefix = title.substring(0, separator.start);
     if (_key(prefix).replaceAll(' ', '') == _key(artist).replaceAll(' ', '')) {
-      title = title.substring(separator.end);
-      artist = prefix;
+      title = title.substring(separator.end).trim();
+      artist = prefix.trim();
     }
   }
+  return (title, artist);
+}
+
+(String, String, String)? _signature(MusicMetadata track) {
+  final (title, artist) = _recordingLabels(track.title, track.artist);
   if (title.isEmpty || artist.isEmpty) return null;
   return (title, artist, _label(track.album));
+}
+
+MusicLyrics _bestRecordingLyrics(
+    Object json, String title, String artist, String album, int? duration) {
+  if (json is! List) throw const MusicLyricsRequestException();
+  const unavailable = MusicLyrics.unavailable();
+  var best = unavailable;
+  (int, num)? bestRank;
+  var conflicting = false;
+  final titleKey = _key(title);
+  final artistKey = _key(artist);
+  final albumKey = _key(album);
+  for (final entry in json.take(_maxSearchResults)) {
+    if (entry is! Map<String, dynamic>) continue;
+    final record = _recordMetadata(entry);
+    if (record == null) continue;
+    final (candidateTitle, candidateArtist) =
+        _recordingLabels(record.title, record.artist);
+    if (_key(candidateTitle) != titleKey ||
+        _key(candidateArtist) != artistKey) {
+      continue;
+    }
+    final sameAlbum = albumKey.isNotEmpty && _key(record.album) == albumKey;
+    final difference =
+        duration == null ? null : (record.duration - duration).abs();
+    final canSync = difference != null && difference <= 2;
+    // A close duration can corroborate an alternate release. A slightly
+    // different cut of the same release is suitable for reading only.
+    if (!canSync &&
+        (!sameAlbum ||
+            (difference != null && difference > 5) ||
+            entry['instrumental'] == true)) {
+      continue;
+    }
+    final rank = (sameAlbum ? 0 : 1, difference ?? 0);
+    final previous = bestRank;
+    if (previous != null &&
+        (rank.$1 > previous.$1 ||
+            (rank.$1 == previous.$1 && rank.$2 > previous.$2))) {
+      continue;
+    }
+    final lyrics = _parseLyrics(entry, canSync ? duration : null);
+    if (lyrics.kind == MusicLyricsKind.unavailable) continue;
+    if (rank == previous) {
+      if ((best.kind == MusicLyricsKind.instrumental) !=
+              (lyrics.kind == MusicLyricsKind.instrumental) ||
+          (!sameAlbum && !_sameLyricWords(best, lyrics))) {
+        conflicting = true;
+      }
+      if (lyrics.kind == MusicLyricsKind.synced) best = lyrics;
+    } else {
+      bestRank = rank;
+      best = lyrics;
+      conflicting = false;
+    }
+  }
+  return conflicting ? unavailable : best;
+}
+
+Iterable<String> _lyricWords(MusicLyrics lyrics) sync* {
+  final text = lyrics.text;
+  final lines =
+      text == null ? lyrics.cues.map((cue) => cue.text) : text.split('\n');
+  for (final line in lines) {
+    for (final word in _lyricsWord.allMatches(normalizeMusicSearchText(line))) {
+      yield word.group(0)!;
+    }
+  }
+}
+
+bool _sameLyricWords(MusicLyrics first, MusicLyrics second) {
+  // Repeated timestamps can share a single cue string. Bound the expanded
+  // text before normalizing or walking the words on the UI isolate.
+  var remaining = 2 * maxLyricsCharacters;
+  for (final lyrics in [first, second]) {
+    remaining -= lyrics.text?.length ?? 0;
+    for (final cue in lyrics.cues) {
+      remaining -= cue.text.length;
+    }
+    if (remaining < 0) return false;
+  }
+  final left = _lyricWords(first).iterator;
+  final right = _lyricWords(second).iterator;
+  while (left.moveNext()) {
+    if (!right.moveNext() || left.current != right.current) return false;
+  }
+  return !right.moveNext();
 }
 
 typedef _RecordMetadata = ({

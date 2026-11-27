@@ -107,6 +107,137 @@ void main() {
     }
   });
 
+  test('finds a close recording on another release after an exact miss',
+      () async {
+    final service = LrclibMusicLyricsService(
+        createClient: () => MockClient((request) async {
+              if (request.url.path == '/api/get') {
+                return http.Response('', 404);
+              }
+              expect(request.url.path, '/api/search');
+              expect(request.url.queryParameters, {
+                'track_name': 'Example Song',
+                'artist_name': 'Example Artist',
+              });
+              return _json([
+                _recordData({'trackName': 'Example Song (Live)'}),
+                _recordData({'artistName': 'Example Artist Tribute'}),
+                _recordData({'duration': 215}),
+                _recordData({'albumName': 'Example Single'}),
+              ]);
+            }));
+    final lyrics = await service.load(_song, 180, isCurrent: () => true);
+    expect(lyrics.kind, MusicLyricsKind.synced);
+  });
+
+  test('ignores upload labels and normalizes title and artist spelling',
+      () async {
+    const song = MusicMetadata(
+        title: 'Beyoncé — Run the World [Official Lyric Video] - 4K',
+        artist: 'Beyoncé - Topic',
+        album: '4');
+    final service = LrclibMusicLyricsService(
+        createClient: () => MockClient((request) async {
+              expect(request.url.path, '/api/get');
+              expect(request.url.queryParameters, {
+                'track_name': 'Run the World',
+                'artist_name': 'Beyoncé',
+                'album_name': '4',
+                'duration': '180',
+              });
+              return _record(changes: {
+                'trackName': 'Run the World',
+                'artistName': 'Beyonce',
+                'albumName': '4',
+              });
+            }));
+    expect((await service.load(song, 180, isCurrent: () => true)).kind,
+        MusicLyricsKind.synced);
+  });
+
+  test('keeps close alternate timings plain when the release matches',
+      () async {
+    final service = LrclibMusicLyricsService(
+        createClient: () => MockClient((request) async {
+              if (request.url.path == '/api/get') {
+                return http.Response('', 404);
+              }
+              return _json([
+                _recordData({
+                  'albumName': 'Other release',
+                  'duration': 184,
+                  'plainLyrics': 'Wrong release',
+                }),
+                _recordData({'duration': 184, 'plainLyrics': null}),
+              ]);
+            }));
+    final lyrics = await service.load(_song, 180, isCurrent: () => true);
+    expect(lyrics.kind, MusicLyricsKind.plain);
+    expect(lyrics.text, 'Example line\nExample line');
+    expect(lyrics.wordsByCue, isEmpty);
+  });
+
+  test('equally close alternate releases agree on the words or need a choice',
+      () async {
+    var words = 'example line!';
+    final service = LrclibMusicLyricsService(
+        createClient: () => MockClient((request) async {
+              if (request.url.path == '/api/get') {
+                return http.Response('', 404);
+              }
+              return _json([
+                _recordData(
+                    {'albumName': 'First Single', 'syncedLyrics': null}),
+                _recordData({
+                  'id': 22,
+                  'albumName': 'Second Single',
+                  'plainLyrics': words,
+                  'syncedLyrics': null,
+                }),
+              ]);
+            }));
+    expect((await service.load(_song, 180, isCurrent: () => true)).kind,
+        MusicLyricsKind.plain);
+    words = 'Different words';
+    expect((await service.load(_song, 180, isCurrent: () => true)).kind,
+        MusicLyricsKind.unavailable);
+  });
+
+  test('a tie that expands beyond the lyrics budget needs a manual choice',
+      () async {
+    final tags = List.filled(64, '[00:10.00]').join();
+    final line = List.filled(1024, 'Repeated words').join(' ');
+    final lrc = '$tags$line';
+    var twoReleases = false;
+    final service = LrclibMusicLyricsService(
+        createClient: () => MockClient((request) async {
+              if (request.url.path == '/api/get') {
+                return http.Response('', 404);
+              }
+              return _json([
+                _recordData({
+                  'albumName': 'First Single',
+                  'syncedLyrics': lrc,
+                  'plainLyrics': null,
+                }),
+                if (twoReleases)
+                  _recordData({
+                    'id': 22,
+                    'albumName': 'Second Single',
+                    'syncedLyrics': lrc,
+                    'plainLyrics': null,
+                  }),
+              ]);
+            }));
+    final single = await service.load(_song, 180, isCurrent: () => true);
+    expect(single.kind, MusicLyricsKind.synced);
+    expect(single.cues, hasLength(64));
+
+    twoReleases = true;
+    final ambiguous = await service.load(_song, 180, isCurrent: () => true);
+    expect(ambiguous.kind, MusicLyricsKind.unavailable);
+  });
+
   test('mismatched versions and durations are unavailable', () async {
     for (final changes in [
       {'trackName': 'Example Song (Live)'},
@@ -115,7 +246,14 @@ void main() {
     ]) {
       final service = LrclibMusicLyricsService(
           createClient: () =>
-              MockClient((_) async => _record(changes: changes)));
+              MockClient((request) async => request.url.path == '/api/get'
+                  ? _record(changes: changes)
+                  : _json([
+                      _recordData({'trackName': 'Example Song (Remix)'}),
+                      _recordData(
+                          {'albumName': 'Unrelated Album', 'duration': 183}),
+                      _recordData({'duration': 211}),
+                    ])));
       final result = await service.load(_song, 180, isCurrent: () => true);
       expect(result.kind, MusicLyricsKind.unavailable);
     }
@@ -137,6 +275,7 @@ void main() {
     var length = 180;
     final service = LrclibMusicLyricsService(
         createClient: () => MockClient((request) async {
+              if (request.url.path == '/api/search') return _json([]);
               expect(
                   request.url.queryParameters.containsKey('duration'), isFalse);
               return _record(changes: {'duration': length});
@@ -267,7 +406,28 @@ void main() {
     now = now.add(const Duration(seconds: 10));
     final missing = await service.load(_song, 180, isCurrent: () => true);
     expect(missing.kind, MusicLyricsKind.unavailable);
-    expect(calls, 2);
+    expect(calls, 3);
+  });
+
+  test('closing the reader during an exact lookup prevents its fallback',
+      () async {
+    final started = Completer<void>();
+    final response = Completer<http.Response>();
+    final retired = Completer<void>();
+    var calls = 0;
+    final service = LrclibMusicLyricsService(
+        createClient: () => MockClient((_) async {
+              if (++calls > 1) return _json([]);
+              started.complete();
+              return response.future;
+            }));
+    final result = service.load(_song, 180,
+        isCurrent: () => true, retired: retired.future);
+    await started.future;
+    retired.complete();
+    response.complete(http.Response('', 404));
+    expect((await result).kind, MusicLyricsKind.unavailable);
+    expect(calls, 1);
   });
 
   test('an invalid Retry-After still suppresses immediate retries', () async {
@@ -357,6 +517,32 @@ void main() {
         [21, ...List.generate(15, (i) => i + 30)]);
     expect(matches.every((match) => match.lyrics.kind == MusicLyricsKind.plain),
         isTrue);
+  });
+
+  test('manual search retries without an album that yields no lyrics',
+      () async {
+    final queries = <Map<String, String>>[];
+    final service = LrclibMusicLyricsService(
+        createClient: () => MockClient((request) async {
+              queries.add(request.url.queryParameters);
+              return _json(queries.length == 1 ? [] : [_recordData()]);
+            }));
+    final matches = await service.search(
+      trackName: 'Example Song [Official Video]',
+      artistName: 'Example Artist - Topic',
+      albumName: 'Example Compilation',
+      durationSeconds: 180,
+      isCurrent: () => true,
+    );
+    expect(matches.single.id, 21);
+    const song = {
+      'track_name': 'Example Song',
+      'artist_name': 'Example Artist'
+    };
+    expect(queries, [
+      {...song, 'album_name': 'Example Compilation'},
+      song,
+    ]);
   });
 
   test('manual search suppresses stale responses and sends only valid queries',

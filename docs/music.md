@@ -623,6 +623,9 @@ Expand Music Now Playing and tap **Lyrics** on the cover artwork to look up
 synced or plain lyrics from LRCLIB. The first lookup asks you to enable the
 provider. The same switch is available in **Settings → YT Music**. Videre sends
 the song's title, artist, and known album and duration when you open the panel.
+If the exact lookup misses, Videre can try one search by song and artist. It
+checks the recording before showing lyrics and can show plain text when the
+duration differs slightly from the matching release.
 The Videre network proxy applies when enabled. The active timed line is
 highlighted and follows playback. Scroll manually to read ahead or behind,
 then select **Follow lyrics** to resume following. With animations off, the
