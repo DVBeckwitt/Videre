@@ -511,6 +511,36 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testPosition('pulling down on Now Playing artwork docks the same track',
+      (tester) async {
+    await player.seed(player.state.copyWith(isMini: false, top: 0));
+    final decoder = await pumpPlayer(tester);
+    final native = decoder.audioPlayer;
+    final artwork = find.byKey(const ValueKey('music-player-artwork'));
+
+    await tester.drag(artwork, const Offset(0, 90));
+    await tester.pumpAndSettle();
+    expect(player.state.isMini, isFalse);
+    expect(tester.getRect(positioned).top, closeTo(0, 0.01));
+
+    final pull = await tester.startGesture(tester.getCenter(artwork));
+    await pull.moveBy(const Offset(0, 40));
+    await tester.pump();
+    await pull.moveBy(const Offset(0, 220));
+    await tester.pump();
+    expect(tester.getRect(positioned).top, greaterThan(0));
+    expect(player.state.isMini, isFalse);
+
+    await pull.up();
+    await tester.pumpAndSettle();
+    expect(player.state.isMini, isTrue);
+    expect(player.state.currentlyPlaying, same(song));
+    expect(find.byType(MusicMiniPlayer), findsOneWidget);
+    expect(
+        tester.element(audioBuilder).read<AudioPlayerCubit>(), same(decoder));
+    expect(decoder.audioPlayer, same(native));
+  });
+
   testPosition('cancelled expanded Music pull returns without minimizing',
       (tester) async {
     await player.seed(player.state.copyWith(isMini: false, top: 0));

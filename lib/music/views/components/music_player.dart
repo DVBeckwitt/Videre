@@ -28,6 +28,7 @@ import 'package:clipious/player/models/playback_queue.dart';
 import 'package:clipious/player/states/audio_player.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/player/views/components/backend_recovery_notice.dart';
+import 'package:clipious/player/views/components/minimize_on_swipe_down.dart';
 import 'package:clipious/player/views/components/player_backend_picker.dart';
 import 'package:clipious/player/views/components/player_modal_back_handler.dart';
 import 'package:clipious/player/models/sleep_timer.dart';
@@ -410,6 +411,13 @@ class _MusicPlayerState extends State<MusicPlayer>
       final showQueue = fixedQueue || _queueVisibility == true;
       final sideQueue = wide && showQueue;
       final interactiveArtwork = sideQueue || (!showQueue && !_draggingQueue);
+      final swipeToMinimize = !widget.television &&
+          activeProfile &&
+          interactiveArtwork &&
+          !state.isMini &&
+          !state.isHidden &&
+          !state.isClosing &&
+          MinimizeDragScope.maybeOf(context) != null;
       final allowLocalVideo =
           onDevice && advisoryQueueId != null && (!showQueue || sideQueue);
       final allowOnlineArtwork = pending == null &&
@@ -449,9 +457,12 @@ class _MusicPlayerState extends State<MusicPlayer>
       final largeArtwork = style == MusicNowPlayingStyle.largeArtwork;
       final horizontalPadding = largeArtwork ? 10.0 : 18.0;
       final nowPlaying = LayoutBuilder(
-          builder: (context, viewport) => SingleChildScrollView(
+          builder: (context, viewport) => MinimizeOnSwipeDown(
                 key: const ValueKey('music-now-playing-scroll'),
-                padding: shortLandscape
+                enabled: swipeToMinimize,
+                scrollable: true,
+                onSwipeDown: player.showMiniPlayer,
+                scrollPadding: shortLandscape
                     ? const EdgeInsets.symmetric(horizontal: 12, vertical: 8)
                     : EdgeInsets.fromLTRB(horizontalPadding, 10,
                         horizontalPadding, portraitPhone ? 6 : 16),
@@ -903,6 +914,7 @@ class _MusicPlayerState extends State<MusicPlayer>
                       allowOnlineArtwork: allowOnlineArtwork,
                       allowLocalVideo: allowLocalVideo,
                       interactive: interactiveArtwork,
+                      swipeToMinimize: swipeToMinimize,
                       onSeekStep: widget.television ? null : seekStep)),
               Expanded(flex: 5, child: nowPlaying),
             ])
@@ -1346,6 +1358,7 @@ class _MusicPlayerState extends State<MusicPlayer>
           required bool allowLocalVideo,
           required bool interactive,
           bool showLyricsButton = true,
+          bool swipeToMinimize = false,
           required ValueChanged<bool>? onSeekStep}) =>
       MusicPlayerArtwork(
           key: _artwork,
@@ -1357,6 +1370,7 @@ class _MusicPlayerState extends State<MusicPlayer>
           localVideoActive: allowLocalVideo,
           interactive: interactive,
           showLyricsButton: showLyricsButton,
+          swipeToMinimize: swipeToMinimize,
           scaleWithPlayback: !widget.television,
           onSeekStep: onSeekStep,
           lyricsLoader: widget.lyricsLoader,

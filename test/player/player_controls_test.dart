@@ -618,6 +618,45 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
+  testWidgets('removing a held minimize surface cancels its preview',
+      (tester) async {
+    final visible = ValueNotifier(true);
+    addTearDown(visible.dispose);
+    final updates = <double>[];
+    final endings = <bool>[];
+    const surface = ValueKey('minimize-surface');
+    await tester.pumpWidget(hostControls(MinimizeDragScope(
+      identity: visible,
+      onUpdate: updates.add,
+      onEnd: endings.add,
+      child: ValueListenableBuilder<bool>(
+        valueListenable: visible,
+        builder: (context, visible, _) => visible
+            ? MinimizeOnSwipeDown(
+                key: surface,
+                enabled: true,
+                onSwipeDown: () => fail('The removed surface minimized'),
+                child: const SizedBox(width: 300, height: 220),
+              )
+            : const SizedBox.shrink(),
+      ),
+    )));
+    final gesture =
+        await tester.startGesture(tester.getCenter(find.byKey(surface)));
+    await gesture.moveBy(const Offset(0, 45));
+    expect(updates, [45]);
+    expect(endings, isEmpty);
+
+    visible.value = false;
+    await tester.pump();
+    expect(endings, [false]);
+    await gesture.moveBy(const Offset(0, 220));
+    await gesture.up();
+    expect(updates, [45]);
+    expect(endings, [false]);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('explicit minimize clears an interrupted drag', (tester) async {
     await createPlayingVideo(tester);
     player.videoDragStarted(DragStartDetails());

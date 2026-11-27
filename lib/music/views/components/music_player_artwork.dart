@@ -11,6 +11,7 @@ import '../../../l10n/generated/app_localizations.dart';
 import '../../../network/network_proxy.dart';
 import '../../../player/models/local_music_playback.dart';
 import '../../../player/states/player.dart';
+import '../../../player/views/components/minimize_on_swipe_down.dart';
 import '../../../settings/states/settings.dart';
 import '../../../utils/motion.dart';
 import '../../../videos/models/music_metadata.dart';
@@ -44,6 +45,7 @@ class MusicPlayerArtwork extends StatefulWidget {
   final bool active;
   final bool localVideoActive;
   final bool interactive;
+  final bool swipeToMinimize;
   final bool scaleWithPlayback;
   final ValueChanged<bool>? onSeekStep;
   final MusicLyricsLoader? lyricsLoader;
@@ -59,6 +61,7 @@ class MusicPlayerArtwork extends StatefulWidget {
     required this.active,
     this.localVideoActive = false,
     this.interactive = true,
+    this.swipeToMinimize = false,
     this.scaleWithPlayback = true,
     this.onSeekStep,
     required this.lyricsLoader,
@@ -747,7 +750,14 @@ class _MusicPlayerArtworkState extends State<MusicPlayerArtwork>
         child: Stack(
           alignment: Alignment.center,
           children: [
-            artwork,
+            if (widget.swipeToMinimize)
+              MinimizeOnSwipeDown(
+                enabled: true,
+                onSwipeDown: player.showMiniPlayer,
+                child: artwork,
+              )
+            else
+              artwork,
             if (widget.interactive)
               PositionedDirectional(
                 top: 0,

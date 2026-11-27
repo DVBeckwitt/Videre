@@ -862,6 +862,7 @@ class _PlayerState extends State<Player> {
               }
             },
             onEnd: (minimize) {
+              if (!mounted || _minimizeIdentity != minimizeIdentity) return;
               if (_minimizeDrag != null) setState(() => _minimizeDrag = null);
               if (minimize &&
                   !cubit.isClosed &&

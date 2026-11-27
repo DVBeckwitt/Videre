@@ -26,6 +26,7 @@ class MinimizeDragScope extends InheritedWidget {
 class MinimizeOnSwipeDown extends StatefulWidget {
   final bool enabled;
   final bool scrollable;
+  final EdgeInsetsGeometry? scrollPadding;
   final VoidCallback onSwipeDown;
   final Widget child;
 
@@ -33,6 +34,7 @@ class MinimizeOnSwipeDown extends StatefulWidget {
     super.key,
     required this.enabled,
     this.scrollable = false,
+    this.scrollPadding,
     required this.onSwipeDown,
     required this.child,
   });
@@ -48,12 +50,18 @@ class _MinimizeOnSwipeDownState extends State<MinimizeOnSwipeDown> {
   final _activePointers = <int>{};
   Offset? _startPosition;
   bool _scrollDragStarted = false;
-  bool _previewing = false;
+  MinimizeDragScope? _previewScope;
   Object? _gestureIdentity;
   final _scrollController = ScrollController();
 
   @override
   void dispose() {
+    final preview = _previewScope;
+    if (preview != null) {
+      // A replacement surface can unmount this listener during the frame.
+      WidgetsBinding.instance.addPostFrameCallback((_) => preview.onEnd(false));
+    }
+    _pointer = null;
     _scrollController.dispose();
     super.dispose();
   }
@@ -83,9 +91,9 @@ class _MinimizeOnSwipeDownState extends State<MinimizeOnSwipeDown> {
       _gestureIdentity == MinimizeDragScope.maybeOf(context)?.identity;
 
   void _endPreview(bool minimize) {
-    if (!_previewing) return;
-    _previewing = false;
-    MinimizeDragScope.maybeOf(context)?.onEnd(minimize);
+    final preview = _previewScope;
+    _previewScope = null;
+    preview?.onEnd(minimize);
   }
 
   void _pointerMove(PointerMoveEvent event) {
@@ -98,7 +106,7 @@ class _MinimizeOnSwipeDownState extends State<MinimizeOnSwipeDown> {
     }
     final distance = event.position - _startPosition!;
     // A horizontal seek/track swipe retains ownership for its whole gesture.
-    if (!_previewing &&
+    if (_previewScope == null &&
         distance.dx.abs() > kTouchSlop &&
         distance.dx.abs() > distance.dy.abs()) {
       _pointer = null;
@@ -106,11 +114,11 @@ class _MinimizeOnSwipeDownState extends State<MinimizeOnSwipeDown> {
       return;
     }
     if ((!widget.scrollable || _scrollDragStarted) &&
-        (_previewing ||
+        (_previewScope != null ||
             (distance.dy > kTouchSlop && distance.dy > distance.dx.abs()))) {
       final motion = MinimizeDragScope.maybeOf(context);
       if (motion != null) {
-        _previewing = true;
+        _previewScope = motion;
         // Muzza BottomSheet.kt dispatches raw deltas while held, then settles
         // at an anchor. Do not ease or repeatedly restart a tween under a finger.
         motion.onUpdate(distance.dy.clamp(0.0, double.infinity));
@@ -140,7 +148,7 @@ class _MinimizeOnSwipeDownState extends State<MinimizeOnSwipeDown> {
         (!widget.scrollable || _scrollDragStarted) &&
         distance.dy > _swipeDistance &&
         distance.dy > distance.dx.abs();
-    if (_previewing) {
+    if (_previewScope != null) {
       _endPreview(minimize);
     } else if (minimize) {
       widget.onSwipeDown();
@@ -169,6 +177,7 @@ class _MinimizeOnSwipeDownState extends State<MinimizeOnSwipeDown> {
               onNotification: _scrollStart,
               child: SingleChildScrollView(
                 controller: _scrollController,
+                padding: widget.scrollPadding,
                 physics: widget.enabled
                     ? const AlwaysScrollableScrollPhysics()
                     : null,
