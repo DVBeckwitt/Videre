@@ -2510,14 +2510,6 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
           ? Icons.bookmark_rounded
           : Icons.cloud_download_rounded;
 
-  void _openAutomaticCollections({bool showLikes = false}) {
-    final session = MusicLibrarySession(context.read<AppCubit>());
-    if (!session.isCurrent) return;
-    unawaited(Navigator.of(context).push<void>(MaterialPageRoute(
-        builder: (_) => MusicAutomaticCollectionsPage(
-            session: session, showLikes: showLikes))));
-  }
-
   ValueKey<String> _shortcutKey(_LibraryFilter shortcut) =>
       ValueKey('music-library-shortcut-${shortcut.name}');
 
@@ -3668,7 +3660,9 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                                   onPressed: state.globalLoading ||
                                           state.sessionRecoveryRequired
                                       ? null
-                                      : _openAutomaticCollections,
+                                      : () =>
+                                          MusicAutomaticCollectionsPage.open(
+                                              context),
                                 ),
                                 IconButton(
                                   key: const ValueKey('music-library-history'),
@@ -3714,8 +3708,9 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                                             if (imported ==
                                                 TakeoutImportDestination
                                                     .likes) {
-                                              _openAutomaticCollections(
-                                                  showLikes: true);
+                                              MusicAutomaticCollectionsPage
+                                                  .open(this.context,
+                                                      showLikes: true);
                                             } else if (imported ==
                                                 TakeoutImportDestination
                                                     .savedSongs) {
