@@ -506,8 +506,11 @@ private class VidereNetworkPlugin : FlutterPlugin {
         connectivity = binding.applicationContext.getSystemService(ConnectivityManager::class.java)
         networkChannel = MethodChannel(binding.binaryMessenger, "videre/network").also {
             it.setMethodCallHandler { call, result ->
-                if (call.method == "isWifiConnected") result.success(isWifiConnected())
-                else result.notImplemented()
+                when (call.method) {
+                    "isWifiConnected" -> result.success(currentNetworkState()["wifi"])
+                    "isNetworkConnected" -> result.success(currentNetworkState()["connected"])
+                    else -> result.notImplemented()
+                }
             }
         }
         networkEvents = EventChannel(binding.binaryMessenger, "videre/network_changes").also {
@@ -521,10 +524,15 @@ private class VidereNetworkPlugin : FlutterPlugin {
         }
     }
 
-    private fun isWifiConnected(): Boolean = runCatching {
-        connectivity.getNetworkCapabilities(connectivity.activeNetwork)
+    private fun networkState(wifi: Boolean, connected: Boolean?) =
+        mapOf("wifi" to wifi, "connected" to connected)
+
+    private fun currentNetworkState() = runCatching {
+        val network = connectivity.activeNetwork
+        val wifi = network != null && connectivity.getNetworkCapabilities(network)
             ?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
-    }.getOrDefault(false)
+        networkState(wifi, network != null)
+    }.getOrElse { networkState(wifi = false, connected = null) }
 
     private fun watchNetwork(events: EventChannel.EventSink) {
         stopWatchingNetwork()
@@ -535,29 +543,33 @@ private class VidereNetworkPlugin : FlutterPlugin {
                 currentNetwork = network
                 // Android 7 does not always send capabilities after onAvailable.
                 if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
-                    mainHandler.post { if (networkCallback === this) events.success(isWifiConnected()) }
+                    mainHandler.post { if (networkCallback === this) events.success(currentNetworkState()) }
                 }
             }
 
             override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
-                if (network == currentNetwork) publish(capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI))
+                if (network == currentNetwork) {
+                    publish(capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI), connected = true)
+                }
             }
 
             override fun onLost(network: Network) {
                 if (network == currentNetwork) {
                     currentNetwork = null
-                    publish(false)
+                    publish(wifi = false, connected = false)
                 }
             }
 
-            private fun publish(wifi: Boolean) {
-                mainHandler.post { if (networkCallback === this) events.success(wifi) }
+            private fun publish(wifi: Boolean, connected: Boolean) {
+                mainHandler.post {
+                    if (networkCallback === this) events.success(networkState(wifi, connected))
+                }
             }
         }
         networkCallback = callback
         try {
             connectivity.registerDefaultNetworkCallback(callback)
-            events.success(isWifiConnected())
+            events.success(currentNetworkState())
         } catch (_: RuntimeException) {
             networkCallback = null
             events.error("NETWORK_UNAVAILABLE", "Could not monitor this device's connection.", null)

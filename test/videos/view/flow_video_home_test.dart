@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:clipious/app/states/app.dart';
+import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/home/models/home_tabs_layout.dart';
@@ -8,6 +9,7 @@ import 'package:clipious/home/views/components/flow_video_home.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/offline_subscriptions/models/offline_subscription.dart';
 import 'package:clipious/player/states/player.dart';
+import 'package:clipious/player/views/tv/screens/tv_player_view.dart';
 import 'package:clipious/recommendations/recommendation_service.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/server.dart';
@@ -79,10 +81,132 @@ class _FeedService extends Service {
   }
 }
 
+class _HomeAppCubit extends TestAppCubit {
+  _HomeAppCubit(super.initialState);
+
+  void changeProfile(String id) {
+    emit(state.copyWith(
+        profileId: id, sessionRevision: state.sessionRevision + 1));
+  }
+}
+
+class _HomePlayerCubit extends TestPlayerCubit {
+  _HomePlayerCubit(super.initialState, super.settings);
+
+  final playedDownloads = <DownloadedVideo>[];
+
+  @override
+  Future<void> playOfflineVideos(List<DownloadedVideo> offlineVids,
+      {int startIndex = 0,
+      bool fromMusic = false,
+      bool songTap = false}) async {
+    expect(fromMusic, isFalse);
+    playedDownloads.add(offlineVids[startIndex]);
+  }
+}
+
+// Inspect the TV route without starting a decoder in a widget test.
+class _PlaybackNavigator extends Navigator {
+  const _PlaybackNavigator({super.key, required super.onGenerateRoute});
+
+  @override
+  NavigatorState createState() => _PlaybackNavigatorState();
+}
+
+class _PlaybackNavigatorState extends NavigatorState {
+  final pushed = <Route<dynamic>>[];
+
+  @override
+  Future<T?> push<T extends Object?>(Route<T> route) {
+    pushed.add(route);
+    return Future<T?>.value();
+  }
+}
+
+class _OfflinePlatform {
+  static const _network = MethodChannel('videre/network');
+  static const _networkEvents = MethodChannel('videre/network_changes');
+  static const _storage = MethodChannel('videre/download_storage');
+  static const _codec = StandardMethodCodec();
+
+  final _messenger =
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+  final files = <String>{};
+  final probes = <({String profile, List<String> ids})>[];
+  bool? online;
+  Future<void> Function(String profile)? beforeProbe;
+
+  _OfflinePlatform({this.online = false}) {
+    _messenger.setMockMethodCallHandler(_network, (call) async {
+      expect(call.method, 'isNetworkConnected');
+      return online;
+    });
+    _messenger.setMockMethodCallHandler(_networkEvents, (_) async => null);
+    _messenger.setMockMethodCallHandler(_storage, (call) async {
+      expect(call.method, 'probeMusicFiles');
+      final args = call.arguments as Map<Object?, Object?>;
+      final profile = args['profileId'] as String;
+      final ids = [
+        for (final entry in args['files'] as List<Object?>)
+          (entry as Map<Object?, Object?>)['videoId'] as String,
+      ];
+      probes.add((profile: profile, ids: ids));
+      await beforeProbe?.call(profile);
+      return {
+        for (final id in ids)
+          if (files.contains(id)) id: {'identity': 'a' * 64, 'byteLength': 10},
+      };
+    });
+    addTearDown(() {
+      _messenger.setMockMethodCallHandler(_network, null);
+      _messenger.setMockMethodCallHandler(_networkEvents, null);
+      _messenger.setMockMethodCallHandler(_storage, null);
+    });
+  }
+
+  Future<void> changeConnection(bool value) async {
+    online = value;
+    final delivered = Completer<void>();
+    unawaited(_messenger.handlePlatformMessage(
+        _networkEvents.name,
+        _codec.encodeSuccessEnvelope({'wifi': false, 'connected': value}),
+        (_) => delivered.complete()));
+    await delivered.future;
+  }
+}
+
+DownloadedVideo _download(String id, String title,
+        {bool ready = true, bool audio = false}) =>
+    DownloadedVideo(
+        videoId: id,
+        title: title,
+        lengthSeconds: 42,
+        quality: audio ? 'audio' : '720p',
+        storageUri: 'content://downloads/tree/videos/document/$id',
+        folderUri: 'content://downloads/tree/videos',
+        downloadComplete: ready,
+        audioOnly: audio);
+
+Finder _downloadCard(String id) =>
+    find.byKey(ValueKey('flow-offline-video-$id'));
+
+final _reconnectRefresh =
+    find.byKey(const ValueKey('video-home-refresh-online'));
+
+bool _hasPrimaryFocus(WidgetTester tester, Finder finder) {
+  final target = tester.element(finder);
+  var found = false;
+  FocusManager.instance.primaryFocus?.context?.visitAncestorElements((element) {
+    found = identical(element, target);
+    return !found;
+  });
+  return found;
+}
+
 void main() {
-  late TestAppCubit app;
+  late _HomeAppCubit app;
   late TestSettingsCubit settings;
-  late TestPlayerCubit player;
+  late _HomePlayerCubit player;
   late _FeedService api;
   final calls = <MethodCall>[];
   List<String> discoveryQueries = [];
@@ -92,12 +216,12 @@ void main() {
   setUp(() async {
     db = await SembastSqfDb.createInMemory();
     service = api = _FeedService();
-    app = TestAppCubit(AppState(0, null, HomeLayout()));
+    app = _HomeAppCubit(AppState(0, null, HomeLayout()));
     app.intentDataStreamSubscription =
         const Stream<void>.empty().listen((_) {});
     await app.initState();
     settings = TestSettingsCubit(SettingsState.init(), app);
-    player = TestPlayerCubit(PlayerState.init(null), settings);
+    player = _HomePlayerCubit(PlayerState.init(null), settings);
     calls.clear();
     discoveryQueries = [];
     interestChips = [];
@@ -168,12 +292,35 @@ void main() {
       bool television = false,
       bool disableAnimations = false,
       Widget? configuredFeed,
+      Key? homeKey,
+      GlobalKey<_PlaybackNavigatorState>? playbackNavigator,
       ValueChanged<List<RecommendationInterest>>? onEdit}) async {
     tester.view.physicalSize =
         television ? const Size(1280, 800) : const Size(320, 568);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
+    final home = Scaffold(
+        body: FlowVideoHome(
+            key: homeKey,
+            active: active,
+            television: television,
+            configuredFeed: configuredFeed == null
+                ? null
+                : (shelf) => Column(children: [
+                      if (shelf != null) shelf,
+                      configuredFeed,
+                    ]),
+            onEdit: onEdit));
+    final surface = television
+        ? Shortcuts(
+            shortcuts: <LogicalKeySet, Intent>{
+              LogicalKeySet(LogicalKeyboardKey.select): const ActivateIntent(),
+            },
+            child: home,
+          )
+        : home;
+
     await tester.pumpWidget(MultiBlocProvider(
       providers: [
         BlocProvider<AppCubit>.value(value: app),
@@ -189,21 +336,213 @@ void main() {
               disableAnimations: disableAnimations),
           child: child!,
         ),
-        home: Scaffold(
-            body: FlowVideoHome(
-                active: active,
-                television: television,
-                configuredFeed: configuredFeed == null
-                    ? null
-                    : (shelf) => Column(children: [
-                          if (shelf != null) shelf,
-                          configuredFeed,
-                        ]),
-                onEdit: onEdit)),
+        home: playbackNavigator == null
+            ? surface
+            : _PlaybackNavigator(
+                key: playbackNavigator,
+                onGenerateRoute: (_) =>
+                    MaterialPageRoute<void>(builder: (_) => surface),
+              ),
       ),
     ));
     if (settle) await tester.pumpAndSettle();
   }
+
+  testWidgets('offline Home offers only readable completed video downloads',
+      (tester) async {
+    final platform = _OfflinePlatform();
+    final readable = _download('saved000001', 'Readable download');
+    final deleted = _download('saved000002', 'Deleted after opening Home');
+    final missing = _download('missing0001', 'Missing download');
+    final pending = _download('pending0001', 'Pending download', ready: false);
+    final audio = _download('audio000001', 'Audio download', audio: true);
+    platform.files.addAll(
+        [readable.videoId, deleted.videoId, pending.videoId, audio.videoId]);
+    await tester.runAsync(() async {
+      for (final download in [readable, deleted, missing, pending, audio]) {
+        await db.upsertDownload(download);
+      }
+    });
+
+    await show(tester);
+
+    expect(find.text('You’re offline'), findsOneWidget);
+    expect(_downloadCard(readable.videoId), findsOneWidget);
+    expect(_downloadCard(deleted.videoId), findsOneWidget);
+    expect(_downloadCard(missing.videoId), findsNothing);
+    expect(_downloadCard(pending.videoId), findsNothing);
+    expect(_downloadCard(audio.videoId), findsNothing);
+    expect(platform.probes.expand((batch) => batch.ids),
+        unorderedEquals([readable.videoId, deleted.videoId, missing.videoId]));
+    expect(_reconnectRefresh, findsNothing);
+
+    await tester.tap(_downloadCard(readable.videoId));
+    await tester.pumpAndSettle();
+    expect(player.playedDownloads, [readable]);
+
+    platform.files.remove(deleted.videoId);
+    await tester.tap(_downloadCard(deleted.videoId));
+    await tester.pumpAndSettle();
+    expect(player.playedDownloads, [readable]);
+    expect(_downloadCard(deleted.videoId), findsNothing);
+    expect(_downloadCard(readable.videoId), findsOneWidget);
+
+    final delayedProbe = Completer<void>();
+    addTearDown(() {
+      if (!delayedProbe.isCompleted) delayedProbe.complete();
+    });
+    platform.beforeProbe = (_) => delayedProbe.future;
+    await tester.tap(_downloadCard(readable.videoId));
+    await tester.pump();
+    final homeContext = tester.element(find.byType(FlowVideoHome));
+    unawaited(showDialog<void>(
+      context: homeContext,
+      builder: (_) => const AlertDialog(content: Text('Other action')),
+    ));
+    await tester.pumpAndSettle();
+    delayedProbe.complete();
+    await tester.pumpAndSettle();
+    expect(find.text('Other action'), findsOneWidget);
+    expect(player.playedDownloads, [readable]);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('offline Home holds its download cards until a manual refresh',
+      (tester) async {
+    final platform = _OfflinePlatform();
+    final download = _download('saved000001', 'Download in view');
+    platform.files.add(download.videoId);
+    await tester.runAsync(() => db.upsertDownload(download));
+    await show(tester);
+
+    final card = _downloadCard(download.videoId);
+    expect(card, findsOneWidget);
+    final originalElement = tester.element(card);
+    final originalBounds = tester.getRect(card);
+
+    await platform.changeConnection(true);
+    await tester.pumpAndSettle();
+    expect(find.text('Back online'), findsOneWidget);
+    expect(_reconnectRefresh, findsOneWidget);
+    expect(tester.element(card), same(originalElement));
+    expect(tester.getRect(card), originalBounds);
+
+    await tester
+        .runAsync(() => remember('cached00001', 'Available feed video', 0));
+    playbackHistoryRevision.value++;
+    await tester.pumpAndSettle();
+    expect(find.text('Available feed video'), findsNothing);
+    expect(tester.element(card), same(originalElement));
+    expect(tester.getRect(card), originalBounds);
+
+    await tester.tap(_reconnectRefresh);
+    await tester.pumpAndSettle();
+    expect(card, findsNothing);
+    expect(find.text('Available feed video'), findsOneWidget);
+    expect(_reconnectRefresh, findsNothing);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('offline Home keeps cached feed cards in place across reconnect',
+      (tester) async {
+    final platform = _OfflinePlatform(online: true);
+    final download = _download('saved000001', 'Unneeded fallback');
+    platform.files.add(download.videoId);
+    await tester.runAsync(() async {
+      await db.upsertDownload(download);
+      await remember('cached00001', 'Cached feed video', 0);
+    });
+    await show(tester);
+
+    final card = find.byKey(const ValueKey('flow-video-cached00001'));
+    expect(card, findsOneWidget);
+    expect(_downloadCard(download.videoId), findsNothing);
+    expect(platform.probes, isEmpty);
+    final originalElement = tester.element(card);
+    final originalBounds = tester.getRect(card);
+
+    await platform.changeConnection(false);
+    await tester.pumpAndSettle();
+    expect(_reconnectRefresh, findsNothing);
+    expect(tester.element(card), same(originalElement));
+    expect(tester.getRect(card), originalBounds);
+
+    await platform.changeConnection(true);
+    await tester.pumpAndSettle();
+    expect(_reconnectRefresh, findsOneWidget);
+    expect(tester.element(card), same(originalElement));
+    expect(tester.getRect(card), originalBounds);
+    expect(platform.probes, isEmpty);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('a profile switch discards an in-flight download shelf',
+      (tester) async {
+    final platform = _OfflinePlatform();
+    final originalProfile = db.profileId;
+    final download = _download('saved000001', 'Previous profile download');
+    final oldProbe = Completer<void>();
+    platform.files.add(download.videoId);
+    platform.beforeProbe = (_) => oldProbe.future;
+    addTearDown(() {
+      if (!oldProbe.isCompleted) oldProbe.complete();
+      RecommendationService.forProfile(db, originalProfile).dispose();
+    });
+    final nextProfile = (await tester.runAsync(() async {
+      await db.upsertDownload(download);
+      return db.createProfile('Next profile');
+    }))!
+        .id;
+
+    await show(tester, settle: false);
+    for (var frame = 0; frame < 8 && platform.probes.isEmpty; frame++) {
+      await tester.pump();
+    }
+    expect(platform.probes.single.profile, originalProfile);
+    expect(_downloadCard(download.videoId), findsNothing);
+
+    await tester.runAsync(() => db.useProfile(nextProfile));
+    app.changeProfile(nextProfile);
+    oldProbe.complete();
+    await tester.pumpAndSettle();
+    expect(_downloadCard(download.videoId), findsNothing);
+
+    await show(tester, homeKey: ValueKey(nextProfile));
+    expect(find.text('You’re offline'), findsOneWidget);
+    expect(find.text('No downloaded videos are available to play.'),
+        findsOneWidget);
+    expect(_downloadCard(download.videoId), findsNothing);
+    expect(platform.probes.map((batch) => batch.profile), [originalProfile]);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('TV D-pad opens an offline Home item in the TV player',
+      (tester) async {
+    final platform = _OfflinePlatform();
+    final download = _download('saved000001', 'Remote-friendly download');
+    final navigator = GlobalKey<_PlaybackNavigatorState>();
+    platform.files.add(download.videoId);
+    await tester.runAsync(() => db.upsertDownload(download));
+    await show(tester, television: true, playbackNavigator: navigator);
+
+    final card = _downloadCard(download.videoId);
+    expect(card, findsOneWidget);
+    for (var move = 0; move < 6 && !_hasPrimaryFocus(tester, card); move++) {
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pumpAndSettle();
+    }
+    expect(_hasPrimaryFocus(tester, card), isTrue);
+    await tester.sendKeyEvent(LogicalKeyboardKey.select);
+    await tester.pumpAndSettle();
+
+    final route =
+        navigator.currentState!.pushed.single as MaterialPageRoute<void>;
+    expect(route.builder(tester.element(card)), isA<TvPlayerScreen>());
+    expect(platform.probes.last.ids, [download.videoId]);
+    expect(player.playedDownloads, isEmpty);
+    route.dispose();
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
 
   test('Continue watching excludes music, completed and manually watched items',
       () async {
@@ -707,7 +1046,7 @@ void main() {
           HomeTabsLayout(enabledOrder: [HomeTabsLayout.discover]));
     });
     await tester.runAsync(player.close);
-    player = TestPlayerCubit(
+    player = _HomePlayerCubit(
         PlayerState.init(null).copyWith(
             currentlyPlaying: const Video(videoId: 'playing0001'),
             isHidden: false,

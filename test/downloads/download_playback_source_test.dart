@@ -6,6 +6,8 @@ import 'package:clipious/downloads/models/download_formats.dart';
 import 'package:clipious/downloads/models/download_playback_provenance.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/downloads/services/download_playback_source.dart';
+import 'package:clipious/downloads/services/download_storage.dart';
+import 'package:clipious/home/services/offline_video_downloads.dart';
 import 'package:clipious/settings/models/db/app_logs.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/errors/no_server_selected.dart';
@@ -19,6 +21,7 @@ import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:path/path.dart' as p;
 
 const _server = Server(
     url: 'https://inv.example',
@@ -111,6 +114,7 @@ class _Database extends Fake implements IDbClient {
   String activeProfile = _server.profileId;
   Server selected = _server;
   DownloadedVideo? download;
+  List<DownloadedVideo> downloads = [];
   Completer<Server>? selectionResult;
   Completer<void>? selectionStarted;
   bool deserializeReads = false;
@@ -136,10 +140,14 @@ class _Database extends Fake implements IDbClient {
   }
 
   @override
+  List<DownloadedVideo> getAllDownloads() => downloads;
+
+  @override
   DownloadedVideo? getDownloadByVideoId(String videoId) {
     reads++;
-    final value = download;
-    if (value?.videoId != videoId) return null;
+    final value = download?.videoId == videoId
+        ? download
+        : downloads.where((row) => row.videoId == videoId).firstOrNull;
     return deserializeReads && value != null
         ? DownloadedVideo.fromJson(value.toJson())
         : value;
@@ -160,6 +168,7 @@ class _Database extends Fake implements IDbClient {
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   const pathProvider = MethodChannel('plugins.flutter.io/path_provider');
+  const storageChannel = MethodChannel('videre/download_storage');
   final messenger =
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
   late Directory documents;
@@ -218,6 +227,7 @@ void main() {
 
   tearDown(() async {
     messenger.setMockMethodCallHandler(pathProvider, null);
+    messenger.setMockMethodCallHandler(storageChannel, null);
     debugDefaultTargetPlatformOverride = null;
     await documents.delete(recursive: true);
   });
@@ -629,5 +639,118 @@ void main() {
     await database.selectionStarted!.future;
     database.selectionResult!.completeError(StateError('Account was removed'));
     expect(await pending, isNull);
+  });
+
+  group('offline Home downloads', () {
+    const video = DownloadedVideo(
+        videoId: 'legacy',
+        profileId: 'person-a',
+        title: 'Downloaded video',
+        quality: '720p',
+        lengthSeconds: 60,
+        downloadComplete: true);
+    const folder = 'content://storage/tree/downloads';
+    DownloadedVideo document(String id) => video.copyWith(
+        videoId: id, storageUri: '$folder/document/$id', folderUri: folder);
+    final storage = DownloadStorage();
+
+    test('probes legacy MP4 and owned documents and skips unavailable files',
+        () async {
+      final mp4 = File(p.join(documents.path, 'downloads', 'profiles',
+          video.profileId, 'legacy.mp4'));
+      await mp4.parent.create(recursive: true);
+      await mp4.writeAsBytes([1, 2, 3]);
+      final privateMissing = video.copyWith(videoId: 'missing');
+      final shared = document('shared');
+      final denied = document('denied');
+      messenger.setMockMethodCallHandler(storageChannel, (call) async {
+        expect(call.method, 'probeMusicFiles');
+        expect(call.arguments['profileId'], video.profileId);
+        final files = (call.arguments['files'] as List).cast<Map>();
+        expect(files.map((file) => file['key']),
+            ['legacy', 'missing', 'shared', 'denied']);
+        expect(Uri.parse(files[0]['uri'] as String).toFilePath(), mp4.path);
+        expect(files[0]['folderUri'], isNull);
+        expect(files[2]['uri'], shared.storageUri);
+        expect(files[2]['folderUri'], folder);
+        return {
+          'legacy': {'identity': 'a' * 64, 'byteLength': 3},
+          'shared': {'identity': 'b' * 64, 'byteLength': 9},
+          'denied': {'identity': 'c' * 64, 'byteLength': 0},
+        };
+      });
+
+      expect(
+          await storage.probeVideoFiles(video.profileId, [
+            video,
+            privateMissing,
+            shared,
+            denied,
+            document('audio').copyWith(audioOnly: true),
+            document('pending').copyWith(downloadComplete: false),
+            document('failed').copyWith(downloadFailed: true),
+            document('storage-failed').copyWith(storageFailed: true),
+            document('auth').copyWith(authenticationRequired: true),
+            document('other').copyWith(profileId: 'person-b'),
+            document('unowned').copyWith(folderUri: null),
+          ]),
+          [video, shared]);
+    });
+
+    test('fills the bounded shelf past missing and filtered rows', () async {
+      final candidates = ['f', 'e', 'd', 'c', 'b', 'a'].map(document).toList();
+      database.downloads = candidates;
+      final probes = <String>[];
+      messenger.setMockMethodCallHandler(storageChannel, (call) async {
+        final ids = (call.arguments['files'] as List)
+            .map((file) => file['key'] as String);
+        probes.addAll(ids);
+        return {
+          for (final id in ids)
+            if (id != 'a') id: {'identity': 'a' * 64, 'byteLength': 3}
+        };
+      });
+
+      final shelf = await readableHomeDownloads(
+          owner: database,
+          storage: storage,
+          isCurrent: () => current,
+          include: (video) => video.videoId != 'c',
+          limit: 2);
+
+      expect(shelf.map((row) => row.videoId), ['b', 'd']);
+      expect(probes, ['a', 'b', 'd']);
+    });
+
+    test('rejects taps when the file, session or owning row changes', () async {
+      final saved = document('saved');
+      for (final change in ['missing', 'session', 'profile', 'replacement']) {
+        database.activeProfile = saved.profileId;
+        database.downloads = [saved];
+        current = true;
+        messenger.setMockMethodCallHandler(storageChannel, (_) async {
+          switch (change) {
+            case 'missing':
+              return <String, Object?>{};
+            case 'session':
+              current = false;
+            case 'profile':
+              database.activeProfile = 'person-b';
+            case 'replacement':
+              database.downloads = [saved.copyWith(title: 'Replacement')];
+          }
+          return {
+            'saved': {'identity': 'a' * 64, 'byteLength': 3}
+          };
+        });
+
+        final shelf = await readableHomeDownloads(
+            owner: database,
+            storage: storage,
+            isCurrent: () => current,
+            selection: saved);
+        expect(shelf, isEmpty, reason: change);
+      }
+    });
   });
 }
