@@ -1,6 +1,14 @@
 package com.github.dvbeckwitt.videre.proxy
 
 import android.content.Context
+import android.net.Uri
+import androidx.media3.common.C
+import androidx.media3.datasource.DataSpec
+import androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException
+import androidx.media3.exoplayer.source.LoadEventInfo
+import androidx.media3.exoplayer.source.MediaLoadData
+import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy.FallbackOptions
+import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy.LoadErrorInfo
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import java.text.SimpleDateFormat
@@ -160,26 +168,25 @@ class NerdVpnTransportDeviceTest {
         assertEquals("ready", NerdVpnAccess.status(account)["state"])
     }
 
-    @Test fun unavailableResponsePreservesKeyAndPausesFurtherNativeRequests() {
+    @Test fun unavailableSubscriptionsDoNotBlockVideoWithTheSameKey() {
         var sent = 0
-        val before = System.currentTimeMillis()
+        val before = EncryptedNerdVpnStore(target).read(account)
+        val subscriptions = request().newBuilder().url("https://invidious.nerdvpn.de/api/v1/auth/subscriptions").build()
         val exception = assertThrows(NerdVpnAccessRequired::class.java) {
-            runInterceptors(request()) {
+            runInterceptors(subscriptions) {
                 sent++
                 response(it, 503, "unavailable").newBuilder().header("Retry-After", "60").build()
             }
         }
         assertEquals("unavailable", exception.state)
         val record = EncryptedNerdVpnStore(target).read(account)!!
-        assertEquals(fixtureKey, record.key)
-        assertTrue(record.retryAt!! >= before + 60_000)
-        assertThrows(NerdVpnAccessRequired::class.java) {
-            runInterceptors(request()) {
-                sent++
-                response(it, 200)
-            }
-        }
-        assertEquals(1, sent)
+        assertEquals(before, record)
+        runInterceptors(request()) {
+            sent++
+            assertEquals(fixtureKey, it.header(NERDVPN_KEY_HEADER))
+            response(it, 200)
+        }.use { assertEquals(200, it.code) }
+        assertEquals(2, sent)
     }
 
     @Test fun rateLimitedResponseAndHeaderReachCallerAndNextRequestCanProceedImmediately() {
@@ -209,6 +216,28 @@ class NerdVpnTransportDeviceTest {
                 response(it, 200)
             }.use { assertEquals(200, it.code) }
             assertEquals(if (refreshFirst) 3 else 2, sent)
+        }
+    }
+
+    @Test fun mediaLoaderRequiresANewPlayForNerdVpn429() {
+        val policy = NerdVpnMediaLoadErrorPolicy()
+        val alternatives = FallbackOptions(2, 0, 2, 0)
+        for (type in listOf(C.DATA_TYPE_MANIFEST, C.DATA_TYPE_MEDIA, C.DATA_TYPE_MEDIA_INITIALIZATION)) {
+            for (host in listOf("https://invidious.nerdvpn.de", "http://$NERDVPN_ONION_HOST", "https://elsewhere.invalid")) {
+                val spec = DataSpec(Uri.parse("$host/videoplayback"))
+                val event = LoadEventInfo(1L, spec, 0L)
+                val failure = InvalidResponseCodeException(429, "Too Many Requests", null,
+                    mapOf("Retry-After" to listOf("1")), spec, byteArrayOf())
+                val info = LoadErrorInfo(event, MediaLoadData(type), failure, 1)
+                if (host.endsWith("elsewhere.invalid")) {
+                    assertEquals(0L, policy.getRetryDelayMsFor(info))
+                } else {
+                    assertEquals(C.TIME_UNSET, policy.getRetryDelayMsFor(info))
+                    assertNull(policy.getFallbackSelectionFor(alternatives, info))
+                }
+                val key = LoadErrorInfo(event, MediaLoadData(type), NerdVpnAccessRequired("rateLimited"), 1)
+                assertEquals(C.TIME_UNSET, policy.getRetryDelayMsFor(key))
+            }
         }
     }
 

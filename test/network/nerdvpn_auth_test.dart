@@ -144,6 +144,19 @@ void main() {
   // NerdVpnPkceTest.kt covers the native S256/verifier, exact nonce callback,
   // duplicate-code and token-downgrade checks. Dart observes only its result;
   // the one-use code and verifier must never return to the Dart HTTP client.
+  test('a 429 obtaining the sign-in key leaves history for manual Retry',
+      () async {
+    accessStatus = {'state': 'rateLimited'};
+    await api.logIn(_account.accountId);
+    final saved = database.getAccount(_account.accountId)!;
+    expect(saved.authToken, 'account-token');
+    expect(authorizations, hasLength(1));
+    expect(requests, isEmpty);
+    await api.syncAccountHistory(saved,
+        database: database, force: true, retryKey: true);
+    expect(requests.single.url.path, '/api/v1/auth/history');
+  });
+
   for (final state in ['waiting', 'disabled']) {
     test('$state access keeps the account signed in and pauses history sync',
         () async {

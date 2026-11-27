@@ -73,7 +73,10 @@ class _WatchSyncService extends Service {
 
   @override
   Future<void> syncAccountHistory(Server account,
-      {IDbClient? database, bool force = false, bool pull = true}) async {
+      {IDbClient? database,
+      bool force = false,
+      bool pull = true,
+      bool retryKey = false}) async {
     accounts.add(account);
     forceValues.add(force);
     expect(database!.profileId, account.profileId);

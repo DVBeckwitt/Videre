@@ -214,6 +214,13 @@ internal class NerdVpnAccessManager(
                 put("retryAllowed", false)
             }
         } else if (error == "unavailable" && statusCode == 503) {
+            // A content endpoint can be unavailable while the same saved key
+            // works on another route. Report this response to its caller.
+            if (record.state == "ready" && record.key != null) {
+                return@synchronized status(record) + mapOf(
+                    "state" to "unavailable", "retryAllowed" to false,
+                )
+            }
             val state = if (record.state in setOf("waiting", "disabled", "denied", "signInRequired", "missing"))
                 record.state else "unavailable"
             record = record.copy(state = state, retryAt = maxOf(record.retryAt ?: 0, retryTime(retryAfterSeconds)),

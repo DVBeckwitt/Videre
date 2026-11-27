@@ -60,6 +60,7 @@ import androidx.media3.exoplayer.trackselection.TrackSelectionArray;
 import androidx.media3.datasource.DataSource;
 import androidx.media3.datasource.HttpDataSource;
 import com.github.dvbeckwitt.videre.proxy.MediaOriginFailure;
+import com.github.dvbeckwitt.videre.proxy.NerdVpnMediaLoadErrorPolicy;
 import com.github.dvbeckwitt.videre.proxy.ProxyDataSource;
 import com.github.dvbeckwitt.videre.proxy.PlaybackMediaCache;
 import com.github.dvbeckwitt.videre.proxy.PlaybackCacheRequest;
@@ -726,6 +727,7 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
             final Runnable confirmation = PlaybackMediaCache.musicConfirmation(dataSource);
             return new ProgressiveMediaSource.Factory(dataSource,
                     buildExtractorsFactory(mapGet(map, "options")))
+                    .setLoadErrorHandlingPolicy(new NerdVpnMediaLoadErrorPolicy())
                     .createMediaSource(new MediaItem.Builder()
                             .setUri(Uri.parse((String)map.get("uri")))
                             .setTag(confirmation == null ? id : new MusicCacheTag(id, confirmation))
@@ -735,6 +737,7 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
             return new DashMediaSource.Factory(
                     new DefaultDashChunkSource.Factory(buildDataSourceFactory(map, PlaybackCacheRequest.ADAPTIVE_MEDIA)),
                     buildDataSourceFactory(map, PlaybackCacheRequest.BYPASS))
+                    .setLoadErrorHandlingPolicy(new NerdVpnMediaLoadErrorPolicy())
                     .createMediaSource(new MediaItem.Builder()
                             .setUri(Uri.parse((String)map.get("uri")))
                             .setMimeType(MimeTypes.APPLICATION_MPD)
@@ -742,6 +745,7 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
                             .build());
         case "hls":
             return new HlsMediaSource.Factory(buildHlsDataSourceFactory(map))
+                    .setLoadErrorHandlingPolicy(new NerdVpnMediaLoadErrorPolicy())
                     .createMediaSource(new MediaItem.Builder()
                             .setUri(Uri.parse((String)map.get("uri")))
                             .setMimeType(MimeTypes.APPLICATION_M3U8)

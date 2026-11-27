@@ -3845,7 +3845,10 @@ class Service {
   }
 
   Future<void> syncAccountHistory(Server account,
-      {IDbClient? database, bool force = false, bool pull = true}) async {
+      {IDbClient? database,
+      bool force = false,
+      bool pull = true,
+      bool retryKey = false}) async {
     final source = database ?? db;
     if (source is SembastSqfDb && !source.profileExists(account.profileId)) {
       return;
@@ -3856,7 +3859,9 @@ class Service {
         account = await _migrateNerdVpnKey(account);
         if (owner is SembastSqfDb && !owner.isProfileAvailable) return;
         final access = await NerdVpnAccess.instance.status(account);
-        if (!access.ready && !(force && access.state == 'rateLimited')) return;
+        if (!access.ready && !(retryKey && access.state == 'rateLimited')) {
+          return;
+        }
       }
       if (owner is SembastSqfDb && !owner.isProfileAvailable) return;
       final worker = _watchSynchronizer(account, database: owner);

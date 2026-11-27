@@ -183,7 +183,7 @@ If the final token exchange fails, the message identifies a connection failure,
 a timeout, a rate limit (HTTP 429), or an unavailable service (HTTP 503).
 After a 429, Videre ends that attempt and displays the server's retry guidance
 when available. Pressing Retry starts a fresh request to the same server.
-A 503 service outage can still pause requests until its retry time.
+A 503 from the key service can pause key checks until its retry time. If a content endpoint returns 503, other endpoints can still use the saved key.
 
 The HTTPS add-server screen also offers manual API-key setup. Copy the
 preferences address and open it yourself in a browser, sign in, enable API
@@ -266,7 +266,7 @@ account remains saved while its requests are paused. Users can check eligibility
 enable access in NerdVPN preferences, or choose another instance. Concurrent key
 failures share one recovery attempt. Reads can retry once after recovery, while
 writes require an explicit retry. A 429 leaves valid credentials usable on the next explicit
-request. A 503 outage can temporarily pause access. A rejected key stays
+request. A key-service outage can temporarily pause key checks. A rejected key stays
 discarded if its replacement lookup fails. Ambiguous token errors prompt reauthorization
 while preserving the saved login.
 

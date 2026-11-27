@@ -338,17 +338,21 @@ class NerdVpnAccessManagerTest {
         var time = initialTime
         var fetches = 0
         val manager = NerdVpnAccessManager(store, { _, _ ->
-            NerdVpnKeyResult(200, key = if (++fetches == 1) originalKey else replacementKey)
+            when (++fetches) {
+                1 -> NerdVpnKeyResult(200, key = originalKey)
+                2 -> NerdVpnKeyResult(503, retryAfterSeconds = 60)
+                else -> NerdVpnKeyResult(200, key = replacementKey)
+            }
         }) { time }
         manager.authorize(account, token)
         val attempt = manager.resolve(account, video)
-        manager.recover(account, "unavailable", 503, 60, attempt.apiKey, attempt.revision, failedIntent = attempt.intent)
+        assertEquals("unavailable", manager.check(account)["state"])
         manager.recover(account, "invalid_credentials", 401, null, attempt.apiKey, attempt.revision, failedIntent = attempt.intent)
         assertNull(store.read(account)?.key)
-        assertEquals(1, fetches)
+        assertEquals(2, fetches)
         time += 60_000
         assertEquals(replacementKey, manager.resolve(account, video).apiKey)
-        assertEquals(2, fetches)
+        assertEquals(3, fetches)
     }
 
     @Test fun `rejected key stays discarded across a failed refresh and restart`() {
@@ -400,8 +404,8 @@ class NerdVpnAccessManagerTest {
         val store = MemoryStore()
         store.write(account, NerdVpnRecord(token = token, key = originalKey, state = "ready", revision = 9))
         var time = initialTime
-        val manager = NerdVpnAccessManager(store, { _, _ -> error("A usable key is already stored") }) { time }
-        val response = manager.recover(account, "unavailable", 503, 17, originalKey, 9)
+        val manager = NerdVpnAccessManager(store, { _, _ -> NerdVpnKeyResult(503, retryAfterSeconds = 17) }) { time }
+        val response = manager.check(account)
         assertEquals(nerdVpnTimestamp(time + 17_000), response["retryAt"])
         assertEquals(token, store.read(account)?.token)
         val restarted = NerdVpnAccessManager(store, { _, _ -> error("A usable key is already stored") }) { time }
@@ -581,7 +585,7 @@ class NerdVpnAccessManagerTest {
         assertEquals(2, fetches)
     }
 
-    @Test fun `late rate limit does not pause a rotated key but a service outage does`() {
+    @Test fun `late content errors cannot pause a rotated key`() {
         val store = MemoryStore()
         store.write(account, NerdVpnRecord(token = token, key = originalKey, state = "ready",
             revision = 9, credentialIntent = 7))
@@ -599,7 +603,8 @@ class NerdVpnAccessManagerTest {
         assertNull(store.read(account)?.retryAt)
         manager.recover(account, "unavailable", 503, 40, attempt.apiKey,
             attempt.revision, failedIntent = attempt.intent)
-        assertEquals(initialTime + 40_000, store.read(account)?.retryAt)
+        assertNull(store.read(account)?.retryAt)
+        assertEquals(replacementKey, manager.resolve(account, video).apiKey)
         assertEquals(replacementKey, store.read(account)?.key)
         assertEquals(token, store.read(account)?.token)
         assertEquals(7L, store.read(account)?.credentialIntent)
@@ -790,12 +795,12 @@ class NerdVpnAccessManagerTest {
         val receivedAt = parseNerdVpnTimestamp("2026-11-19T19:30:00.250Z")!!
         val store = MemoryStore()
         var clock = receivedAt
-        val manager = NerdVpnAccessManager(store, { _, _ -> error("Unexpected key retrieval") }) { clock }
-        manager.setKey(account, originalKey)
-        val revision = store.read(account)!!.revision
         val header = "Thu, 19 Nov 2026 19:32:00 GMT"
-        val delay = nerdVpnRetryAfterSeconds(header, clock)
-        manager.recover(account, "unavailable", 503, delay, originalKey, revision)
+        val manager = NerdVpnAccessManager(store, { _, _ ->
+            NerdVpnKeyResult(503, retryAfterSeconds = nerdVpnRetryAfterSeconds(header, clock))
+        }) { clock }
+        store.write(account, NerdVpnRecord(token = token, key = originalKey, state = "ready"))
+        assertEquals("unavailable", manager.check(account)["state"])
         clock += 119_000
         assertEquals("unavailable", manager.resolve(account, video).error)
         clock += 1000

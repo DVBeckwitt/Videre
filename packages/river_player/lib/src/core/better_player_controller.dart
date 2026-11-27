@@ -939,6 +939,7 @@ class BetterPlayerController {
           parameters: <String, dynamic>{
             "exception": currentVideoPlayerValue.errorDescription,
             "backendRetryable": currentVideoPlayerValue.backendRetryable,
+            "nerdVpnRateLimited": currentVideoPlayerValue.nerdVpnRateLimited,
             "mediaOriginBlocked": currentVideoPlayerValue.mediaOriginBlocked,
           },
         ),

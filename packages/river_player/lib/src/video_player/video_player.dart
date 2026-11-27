@@ -40,6 +40,7 @@ class VideoPlayerValue {
     this.errorDescription,
     this.backendRetryable = false,
     this.mediaOriginBlocked = false,
+    this.nerdVpnRateLimited = false,
     this.isPip = false,
     this.isLiveStream = false,
   });
@@ -98,6 +99,9 @@ class VideoPlayerValue {
   /// Whether a media redirect or child request left the selected origin.
   final bool mediaOriginBlocked;
 
+  /// A NerdVPN media request received an explicit rate-limit response.
+  final bool nerdVpnRateLimited;
+
   /// The [size] of the currently loaded video.
   ///
   /// Is null when [initialized] is false.
@@ -144,6 +148,7 @@ class VideoPlayerValue {
     String? errorDescription,
     bool? backendRetryable,
     bool? mediaOriginBlocked,
+    bool? nerdVpnRateLimited,
     double? speed,
     double? pitch,
     bool? isPip,
@@ -164,6 +169,7 @@ class VideoPlayerValue {
       errorDescription: errorDescription ?? this.errorDescription,
       backendRetryable: backendRetryable ?? this.backendRetryable,
       mediaOriginBlocked: mediaOriginBlocked ?? this.mediaOriginBlocked,
+      nerdVpnRateLimited: nerdVpnRateLimited ?? this.nerdVpnRateLimited,
       isPip: isPip ?? this.isPip,
       isLiveStream: isLiveStream ?? this.isLiveStream,
     );
@@ -318,12 +324,15 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
               details is Map && details['backendRetryable'] == true,
           mediaOriginBlocked:
               details is Map && details['mediaOriginBlocked'] == true,
+          nerdVpnRateLimited:
+              details is Map && details['nerdVpnRateLimited'] == true,
         );
       } else {
         value = value.copyWith(
           errorDescription: object.toString(),
           backendRetryable: false,
           mediaOriginBlocked: false,
+          nerdVpnRateLimited: false,
         );
       }
       _timer?.cancel();

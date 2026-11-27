@@ -30,7 +30,8 @@ class _WatchSyncStatusState extends State<WatchSyncStatus> {
       _failed = false;
     });
     try {
-      await service.syncAccountHistory(account, database: owner, force: true);
+      await service.syncAccountHistory(account,
+          database: owner, force: true, retryKey: true);
     } catch (_) {
       if (mounted) setState(() => _failed = true);
     } finally {

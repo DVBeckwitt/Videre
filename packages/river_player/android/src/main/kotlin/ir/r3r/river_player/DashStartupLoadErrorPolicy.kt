@@ -4,11 +4,11 @@ import android.net.Uri
 import androidx.media3.common.C
 import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException
-import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
+import com.github.dvbeckwitt.videre.proxy.NerdVpnMediaLoadErrorPolicy
 import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy.LoadErrorInfo
 
 /** Give a failing Invidious DASH range one retry before Videre tries the next source. */
-internal class DashStartupLoadErrorPolicy(private val manifest: Uri) : DefaultLoadErrorHandlingPolicy() {
+internal class DashStartupLoadErrorPolicy(private val manifest: Uri) : NerdVpnMediaLoadErrorPolicy() {
     @Volatile
     private var starting = true
 

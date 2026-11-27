@@ -87,6 +87,7 @@ void main() {
   late List<int?> initialDashHeights;
   late List<int> trackHeights;
   late Set<String> failedSources;
+  late Set<String> rateLimitedSources;
   late Map<String, Completer<void>> heldSources;
   late Service previousService;
 
@@ -110,6 +111,7 @@ void main() {
     initialDashHeights = [];
     trackHeights = [];
     failedSources = {};
+    rateLimitedSources = {};
     heldSources = {};
     messenger.setMockMessageHandler(
         wakelock,
@@ -128,6 +130,10 @@ void main() {
         final uri = source['uri'] as String;
         sources.add(uri);
         initialDashHeights.add(source['initialDashHeight'] as int?);
+        if (rateLimitedSources.contains(uri)) {
+          throw PlatformException(
+              code: 'VideoError', details: {'nerdVpnRateLimited': true});
+        }
         if (failedSources.contains(uri)) {
           throw PlatformException(code: 'VideoError');
         }
@@ -1167,6 +1173,24 @@ void main() {
       expect(manifestRequests, [Uri.parse('$nerdVpn$dashQuery')]);
       expect(video.isUsingDash(), isTrue);
       expect(db.getSettings(useDashSettingName)?.value, 'true');
+    });
+
+    test('a NerdVPN media 429 stops before DASH until a new play', () async {
+      const progressive = '$nerdVpn/startup-360.mp4';
+      rateLimitedSources.add(progressive);
+      final video = await createStartupVideo();
+      addTearDown(video.close);
+
+      await video.playVideo(false);
+      await _flush();
+      expect(sources, [progressive]);
+      expect(manifestRequests, isEmpty);
+
+      rateLimitedSources.clear();
+      await video.playVideo(false);
+      await _flush();
+      expect(sources, [progressive, progressive]);
+      expect(manifestRequests, isEmpty);
     });
 
     test('a failed progressive startup tries DASH before another quality',

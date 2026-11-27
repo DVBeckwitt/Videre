@@ -39,7 +39,10 @@ class _PendingCookieLoginService extends Service {
 
   @override
   Future<void> syncAccountHistory(Server account,
-      {IDbClient? database, bool force = false, bool pull = true}) async {}
+      {IDbClient? database,
+      bool force = false,
+      bool pull = true,
+      bool retryKey = false}) async {}
 
   @override
   Future<String> loginWithCookies(

@@ -570,6 +570,10 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
     }
     if (event.betterPlayerEventType == BetterPlayerEventType.exception) {
       if (_backendRecoveryPending || _terminalErrorSent) return;
+      if (event.parameters?['nerdVpnRateLimited'] == true) {
+        _emitTerminalPlaybackError();
+        return;
+      }
       final retryable = event.parameters?['backendRetryable'] == true;
       _sourceMediaOriginBlocked |=
           event.parameters?['mediaOriginBlocked'] == true;
@@ -1177,6 +1181,12 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
       setupFailed = true;
       if (_isCurrentAttempt(generation, sourceIndex)) {
         final details = error is PlatformException ? error.details : null;
+        if ((details is Map && details['nerdVpnRateLimited'] == true) ||
+            (videoController?.videoPlayerController?.value.nerdVpnRateLimited ??
+                false)) {
+          _emitTerminalPlaybackError();
+          return;
+        }
         _sourceMediaOriginBlocked |= (details is Map &&
                 details['mediaOriginBlocked'] == true) ||
             (videoController?.videoPlayerController?.value.mediaOriginBlocked ??

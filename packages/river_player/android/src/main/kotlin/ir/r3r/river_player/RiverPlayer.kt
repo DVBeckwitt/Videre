@@ -36,6 +36,7 @@ import androidx.work.WorkInfo
 //import com.google.android.exoplayer2.drm.HttpMediaDrmCallback
 import androidx.media3.exoplayer.drm.HttpMediaDrmCallback
 
+import com.github.dvbeckwitt.videre.proxy.NerdVpnMediaLoadErrorPolicy
 import com.github.dvbeckwitt.videre.proxy.ProxyDataSource
 import com.github.dvbeckwitt.videre.proxy.MediaOriginFailure
 import com.github.dvbeckwitt.videre.proxy.PlaybackMediaCache
@@ -554,7 +555,7 @@ internal class RiverPlayer(
             C.TYPE_DASH -> DashMediaSource.Factory(
                 DefaultDashChunkSource.Factory(sourceFactory(PlaybackCacheRequest.ADAPTIVE_MEDIA)),
                 manifestFactory()
-            ).apply { startupRetry?.let { setLoadErrorHandlingPolicy(it) } }
+            )
 
             C.TYPE_HLS -> {
                 // Keep the source's admission epochs even when a later playlist
@@ -577,6 +578,9 @@ internal class RiverPlayer(
             }
         }
 
+        mediaFactory.setLoadErrorHandlingPolicy(
+            if (type == C.TYPE_DASH && startupRetry != null) startupRetry else NerdVpnMediaLoadErrorPolicy()
+        )
         drmSessionManager?.let { drmSessionManager ->
             mediaFactory.setDrmSessionManagerProvider(DrmSessionManagerProvider { drmSessionManager })
         }
@@ -654,6 +658,7 @@ internal class RiverPlayer(
                     "Video player had error $error",
                     mapOf(
                         "backendRetryable" to BackendRetryability.isRetryable(error),
+                        "nerdVpnRateLimited" to NerdVpnMediaLoadErrorPolicy.isRateLimited(error),
                         "mediaOriginBlocked" to MediaOriginFailure.isBlocked(error),
                     )
                 )
