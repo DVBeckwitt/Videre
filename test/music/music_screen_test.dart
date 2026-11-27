@@ -33,6 +33,7 @@ import 'package:clipious/music/models/music_playlist.dart';
 import 'package:clipious/music/models/music_track.dart';
 import 'package:clipious/music/models/music_song_row_swipe_action.dart';
 import 'package:clipious/music/services/cached_music.dart';
+import 'package:clipious/music/services/invidious_music_catalog_service.dart';
 import 'package:clipious/music/services/music_catalog_service.dart';
 import 'package:clipious/music/services/music_library_service.dart';
 import 'package:clipious/music/services/music_listening_history.dart';
@@ -93,6 +94,19 @@ const second = MusicTrack(
     artists: ['Artist'],
     albumId: 'MPREalbum',
     albumTitle: 'Album');
+
+class _SavedPlaylistPages extends Service {
+  final pages = <int>[];
+  late Future<Playlist> Function(String, int) reply;
+
+  @override
+  Future<Playlist> getMusicPlaylistPage(String playlistId, int page,
+      Server server, Future<void> Function() beforeRequest) async {
+    await beforeRequest();
+    pages.add(page);
+    return reply(playlistId, page);
+  }
+}
 
 class _Catalog extends MusicCatalogService {
   final playlistOverlapRequests = <({
@@ -4017,6 +4031,132 @@ void main() {
     expect(catalog.artistRequests, ['UCartist']);
     expect(find.text('Artist description'), findsOneWidget);
     expect(player.calls, isEmpty);
+  });
+
+  testWidgets(
+      'a saved Music Library playlist reopens fast and refreshes its full queue',
+      (tester) async {
+    const bookmark = MusicLibraryEntry(
+        kind: MusicLibraryKind.playlist,
+        id: 'PLsavedReopen',
+        title: 'Saved rehearsal playlist');
+    const server = Server(url: 'https://instance.example', inUse: true);
+    await tester.runAsync(() async {
+      await db.upsertServer(server);
+      await MusicLibraryService.forProfile(db, db.profileId).save(bookmark);
+    });
+    app.setServer(server);
+    final pending = Completer<Playlist>();
+    const opening = Video(
+        videoId: 'firstsong01',
+        title: 'Opening track',
+        index: 0,
+        indexId: 'opening');
+    const middle = Video(
+        videoId: 'secondsong2',
+        title: 'Middle track',
+        index: 1,
+        indexId: 'middle');
+    final reprise =
+        opening.copyWith(title: 'Reprise track', index: 2, indexId: 'reprise');
+    final alternateOpening = opening.copyWith(title: 'Alternate opening');
+    final finale =
+        reprise.copyWith(videoId: 'finaletrack', title: 'Finale track');
+    const playlist = Playlist(
+        playlistId: 'PLsavedReopen',
+        title: 'Rehearsal tracks',
+        author: 'Ensemble',
+        isListed: true,
+        videoCount: 3);
+    final api = _SavedPlaylistPages()
+      ..reply = (id, page) async {
+        expect(id, bookmark.id);
+        return switch (page) {
+          1 => playlist.copyWith(videos: [opening, middle]),
+          2 => await pending.future,
+          _ => throw StateError('Unexpected page $page'),
+        };
+      };
+    var now = DateTime.utc(2026, 1, 1);
+    musicCatalogService =
+        InvidiousMusicCatalogService(api: api, now: () => now);
+
+    final saved = find.text(bookmark.title);
+    Future<void> openSaved() async {
+      await tester.ensureVisible(saved);
+      await tester.tap(saved);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 350));
+    }
+
+    await show(tester, screen: const Scaffold(body: MusicLibraryPage()));
+    await tester.pumpAndSettle();
+    await openSaved();
+    expect(api.pages, [1, 2]);
+    expect(find.text(opening.title!), findsOneWidget);
+    expect(find.text(reprise.title!), findsNothing);
+
+    pending.complete(playlist.copyWith(videos: [middle, reprise]));
+    await tester.pumpAndSettle();
+    expect(find.text(reprise.title!), findsOneWidget);
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    await openSaved();
+
+    expect(api.pages, [1, 2]);
+    expect(find.text(reprise.title!), findsOneWidget);
+    await tester.tap(find.text(reprise.title!));
+    await tester.pumpAndSettle();
+    final call = player.calls.single;
+    expect(call.videos.map((entry) => entry.videoId),
+        [opening.videoId, middle.videoId, opening.videoId]);
+    expect(call.videos.map((entry) => entry.indexId),
+        ['opening', 'middle', 'reprise']);
+    expect(call.startIndex, 2);
+    expect(call.videos.every((entry) => entry.formatStreams == null), isTrue);
+
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    now = now.add(const Duration(hours: 2));
+    final stalePage = Completer<Playlist>();
+    api.reply = (_, page) async => switch (page) {
+          1 => playlist.copyWith(videos: [alternateOpening, middle]),
+          2 => await stalePage.future,
+          _ => throw StateError('Unexpected page $page'),
+        };
+    await openSaved();
+    expect(api.pages, [1, 2, 1, 2]);
+    expect(find.text(reprise.title!), findsOneWidget);
+    expect(find.text(alternateOpening.title!), findsNothing);
+    stalePage.completeError(StateError('Second page failed'));
+    await tester.pumpAndSettle();
+    expect(find.text(reprise.title!), findsOneWidget);
+    expect(find.text(alternateOpening.title!), findsNothing);
+    expect(
+        find.text(
+            'Could not refresh. Showing the previously loaded selection.'),
+        findsOneWidget);
+
+    api.reply = (_, page) async => switch (page) {
+          1 => playlist.copyWith(videos: [alternateOpening, middle]),
+          2 => playlist.copyWith(videos: [middle, finale]),
+          _ => throw StateError('Unexpected page $page'),
+        };
+    final refresh = find.byKey(const ValueKey('music-saved-playlist-refresh'));
+    await tester.ensureVisible(refresh);
+    await tester.tap(refresh);
+    await tester.pumpAndSettle();
+    expect(api.pages, [1, 2, 1, 2, 1, 2]);
+    expect(find.text(finale.title!), findsOneWidget);
+    expect(find.text(reprise.title!), findsNothing);
+    expect(find.text(alternateOpening.title!), findsOneWidget);
+
+    // Force a request even while the replacement snapshot is still fresh.
+    await tester.ensureVisible(refresh);
+    await tester.tap(refresh);
+    await tester.pumpAndSettle();
+    expect(api.pages, [1, 2, 1, 2, 1, 2, 1, 2]);
+    expect(find.text(finale.title!), findsOneWidget);
   });
 
   testWidgets('public playlist search opens ordered songs', (tester) async {

@@ -2571,6 +2571,238 @@ void main() {
     expect(requests, hasLength(1));
   });
 
+  group('saved playlist reopens', () {
+    const bookmark = MusicLibraryEntry(
+        kind: MusicLibraryKind.playlist,
+        id: _playlistId,
+        title: 'Saved playlist');
+
+    Future<MusicCollection> openSaved({
+      bool forceRefresh = false,
+      bool Function()? isCurrent,
+      void Function(MusicCollection)? onProgress,
+    }) =>
+        catalog.getSavedPlaylistProgressively(_playlistId,
+            forceRefresh: forceRefresh,
+            onProgress: onProgress ?? (_) {},
+            isCurrent: isCurrent ?? () => true);
+
+    Map<String, Object?> page(List<Object> songs, {int count = 1}) => {
+          ..._playlist(songs: songs, count: count),
+          'isListed': true,
+        };
+
+    setUp(
+        () => MusicLibraryService.forProfile(db, db.profileId).save(bookmark));
+
+    test('a cold truncated load leaves no complete snapshot to reopen',
+        () async {
+      respond = (request) async => _json(
+          page(request.url.queryParameters['page'] == '1' ? [_song()] : [],
+              count: 3),
+          request);
+      await expectLater(openSaved(), throwsA(isA<MusicCatalogException>()));
+
+      respond = (request) async => _json(
+          page([
+            {..._song(), 'title': 'Full result'}
+          ]),
+          request);
+      expect((await openSaved()).tracks.single.title, 'Full result');
+      expect((await openSaved()).tracks.single.title, 'Full result');
+      expect(requests.map((request) => request.url.queryParameters['page']),
+          ['1', '2', '1']);
+    });
+
+    test('concurrent reopens share pending pages with independent callers',
+        () async {
+      final started = Completer<http.Request>();
+      final pending = Completer<http.Response>();
+      respond = (request) {
+        if (request.url.queryParameters['page'] == '1') {
+          if (!started.isCompleted) started.complete(request);
+          return pending.future;
+        }
+        return Future.value(_json(page([_song(index: 1)], count: 2), request));
+      };
+
+      var firstCurrent = true;
+      final first = openSaved(isCurrent: () => firstCurrent);
+      final firstCancelled =
+          expectLater(first, throwsA(isA<MusicCatalogException>()));
+      final request = await started.future;
+      final second = openSaved();
+      await Future<void>.delayed(Duration.zero);
+      firstCurrent = false;
+      pending.complete(_json(page([_song()], count: 2), request));
+
+      final result = await second;
+      await firstCancelled;
+      expect(result.tracks.map((track) => track.playlistIndex), [0, 1]);
+      expect(requests.map((request) => request.url.queryParameters['page']),
+          ['1', '2']);
+    });
+
+    test('removing and saving again invalidates cached and pending tracks',
+        () async {
+      final library = MusicLibraryService.forProfile(db, db.profileId);
+      respond = (request) async => _json(
+          page([
+            {..._song(), 'title': 'Old save'}
+          ]),
+          request);
+      expect((await openSaved()).tracks.single.title, 'Old save');
+
+      final started = Completer<http.Request>();
+      final pending = Completer<http.Response>();
+      respond = (request) {
+        started.complete(request);
+        return pending.future;
+      };
+      final previous = openSaved(forceRefresh: true);
+      final obsolete =
+          expectLater(previous, throwsA(isA<MusicCatalogException>()));
+      final request = await started.future;
+      await library.remove(bookmark.kind, bookmark.id);
+      await library.save(bookmark);
+
+      respond = (request) async => _json(
+          page([
+            {..._song(), 'title': 'New save'}
+          ]),
+          request);
+      expect((await openSaved()).tracks.single.title, 'New save');
+      pending.complete(_json(
+          page([
+            {..._song(), 'title': 'Late old save'}
+          ]),
+          request));
+      await obsolete;
+      expect((await openSaved()).tracks.single.title, 'New save');
+      expect(requests, hasLength(3));
+    });
+
+    test('loss of public access invalidates a completed saved snapshot',
+        () async {
+      respond = (request) async => _json(
+          page([
+            {..._song(), 'title': 'Before access changed'}
+          ]),
+          request);
+      expect((await openSaved()).tracks.single.title, 'Before access changed');
+
+      respond = (request) async => _json({
+            ...page([
+              {..._song(), 'title': 'Unlisted result'}
+            ]),
+            'isListed': false,
+          }, request);
+      await expectLater(openSaved(forceRefresh: true),
+          throwsA(isA<MusicPlaylistAccessChanged>()));
+
+      respond = (request) async => _json(
+          page([
+            {..._song(), 'title': 'Public again'}
+          ]),
+          request);
+      final progress = <MusicCollection>[];
+      expect((await openSaved(onProgress: progress.add)).tracks.single.title,
+          'Public again');
+      expect(progress, isEmpty);
+      expect(requests, hasLength(3));
+    });
+
+    test('saved playlist with unspecified visibility is read on every reopen',
+        () async {
+      respond = (request) async => _json(_playlist(count: 1), request);
+
+      expect((await openSaved()).tracks, hasLength(1));
+      expect((await openSaved()).tracks, hasLength(1));
+      expect(requests, hasLength(2));
+    });
+
+    test('a filtered saved playlist is read on every reopen', () async {
+      respond = (request) async => _json(
+          page(
+              request.url.queryParameters['page'] == '1'
+                  ? [
+                      _song(),
+                      {..._song(index: 1), 'title': '[Private video]'}
+                    ]
+                  : [],
+              count: 2),
+          request);
+
+      expect((await openSaved()).tracks, hasLength(1));
+      expect((await openSaved()).tracks, hasLength(1));
+      expect(requests.map((request) => request.url.queryParameters['page']),
+          ['1', '2', '1', '2']);
+    });
+
+    for (final change in ['profile', 'account', 'server', 'headers', 'proxy']) {
+      test('leaving the $change scope makes pending and cached tracks obsolete',
+          () async {
+        final selected = (await db.getCurrentlySelectedServer())
+            .copyWith(id: 'original-playlist-account', inUse: true);
+        await db.upsertServer(selected);
+        await db.useServer(selected);
+        respond = (request) async => _json(
+            page([
+              {..._song(), 'title': 'Previous scope'}
+            ]),
+            request);
+        expect((await openSaved()).tracks.single.title, 'Previous scope');
+
+        final started = Completer<http.Request>();
+        final pending = Completer<http.Response>();
+        respond = (request) {
+          started.complete(request);
+          return pending.future;
+        };
+        final previous = openSaved(forceRefresh: true);
+        final obsolete =
+            expectLater(previous, throwsA(isA<MusicCatalogException>()));
+        final request = await started.future;
+        switch (change) {
+          case 'profile':
+            final other = await db.createProfile('Other listener');
+            await db.useProfile(other.id);
+            await db.upsertServer(selected.copyWith(profileId: other.id));
+            await MusicLibraryService.forProfile(db, other.id).save(bookmark);
+          case 'account':
+            final other = selected.copyWith(id: 'other-playlist-account');
+            await db.upsertServer(other);
+            await db.useServer(other);
+          case 'server':
+            await db.upsertServer(
+                selected.copyWith(url: 'https://different.example'));
+          case 'headers':
+            await db.upsertServer(
+                selected.copyWith(customHeaders: {'X-Test': 'different'}));
+          case 'proxy':
+            await NetworkProxy.instance.initialize(
+                saved: '{"enabled":true,"host":"127.0.0.1","port":19050}',
+                configureNative: false);
+        }
+        respond = (request) async => _json(
+            page([
+              {..._song(), 'title': 'Current scope'}
+            ]),
+            request);
+        expect((await openSaved()).tracks.single.title, 'Current scope');
+
+        pending.complete(_json(
+            page([
+              {..._song(), 'title': 'Late old scope'}
+            ]),
+            request));
+        await obsolete;
+        expect((await openSaved()).tracks.single.title, 'Current scope');
+        expect(requests, hasLength(3));
+      });
+    }
+  });
+
   test('terminal empty page completes playlists with unavailable entries',
       () async {
     respond = (request) async => _json(

@@ -168,6 +168,9 @@ class Service {
       _InteractiveVideoRequest>{};
   final _browseCache = <String, ({DateTime expires, Response response})>{};
   int _sessionRevision = 0;
+
+  /// Changes when instance-scoped requests and caches are retired.
+  int get sessionRevision => _sessionRevision;
   Future<void> _localPlaylistWrite = Future.value();
   final Map<String, int> _authenticationAttempts = {};
   final Map<String, Future<Server>> _keyMigrations = {};

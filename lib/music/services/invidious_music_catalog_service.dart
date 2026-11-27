@@ -18,6 +18,9 @@ import 'package:clipious/music/services/music_library_service.dart';
 import 'package:clipious/music/services/music_video_match.dart';
 import 'package:clipious/music/services/music_video_source.dart';
 import 'package:clipious/network/content_link.dart';
+import 'package:clipious/network/gateway_context.dart';
+import 'package:clipious/network/gateway_session_bridge.dart';
+import 'package:clipious/network/nerdvpn_access.dart';
 import 'package:clipious/network/network_proxy.dart';
 import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/playlists/models/playlist.dart';
@@ -32,12 +35,16 @@ import 'package:clipious/utils/video_post_processing.dart'
     show privateVideoString;
 import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:clipious/videos/models/video.dart';
+import 'package:crypto/crypto.dart';
+
+part 'saved_music_playlist_cache.dart';
 
 /// Music browsing through the selected Invidious instance's standard API.
 /// Unsupported YouTube Music feeds never fall back to Google's catalog.
 class InvidiousMusicCatalogService extends MusicCatalogService {
   final Service? _service;
   final DateTime Function() _now;
+  _SavedPlaylistScope? _savedPlaylists;
   ({
     Object owner,
     BackendPlayback route,
@@ -60,8 +67,9 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
       {Server? expectedServer}) async {
     final owner = db;
     final profileId = owner.profileId;
-    final proxy = NetworkProxy.instance.config;
+    final proxyRevision = NetworkProxy.instance.revision;
     final api = _service ?? service;
+    final revision = api.sessionRevision;
     if (expectedServer != null &&
         !BackendPlayback(expectedServer)
             .matchesConnection(await owner.getCurrentlySelectedServer())) {
@@ -74,15 +82,18 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
     bool current() =>
         identical(owner, db) &&
         owner.profileId == profileId &&
+        api.sessionRevision == revision &&
         !NetworkProxy.instance.isChanging &&
-        identical(NetworkProxy.instance.config, proxy);
+        NetworkProxy.instance.revision == proxyRevision;
     Future<void> check() async {
       if (!current()) {
         throw const MusicCatalogException(
             'The music connection changed. Retry the request.');
       }
       final selected = await owner.getCurrentlySelectedServer();
-      if (!current() || !route.matchesConnection(selected)) {
+      if (!current() ||
+          !route.matchesConnection(selected) ||
+          server.gatewayEnabled != selected.gatewayEnabled) {
         throw const MusicCatalogException(
             'The music connection changed. Retry the request.');
       }
@@ -1534,11 +1545,178 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
         }
       }
 
-      final covers = _savedCovers(server);
-      if (playlistId.startsWith('RD')) {
-        final mix = await api.getMix(playlistId,
-            serverOverride: server, enrichResults: false, beforeRequest: check);
-        return MusicCollection(
+      return (await _fetchPlaylist(playlistId, api, server, check,
+              onProgress: onProgress))
+          .collection;
+    });
+  }
+
+  @override
+  Future<MusicCollection> getSavedPlaylistProgressively(String id,
+      {required void Function(MusicCollection) onProgress,
+      required bool Function() isCurrent,
+      bool forceRefresh = false}) async {
+    final playlistId = id.startsWith('VL') ? id.substring(2) : id;
+    if (!isMusicPlaylistOverlapCandidate(playlistId)) {
+      return getPlaylistProgressively(id,
+          onProgress: onProgress, isCurrent: isCurrent);
+    }
+
+    void checkCaller() {
+      if (!isCurrent()) {
+        throw const MusicCatalogException('The music request was cancelled.');
+      }
+    }
+
+    checkCaller();
+    return _inSession((api, server, checkSession) async {
+      final owner = db;
+      final proxyRevision = NetworkProxy.instance.revision;
+      final revision = api.sessionRevision;
+      final library = MusicLibraryService.forProfile(owner, server.profileId);
+      final _PlaylistGatewayIdentity? gateway;
+      try {
+        gateway = await _playlistGatewayIdentity(server);
+      } on GatewayTransportUnavailable {
+        throw const MusicPlaylistAccessChanged();
+      }
+      await checkSession();
+      checkCaller();
+
+      final key = (
+        owner: owner,
+        api: api,
+        sessionRevision: revision,
+        proxyRevision: proxyRevision,
+        connection: _playlistConnection(server),
+        gateway: gateway,
+      );
+      final scope = _savedPlaylists;
+      if (scope != null && scope.key != key) {
+        scope.dispose();
+        _savedPlaylists = null;
+      }
+      if (!library.contains(MusicLibraryKind.playlist, playlistId)) {
+        return (await _fetchPlaylist(playlistId, api, server, () async {
+          await checkSession();
+          checkCaller();
+        }, onProgress: onProgress))
+            .collection;
+      }
+
+      final cache = _savedPlaylists ??= _SavedPlaylistScope(key, library);
+      final entry = cache.entry(playlistId);
+      Future<void> check() async {
+        try {
+          await checkSession();
+          if (gateway != null) {
+            final currentGateway = await _playlistGatewayIdentity(server);
+            await checkSession();
+            if (currentGateway != gateway) {
+              throw const MusicPlaylistAccessChanged();
+            }
+          }
+          if (cache.owns(playlistId, entry)) {
+            return;
+          }
+        } on MusicCatalogException {
+          // A retired connection cannot continue displaying its snapshot.
+        } on GatewayTransportUnavailable {
+          // The previous native session can no longer be verified.
+        }
+        throw const MusicPlaylistAccessChanged();
+      }
+
+      final previous = entry.snapshot;
+      if (previous != null) {
+        final age = _now().difference(previous.time);
+        if (!forceRefresh &&
+            entry.request == null &&
+            !age.isNegative &&
+            age < _SavedPlaylistScope.freshness) {
+          return previous.collection;
+        }
+        onProgress(previous.collection);
+      }
+
+      final pending = entry.request ??= _SavedPlaylistRequest();
+      void progress(MusicCollection collection) {
+        if (isCurrent()) onProgress(collection);
+      }
+
+      // A refresh stages every page until it can replace the complete list.
+      // Cold opens can still display the same progressive prefixes as before.
+      if (previous == null) pending.observers.add(progress);
+      try {
+        if (pending.result == null) {
+          pending.result = _refreshSavedPlaylist(
+              playlistId, api, server, check, cache, entry, pending);
+        } else if (previous == null && pending.prefix != null) {
+          progress(pending.prefix!);
+        }
+        final collection = await pending.result!;
+        await check();
+        checkCaller();
+        return collection;
+      } finally {
+        pending.observers.remove(progress);
+      }
+    });
+  }
+
+  Future<MusicCollection> _refreshSavedPlaylist(
+      String id,
+      Service api,
+      Server server,
+      Future<void> Function() check,
+      _SavedPlaylistScope cache,
+      _SavedPlaylistEntry entry,
+      _SavedPlaylistRequest request) async {
+    try {
+      final result = await _fetchPlaylist(id, api, server, check,
+          requireComplete: true,
+          onProgress: request.publish, onFirstPage: (page) {
+        if (entry.snapshot != null &&
+            (page.isListed == false || page.type == invidiousPlaylist)) {
+          throw const MusicPlaylistAccessChanged();
+        }
+      });
+      await check();
+      cache.store(
+          id, entry, result.cacheable ? result.collection : null, _now());
+      return result.collection;
+    } catch (error) {
+      if (error is MusicPlaylistAccessChanged ||
+          error is GatewayAuthenticationRequired ||
+          error is NerdVpnAccessRequired ||
+          error is InvidiousServiceError &&
+              (error.isAuthenticationFailure ||
+                  error.isGatewayAccessFailure ||
+                  const {403, 404, 410}.contains(error.statusCode))) {
+        cache.store(id, entry, null, _now());
+        throw const MusicPlaylistAccessChanged();
+      }
+      rethrow;
+    } finally {
+      entry.request = null;
+      cache.removeEmpty(id, entry);
+    }
+  }
+
+  Future<({MusicCollection collection, bool cacheable})> _fetchPlaylist(
+      String playlistId,
+      Service api,
+      Server server,
+      Future<void> Function() check,
+      {void Function(MusicCollection)? onProgress,
+      void Function(Playlist)? onFirstPage,
+      bool requireComplete = false}) async {
+    final covers = _savedCovers(server);
+    if (playlistId.startsWith('RD')) {
+      final mix = await api.getMix(playlistId,
+          serverOverride: server, enrichResults: false, beforeRequest: check);
+      return (
+        collection: MusicCollection(
           id: playlistId,
           title: mix.title,
           artists: mix.author.isEmpty ? [] : [mix.author],
@@ -1549,81 +1727,99 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
           ],
           videoCount: mix.videoCount,
           updated: mix.updated,
+        ),
+        cacheable: false
+      );
+    }
+    final first = await api.getMusicPlaylistPage(playlistId, 1, server, check);
+    if (onFirstPage != null) {
+      await check();
+      onFirstPage(first);
+    }
+    final author = _nonBlank(first.author);
+    final authorId = normalizeChannelId(first.authordId) ??
+        channelIdFromAuthorUrl(first.authorUrl);
+    final albumId = validMusicAlbumPlaylistId(playlistId);
+    final albumTitle =
+        albumId != null && first.title.trim().isNotEmpty ? first.title : null;
+    final thumbnails = _playlistPreview(first.videos, server);
+    var page = first;
+    var hasFilteredEntries = false;
+    var removed = 0;
+    final tracks = <MusicTrack>[];
+    final signatures = <String>{};
+    final identities = <String>{};
+    MusicCollection snapshot({required bool complete}) => MusicCollection(
+          id: playlistId,
+          title: first.title,
+          artists: [if (author != null) author],
+          playlistAuthor: author == null
+              ? null
+              : MusicArtistCredit(name: author, id: authorId),
+          description: _nonBlank(first.description),
+          thumbnails: thumbnails,
+          tracks: List.unmodifiable(tracks),
+          videoCount: first.videoCount,
+          updated: first.updated,
+          loadingComplete: complete,
+        );
+
+    for (var pageNumber = 1; pageNumber <= 50; pageNumber++) {
+      await check();
+      if (page.playlistId != playlistId ||
+          page.videoCount != first.videoCount) {
+        throw const MusicCatalogException(
+            'The music playlist changed while loading. Retry the request.');
+      }
+      final signature = jsonEncode([
+        for (final video in page.videos)
+          [video.videoId, video.indexId, video.index],
+        page.removedByFilter,
+      ]);
+      if (page.videoCount < 0 ||
+          page.removedByFilter < 0 ||
+          (page.videos.isNotEmpty && !signatures.add(signature))) {
+        throw const MusicCatalogException(
+            'The server returned an invalid music playlist page.');
+      }
+      for (final video in page.videos) {
+        final identity = playlistSourceEntryId(video);
+        if (identity == null || identities.add(identity)) {
+          tracks.add(_track(video, covers, server,
+              albumPlaylistId: albumId,
+              albumTitle: albumTitle,
+              playlistEntry: true));
+        }
+      }
+      // Invidious pages can overlap. Filtered entries have already lost their
+      // source identities, so adding their counts could finish too early.
+      // When filtering occurred, wait for the server's terminal empty page.
+      // A final lookback-only window may precede it; the repeated-page and
+      // page-budget guards still bound that traversal.
+      hasFilteredEntries |= page.removedByFilter > 0;
+      removed += page.removedByFilter;
+      if ((!hasFilteredEntries && tracks.length >= first.videoCount) ||
+          (page.videos.isEmpty && page.removedByFilter == 0)) {
+        if (requireComplete &&
+            (tracks.length > first.videoCount ||
+                tracks.length + removed < first.videoCount)) {
+          throw const MusicCatalogException(
+              'The music playlist could not finish loading.');
+        }
+        return (
+          collection: snapshot(complete: true),
+          cacheable: first.isListed == true &&
+              first.type != invidiousPlaylist &&
+              !hasFilteredEntries &&
+              tracks.length == first.videoCount,
         );
       }
-      final first =
-          await api.getMusicPlaylistPage(playlistId, 1, server, check);
-      final author = _nonBlank(first.author);
-      final authorId = normalizeChannelId(first.authordId) ??
-          channelIdFromAuthorUrl(first.authorUrl);
-      final albumId = validMusicAlbumPlaylistId(playlistId);
-      final albumTitle =
-          albumId != null && first.title.trim().isNotEmpty ? first.title : null;
-      final thumbnails = _playlistPreview(first.videos, server);
-      var page = first;
-      var hasFilteredEntries = false;
-      final tracks = <MusicTrack>[];
-      final signatures = <String>{};
-      final identities = <String>{};
-      MusicCollection snapshot({required bool complete}) => MusicCollection(
-            id: playlistId,
-            title: first.title,
-            artists: [if (author != null) author],
-            playlistAuthor: author == null
-                ? null
-                : MusicArtistCredit(name: author, id: authorId),
-            description: _nonBlank(first.description),
-            thumbnails: thumbnails,
-            tracks: List.unmodifiable(tracks),
-            videoCount: first.videoCount,
-            updated: first.updated,
-            loadingComplete: complete,
-          );
-
-      for (var pageNumber = 1; pageNumber <= 50; pageNumber++) {
-        await check();
-        if (page.playlistId != playlistId ||
-            page.videoCount != first.videoCount) {
-          throw const MusicCatalogException(
-              'The music playlist changed while loading. Retry the request.');
-        }
-        final signature = jsonEncode([
-          for (final video in page.videos)
-            [video.videoId, video.indexId, video.index],
-          page.removedByFilter,
-        ]);
-        if (page.videoCount < 0 ||
-            page.removedByFilter < 0 ||
-            (page.videos.isNotEmpty && !signatures.add(signature))) {
-          throw const MusicCatalogException(
-              'The server returned an invalid music playlist page.');
-        }
-        for (final video in page.videos) {
-          final identity = playlistSourceEntryId(video);
-          if (identity == null || identities.add(identity)) {
-            tracks.add(_track(video, covers, server,
-                albumPlaylistId: albumId,
-                albumTitle: albumTitle,
-                playlistEntry: true));
-          }
-        }
-        // Invidious pages can overlap. Filtered entries have already lost their
-        // source identities, so adding their counts could finish too early.
-        // When filtering occurred, wait for the server's terminal empty page.
-        // A final lookback-only window may precede it; the repeated-page and
-        // page-budget guards still bound that traversal.
-        hasFilteredEntries |= page.removedByFilter > 0;
-        if ((!hasFilteredEntries && tracks.length >= first.videoCount) ||
-            (page.videos.isEmpty && page.removedByFilter == 0)) {
-          return snapshot(complete: true);
-        }
-        onProgress?.call(snapshot(complete: false));
-        if (pageNumber == 50) break;
-        page = await api.getMusicPlaylistPage(
-            playlistId, pageNumber + 1, server, check);
-      }
-      throw const MusicCatalogException(
-          'The music playlist could not finish loading.');
-    });
+      onProgress?.call(snapshot(complete: false));
+      if (pageNumber == 50) break;
+      page = await api.getMusicPlaylistPage(
+          playlistId, pageNumber + 1, server, check);
+    }
+    throw const MusicCatalogException(
+        'The music playlist could not finish loading.');
   }
 }

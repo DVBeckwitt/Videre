@@ -31,11 +31,15 @@ class NetworkProxy {
   final _beforeApply = <Future<void> Function()>{};
   SocksProxyConfig _config = SocksProxyConfig();
   bool _changing = false;
+  int _revision = 0;
   bool _initialized = false;
   Object? _blocked;
 
   SocksProxyConfig get config => _config;
   bool get isChanging => _changing;
+
+  /// Advances even when a settings change returns to a previous configuration.
+  int get revision => _revision;
 
   void addBeforeApply(Future<void> Function() listener) =>
       _beforeApply.add(listener);
@@ -43,6 +47,7 @@ class NetworkProxy {
       _beforeApply.remove(listener);
 
   Future<void> initialize({String? saved, bool configureNative = true}) async {
+    _revision++;
     try {
       if (configureNative && _useNative) {
         // Native preferences are authoritative on Android, including workers.
@@ -102,6 +107,7 @@ class NetworkProxy {
       return;
     }
     _changing = true;
+    _revision++;
     var phase = 'stopping playback and downloads';
     ReloadableHttpClient.resetAll();
     try {
