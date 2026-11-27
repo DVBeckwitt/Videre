@@ -2786,7 +2786,7 @@ void main() {
     group('NerdVPN access', () {
       const sessions = MethodChannel('videre/gateway_sessions');
       late int keyRevision;
-      late int keyIntent;
+      int? keyIntent;
       String? accessError;
 
       setUp(() async {
@@ -2829,7 +2829,7 @@ void main() {
 
         respond = (request) async {
           keyRevision++;
-          keyIntent++;
+          keyIntent = keyIntent! + 1;
           return _json(page([_song()]), request);
         };
         await expectLater(openSaved(forceRefresh: true),
@@ -2847,7 +2847,7 @@ void main() {
         ]) {
           respond = (request) async {
             keyRevision++;
-            accessError = 'unavailable';
+            accessError = code == 429 ? 'rateLimited' : 'unavailable';
             return http.Response(jsonEncode({'error': error}), code,
                 request: request,
                 headers: {'content-type': 'application/json'});
@@ -2857,9 +2857,17 @@ void main() {
           expect(await openSaved(), same(cached));
         }
 
-        respond = (_) async => throw const NerdVpnAccessRequired('unavailable');
-        await expectLater(openSaved(forceRefresh: true),
-            throwsA(isA<NerdVpnAccessRequired>()));
+        for (final state in ['rateLimited', 'unavailable']) {
+          respond = (_) async => throw NerdVpnAccessRequired(state);
+          await expectLater(openSaved(forceRefresh: true),
+              throwsA(isA<NerdVpnAccessRequired>()));
+          expect(await openSaved(), same(cached));
+        }
+
+        keyIntent = null;
+        accessError = 'rateLimited';
+        await expectLater(openSaved(), throwsA(isA<NerdVpnAccessRequired>()));
+        keyIntent = 1;
         expect(await openSaved(), same(cached));
 
         accessError = 'signInRequired';
@@ -2868,7 +2876,7 @@ void main() {
         accessError = null;
         respond = (request) async => _json(page([_song()]), request);
         expect(await openSaved(), isNot(same(cached)));
-        expect(requests, hasLength(5));
+        expect(requests, hasLength(6));
       });
     });
 

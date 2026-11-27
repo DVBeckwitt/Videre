@@ -251,7 +251,7 @@ internal fun recoverInterruptedGatewaySignIns(preferences: SharedPreferences): L
 }
 
 internal fun gatewayRequiresSignIn(url: HttpUrl, statusCode: Int, contentType: String?, location: String?): Boolean {
-    if (statusCode == 429 && isNerdVpnOrigin(url)) return false
+    if (statusCode in 500..599 || (statusCode == 429 && isNerdVpnOrigin(url))) return false
     val html = contentType?.substringBefore(';')?.trim()?.equals("text/html", ignoreCase = true) == true
     val loginPath = location?.let { url.resolve(it)?.encodedPath }.orEmpty()
     val authRedirect = statusCode in 300..399 &&

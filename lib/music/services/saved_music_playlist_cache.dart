@@ -1,5 +1,7 @@
 part of 'invidious_music_catalog_service.dart';
 
+const _temporaryPlaylistAccessErrors = {'rateLimited', 'unavailable'};
+
 typedef _PlaylistGatewayIdentity = (bool, int?, int?, int?);
 typedef _SavedPlaylistScopeKey = ({
   Object owner,
@@ -45,12 +47,13 @@ Future<_PlaylistGatewayIdentity?> _playlistGatewayIdentity(
   if (state.needsSignIn ||
       nerdVpn &&
           state.accessError != null &&
-          state.accessError != 'unavailable' &&
+          !_temporaryPlaylistAccessErrors.contains(state.accessError) &&
           !manualKey) {
     throw const MusicPlaylistAccessChanged();
   }
-  if (state.accessError == 'unavailable' && state.apiKeyIntent == null) {
-    throw const NerdVpnAccessRequired('unavailable');
+  if (_temporaryPlaylistAccessErrors.contains(state.accessError) &&
+      state.apiKeyIntent == null) {
+    throw NerdVpnAccessRequired(state.accessError!);
   }
   // Recovery can replace a key without changing the credential owner's intent.
   return (
@@ -63,7 +66,8 @@ Future<_PlaylistGatewayIdentity?> _playlistGatewayIdentity(
 
 bool _retiresSavedPlaylist(Object error) => switch (error) {
       MusicPlaylistAccessChanged() || GatewayAuthenticationRequired() => true,
-      NerdVpnAccessRequired(:final state) => state != 'unavailable',
+      NerdVpnAccessRequired(:final state) =>
+        !_temporaryPlaylistAccessErrors.contains(state),
       InvidiousServiceError() => error.isAuthenticationFailure ||
           const {403, 404, 410}.contains(error.statusCode) ||
           error.isGatewayAccessFailure &&

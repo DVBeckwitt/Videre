@@ -42,6 +42,17 @@ void main() {
     await tester.pumpAndSettle();
   }
 
+  Future<void> selectRelease(WidgetTester tester, String version) async {
+    await tester.tap(find.byType(DropdownButton<String>));
+    await tester.pumpAndSettle();
+    final option = find.text(version).hitTestable();
+    await tester.scrollUntilVisible(option, 150,
+        scrollable: find.byType(Scrollable).last);
+    await tester.pumpAndSettle();
+    await tester.tap(option.last);
+    await tester.pumpAndSettle();
+  }
+
   testWidgets('reads the installed beta offline and opens another release',
       (tester) async {
     await open(tester, '1.22.51-beta.4+60955');
@@ -49,10 +60,7 @@ void main() {
     expect(find.text('Videre 1.22.51 Beta 4'), findsOneWidget);
     expect(find.textContaining('• Audio-only playback.'), findsOneWidget);
     expect(find.textContaining('**'), findsNothing);
-    await tester.tap(find.byType(DropdownButton<String>));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('1.22.50').hitTestable().last);
-    await tester.pumpAndSettle();
+    await selectRelease(tester, '1.22.50');
     expect(find.text('Videre 1.22.50'), findsOneWidget);
     await tester.pageBack();
     await tester.pumpAndSettle();
@@ -64,10 +72,7 @@ void main() {
     await open(tester, '1.99.0');
     expect(find.text('1.99.0 (installed)'), findsOneWidget);
     expect(find.textContaining('aren’t included'), findsOneWidget);
-    await tester.tap(find.byType(DropdownButton<String>));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('1.22.51').hitTestable().last);
-    await tester.pumpAndSettle();
+    await selectRelease(tester, '1.22.51');
     expect(find.text('Videre 1.22.51'), findsOneWidget);
     expect(find.textContaining('aren’t included'), findsNothing);
   });

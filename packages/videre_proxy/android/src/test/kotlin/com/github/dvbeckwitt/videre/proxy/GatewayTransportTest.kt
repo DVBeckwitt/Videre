@@ -162,6 +162,8 @@ class GatewayTransportTest {
         assertFalse(gatewayRequiresSignIn(url, 401, "application/json", null))
         val nerd = "https://invidious.nerdvpn.de/api/v1/auth/history".toHttpUrl()
         assertFalse(gatewayRequiresSignIn(nerd, 429, "text/html", null))
+        assertFalse(gatewayRequiresSignIn(nerd, 503, "text/html; charset=utf-8", null))
+        assertFalse(gatewayRequiresSignIn(url, 502, "text/html", null))
         assertTrue(gatewayRequiresSignIn(nerd, 401, "text/html", null))
         assertFalse(gatewayRequiresSignIn(url, 302, null, "https://r1.googlevideo.com/videoplayback"))
     }

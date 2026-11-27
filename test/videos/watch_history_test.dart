@@ -484,30 +484,32 @@ void main() {
       expect(repository.syncStatus(account.accountId)?['state'], 'synced');
     });
 
-    test('HTML rate limit keeps queued history available for explicit retry',
-        () async {
-      final nerd = account.copyWith(url: 'https://invidious.nerdvpn.de');
-      await repository.mark('video', true, account: nerd);
-      var calls = 0;
-      final coordinator = WatchHistorySync(
-          repository: repository,
-          accountIsCurrent: (_) async => true,
-          readPage: (_, page, size) async => [],
-          changeHistory: (_, id, present) async {
-            if (++calls == 1) {
-              throw InvidiousServiceError('Too many requests',
-                  statusCode: 429,
-                  responseWasHtml: true,
-                  isGatewayResponse: true,
-                  retryAfter: const Duration(hours: 1));
-            }
-          });
-      await coordinator.run(nerd, pull: false);
-      expect(repository.syncStatus(nerd.accountId)?['state'], 'pending');
-      await coordinator.run(nerd, force: true, pull: false);
-      expect(calls, 2);
-      expect(repository.pending(nerd.accountId), isEmpty);
-    });
+    for (final status in [429, 503]) {
+      test('HTML $status keeps queued history available for explicit retry',
+          () async {
+        final nerd = account.copyWith(url: 'https://invidious.nerdvpn.de');
+        await repository.mark('video', true, account: nerd);
+        var calls = 0;
+        final coordinator = WatchHistorySync(
+            repository: repository,
+            accountIsCurrent: (_) async => true,
+            readPage: (_, page, size) async => [],
+            changeHistory: (_, id, present) async {
+              if (++calls == 1) {
+                throw InvidiousServiceError('Temporary failure',
+                    statusCode: status,
+                    responseWasHtml: true,
+                    isGatewayResponse: true,
+                    retryAfter: const Duration(hours: 1));
+              }
+            });
+        await coordinator.run(nerd, pull: false);
+        expect(repository.syncStatus(nerd.accountId)?['state'], 'pending');
+        await coordinator.run(nerd, force: true, pull: false);
+        expect(calls, 2);
+        expect(repository.pending(nerd.accountId), isEmpty);
+      });
+    }
 
     test('an authentication challenge pauses retries until explicit retry',
         () async {

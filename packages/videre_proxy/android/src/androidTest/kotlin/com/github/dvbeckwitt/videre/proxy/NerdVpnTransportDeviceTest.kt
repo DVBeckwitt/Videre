@@ -3,8 +3,12 @@ package com.github.dvbeckwitt.videre.proxy
 import android.content.Context
 import android.net.Uri
 import androidx.media3.common.C
+import androidx.media3.common.PlaybackException
+import androidx.media3.datasource.DataSourceException
 import androidx.media3.datasource.DataSpec
+import androidx.media3.datasource.HttpDataSource.HttpDataSourceException
 import androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException
+import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.source.LoadEventInfo
 import androidx.media3.exoplayer.source.MediaLoadData
 import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy.FallbackOptions
@@ -22,6 +26,7 @@ import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
 import okhttp3.Protocol
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -238,6 +243,51 @@ class NerdVpnTransportDeviceTest {
                 val key = LoadErrorInfo(event, MediaLoadData(type), NerdVpnAccessRequired("rateLimited"), 1)
                 assertEquals(C.TIME_UNSET, policy.getRetryDelayMsFor(key))
             }
+        }
+    }
+
+    @Test fun shortRangeResponseCanResumeOnceFromTheSameOffset() {
+        val spec = DataSpec.Builder().setUri("https://invidious.nerdvpn.de/videoplayback")
+            .setPosition(16).setLength(4).build()
+        val requests = mutableListOf<Request>()
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            val request = chain.request()
+            requests.add(request)
+            val partial = requests.size == 2
+            Response.Builder().request(request).protocol(Protocol.HTTP_1_1)
+                .code(if (partial) 206 else 200).message("Fixture media")
+                .apply { if (partial) header("Content-Range", "bytes 16-19/20") }
+                .body((if (partial) "good" else "bad").toResponseBody("video/mp4".toMediaType())).build()
+        }.build()
+        val source = OkHttpDataSource.Factory(client).createDataSource()
+        val policy = NerdVpnMediaLoadErrorPolicy()
+        val event = LoadEventInfo(1L, spec, 0L)
+        fun delay(error: HttpDataSourceException, count: Int, type: Int = C.DATA_TYPE_MEDIA) =
+            policy.getRetryDelayMsFor(LoadErrorInfo(event, MediaLoadData(type), error, count))
+        try {
+            val short = assertThrows(HttpDataSourceException::class.java) { source.open(spec) }
+            source.close()
+            assertEquals(0L, delay(short, 1))
+            assertEquals(C.TIME_UNSET, delay(short, 2))
+            assertEquals(C.TIME_UNSET, delay(short, 1, C.DATA_TYPE_MANIFEST))
+            for (status in listOf(416, 429)) {
+                val cause = if (status == 416) DataSourceException(PlaybackException.ERROR_CODE_IO_READ_POSITION_OUT_OF_RANGE) else null
+                val refusal = InvalidResponseCodeException(status, "Refused", cause, emptyMap(), spec, byteArrayOf())
+                assertEquals(C.TIME_UNSET, delay(refusal, 1))
+            }
+            assertEquals(4L, source.open(spec))
+            val bytes = ByteArray(4)
+            var read = 0
+            while (read < bytes.size) {
+                val n = source.read(bytes, read, bytes.size - read)
+                assertTrue(n > 0)
+                read += n
+            }
+            assertArrayEquals("good".toByteArray(), bytes)
+            assertEquals(listOf("bytes=16-19", "bytes=16-19"), requests.map { it.header("Range") })
+            assertEquals(1, requests.map { it.url }.distinct().size)
+        } finally {
+            source.close()
         }
     }
 
