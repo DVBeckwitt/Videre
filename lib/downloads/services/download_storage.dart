@@ -33,6 +33,7 @@ class DownloadFolder {
 }
 
 typedef DownloadDestination = ({DownloadFolder? folder, bool usePrivate});
+typedef DownloadCapacity = ({String volume, int availableBytes});
 typedef MusicFileProbe = ({
   DownloadedVideo download,
   String uri,
@@ -351,6 +352,27 @@ class DownloadStorage {
   Future<DownloadFolder?> pickFolder(String? initialUri) async =>
       DownloadFolder.fromJson(await _channel
           .invokeMethod<dynamic>('pickFolder', {'initialUri': initialUri}));
+
+  /// Returns the free bytes and backing volume for a local path or a
+  /// destination Android can identify. A provider may leave capacity unknown.
+  Future<DownloadCapacity?> capacityFor(String pathOrUri) async {
+    try {
+      final value = await _channel.invokeMapMethod<String, Object?>(
+          'downloadCapacity', {'pathOrUri': pathOrUri});
+      if (value
+          case {
+            'volume': final String volume,
+            'availableBytes': final int bytes,
+          } when volume.isNotEmpty && bytes >= 0) {
+        return (volume: volume, availableBytes: bytes);
+      }
+    } on PlatformException {
+      return null;
+    } on MissingPluginException {
+      return null;
+    }
+    return null;
+  }
 
   Future<void> checkFolder(String uri) =>
       _channel.invokeMethod<void>('checkFolder', {'uri': uri});

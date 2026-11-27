@@ -69,29 +69,53 @@ class DownloadedVideoView extends StatelessWidget {
                 bloc: cubit,
                 builder: (context, state) {
                   final paused = state.pausedVideoIds.contains(video.videoId);
-                  return DownloadRetryAvailability(
-                      retryAt: paused ? cubit.retryAtFor(video) : null,
-                      builder: (_, waitUntil) => ListTile(
-                            enabled: waitUntil == null,
-                            leading:
-                                Icon(paused ? Icons.play_arrow : Icons.pause),
-                            title: Text(paused
-                                ? locals.resumeDownload
-                                : locals.pauseDownload),
-                            subtitle: waitUntil == null
-                                ? null
-                                : Text(locals.downloadResumeAfter(waitUntil)),
-                            onTap: waitUntil == null
-                                ? () {
-                                    Navigator.of(ctx).pop();
-                                    if (paused) {
-                                      cubit.retryDownload(video);
-                                    } else {
-                                      cubit.pauseDownload(video);
-                                    }
-                                  }
-                                : null,
-                          ));
+                  final pauseAction = DownloadRetryAvailability(
+                    retryAt: paused ? cubit.retryAtFor(video) : null,
+                    builder: (_, waitUntil) => ListTile(
+                      enabled: waitUntil == null,
+                      leading: Icon(paused ? Icons.play_arrow : Icons.pause),
+                      title: Text(paused
+                          ? locals.resumeDownload
+                          : locals.pauseDownload),
+                      subtitle: waitUntil == null
+                          ? null
+                          : Text(locals.downloadResumeAfter(waitUntil)),
+                      onTap: waitUntil == null
+                          ? () {
+                              Navigator.of(ctx).pop();
+                              if (paused) {
+                                cubit.retryDownload(video);
+                              } else {
+                                cubit.pauseDownload(video);
+                              }
+                            }
+                          : null,
+                    ),
+                  );
+                  if (!state.waitingForSpaceFor(video)) return pauseAction;
+                  return Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      DownloadRetryAvailability(
+                        retryAt: cubit.retryAtFor(video),
+                        builder: (_, waitUntil) => ListTile(
+                          enabled: waitUntil == null,
+                          leading: const Icon(Icons.refresh),
+                          title: Text(locals.downloadCheckSpace),
+                          subtitle: Text(waitUntil == null
+                              ? locals.downloadFreeSpaceToResume
+                              : locals.downloadRetryAfter(waitUntil)),
+                          onTap: waitUntil == null
+                              ? () {
+                                  Navigator.of(ctx).pop();
+                                  cubit.retryDownload(video);
+                                }
+                              : null,
+                        ),
+                      ),
+                      pauseAction,
+                    ],
+                  );
                 }),
           if (video.downloadFailed || video.authenticationRequired)
             ListTile(
@@ -162,6 +186,8 @@ class DownloadedVideoView extends StatelessWidget {
     final progress = state.downloadProgresses[video.videoId];
     final paused = state.pausedVideoIds.contains(video.videoId);
     final waitingForWifi = state.waitingForWifiFor(video);
+    final waitingForNetwork = state.waitingForNetworkFor(video);
+    final waitingForSpace = state.waitingForSpaceFor(video);
     final pending = !video.downloadComplete && !video.downloadFailed;
     Widget label(String text) =>
         Text(text, style: Theme.of(context).textTheme.bodySmall);
@@ -179,10 +205,14 @@ class DownloadedVideoView extends StatelessWidget {
             ? locals.downloadPaused
             : locals.downloadResumeAfter(waitUntil)),
       );
-    } else if (waitingForWifi) {
-      status = label(locals.downloadsWaitingForWifi);
     } else if (progress?.retryAt != null) {
       status = label(locals.downloadRetryWaiting);
+    } else if (waitingForSpace) {
+      status = label(locals.downloadsWaitingForSpace);
+    } else if (waitingForWifi) {
+      status = label(locals.downloadsWaitingForWifi);
+    } else if (waitingForNetwork) {
+      status = label(locals.downloadsWaitingForNetwork);
     } else if (progress == null) {
       status = label(locals.downloadQueued);
     }
@@ -226,7 +256,9 @@ class DownloadedVideoView extends StatelessWidget {
                   progress != null &&
                   progress.retryAt == null &&
                   !paused &&
-                  !waitingForWifi)
+                  !waitingForWifi &&
+                  !waitingForNetwork &&
+                  !waitingForSpace)
                 SizedBox(
                   width: 20,
                   height: 20,

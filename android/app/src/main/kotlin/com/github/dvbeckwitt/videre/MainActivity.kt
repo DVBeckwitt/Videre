@@ -506,8 +506,11 @@ private class VidereNetworkPlugin : FlutterPlugin {
         connectivity = binding.applicationContext.getSystemService(ConnectivityManager::class.java)
         networkChannel = MethodChannel(binding.binaryMessenger, "videre/network").also {
             it.setMethodCallHandler { call, result ->
-                if (call.method == "isWifiConnected") result.success(isWifiConnected())
-                else result.notImplemented()
+                when (call.method) {
+                    "isWifiConnected" -> result.success(readConnectivity()["wifi"])
+                    "readConnectivity" -> result.success(readConnectivity())
+                    else -> result.notImplemented()
+                }
             }
         }
         networkEvents = EventChannel(binding.binaryMessenger, "videre/network_changes").also {
@@ -521,43 +524,70 @@ private class VidereNetworkPlugin : FlutterPlugin {
         }
     }
 
-    private fun isWifiConnected(): Boolean = runCatching {
-        connectivity.getNetworkCapabilities(connectivity.activeNetwork)
-            ?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
-    }.getOrDefault(false)
+    private fun readConnectivity(): Map<String, Boolean> = runCatching {
+        connectivity.getNetworkCapabilities(connectivity.activeNetwork).downloadStatus()
+    }.getOrElse { mapOf("wifi" to false, "online" to true) }
+
+    private fun NetworkCapabilities?.downloadStatus(): Map<String, Boolean> = mapOf(
+        "wifi" to (this?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true),
+        // Validation checks public Internet reachability. Videre also supports
+        // private servers and VPN routes that can work without validation.
+        "online" to (this?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true)
+    )
 
     private fun watchNetwork(events: EventChannel.EventSink) {
         stopWatchingNetwork()
         val callback = object : ConnectivityManager.NetworkCallback() {
             private var currentNetwork: Network? = null
+            private var currentCapabilities: NetworkCapabilities? = null
+            private var blocked = false
 
             override fun onAvailable(network: Network) {
                 currentNetwork = network
+                currentCapabilities = null
+                blocked = false
                 // Android 7 does not always send capabilities after onAvailable.
                 if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
-                    mainHandler.post { if (networkCallback === this) events.success(isWifiConnected()) }
+                    mainHandler.post {
+                        if (networkCallback === this) events.success(readConnectivity())
+                    }
                 }
             }
 
             override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
-                if (network == currentNetwork) publish(capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI))
+                if (network == currentNetwork) {
+                    currentCapabilities = capabilities
+                    publishCurrentNetwork()
+                }
+            }
+
+            override fun onBlockedStatusChanged(network: Network, blocked: Boolean) {
+                if (network == currentNetwork) {
+                    this.blocked = blocked
+                    publishCurrentNetwork()
+                }
             }
 
             override fun onLost(network: Network) {
                 if (network == currentNetwork) {
                     currentNetwork = null
-                    publish(false)
+                    currentCapabilities = null
+                    publishCurrentNetwork()
                 }
             }
 
-            private fun publish(wifi: Boolean) {
-                mainHandler.post { if (networkCallback === this) events.success(wifi) }
+            private fun publishCurrentNetwork() {
+                publish((if (blocked) null else currentCapabilities).downloadStatus())
+            }
+
+            private fun publish(status: Map<String, Boolean>) {
+                mainHandler.post { if (networkCallback === this) events.success(status) }
             }
         }
         networkCallback = callback
         try {
             connectivity.registerDefaultNetworkCallback(callback)
-            events.success(isWifiConnected())
+            events.success(readConnectivity())
         } catch (_: RuntimeException) {
             networkCallback = null
             events.error("NETWORK_UNAVAILABLE", "Could not monitor this device's connection.", null)

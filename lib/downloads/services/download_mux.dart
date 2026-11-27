@@ -10,6 +10,8 @@ import 'package:ffmpeg_kit_flutter_new_audio/ffprobe_kit.dart';
 import 'package:logging/logging.dart';
 import 'package:path/path.dart' as path;
 
+import 'download_space.dart';
+
 String _inputDemuxer(DownloadedVideo video, MusicDownloadFormat? inputFormat) =>
     switch (inputFormat) {
       MusicDownloadFormat.mp3 => 'mp3',
@@ -189,6 +191,15 @@ Future<void> runDownloadMux(List<String> args, CancelToken token) async {
   }
   if (token.isCancelled) throw token.cancelError!;
   if (!((await session.getReturnCode())?.isValueSuccess() ?? false)) {
+    String? output;
+    try {
+      output = await session.getAllLogsAsString(500);
+    } catch (_) {
+      // Preserve the original mux failure if native logs are unavailable.
+    }
+    if (output?.contains('No space left on device') ?? false) {
+      throw const DownloadInsufficientSpace();
+    }
     throw StateError('Could not mux the download');
   }
 }

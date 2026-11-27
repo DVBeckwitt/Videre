@@ -13,6 +13,7 @@ import '../../settings/models/db/server.dart';
 import '../../settings/models/db/settings.dart';
 import '../../settings/models/errors/invidious_service_error.dart';
 import '../../utils/interfaces/db.dart';
+import 'download_space.dart';
 
 /// A different extractor may return the missing compatible rendition.
 class DownloadFormatsUnavailable implements Exception {
@@ -79,7 +80,8 @@ class DownloadRecovery {
   /// Three attempts total across metadata, track discovery and transfer.
   /// A server cooldown applies to every download backend on the same origin.
   Future<T> run<T>(Future<T> Function(BackendPlayback route) operation,
-      {void Function(DateTime? retryAt)? onWaiting}) async {
+      {void Function(DateTime? retryAt)? onWaiting,
+      Future<void> Function()? onTransportFailure}) async {
     final cooldowns = _cooldowns[_client] ??= {};
     cooldowns.removeWhere((_, deadline) => !deadline.isAfter(DateTime.now()));
     var renewedExpiredUrl = false;
@@ -139,6 +141,14 @@ class DownloadRecovery {
             await _wait(Duration(seconds: attempt), onWaiting);
           }
           continue; // Keep the same route after an instance-wide limit.
+        }
+        if (isDownloadOutOfSpace(error)) rethrow;
+        if (response == null &&
+            (error is SocketException ||
+                error is TimeoutException ||
+                _transportFailure(error))) {
+          await onTransportFailure?.call();
+          checkCurrent();
         }
         final failure = response ?? error;
         _route.recordFailure(failure);
