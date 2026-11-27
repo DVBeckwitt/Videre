@@ -7,7 +7,49 @@ class DownloadSizeLimitExceeded extends FormatException {
       : super('The download exceeds the allowed size');
 }
 
+/// The validated size and offset for an upcoming response.
+typedef DownloadTransferSize = ({
+  int? totalBytes,
+  int offset,
+  int existingBytes,
+  int? minimumWriteBytes,
+});
+
+Future<bool> _identityMatches(File marker, String identity) async =>
+    await marker.exists() && await marker.readAsString() == identity;
+
+Future<int> _fileBytes(File file) async {
+  final stat = await file.stat();
+  return stat.type == FileSystemEntityType.file ? stat.size : 0;
+}
+
+bool _canResume(int bytes, {int? expectedSize, int? maximumBytes}) =>
+    (expectedSize == null || expectedSize <= 0 || bytes <= expectedSize) &&
+    (maximumBytes == null || bytes <= maximumBytes);
+
+/// Reads the resumable length, optionally releasing an incompatible part.
+Future<int> compatibleDownloadBytes(String path,
+    {required String identity,
+    int? expectedSize,
+    int? maximumBytes,
+    bool discardIncompatible = false}) async {
+  final file = File(path);
+  final bytes = await _fileBytes(file);
+  if (bytes == 0) return 0;
+  if (await _identityMatches(File('$path.identity'), identity) &&
+      _canResume(bytes,
+          expectedSize: expectedSize, maximumBytes: maximumBytes)) {
+    return bytes;
+  }
+  if (discardIncompatible) await file.delete();
+  return 0;
+}
+
 /// Keeps a partial file only while it still belongs to the same media stream.
+///
+/// [checkCapacity] runs after response validation and before writing or
+/// replacing the part. The total can be unknown even when a byte range
+/// provides the minimum amount this response will write.
 Future<void> downloadResumable(Dio dio, String url, String path,
     {required CancelToken cancelToken,
     required String identity,
@@ -16,6 +58,7 @@ Future<void> downloadResumable(Dio dio, String url, String path,
     bool Function(String? contentType)? acceptsContentType,
     Map<String, dynamic>? headers,
     void Function()? beforeRequest,
+    Future<void> Function(DownloadTransferSize size)? checkCapacity,
     void Function(int received, int total)? onProgress}) async {
   if (maximumBytes != null &&
       (maximumBytes <= 0 ||
@@ -24,24 +67,18 @@ Future<void> downloadResumable(Dio dio, String url, String path,
   }
   final file = File(path);
   final marker = File('$path.identity');
-  if (!await marker.exists() || await marker.readAsString() != identity) {
+  if (!await _identityMatches(marker, identity)) {
     if (await file.exists()) await file.delete();
     await marker.writeAsString(identity, flush: true);
   }
-  var offset = await file.exists() ? await file.length() : 0;
-  if (maximumBytes != null && offset > maximumBytes) {
-    await file.writeAsBytes([]);
-    offset = 0;
-  }
-  if (expectedSize != null && expectedSize > 0) {
-    if (offset == expectedSize) {
-      onProgress?.call(offset, expectedSize);
-      return;
-    }
-    if (offset > expectedSize) {
-      await file.writeAsBytes([]);
-      offset = 0;
-    }
+  var existingBytes = await _fileBytes(file);
+  var offset = _canResume(existingBytes,
+          expectedSize: expectedSize, maximumBytes: maximumBytes)
+      ? existingBytes
+      : 0;
+  if (expectedSize != null && expectedSize > 0 && offset == expectedSize) {
+    onProgress?.call(offset, expectedSize);
+    return;
   }
 
   // A server may ignore Range, or reject a stale partial. Neither is a reason
@@ -82,7 +119,7 @@ Future<void> downloadResumable(Dio dio, String url, String path,
         onProgress?.call(offset, total);
         return;
       }
-      await file.writeAsBytes([]);
+      // Keep the old bytes until an accepted replacement passes preflight.
       offset = 0;
       if (++rejectedRanges >= 2) {
         throw const HttpException('Server rejected the download range');
@@ -123,8 +160,25 @@ Future<void> downloadResumable(Dio dio, String url, String path,
       throw const DownloadSizeLimitExceeded();
     }
 
-    final output =
-        await file.open(mode: offset > 0 ? FileMode.append : FileMode.write);
+    final RandomAccessFile output;
+    try {
+      if (checkCapacity != null) {
+        final totalBytes = total > 0 ? total : null;
+        final writeUntil = totalBytes ?? responseEnd;
+        await checkCapacity((
+          totalBytes: totalBytes,
+          offset: offset,
+          existingBytes: existingBytes,
+          minimumWriteBytes: writeUntil == null ? null : writeUntil - offset,
+        ));
+      }
+      if (cancelToken.isCancelled) throw cancelToken.cancelError!;
+      output =
+          await file.open(mode: offset > 0 ? FileMode.append : FileMode.write);
+    } catch (_) {
+      await body.stream.listen(null).cancel();
+      rethrow;
+    }
     var count = offset;
     try {
       await for (final chunk
@@ -159,5 +213,6 @@ Future<void> downloadResumable(Dio dio, String url, String path,
     // A valid partial response can cover less than the requested suffix.
     // Continue from its end without spending a retry on a successful transfer.
     offset = count;
+    existingBytes = count;
   }
 }

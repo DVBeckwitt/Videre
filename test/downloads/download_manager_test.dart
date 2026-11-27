@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:clipious/downloads/models/download_formats.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
+import 'package:clipious/downloads/models/download_playback_provenance.dart';
 import 'package:clipious/downloads/models/music_download_format.dart';
 import 'package:clipious/downloads/models/music_offline_policy.dart';
 import 'package:clipious/downloads/services/download_mux.dart';
@@ -13,6 +14,7 @@ import 'package:clipious/downloads/services/download_storage.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/music/services/cached_music.dart';
 import 'package:clipious/network/network_proxy.dart';
+import 'package:clipious/network/connectivity.dart';
 import 'package:clipious/network/gateway_session_bridge.dart';
 import 'package:clipious/network/gateway_http_client.dart';
 import 'package:clipious/network/nerdvpn_access.dart';
@@ -4133,6 +4135,244 @@ void main() {
     expect(ranges, [null, 'bytes=3-']);
     expect(await File(await saved.downloadPath).readAsBytes(), bytes);
     expect(saved.musicPolicy?.wifiOnly, isTrue);
+  });
+
+  for (final pauseWhileOffline in [false, true]) {
+    test(
+        'network loss resumes compatible bytes (manual pause: $pauseWhileOffline)',
+        () async {
+      const bytes = [0, 1, 2, 3, 4, 5, 6, 7];
+      final changes = StreamController<DownloadConnectivity>.broadcast();
+      final releaseFirstResponse = Completer<void>();
+      addTearDown(() async {
+        if (!releaseFirstResponse.isCompleted) releaseFirstResponse.complete();
+        await changes.close();
+      });
+      final ranges = <String?>[];
+      mediaServer!.listen((request) async {
+        try {
+          ranges.add(request.headers.value(HttpHeaders.rangeHeader));
+          if (ranges.length == 1) {
+            request.response.bufferOutput = false;
+            request.response.add(bytes.take(3).toList());
+            await request.response.flush();
+            await releaseFirstResponse.future;
+          } else {
+            request.response.statusCode = HttpStatus.partialContent;
+            request.response.headers
+                .set(HttpHeaders.contentRangeHeader, 'bytes 3-7/8');
+          }
+          request.response.add(bytes.skip(3).toList());
+          await request.response.close();
+        } on IOException {
+          // Going offline interrupts the first response.
+        }
+      });
+      final owner = await db.getCurrentlySelectedServer();
+      service = _DownloadService((id) async => downloadRendition(id, owner));
+      final queued =
+          video.copyWith(audioOnly: true, accountId: owner.accountId);
+      await manager.close();
+      await db.upsertDownload(queued);
+      await db.saveSetting(SettingsValue('downloads-wifi-only', 'false'));
+      manager = DownloadManagerCubit(const DownloadManagerState(), _Player(),
+          readConnectivity: () async => (wifi: false, online: false),
+          connectivityChanges: changes.stream);
+      await manager.addDownloads([]);
+      expect(manager.state.waitingForNetworkFor(queued), isTrue);
+      expect(ranges, isEmpty);
+
+      changes.add((wifi: false, online: true));
+      await waitFor((state) => state.totalProgress > 0);
+      changes.add((wifi: false, online: false));
+      await waitFor((state) => state.waitingForNetworkFor(queued));
+      final partial = File('${await queued.stagingPath}.audio.part');
+      expect(await partial.readAsBytes(), bytes.take(3).toList());
+      expect(db.getDownloadByVideoId(queued.videoId)!.downloadFailed, isFalse);
+      expect(manager.state.pausedVideoIds, isEmpty);
+      releaseFirstResponse.complete();
+
+      if (pauseWhileOffline) await manager.pauseDownload(queued);
+      changes.add((wifi: false, online: true));
+      if (pauseWhileOffline) {
+        await waitFor((state) => state.networkConnected);
+        expect(manager.state.pausedVideoIds, {queued.videoId});
+        expect(manager.state.downloadProgresses, isEmpty);
+        expect(ranges, [null]);
+        await manager.retryDownload(queued);
+      }
+      await waitFor((state) => state.videos.single.downloadComplete);
+      expect(ranges, [null, 'bytes=3-']);
+      expect(await File(await queued.downloadPath).readAsBytes(), bytes);
+    });
+  }
+
+  test('a compatible part lowers the space needed to resume and mux', () async {
+    const bytes = [0, 1, 2, 3, 4, 5, 6, 7];
+    final queued = video.copyWith(audioOnly: true);
+    final owner = await db.getCurrentlySelectedServer();
+    final remote = downloadRendition(queued.videoId, owner);
+    service = _DownloadService((_) async => remote);
+    await db.upsertDownload(queued.copyWith(accountId: owner.accountId));
+    final part = File('${await queued.stagingPath}.audio.part');
+    await part.writeAsBytes(bytes.take(3).toList());
+    final rendition = RenditionIdentity.fromSelection(
+        remote, remote.adaptiveFormats!.single, owner)!;
+    final marker = jsonEncode([
+      queued.profileId,
+      owner.accountId,
+      Uri.parse(owner.url).origin,
+      queued.videoId,
+      rendition.toJson()
+    ]);
+    await File('${part.path}.identity').writeAsString(marker);
+    var available = 12;
+    messenger.setMockMethodCallHandler(storageChannel, (call) async {
+      if (call.method == 'downloadCapacity') {
+        return {'volume': 'internal', 'availableBytes': available};
+      }
+      return null;
+    });
+    final ranges = <String?>[];
+    mediaServer!.listen((request) async {
+      ranges.add(request.headers.value(HttpHeaders.rangeHeader));
+      request.response
+        ..statusCode = HttpStatus.partialContent
+        ..headers.set(HttpHeaders.contentRangeHeader, 'bytes 3-7/8')
+        ..add(bytes.skip(3).toList());
+      await request.response.close();
+    });
+
+    await manager.setWifiOnly(false);
+    await waitFor((state) =>
+        state.waitingForSpaceFor(queued) && state.downloadProgresses.isEmpty);
+    expect(ranges, isEmpty);
+    expect(await part.readAsBytes(), bytes.take(3).toList());
+    expect(await File('${part.path}.identity').readAsString(), marker);
+    expect(db.getDownloadByVideoId(queued.videoId)!.downloadFailed, isFalse);
+
+    available = 13; // Five bytes remaining plus an eight-byte staged output.
+    await manager.retryDownload(queued);
+    await waitFor((state) =>
+        state.videos.single.downloadComplete &&
+        state.downloadProgresses.isEmpty);
+    expect(ranges, ['bytes=3-']);
+    expect(await File(await queued.downloadPath).readAsBytes(), bytes);
+    expect(await part.exists(), isFalse);
+  });
+
+  test('external publication budgets a second copy on a shared volume',
+      () async {
+    final queued = video.copyWith(audioOnly: true, folderUri: folder);
+    await db.upsertDownload(queued);
+    var mediaRequests = 0;
+    final remote =
+        await audioVideo(queued.videoId, onRequest: (_) => mediaRequests++);
+    service = _DownloadService((_) async => remote);
+    var destinationVolume = 'internal';
+    var destinationAvailable = 20;
+    List<int>? written;
+    messenger.setMockMethodCallHandler(storageChannel, (call) async {
+      switch (call.method) {
+        case 'downloadCapacity':
+          final target = (call.arguments as Map).values.single as String;
+          final external = target == folder;
+          return {
+            'volume': external ? destinationVolume : 'internal',
+            'availableBytes': external ? destinationAvailable : 20
+          };
+        case 'prepareDocument':
+          return document;
+        case 'writeDocument':
+          written =
+              await File(call.arguments['source'] as String).readAsBytes();
+      }
+      return null;
+    });
+    await manager.setWifiOnly(false);
+    await waitFor((state) =>
+        state.waitingForSpaceFor(queued) && state.downloadProgresses.isEmpty);
+    expect(mediaRequests, 0); // The same volume needs twenty-four bytes.
+
+    destinationVolume = 'external';
+    destinationAvailable = 7;
+    await manager.retryDownload(queued);
+    await waitFor((state) =>
+        state.waitingForSpaceFor(queued) && state.downloadProgresses.isEmpty);
+    expect(mediaRequests, 0); // A separate volume still needs eight bytes.
+
+    destinationAvailable = 8;
+    await manager.retryDownload(queued);
+    await waitFor((state) =>
+        state.videos.single.downloadComplete &&
+        state.downloadProgresses.isEmpty);
+    expect(mediaRequests, 1);
+    expect(written, [0, 1, 2, 3, 4, 5, 6, 7]);
+    expect(manager.state.videos.single.storageUri, document);
+  });
+
+  test('an incompatible part cannot block space for its replacement', () async {
+    final queued = video.copyWith(audioOnly: true);
+    final remote = await audioVideo(queued.videoId);
+    service = _DownloadService((_) async => remote);
+    await db.upsertDownload(queued);
+    final part = File('${await queued.stagingPath}.audio.part');
+    await part.writeAsBytes(List.filled(8, 1));
+    await File('${part.path}.identity').writeAsString('stale rendition');
+    messenger.setMockMethodCallHandler(storageChannel, (call) async {
+      if (call.method == 'downloadCapacity') {
+        final stale = await part.exists() &&
+            await File('${part.path}.identity').readAsString() ==
+                'stale rendition';
+        return {'volume': 'internal', 'availableBytes': stale ? 12 : 20};
+      }
+      return null;
+    });
+
+    await manager.setWifiOnly(false);
+    await waitFor((state) => state.videos.single.downloadComplete);
+    expect(await File(await queued.downloadPath).readAsBytes(),
+        [0, 1, 2, 3, 4, 5, 6, 7]);
+  });
+
+  test(
+      'a provider with unknown capacity can report disk full during publication',
+      () async {
+    final queued = video.copyWith(audioOnly: true, folderUri: folder);
+    var mediaRequests = 0;
+    final remote =
+        await audioVideo(queued.videoId, onRequest: (_) => mediaRequests++);
+    service = _DownloadService((_) async => remote);
+    await db.upsertDownload(queued);
+    final existing = <Object?>[];
+    var writeAttempts = 0;
+    messenger.setMockMethodCallHandler(storageChannel, (call) async {
+      switch (call.method) {
+        case 'prepareDocument':
+          existing.add(call.arguments['existing']);
+          return document;
+        case 'writeDocument':
+          if (++writeAttempts == 1) {
+            throw PlatformException(code: 'download_no_space');
+          }
+          expect(await File(call.arguments['source'] as String).readAsBytes(),
+              [0, 1, 2, 3, 4, 5, 6, 7]);
+      }
+      return null;
+    });
+    await manager.setWifiOnly(false);
+    await waitFor((state) =>
+        state.waitingForSpaceFor(queued) && state.downloadProgresses.isEmpty);
+    final waiting = db.getDownloadByVideoId(queued.videoId)!;
+    expect(waiting.storageUri, document);
+    expect(waiting.downloadFailed, isFalse);
+    expect(waiting.storageFailed, isFalse);
+    expect(await File('${await queued.stagingPath}.audio.part').length(), 8);
+
+    await manager.retryDownload(waiting);
+    await waitFor((state) => state.videos.single.downloadComplete);
+    expect(existing, [null, document]);
+    expect(mediaRequests, 1);
   });
 
   test('malformed image error bodies cannot fail the media download', () async {

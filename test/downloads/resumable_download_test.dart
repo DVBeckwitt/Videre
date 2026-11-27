@@ -36,11 +36,13 @@ void main() {
           {int? size = 12,
           String identity = 'stream-1',
           CancelToken? cancelToken,
+          Future<void> Function(DownloadTransferSize)? checkCapacity,
           void Function(int, int)? onProgress}) =>
       downloadResumable(dio, url, path,
           identity: identity,
           cancelToken: cancelToken ?? CancelToken(),
           expectedSize: size,
+          checkCapacity: checkCapacity,
           onProgress: onProgress);
 
   test('clearnet downloads retain working redirects', () async {
@@ -116,6 +118,109 @@ void main() {
     };
     await download();
     expect(await File(path).readAsBytes(), content);
+  });
+
+  test('capacity rejection preserves a compatible partial for the next try',
+      () async {
+    await partial(4);
+    respond = (request) async {
+      expect(request.headers.value(HttpHeaders.rangeHeader), 'bytes=4-');
+      request.response.statusCode = 206;
+      request.response.headers
+          .set(HttpHeaders.contentRangeHeader, 'bytes 4-11/12');
+      request.response.add(content.sublist(4));
+      await request.response.close();
+    };
+    final limited = StateError('No space');
+    await expectLater(download(checkCapacity: (transfer) async {
+      expect(transfer,
+          (totalBytes: 12, offset: 4, existingBytes: 4, minimumWriteBytes: 8));
+      throw limited;
+    }), throwsA(same(limited)));
+    expect(await File(path).readAsBytes(), content.sublist(0, 4));
+    expect(await File('$path.identity').readAsString(), 'stream-1');
+    await download();
+    expect(await File(path).readAsBytes(), content);
+  });
+
+  test('checks a full restart before replacing previously saved bytes',
+      () async {
+    await partial(4);
+    respond = (request) async {
+      expect(request.headers.value(HttpHeaders.rangeHeader), 'bytes=4-');
+      request.response.contentLength = content.length;
+      request.response.add(content);
+      await request.response.close();
+    };
+    final limited = StateError('No space');
+    await expectLater(
+        download(
+            size: null,
+            checkCapacity: (transfer) async {
+              expect(transfer, (
+                totalBytes: 12,
+                offset: 0,
+                existingBytes: 4,
+                minimumWriteBytes: 12
+              ));
+              throw limited;
+            }),
+        throwsA(same(limited)));
+    expect(await File(path).readAsBytes(), content.sublist(0, 4));
+  });
+
+  test('reports a range length even when the final size is unknown', () async {
+    await partial(4);
+    respond = (request) async {
+      request.response.statusCode = 206;
+      request.response.headers
+          .set(HttpHeaders.contentRangeHeader, 'bytes 4-11/*');
+      request.response.add(content.sublist(4));
+      await request.response.close();
+    };
+    final limited = StateError('No space');
+    await expectLater(
+        download(
+            size: null,
+            checkCapacity: (transfer) async {
+              expect(transfer, (
+                totalBytes: null,
+                offset: 4,
+                existingBytes: 4,
+                minimumWriteBytes: 8
+              ));
+              throw limited;
+            }),
+        throwsA(same(limited)));
+    expect(await File(path).readAsBytes(), content.sublist(0, 4));
+  });
+
+  test('an unmeasurable response streams without inventing a required size',
+      () async {
+    respond = (request) async {
+      request.response.add(content.sublist(0, 4));
+      await request.response.flush();
+      request.response.add(content.sublist(4));
+      await request.response.close();
+    };
+    final measured = <DownloadTransferSize>[];
+    await download(
+        size: null, checkCapacity: (size) async => measured.add(size));
+    expect(measured, [
+      (totalBytes: null, offset: 0, existingBytes: 0, minimumWriteBytes: null)
+    ]);
+    expect(await File(path).readAsBytes(), content);
+  });
+
+  test('preflight only counts bytes that a transfer can resume', () async {
+    await partial(4);
+    expect(await compatibleDownloadBytes(path, identity: 'stream-1'), 4);
+    expect(await compatibleDownloadBytes(path, identity: 'other-stream'), 0);
+    expect(
+        await compatibleDownloadBytes(path,
+            identity: 'stream-1', expectedSize: 3),
+        0);
+    expect(await File(path).readAsBytes(), content.sublist(0, 4));
   });
 
   test('replaces the partial when the server ignores Range', () async {
@@ -241,6 +346,33 @@ void main() {
     await download();
     expect(requests, 2);
     expect(await File(path).readAsBytes(), content);
+  });
+
+  test(
+      'a rejected range preserves the part until a replacement passes capacity',
+      () async {
+    await partial(4);
+    var requests = 0;
+    respond = (request) async {
+      if (requests++ == 0) {
+        expect(request.headers.value(HttpHeaders.rangeHeader), 'bytes=4-');
+        request.response.statusCode = 416;
+        request.response.headers
+            .set(HttpHeaders.contentRangeHeader, 'bytes */2');
+      } else {
+        expect(request.headers.value(HttpHeaders.rangeHeader), isNull);
+        request.response.add(content);
+      }
+      await request.response.close();
+    };
+    final limited = StateError('No space');
+    await expectLater(download(checkCapacity: (transfer) async {
+      expect(transfer.offset, 0);
+      expect(transfer.existingBytes, 4);
+      throw limited;
+    }), throwsA(same(limited)));
+    expect(requests, 2);
+    expect(await File(path).readAsBytes(), content.sublist(0, 4));
   });
 
   test('rejects a server range that starts at the wrong offset', () async {

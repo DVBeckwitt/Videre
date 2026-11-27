@@ -117,6 +117,9 @@ class _Downloads extends Cubit<DownloadManagerState>
   int? removalResult;
 
   @override
+  DateTime? retryAtFor(DownloadedVideo video) => null;
+
+  @override
   Listenable get playlistOfflineChanges => kAlwaysCompleteAnimation;
 
   @override

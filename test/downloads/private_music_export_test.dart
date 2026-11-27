@@ -378,6 +378,56 @@ void main() {
     expect(downloads.actions, ['pause']);
   });
 
+  testWidgets('a download short on space can be retried or manually paused',
+      (tester) async {
+    final video = _song.copyWith(downloadComplete: false);
+    final blocked = DownloadManagerState(
+      videos: [video],
+      networkConnected: false,
+      spaceBlockedVideoIds: {video.videoId},
+    );
+    downloads.setPending(blocked);
+    final locals = await openSheet(tester, video);
+    expect(find.text(locals.downloadsWaitingForSpace), findsOneWidget);
+    expect(find.text(locals.downloadsWaitingForNetwork), findsNothing);
+    expect(find.text(locals.downloadFreeSpaceToResume), findsOneWidget);
+    expect(find.text(locals.pauseDownload), findsOneWidget);
+
+    await tester.tap(find.text(locals.downloadCheckSpace));
+    await tester.pumpAndSettle();
+    expect(downloads.actions, ['resume']);
+
+    await tester.tap(find.byTooltip(locals.downloads));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text(locals.pauseDownload));
+    await tester.pumpAndSettle();
+    expect(downloads.actions, ['resume', 'pause']);
+
+    downloads.setPending(blocked.copyWith(pausedVideoIds: {video.videoId}));
+    await tester.pumpAndSettle();
+    expect(find.text(locals.downloadPaused), findsOneWidget);
+    expect(find.text(locals.downloadsWaitingForSpace), findsNothing);
+  });
+
+  testWidgets('a network wait clears when the connection returns',
+      (tester) async {
+    final video = _song.copyWith(downloadComplete: false);
+    final blocked = DownloadManagerState(
+      videos: [video],
+      networkConnected: false,
+    );
+    downloads.setPending(blocked);
+    final locals = await mount(tester, DownloadedVideoView(video: video));
+    expect(find.text(locals.downloadsWaitingForNetwork), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+
+    downloads.setPending(blocked.copyWith(networkConnected: true));
+    await tester.pump();
+    expect(find.text(locals.downloadsWaitingForNetwork), findsNothing);
+    expect(find.text(locals.downloadQueued), findsOneWidget);
+    expect(downloads.actions, isEmpty);
+  });
+
   testWidgets(
       'the paused row clears its resume deadline without another state change',
       (tester) async {

@@ -48,6 +48,7 @@ import 'resumable_download.dart';
 import '../services/download_rename.dart';
 import '../services/download_recovery.dart';
 import '../services/download_storage.dart';
+import '../services/download_space.dart';
 import '../services/download_mux.dart';
 import '../services/explicit_music_download.dart';
 import '../services/music_download_storage.dart';
@@ -130,8 +131,8 @@ class MusicDownloadDeletionApproval {
 class DownloadManagerCubit extends Cubit<DownloadManagerState> {
   final PlayerCubit player;
   final DownloadStorage storage;
-  final Future<bool> Function()? _readWifi;
-  final Stream<bool>? _wifiChanges;
+  final Future<DownloadConnectivity> Function() _readConnectivity;
+  final Stream<DownloadConnectivity>? _networkChanges;
   final Future<int> Function() _discoveryBudgetBytes;
   final Future<void> Function(
       {required String input,
@@ -143,7 +144,7 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
   late final Future<void> _ready;
   Future<void>? _closeFuture;
   late IDbClient _library;
-  StreamSubscription<bool>? _networkSubscription;
+  StreamSubscription<DownloadConnectivity>? _networkSubscription;
   StreamSubscription<SettingsValue?>? _playlistSubscription;
   late final StreamSubscription<({IDbClient database, Set<String> profiles})>
       _renames;
@@ -168,7 +169,12 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
   final _folderChoiceRevision = <bool, int>{};
   int _musicFolderRevision = 0;
   Future<String?>? _pendingMusicFolder;
-  bool _processing = false, _wifiConnected = false, _closing = false;
+  DownloadConnectivity _connectivity = (wifi: false, online: true);
+  int _networkRevision = 0;
+  bool _networkReady = false;
+  bool _processing = false, _closing = false;
+  bool _activeNeedsNetwork = false;
+  CancelToken? _activeArtworkToken;
   bool _switchingProfile = false;
   int _generation = 0;
   String? _activeId;
@@ -180,14 +186,25 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
       this.encodeMusic = runMusicDownloadMux,
       Future<bool> Function()? wifiConnected,
       Stream<bool>? wifiChanges,
+      Future<DownloadConnectivity> Function()? readConnectivity,
+      Stream<DownloadConnectivity>? connectivityChanges,
       Future<int> Function()? discoveryBudgetBytes})
       : storage = storage ?? DownloadStorage(),
         _discoveryBudgetBytes =
             discoveryBudgetBytes ?? _configuredDiscoveryBudget,
-        _readWifi =
-            wifiConnected ?? (Platform.isAndroid ? isWifiConnected : null),
-        _wifiChanges = wifiChanges ??
-            (Platform.isAndroid ? wifiConnectivityChanges : null) {
+        _readConnectivity = readConnectivity ??
+            (wifiConnected != null || wifiChanges != null || !Platform.isAndroid
+                ? () async =>
+                    (wifi: await wifiConnected?.call() ?? false, online: true)
+                : readDownloadConnectivity),
+        _networkChanges = connectivityChanges ??
+            (wifiChanges != null
+                ? wifiChanges.map((wifi) => (wifi: wifi, online: true))
+                : Platform.isAndroid &&
+                        wifiConnected == null &&
+                        readConnectivity == null
+                    ? downloadConnectivityChanges
+                    : null) {
     _library = db.forProfile(db.profileId);
     _renames = localMusicDownloadRenames.listen((change) {
       if (identical(change.database, db) &&
@@ -262,7 +279,7 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
     _switchingProfile = false;
     _discoveryOfflineChanges.value++;
     _watchPlaylistMembership();
-    _networkChanged(_wifiConnected);
+    _networkChanged(_connectivity);
   }
 
   Future<void> _proxyChanging() async {
@@ -293,17 +310,26 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
   Future<void> onReady() async {
     _loadLibrary();
     _watchPlaylistMembership();
-    var receivedEvent = false;
-    void networkEvent(bool connected) {
-      receivedEvent = true;
-      _networkChanged(connected);
-    }
+    _networkSubscription = _networkChanges?.listen((connectivity) {
+      _networkRevision++;
+      _networkChanged(connectivity);
+    }, onError: (Object error) {
+      log.fine(
+          'Download connectivity events are unavailable', error.runtimeType);
+    });
+    await _refreshConnectivity();
+  }
 
-    _networkSubscription = _wifiChanges?.listen(networkEvent,
-        onError: (Object error) => networkEvent(false));
-    final readWifi = _readWifi;
-    final connected = readWifi == null ? false : await readWifi();
-    if (!receivedEvent) _networkChanged(connected);
+  Future<void> _refreshConnectivity() async {
+    final revision = _networkRevision;
+    var connectivity = _connectivity;
+    try {
+      connectivity = await _readConnectivity();
+    } catch (error) {
+      log.fine('Download connectivity could not be read', error.runtimeType);
+    }
+    // An event delivered during this request is newer than the requested read.
+    if (revision == _networkRevision) _networkChanged(connectivity);
   }
 
   void _loadLibrary() {
@@ -349,22 +375,29 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
         wifiOnly: _library.getSettings(_wifiSetting)?.value == 'true',
         pausedVideoIds: paused,
         downloadProgresses: {},
+        spaceBlockedVideoIds: {},
         videos: _library.getAllDownloads())));
     _playlistOfflineChanges.value++;
     _discoveryOfflineChanges.value++;
   }
 
-  void _networkChanged(bool connected) {
-    _wifiConnected = connected;
-    if (!_current) return;
+  void _networkChanged(DownloadConnectivity connectivity) {
+    _connectivity = connectivity;
+    _networkReady = true;
+    if (!_current || _switchingProfile) return;
     emit(state.copyWith(
-        wifiConnected: connected,
-        waitingForWifi: state.wifiOnly && !connected));
+        networkConnected: connectivity.online,
+        wifiConnected: connectivity.wifi,
+        waitingForWifi: state.wifiOnly && !connectivity.wifi));
     if (_activeId case final id?) {
       final active = _library.getDownloadByVideoId(id);
-      if (state.waitingForWifi ||
+      if (!connectivity.online ||
+          state.waitingForWifi ||
           (active != null && state.waitingForWifiFor(active))) {
-        state.downloadProgresses[id]?.cancelToken.cancel();
+        _activeArtworkToken?.cancel();
+        if (_activeNeedsNetwork) {
+          state.downloadProgresses[id]?.cancelToken.cancel();
+        }
       }
     }
     unawaited(_drain());
@@ -378,7 +411,7 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
         await _library
             .saveSetting(SettingsValue(_wifiSetting, value.toString()));
         emit(state.copyWith(wifiOnly: value));
-        _networkChanged(_wifiConnected);
+        _networkChanged(_connectivity);
         await PodcastDownloads.notifyWifiOnlyChanged(database, profileId);
       });
 
@@ -583,6 +616,7 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
           file.downloadFailed ||
           file.storageFailed ||
           file.authenticationRequired ||
+          state.waitingForSpaceFor(file) ||
           state.pausedVideoIds.contains(id)) {
         needsAttention++;
       } else if (file.downloadComplete) {
@@ -751,6 +785,7 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
           if (download.downloadFailed ||
               download.authenticationRequired ||
               download.storageFailed ||
+              state.waitingForSpaceFor(download) ||
               state.pausedVideoIds.contains(id)) {
             await retryDownload(download);
           }
@@ -1212,14 +1247,20 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
     return added;
   }
 
+  bool get _canDrain =>
+      _current &&
+      !_switchingProfile &&
+      !NetworkProxy.instance.isChanging &&
+      _networkReady &&
+      _connectivity.online &&
+      !state.waitingForWifi;
+
   Future<void> _drain() async {
-    if (_processing || !_current || _switchingProfile || state.waitingForWifi) {
-      return;
-    }
+    if (_processing || !_canDrain) return;
     _processing = true;
     final finished = _drainFinished = Completer<void>();
     try {
-      while (_current && !_switchingProfile && !state.waitingForWifi) {
+      while (_canDrain) {
         final next = _library
             .getAllDownloads()
             .where((v) =>
@@ -1227,6 +1268,7 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
                 !v.downloadFailed &&
                 !v.authenticationRequired &&
                 !state.waitingForWifiFor(v) &&
+                !state.spaceBlockedVideoIds.contains(v.videoId) &&
                 !state.pausedVideoIds.contains(v.videoId) &&
                 !_deleting.contains(v.videoId) &&
                 (!_library.isPlaylistOwnedMusicDownload(v.videoId) ||
@@ -1260,6 +1302,8 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
     final library = _library;
     final token = CancelToken();
     final progress = DownloadProgress(token);
+    _activeNeedsNetwork = true;
+    String? currentMux;
     emit(state.copyWith(downloadProgresses: {video.videoId: progress}));
     final dio = Dio(BaseOptions(
         connectTimeout: const Duration(seconds: 20),
@@ -1309,7 +1353,7 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
           await DownloadRecovery.start(service, library, account, token);
       await recovery.run<void>((route) async {
         final server = route.server;
-        final artworkToken = CancelToken();
+        final artworkToken = _activeArtworkToken = CancelToken();
         Future<void>? artwork;
         try {
           var vid = await Future.any([
@@ -1418,9 +1462,8 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
           final videoPath = '$staging.video.part';
           final captionPath = '$staging.caption.vtt';
           final steps = (video.audioOnly ? 2 : 3) + (caption == null ? 0 : 1);
-          Future<void> transfer(AdaptiveFormat format, String path, int step) {
-            recovery.checkCurrent();
-            final url = mediaUrls[format]!;
+          ({int? size, String path, String url, String identity}) mediaPart(
+              AdaptiveFormat format, String path) {
             final size = int.tryParse(format.clen);
             final rendition =
                 RenditionIdentity.fromSelection(vid, format, server);
@@ -1435,14 +1478,72 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
                     video.videoId,
                     rendition.toJson()
                   ]);
-            return downloadResumable(dio, url, path,
+            return (
+              size: size != null && size > 0 ? size : null,
+              path: path,
+              url: mediaUrls[format]!,
+              identity: identity,
+            );
+          }
+
+          final parts = [
+            mediaPart(audio, audioPath),
+            if (selectedVideo != null) mediaPart(selectedVideo, videoPath),
+          ];
+          final output = '$staging.mux.${outputVideo.extension}';
+          final destination = video.folderUri;
+          final existingDestination = await _pendingDocumentSize(video);
+          // The retry already replaces this uncommitted output. Release it
+          // before preflight so it can't prevent a retry after space is freed.
+          await _deleteStagedMux(output);
+          var knownPartGrowth = 0;
+          var knownInputBytes = 0;
+          var allSizesKnown = true;
+          for (final part in parts) {
+            final size = part.size;
+            if (size == null) {
+              allSizesKnown = false;
+              continue;
+            }
+            recovery.checkCurrent();
+            final reusable = await compatibleDownloadBytes(part.path,
+                identity: part.identity,
+                expectedSize: size,
+                maximumBytes: maximumBytes,
+                discardIncompatible: true);
+            knownInputBytes += size;
+            knownPartGrowth += size - reusable;
+          }
+          // A stream copy budgets the staged input sizes. The exact published
+          // length is checked after muxing. Transcoded sizes are unknown here.
+          final plannedOutput =
+              allSizesKnown && !video.storeAsMusic ? knownInputBytes : 0;
+          await checkDownloadSpace(storage, {
+            staging: knownPartGrowth + plannedOutput,
+            if (destination != null)
+              destination:
+                  remainingDownloadGrowth(plannedOutput, existingDestination),
+          });
+          recovery.checkCurrent();
+
+          Future<void> transfer(int step) {
+            final part = parts[step];
+            return downloadResumable(dio, part.url, part.path,
                 cancelToken: token,
-                identity: identity,
+                identity: part.identity,
                 beforeRequest: recovery.checkCurrent,
-                expectedSize: size != null && size > 0 ? size : null,
+                expectedSize: part.size,
+                checkCapacity: (transfer) async {
+                  final writes = transfer.minimumWriteBytes;
+                  if (writes == null) return;
+                  final reclaimed =
+                      transfer.offset == 0 ? transfer.existingBytes : 0;
+                  await checkDownloadSpace(storage,
+                      {part.path: remainingDownloadGrowth(writes, reclaimed)});
+                },
                 maximumBytes: maximumBytes,
                 acceptsContentType: container.acceptsResponseType,
-                headers: server.headersForUrl(url),
+                headers: server.headersForUrl(part.url),
                 onProgress: (count, total) =>
                     update(count, total, step, steps));
           }
@@ -1464,8 +1565,10 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
             artwork = _downloadArtwork(dio, video, server, artworkToken,
                 cover: cover, posters: posters);
           }
-          await transfer(audio, audioPath, 0);
-          if (!video.audioOnly) await transfer(selectedVideo!, videoPath, 1);
+          for (var step = 0; step < parts.length; step++) {
+            await transfer(step);
+            recovery.checkCurrent();
+          }
           recovery.checkCurrent();
           route.recordSuccess();
           if (caption != null) {
@@ -1476,11 +1579,39 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
               token.whenCancel.then((error) => throw error),
             ]);
             if (token.isCancelled) throw token.cancelError!;
-            await File(captionPath).writeAsString(subtitles);
+            final bytes = utf8.encode(subtitles);
+            await checkDownloadSpace(storage, {
+              captionPath: remainingDownloadGrowth(
+                  bytes.length, await downloadFileBytes(captionPath))
+            });
+            recovery.checkCurrent();
+            await File(captionPath).writeAsBytes(bytes);
             update(1, 1, steps - 2, steps);
           }
           recovery.checkCurrent();
-          final output = '$staging.mux.${outputVideo.extension}';
+          _activeNeedsNetwork = false;
+          currentMux = output;
+          final captionBytes =
+              caption == null ? 0 : await downloadFileBytes(captionPath);
+          final subtitlePath =
+              caption == null ? null : await video.subtitlePath;
+          final subtitleGrowth = subtitlePath == null
+              ? 0
+              : remainingDownloadGrowth(
+                  captionBytes, await downloadFileBytes(subtitlePath));
+          if (!video.storeAsMusic) {
+            var muxBudget = captionBytes;
+            for (final part in parts) {
+              muxBudget += await File(part.path).length();
+            }
+            await checkDownloadSpace(storage, {
+              staging: muxBudget + subtitleGrowth,
+              if (destination != null)
+                destination:
+                    remainingDownloadGrowth(muxBudget, existingDestination),
+            });
+          }
+          recovery.checkCurrent();
           if (video.storeAsMusic) {
             await encodeMusic(
                 input: audioPath,
@@ -1532,8 +1663,16 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
             throw const DownloadSizeLimitExceeded();
           }
           recovery.checkCurrent();
-          if (caption != null) {
-            await File(captionPath).copy(await video.subtitlePath);
+          final outputBytes = await File(output).length();
+          await checkDownloadSpace(storage, {
+            if (subtitlePath != null) subtitlePath: subtitleGrowth,
+            if (destination != null)
+              destination:
+                  remainingDownloadGrowth(outputBytes, existingDestination),
+          });
+          recovery.checkCurrent();
+          if (subtitlePath != null) {
+            await File(captionPath).copy(subtitlePath);
             if (token.isCancelled) throw token.cancelError!;
           }
           if (video.folderUri == null) {
@@ -1595,8 +1734,11 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
           return;
         } finally {
           artworkToken.cancel();
+          _activeArtworkToken = null;
           await artwork;
         }
+      }, onTransportFailure: () async {
+        if (_activeNeedsNetwork) await _refreshConnectivity();
       }, onWaiting: (retryAt) {
         if (!_current || token.isCancelled) return;
         final current = state.downloadProgresses[video.videoId];
@@ -1607,6 +1749,16 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
       });
     } catch (error, stack) {
       if (!token.isCancelled && !_closing) {
+        if (isDownloadOutOfSpace(error)) {
+          if (currentMux case final output?) await _deleteStagedMux(output);
+          if (_current && !token.isCancelled) {
+            emit(state.copyWith(spaceBlockedVideoIds: {
+              ...state.spaceBlockedVideoIds,
+              video.videoId
+            }));
+          }
+          return;
+        }
         if (error is DownloadSizeLimitExceeded) {
           try {
             await _deleteParts(video);
@@ -1638,11 +1790,35 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
                 error.code == 'DOWNLOAD_STORAGE'));
       }
     } finally {
+      _activeNeedsNetwork = false;
       dio.close(force: true);
       if (_current) {
         emit(state.copyWith(downloadProgresses: {}));
         setVideos();
       }
+    }
+  }
+
+  Future<int> _pendingDocumentSize(DownloadedVideo video) async {
+    final uri = video.storageUri;
+    final folder = video.folderUri;
+    if (uri == null || folder == null) return 0;
+    try {
+      return await storage.documentSize(uri, folder) ?? 0;
+    } on PlatformException {
+      return 0;
+    } on MissingPluginException {
+      return 0;
+    }
+  }
+
+  Future<void> _deleteStagedMux(String path) async {
+    try {
+      final file = File(path);
+      if (await file.exists()) await file.delete();
+    } on FileSystemException catch (error) {
+      log.fine('Could not remove the unfinished mux output',
+          error.osError?.errorCode);
     }
   }
 
@@ -1798,7 +1974,10 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
               authenticationRequired: false,
               storageFailed: false));
         }
+        final blocked = {...state.spaceBlockedVideoIds}..remove(video.videoId);
+        emit(state.copyWith(spaceBlockedVideoIds: blocked));
         setVideos();
+        if (!_connectivity.online) await _refreshConnectivity();
         unawaited(_drain());
       });
 
@@ -2001,7 +2180,10 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
           final paused = {...state.pausedVideoIds}..remove(video.videoId);
           await _library.saveSetting(
               SettingsValue(_pausedSetting, jsonEncode(paused.toList())));
-          emit(state.copyWith(pausedVideoIds: paused));
+          final blocked = {...state.spaceBlockedVideoIds}
+            ..remove(video.videoId);
+          emit(state.copyWith(
+              pausedVideoIds: paused, spaceBlockedVideoIds: blocked));
           setVideos();
           return true;
         } finally {
@@ -2165,12 +2347,29 @@ sealed class DownloadManagerState with _$DownloadManagerState {
     @Default(false) bool wifiOnly,
     @Default(false) bool waitingForWifi,
     @Default(false) bool wifiConnected,
+    @Default(true) bool networkConnected,
+    @Default({}) Set<String> spaceBlockedVideoIds,
   }) = _DownloadManagerState;
 
   const DownloadManagerState._();
 
   bool waitingForWifiFor(DownloadedVideo video) =>
       waitingForWifi || (!wifiConnected && video.musicPolicy?.wifiOnly == true);
+
+  bool _canWait(DownloadedVideo video) =>
+      !video.downloadComplete &&
+      !video.downloadFailed &&
+      !video.storageFailed &&
+      !video.authenticationRequired &&
+      !pausedVideoIds.contains(video.videoId);
+
+  bool waitingForSpaceFor(DownloadedVideo video) =>
+      _canWait(video) && spaceBlockedVideoIds.contains(video.videoId);
+
+  bool waitingForNetworkFor(DownloadedVideo video) =>
+      _canWait(video) &&
+      !networkConnected &&
+      !downloadProgresses.containsKey(video.videoId);
 
   double get totalProgress {
     var downloaded = 0, total = 0;

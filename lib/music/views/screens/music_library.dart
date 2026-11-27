@@ -5,6 +5,7 @@ import 'dart:math' as math;
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/downloads/states/download_manager.dart';
+import 'package:clipious/downloads/views/components/download_retry_time.dart';
 import 'package:clipious/downloads/views/components/downloaded_video.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
@@ -3127,27 +3128,76 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
           video.authenticationRequired ||
           video.storageFailed;
       final progress = state.downloadProgresses[video.videoId];
-      final status = ready
-          ? library.catalogArtistByline(
-              video.musicMetadata!.artist, video.musicMetadata!.artistCredits)
-          : video.authenticationRequired
-              ? locals.downloadSignInRequired
-              : video.storageFailed
-                  ? locals.downloadFolderError
-                  : video.downloadFailed
-                      ? locals.videoFailedDownloadRetry
-                      : paused
-                          ? locals.downloadPaused
-                          : state.waitingForWifiFor(video)
-                              ? locals.downloadsWaitingForWifi
-                              : locals.downloadQueued;
+      final waitingForSpace = state.waitingForSpaceFor(video);
+      final waitingForWifi = state.waitingForWifiFor(video);
+      final waitingForNetwork = state.waitingForNetworkFor(video);
+
+      String status() {
+        if (ready) {
+          return library.catalogArtistByline(
+              video.musicMetadata!.artist, video.musicMetadata!.artistCredits);
+        }
+        if (video.authenticationRequired) return locals.downloadSignInRequired;
+        if (video.storageFailed) return locals.downloadFolderError;
+        if (video.downloadFailed) return locals.videoFailedDownloadRetry;
+        if (paused) return locals.downloadPaused;
+        if (progress?.retryAt != null) return locals.downloadRetryWaiting;
+        if (waitingForSpace) return locals.downloadsWaitingForSpace;
+        if (waitingForWifi) return locals.downloadsWaitingForWifi;
+        if (waitingForNetwork) return locals.downloadsWaitingForNetwork;
+        return locals.downloadQueued;
+      }
+
+      Widget queueActions() {
+        final manager = context.read<DownloadManagerCubit>();
+        return DownloadRetryAvailability(
+          retryAt: paused || waitingForSpace ? manager.retryAtFor(video) : null,
+          builder: (_, waitUntil) {
+            final pauseOrRetry = IconButton(
+              tooltip: switch ((retry, paused, waitUntil)) {
+                (true, _, _) => locals.retry,
+                (_, true, final time?) => locals.downloadResumeAfter(time),
+                (_, true, _) => locals.resumeDownload,
+                _ => locals.pauseDownload,
+              },
+              icon: Icon(retry
+                  ? Icons.refresh
+                  : paused
+                      ? Icons.play_arrow
+                      : Icons.pause),
+              onPressed: paused && waitUntil != null
+                  ? null
+                  : () => _downloadAction(
+                      video,
+                      (manager) => retry || paused
+                          ? manager.retryDownload(video)
+                          : manager.pauseDownload(video)),
+            );
+            if (!waitingForSpace) return pauseOrRetry;
+            return Row(mainAxisSize: MainAxisSize.min, children: [
+              IconButton(
+                tooltip: waitUntil == null
+                    ? locals.downloadCheckSpace
+                    : locals.downloadRetryAfter(waitUntil),
+                icon: const Icon(Icons.refresh),
+                onPressed: waitUntil == null
+                    ? () => _downloadAction(
+                        video, (manager) => manager.retryDownload(video))
+                    : null,
+              ),
+              pauseOrRetry,
+            ]);
+          },
+        );
+      }
+
       final tile = ListTile(
           key: ValueKey('music-download-${video.videoId}'),
           selected: selected ?? false,
           leading: Icon(ready ? Icons.audio_file_outlined : Icons.downloading),
           title: MusicStatusTitle.download(
               file: video, child: Text(video.musicMetadata!.title)),
-          subtitle: Text(status),
+          subtitle: Text(status()),
           onLongPress: selected == null
               ? () => _startLibrarySelection(_LibraryFilter.downloads,
                   rowId: video.videoId)
@@ -3179,22 +3229,7 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                     ])
                   : video.downloadComplete
                       ? null
-                      : IconButton(
-                          tooltip: retry
-                              ? locals.retry
-                              : paused
-                                  ? locals.resumeDownload
-                                  : locals.pauseDownload,
-                          icon: Icon(retry
-                              ? Icons.refresh
-                              : paused
-                                  ? Icons.play_arrow
-                                  : Icons.pause),
-                          onPressed: () => _downloadAction(
-                              video,
-                              (manager) => retry || paused
-                                  ? manager.retryDownload(video)
-                                  : manager.pauseDownload(video))));
+                      : queueActions());
       return Column(key: rowKey(video), children: [
         MusicSongRowSwipe(
           trailingInset: 112,
@@ -3209,7 +3244,13 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
               : null,
           child: tile,
         ),
-        if (!video.downloadComplete && progress != null && !paused)
+        if (!video.downloadComplete &&
+            progress != null &&
+            progress.retryAt == null &&
+            !paused &&
+            !waitingForSpace &&
+            !waitingForWifi &&
+            !waitingForNetwork)
           LinearProgressIndicator(
               value:
                   progress.total > 0 ? progress.count / progress.total : null),

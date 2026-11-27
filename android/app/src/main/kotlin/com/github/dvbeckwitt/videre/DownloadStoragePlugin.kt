@@ -5,16 +5,21 @@ import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.database.Cursor
+import android.database.sqlite.SQLiteFullException
 import android.media.MediaScannerConnection
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.os.StatFs
 import android.os.storage.StorageManager
 import android.provider.DocumentsContract
 import android.provider.DocumentsContract.Document
 import android.provider.MediaStore
+import android.system.ErrnoException
+import android.system.Os
+import android.system.OsConstants
 import androidx.core.content.FileProvider
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.embedding.engine.plugins.activity.ActivityAware
@@ -122,6 +127,9 @@ class DownloadStoragePlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activ
             "canSetMusicRingtone" -> musicRingtone(call, result, probe = true)
             "setMusicRingtone" -> musicRingtone(call, result, probe = false)
             "documentSize" -> measureDocument(call, result)
+            "downloadCapacity" -> runMetadataProbe(result) {
+                call.argument<String>("pathOrUri")?.let(::downloadCapacity)
+            }
             "exportExists" -> run(result) {
                 val uri = Uri.parse(call.argument<String>("uri")!!)
                 val folderValue = call.argument<String>("folderUri")!!
@@ -187,6 +195,58 @@ class DownloadStoragePlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activ
         if (context.contentResolver.update(uri, values, null, null) != 1) throw IOException()
     }
 
+    @Suppress("DEPRECATION")
+    private fun externalStorageRoot(volume: String): File? {
+        if (volume.equals("primary", true)) return Environment.getExternalStorageDirectory()
+        val manager = context.getSystemService(StorageManager::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            return manager.storageVolumes.firstOrNull { volume.equals(it.uuid, true) }?.directory
+        }
+        // Before API 30 infer the mount point from our own directory on the same volume.
+        val files = context.getExternalFilesDirs(null).filterNotNull().firstOrNull {
+            volume.equals(manager.getStorageVolume(it)?.uuid, true)
+        }
+        val suffix = "/Android/data/${context.packageName}/files"
+        return files?.path?.takeIf { it.endsWith(suffix) }?.let { File(it.removeSuffix(suffix)) }
+    }
+
+    private fun capacityPath(value: String): File? {
+        if (value.startsWith('/')) return File(value)
+        val uri = Uri.parse(value)
+        if (uri.encodedQuery != null || uri.encodedFragment != null) return null
+        val root = when {
+            uri.scheme == "file" && uri.authority.isNullOrEmpty() -> return uri.path?.let(::File)
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+                (value == SharedMusicDownload.COLLECTION || SharedMusicDownload.isItem(value)) ->
+                externalStorageRoot("primary")
+            uri.authority == "com.android.externalstorage.documents" -> {
+                requireGrant(uri)
+                val tree = DocumentsContract.getTreeDocumentId(uri)
+                if (':' !in tree) return null
+                // The system provider's Home root uses the primary volume's Documents directory.
+                val volume = tree.substringBefore(':').let { if (it == "home") "primary" else it }
+                externalStorageRoot(volume)
+            }
+            else -> null
+        }
+        return root?.takeIf { Environment.getExternalStorageState(it) == Environment.MEDIA_MOUNTED }
+    }
+
+    private fun downloadCapacity(value: String): Map<String, Any>? {
+        val path = capacityPath(value)?.takeIf { it.isAbsolute }?.canonicalFile ?: return null
+        val existing = generateSequence(path) { it.parentFile }.firstOrNull { it.exists() } ?: return null
+        val manager = context.getSystemService(StorageManager::class.java)
+        val sharedVolume = manager.getStorageVolume(existing)
+        val uuid = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            // Android can expose an emulated FUSE mount backed by the private volume.
+            // Use the backing UUID to group its writes with staging on the same disk.
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) sharedVolume?.storageUuid else null)
+                ?: runCatching { manager.getUuidForPath(existing) }.getOrNull()
+        } else null
+        val volume = uuid?.let { "uuid:$it" } ?: "device:${Os.stat(existing.path).st_dev}"
+        return mapOf("volume" to volume, "availableBytes" to StatFs(existing.path).availableBytes)
+    }
+
     /** A SAF provider may be a cloud service. Only scan files on a known local shared volume. */
     @Suppress("DEPRECATION")
     private fun scanAudioDocument(uri: Uri) {
@@ -196,21 +256,7 @@ class DownloadStoragePlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activ
             if (!mime.startsWith("audio/") && mime != "application/ogg") return
             val id = DocumentsContract.getDocumentId(uri)
             val volume = id.substringBefore(':')
-            val manager = context.getSystemService(StorageManager::class.java)
-            val root = when {
-                volume.equals("primary", true) -> Environment.getExternalStorageDirectory()
-                Build.VERSION.SDK_INT >= Build.VERSION_CODES.R ->
-                    manager.storageVolumes.firstOrNull { volume.equals(it.uuid, true) }?.directory
-                else -> {
-                    // Before API 30 StorageVolume has no directory getter. Match its UUID to this
-                    // app's known external files directory, then remove the app-specific suffix.
-                    val files = context.getExternalFilesDirs(null).filterNotNull().firstOrNull {
-                        volume.equals(manager.getStorageVolume(it)?.uuid, true)
-                    }
-                    val suffix = "/Android/data/${context.packageName}/files"
-                    files?.path?.takeIf { it.endsWith(suffix) }?.let { File(it.removeSuffix(suffix)) }
-                }
-            } ?: return
+            val root = externalStorageRoot(volume) ?: return
             val path = sharedAudioFile(root, DocumentsContract.getTreeDocumentId(uri), id) ?: return
             MediaScannerConnection.scanFile(context, arrayOf(path.path), arrayOf(mime), null)
         } catch (_: Exception) {
@@ -223,12 +269,25 @@ class DownloadStoragePlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activ
             try {
                 val value = action()
                 main.post { result.success(value) }
-            } catch (_: Exception) {
+            } catch (error: Exception) {
                 // Provider errors can contain local paths or account identifiers.
-                main.post { result.error("DOWNLOAD_STORAGE", "Could not access the download folder. Reconnect the storage or choose the folder again.", null) }
+                main.post {
+                    if (isOutOfSpace(error)) {
+                        result.error("download_no_space", "Not enough space for the download.", null)
+                    } else {
+                        result.error("DOWNLOAD_STORAGE", "Could not access the download folder. Reconnect the storage or choose the folder again.", null)
+                    }
+                }
             }
         }
     }
+
+    private fun isOutOfSpace(error: Throwable): Boolean =
+        generateSequence(error) { it.cause }.take(16).any {
+            (it is ErrnoException && it.errno == OsConstants.ENOSPC) ||
+                it is SQLiteFullException ||
+                (it is IOException && it.message?.contains("ENOSPC (No space left on device)") == true)
+        }
 
     private fun measureDocument(call: MethodCall, result: MethodChannel.Result) = runMetadataProbe(result) {
         val value = call.argument<String>("uri")!!

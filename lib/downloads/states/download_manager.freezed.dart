@@ -26,6 +26,8 @@ mixin _$DownloadManagerState {
   bool get wifiOnly;
   bool get waitingForWifi;
   bool get wifiConnected;
+  bool get networkConnected;
+  Set<String> get spaceBlockedVideoIds;
 
   /// Create a copy of DownloadManagerState
   /// with the given fields replaced by the non-null parameter values.
@@ -62,7 +64,11 @@ mixin _$DownloadManagerState {
             (identical(other.waitingForWifi, waitingForWifi) ||
                 other.waitingForWifi == waitingForWifi) &&
             (identical(other.wifiConnected, wifiConnected) ||
-                other.wifiConnected == wifiConnected));
+                other.wifiConnected == wifiConnected) &&
+            (identical(other.networkConnected, networkConnected) ||
+                other.networkConnected == networkConnected) &&
+            const DeepCollectionEquality()
+                .equals(other.spaceBlockedVideoIds, spaceBlockedVideoIds));
   }
 
   @override
@@ -79,11 +85,13 @@ mixin _$DownloadManagerState {
       const DeepCollectionEquality().hash(pausedVideoIds),
       wifiOnly,
       waitingForWifi,
-      wifiConnected);
+      wifiConnected,
+      networkConnected,
+      const DeepCollectionEquality().hash(spaceBlockedVideoIds));
 
   @override
   String toString() {
-    return 'DownloadManagerState(folderUri: $folderUri, folderName: $folderName, usePrivateStorage: $usePrivateStorage, audioFolderUri: $audioFolderUri, audioFolderName: $audioFolderName, usePrivateAudioStorage: $usePrivateAudioStorage, videos: $videos, downloadProgresses: $downloadProgresses, pausedVideoIds: $pausedVideoIds, wifiOnly: $wifiOnly, waitingForWifi: $waitingForWifi, wifiConnected: $wifiConnected)';
+    return 'DownloadManagerState(folderUri: $folderUri, folderName: $folderName, usePrivateStorage: $usePrivateStorage, audioFolderUri: $audioFolderUri, audioFolderName: $audioFolderName, usePrivateAudioStorage: $usePrivateAudioStorage, videos: $videos, downloadProgresses: $downloadProgresses, pausedVideoIds: $pausedVideoIds, wifiOnly: $wifiOnly, waitingForWifi: $waitingForWifi, wifiConnected: $wifiConnected, networkConnected: $networkConnected, spaceBlockedVideoIds: $spaceBlockedVideoIds)';
   }
 }
 
@@ -105,7 +113,9 @@ abstract mixin class $DownloadManagerStateCopyWith<$Res> {
       Set<String> pausedVideoIds,
       bool wifiOnly,
       bool waitingForWifi,
-      bool wifiConnected});
+      bool wifiConnected,
+      bool networkConnected,
+      Set<String> spaceBlockedVideoIds});
 }
 
 /// @nodoc
@@ -133,6 +143,8 @@ class _$DownloadManagerStateCopyWithImpl<$Res>
     Object? wifiOnly = null,
     Object? waitingForWifi = null,
     Object? wifiConnected = null,
+    Object? networkConnected = null,
+    Object? spaceBlockedVideoIds = null,
   }) {
     return _then(_self.copyWith(
       folderUri: freezed == folderUri
@@ -183,6 +195,14 @@ class _$DownloadManagerStateCopyWithImpl<$Res>
           ? _self.wifiConnected
           : wifiConnected // ignore: cast_nullable_to_non_nullable
               as bool,
+      networkConnected: null == networkConnected
+          ? _self.networkConnected
+          : networkConnected // ignore: cast_nullable_to_non_nullable
+              as bool,
+      spaceBlockedVideoIds: null == spaceBlockedVideoIds
+          ? _self.spaceBlockedVideoIds
+          : spaceBlockedVideoIds // ignore: cast_nullable_to_non_nullable
+              as Set<String>,
     ));
   }
 }
@@ -202,10 +222,13 @@ class _DownloadManagerState extends DownloadManagerState {
       final Set<String> pausedVideoIds = const {},
       this.wifiOnly = false,
       this.waitingForWifi = false,
-      this.wifiConnected = false})
+      this.wifiConnected = false,
+      this.networkConnected = true,
+      final Set<String> spaceBlockedVideoIds = const {}})
       : _videos = videos,
         _downloadProgresses = downloadProgresses,
         _pausedVideoIds = pausedVideoIds,
+        _spaceBlockedVideoIds = spaceBlockedVideoIds,
         super._();
 
   @override
@@ -259,6 +282,18 @@ class _DownloadManagerState extends DownloadManagerState {
   @override
   @JsonKey()
   final bool wifiConnected;
+  @override
+  @JsonKey()
+  final bool networkConnected;
+  final Set<String> _spaceBlockedVideoIds;
+  @override
+  @JsonKey()
+  Set<String> get spaceBlockedVideoIds {
+    if (_spaceBlockedVideoIds is EqualUnmodifiableSetView)
+      return _spaceBlockedVideoIds;
+    // ignore: implicit_dynamic_type
+    return EqualUnmodifiableSetView(_spaceBlockedVideoIds);
+  }
 
   /// Create a copy of DownloadManagerState
   /// with the given fields replaced by the non-null parameter values.
@@ -296,7 +331,11 @@ class _DownloadManagerState extends DownloadManagerState {
             (identical(other.waitingForWifi, waitingForWifi) ||
                 other.waitingForWifi == waitingForWifi) &&
             (identical(other.wifiConnected, wifiConnected) ||
-                other.wifiConnected == wifiConnected));
+                other.wifiConnected == wifiConnected) &&
+            (identical(other.networkConnected, networkConnected) ||
+                other.networkConnected == networkConnected) &&
+            const DeepCollectionEquality()
+                .equals(other._spaceBlockedVideoIds, _spaceBlockedVideoIds));
   }
 
   @override
@@ -313,11 +352,13 @@ class _DownloadManagerState extends DownloadManagerState {
       const DeepCollectionEquality().hash(_pausedVideoIds),
       wifiOnly,
       waitingForWifi,
-      wifiConnected);
+      wifiConnected,
+      networkConnected,
+      const DeepCollectionEquality().hash(_spaceBlockedVideoIds));
 
   @override
   String toString() {
-    return 'DownloadManagerState(folderUri: $folderUri, folderName: $folderName, usePrivateStorage: $usePrivateStorage, audioFolderUri: $audioFolderUri, audioFolderName: $audioFolderName, usePrivateAudioStorage: $usePrivateAudioStorage, videos: $videos, downloadProgresses: $downloadProgresses, pausedVideoIds: $pausedVideoIds, wifiOnly: $wifiOnly, waitingForWifi: $waitingForWifi, wifiConnected: $wifiConnected)';
+    return 'DownloadManagerState(folderUri: $folderUri, folderName: $folderName, usePrivateStorage: $usePrivateStorage, audioFolderUri: $audioFolderUri, audioFolderName: $audioFolderName, usePrivateAudioStorage: $usePrivateAudioStorage, videos: $videos, downloadProgresses: $downloadProgresses, pausedVideoIds: $pausedVideoIds, wifiOnly: $wifiOnly, waitingForWifi: $waitingForWifi, wifiConnected: $wifiConnected, networkConnected: $networkConnected, spaceBlockedVideoIds: $spaceBlockedVideoIds)';
   }
 }
 
@@ -341,7 +382,9 @@ abstract mixin class _$DownloadManagerStateCopyWith<$Res>
       Set<String> pausedVideoIds,
       bool wifiOnly,
       bool waitingForWifi,
-      bool wifiConnected});
+      bool wifiConnected,
+      bool networkConnected,
+      Set<String> spaceBlockedVideoIds});
 }
 
 /// @nodoc
@@ -369,6 +412,8 @@ class __$DownloadManagerStateCopyWithImpl<$Res>
     Object? wifiOnly = null,
     Object? waitingForWifi = null,
     Object? wifiConnected = null,
+    Object? networkConnected = null,
+    Object? spaceBlockedVideoIds = null,
   }) {
     return _then(_DownloadManagerState(
       folderUri: freezed == folderUri
@@ -419,6 +464,14 @@ class __$DownloadManagerStateCopyWithImpl<$Res>
           ? _self.wifiConnected
           : wifiConnected // ignore: cast_nullable_to_non_nullable
               as bool,
+      networkConnected: null == networkConnected
+          ? _self.networkConnected
+          : networkConnected // ignore: cast_nullable_to_non_nullable
+              as bool,
+      spaceBlockedVideoIds: null == spaceBlockedVideoIds
+          ? _self._spaceBlockedVideoIds
+          : spaceBlockedVideoIds // ignore: cast_nullable_to_non_nullable
+              as Set<String>,
     ));
   }
 }
