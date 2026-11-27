@@ -7,6 +7,7 @@ import 'package:dio/dio.dart';
 
 import '../../globals.dart';
 import '../../network/network_proxy.dart';
+import '../../network/nerdvpn_origin.dart';
 import '../../player/models/backend_playback.dart';
 import '../../service.dart';
 import '../../settings/models/db/server.dart';
@@ -39,8 +40,12 @@ class DownloadRecovery {
   DownloadRecovery._(
       this._client, this._database, this._owner, this._token, this._route);
 
-  static String _cooldownKey(Server server) =>
-      'download-cooldown-${sha256.convert(utf8.encode(Uri.parse(server.url).origin))}';
+  static String _cooldownKey(Server server) {
+    // Legacy NerdVPN entries could be either a 429 or an outage.
+    final prefix =
+        isNerdVpnUrl(server.url) ? 'download-outage' : 'download-cooldown';
+    return '$prefix-${sha256.convert(utf8.encode(Uri.parse(server.url).origin))}';
+  }
 
   static DateTime? retryAtFor(Service client, IDbClient owner, Server server) {
     final key = _cooldownKey(server);
@@ -99,6 +104,10 @@ class DownloadRecovery {
       } catch (error) {
         checkCurrent();
         final response = _responseError(error);
+        if (response?.isRateLimited == true &&
+            isNerdVpnUrl(_route.server.url)) {
+          rethrow;
+        }
         if (response != null && response.isGatewayAccessFailure) {
           final temporary = const {'rate_limited', 'unavailable'}
               .contains(response.errorCode);

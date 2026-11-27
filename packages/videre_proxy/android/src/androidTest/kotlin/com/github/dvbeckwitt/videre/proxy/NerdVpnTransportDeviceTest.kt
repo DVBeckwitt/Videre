@@ -182,28 +182,34 @@ class NerdVpnTransportDeviceTest {
         assertEquals(1, sent)
     }
 
-    @Test fun rateLimitedResponseUsesTheServerHttpDateDeadline() {
+    @Test fun rateLimitedResponseAndHeaderReachCallerAndNextRequestCanProceedImmediately() {
         val deadline = (System.currentTimeMillis() / 1000 + 120) * 1000
         val header = SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss 'GMT'", Locale.US)
             .apply { timeZone = TimeZone.getTimeZone("GMT") }.format(Date(deadline))
-        var sent = 0
-        val failure = assertThrows(NerdVpnAccessRequired::class.java) {
+        for (refreshFirst in listOf(false, true)) {
+            val before = NerdVpnAccess.status(account)
+            var sent = 0
             runInterceptors(request()) {
                 sent++
-                response(it, 429, "rate_limited").newBuilder().header("Retry-After", header).build()
+                if (refreshFirst && sent == 1) {
+                    rotateKeyForCurrentIdentity()
+                    response(it, 401, "invalid_credentials")
+                } else response(it, 429, "rate_limited").newBuilder().header("Retry-After", header).build()
+            }.use {
+                assertEquals(429, it.code)
+                assertEquals(header, it.header("Retry-After"))
+                assertTrue(it.body!!.string().contains("rate_limited"))
             }
-        }
-        assertEquals("unavailable", failure.state)
-        val record = EncryptedNerdVpnStore(target).read(account)!!
-        assertEquals(fixtureKey, record.key)
-        assertTrue(record.retryAt!! >= deadline)
-        assertThrows(NerdVpnAccessRequired::class.java) {
+            val after = NerdVpnAccess.status(account)
+            assertEquals("ready", after["state"])
+            assertNull(after["retryAt"])
+            if (!refreshFirst) assertEquals(before, after)
             runInterceptors(request()) {
                 sent++
                 response(it, 200)
-            }
+            }.use { assertEquals(200, it.code) }
+            assertEquals(if (refreshFirst) 3 else 2, sent)
         }
-        assertEquals(1, sent)
     }
 
     private fun request() = prepareGatewayRequest(Request.Builder()

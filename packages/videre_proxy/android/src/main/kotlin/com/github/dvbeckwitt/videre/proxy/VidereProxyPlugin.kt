@@ -205,7 +205,7 @@ class VidereProxyPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
                         "clear" -> NerdVpnAccess.clear(context)
                         "recover" -> NerdVpnAccess.recover(context, call.argument("error"),
                             call.argument<Int>("statusCode") ?: 0,
-                            call.argument<Any>("retryAfter")?.toString()?.toLongOrNull(), call.argument("failedKey"),
+                            nerdVpnRetryAfterSeconds(call.argument<Any>("retryAfter")?.toString()), call.argument("failedKey"),
                             call.argument<Number>("revision")?.toLong(), call.argument<Boolean>("retry") ?: true,
                             call.argument<Number>("failedIntent")?.toLong())
                         else -> { result.notImplemented(); return@setMethodCallHandler }

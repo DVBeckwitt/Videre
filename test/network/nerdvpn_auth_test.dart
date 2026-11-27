@@ -214,7 +214,7 @@ void main() {
         'fresh-account-token');
   });
 
-  test('a rate-limited native exchange pauses subsequent browser sign-in',
+  test('a rate-limited native exchange allows the next explicit sign-in',
       () async {
     final now = DateTime.now().toUtc();
     service = api = Service(httpClient: client, now: () => now);
@@ -233,9 +233,8 @@ void main() {
       if (call.method == 'beginAuth') return {'intent': ++intent};
       if (call.method == 'recover') {
         recoveries.add(Map<String, dynamic>.from(call.arguments as Map));
-        accessStatus = {
-          'state': 'unavailable',
-          'revision': 1,
+        return {
+          ...accessStatus,
           'retryAt': now.add(const Duration(seconds: 17)).toIso8601String(),
         };
       }
@@ -243,21 +242,22 @@ void main() {
     });
 
     final retryAt = now.add(const Duration(seconds: 17));
-    for (final expected in [
-      NerdVpnSignInProblem.rateLimited,
-      NerdVpnSignInProblem.cooldown,
-    ]) {
+    for (var attempt = 0; attempt < 2; attempt++) {
       await expectLater(
           api.logIn(_account.accountId),
           throwsA(isA<NerdVpnSignInFailed>()
-              .having((e) => e.problem, 'reason', expected)
+              .having(
+                  (e) => e.problem, 'reason', NerdVpnSignInProblem.rateLimited)
               .having((e) => e.retryAt, 'retry time', retryAt)));
     }
-    expect(recoveries.single['error'], 'rate_limited');
-    expect(recoveries.single['retryAfter'], '17');
-    expect(recoveries.single['revision'], 0);
-    expect(recoveries.single['retry'], isFalse);
-    expect(browserOpens, 1);
+    expect(recoveries, hasLength(2));
+    for (final recovery in recoveries) {
+      expect(recovery['error'], 'rate_limited');
+      expect(recovery['retryAfter'], '17');
+      expect(recovery['revision'], 0);
+      expect(recovery['retry'], isFalse);
+    }
+    expect(browserOpens, 2);
     expect(requests, isEmpty);
     expect(database.getAccount(_account.accountId)!.authToken, isNull);
   });

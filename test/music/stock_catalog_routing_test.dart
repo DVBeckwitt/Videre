@@ -574,6 +574,28 @@ void main() {
     expect(calls.single.origin, instance);
   });
 
+  test('NerdVPN release retry reaches the server before Retry-After expires',
+      () async {
+    const server = Server(id: 'nerdvpn', url: 'https://invidious.nerdvpn.de');
+    await db.useServer(server);
+    respond = (request) async => calls.length == 1
+        ? http.Response('{"error":"rate_limited"}', 429,
+            request: request,
+            headers: {'content-type': 'application/json', 'retry-after': '1'})
+        : json(request, {'playlists': []});
+    waitForRetry =
+        (_) async => fail('A server rate limit must end this attempt');
+    final music = InvidiousMusicCatalogService(api: api);
+    await expectLater(
+        music.getArtistReleases(channelId),
+        throwsA(isA<InvidiousServiceError>().having(
+            (e) => e.retryAfter, 'server advice', const Duration(seconds: 1))));
+    expect(calls, hasLength(1));
+    expect((await music.getArtistReleases(channelId)).releases, isEmpty);
+    expect(calls, hasLength(2));
+    expect(calls.first, calls.last);
+  });
+
   test('different release callers share the selected instance cooldown',
       () async {
     final success = respond;

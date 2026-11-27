@@ -1122,7 +1122,7 @@ void main() {
         expect(raw.requests.single.sent, isFalse);
       });
 
-      test('records gateway cooldowns and returns the original response',
+      test('returns the original response and records only service outages',
           () async {
         for (final entry in [(429, 'rate_limited'), (503, 'unavailable')]) {
           final raw = _Client([failure(entry.$2, entry.$1, retryAfter: '12')]);
@@ -1149,7 +1149,8 @@ void main() {
           expect(await response.transform(utf8.decoder).join(),
               jsonEncode({'error': entry.$2}));
           expect(response.statusCode, entry.$1);
-          expect(observed, isTrue);
+          expect(response.headers.value('retry-after'), '12');
+          expect(observed, entry.$1 == 503);
           expect(raw.requests, hasLength(1));
         }
       });

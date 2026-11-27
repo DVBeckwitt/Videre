@@ -153,12 +153,12 @@ internal class NerdVpnAccessManager(
                 record = record.copy(key = manualKey, state = "ready", revision = record.revision + 1)
                 store.write(context, record)
             }
-            if (record.state == "proxyRequired") {
+            if (record.state == "proxyRequired" || record.state == "rateLimited") {
                 record = requestKey(context, record)
             } else if (record.state == "unavailable" && (record.retryAt ?: 0) <= now()) {
-                record = if (record.key != null) record.copy(state = "ready", retryAt = null)
-                    else requestKey(context, record)
-                store.write(context, record)
+                record = if (record.key != null) {
+                    record.copy(state = "ready", retryAt = null).also { store.write(context, it) }
+                } else requestKey(context, record)
             } else if (record.state == "waiting" && record.availableAt != null && record.availableAt <= now() &&
                 (record.retryAt ?: 0) <= now()) {
                 record = requestKey(context, record)
@@ -178,6 +178,14 @@ internal class NerdVpnAccessManager(
         val keyError = error in setOf("credentials_required", "invalid_credentials") && statusCode == 401
         val superseded = revision != null && revision != record.revision ||
             failedKey != null && record.key != null && failedKey != record.key
+        // An outage can advance the status revision while the same key is in
+        // flight. A confirmed rejection still invalidates that exact credential.
+        if (keyError && record.state == "unavailable" && failedKey != null && failedKey == record.key &&
+            failedIntent == record.credentialIntent && (record.retryAt ?: 0) > now()) {
+            record = record.copy(key = null, revision = record.revision + 1)
+            store.write(context, record)
+            return@synchronized status(record) + ("retryAllowed" to false)
+        }
         if (keyError && superseded)
             return@synchronized status(record) + ("retryAllowed" to (record.state == "ready" && retry))
         if (keyError) {
@@ -186,12 +194,26 @@ internal class NerdVpnAccessManager(
                 store.write(context, record)
             } else if (record.state !in setOf("waiting", "disabled", "denied", "signInRequired") &&
                 (record.retryAt ?: 0) <= now()) {
+                // Persist the rejection before fetching. A failed refresh or process
+                // restart must never restore the key that the server just rejected.
+                record = record.copy(key = null, state = "unavailable", retryAt = null)
+                store.write(context, record)
                 record = requestKey(context, record)
             }
         } else if (error == "access_denied" && statusCode == 403) {
             record = record.copy(state = "denied", retryAt = null, revision = record.revision + 1)
             store.write(context, record)
-        } else if ((error == "rate_limited" && statusCode == 429) || (error == "unavailable" && statusCode == 503)) {
+        } else if (statusCode == 429) {
+            // A sign-in caller may display the server's advice for this attempt.
+            // Nothing is written to the account, including its credential revision.
+            val advice = advisedRetryTime(retryAfterSeconds)
+            return@synchronized buildMap {
+                putAll(status(record))
+                remove("retryAt")
+                if (advice != null) put("retryAt", nerdVpnTimestamp(advice))
+                put("retryAllowed", false)
+            }
+        } else if (error == "unavailable" && statusCode == 503) {
             val state = if (record.state in setOf("waiting", "disabled", "denied", "signInRequired", "missing"))
                 record.state else "unavailable"
             record = record.copy(state = state, retryAt = maxOf(record.retryAt ?: 0, retryTime(retryAfterSeconds)),
@@ -199,6 +221,11 @@ internal class NerdVpnAccessManager(
             store.write(context, record)
         }
         status(record) + ("retryAllowed" to (keyError && retry && record.state == "ready"))
+    }
+
+    private fun advisedRetryTime(seconds: Long?): Long? {
+        val time = now()
+        return seconds?.takeIf { it in 0..(Long.MAX_VALUE - time) / 1000 }?.let { time + it * 1000 }
     }
 
     private fun retryTime(seconds: Long?): Long {
@@ -213,6 +240,17 @@ internal class NerdVpnAccessManager(
             val response = try { fetch(context, token) } catch (error: IOException) {
                 NerdVpnKeyResult(0, error = if (error is NerdVpnAccessRequired && error.state == "proxyRequired")
                     error.state else null)
+            }
+            if (response.statusCode == 429) {
+                // A key lookup may be retried by the next operation. Preserve any
+                // independently confirmed access or eligibility constraints.
+                val saved = when {
+                    current.state in setOf("ready", "waiting", "disabled", "denied", "signInRequired") -> current
+                    else -> current.copy(state = if (current.key == null) "rateLimited" else "ready",
+                        retryAt = null, revision = current.revision + 1)
+                }
+                if (saved != current) store.write(context, saved)
+                return saved.copy(state = "rateLimited", retryAt = advisedRetryTime(response.retryAfterSeconds))
             }
             val next = current.copy(revision = current.revision + 1, availableAt = null, retryAt = null)
             when {

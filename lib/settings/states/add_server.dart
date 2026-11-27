@@ -241,7 +241,10 @@ class AddServerCubit extends Cubit<AddServerState> {
               : await service.authenticateNerdVpn(server);
         } on NerdVpnSignInFailed catch (error) {
           final deadline = error.retryAt;
-          if (!isClosed && nerdVpn && deadline != null) {
+          if (!isClosed &&
+              nerdVpn &&
+              error.problem == NerdVpnSignInProblem.serviceUnavailable &&
+              deadline != null) {
             _signInRetryTimes[origin] = deadline;
           }
           rethrow;

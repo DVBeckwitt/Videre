@@ -333,7 +333,7 @@ class Service {
     if (beforeRequest != null) await beforeRequest();
     final client = _instanceReader(beforeRequest);
     var response = await client.get(request.uri, headers: request.headers);
-    if (response.statusCode == 429) {
+    if (response.statusCode == 429 && !isNerdVpnUrl(request.uri.toString())) {
       final delay = _retryAfter(response);
       // A long server cooldown belongs in the UI, not a hidden retry loop.
       if (delay != null && delay <= const Duration(seconds: 2)) {
@@ -1322,7 +1322,7 @@ class Service {
         isBackendRetryable(error)) {
       return null;
     }
-    final delay = error.retryAfter;
+    final delay = error.localRetryAfterFor(request.uri.toString());
     if (delay != null) {
       return delay <= const Duration(seconds: 2) ? delay : null;
     }
@@ -3855,7 +3855,8 @@ class Service {
       if (NerdVpnAccess.supports(account)) {
         account = await _migrateNerdVpnKey(account);
         if (owner is SembastSqfDb && !owner.isProfileAvailable) return;
-        if (!(await NerdVpnAccess.instance.status(account)).ready) return;
+        final access = await NerdVpnAccess.instance.status(account);
+        if (!access.ready && !(force && access.state == 'rateLimited')) return;
       }
       if (owner is SembastSqfDb && !owner.isProfileAvailable) return;
       final worker = _watchSynchronizer(account, database: owner);

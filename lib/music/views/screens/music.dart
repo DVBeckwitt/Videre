@@ -1738,7 +1738,9 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
     } catch (error) {
       if (!current()) return;
       listing.failed = true;
-      final delay = error is InvidiousServiceError ? error.retryAfter : null;
+      final delay = error is InvidiousServiceError
+          ? error.localRetryAfterFor(session.server?.url)
+          : null;
       if (delay != null && delay > Duration.zero) {
         _artistReleaseCooldown?.cancel();
         _artistReleaseCooldown = Timer(delay, () {

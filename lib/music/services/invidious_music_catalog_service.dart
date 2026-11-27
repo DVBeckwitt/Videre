@@ -1417,7 +1417,7 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
             continuation: continuation);
       } on InvidiousServiceError catch (error) {
         await checkSession();
-        final delay = error.retryAfter;
+        final delay = error.localRetryAfterFor(server.url);
         if (delay != null && delay > Duration.zero) {
           final until = _now().add(delay);
           if (_artistReleaseDeadline(server)?.isAfter(until) != true) {

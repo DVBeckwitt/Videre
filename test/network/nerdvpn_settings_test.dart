@@ -7,6 +7,7 @@ import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' as app;
 import 'package:clipious/network/gateway_context.dart';
+import 'package:clipious/network/nerdvpn_access.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/states/add_server.dart';
 import 'package:clipious/settings/states/server_settings.dart';
@@ -363,6 +364,28 @@ void main() {
         findsOneWidget);
     expect(find.text('Copy to clipboard'), findsOneWidget);
     expect(find.byType(AlertDialog), findsOneWidget);
+  });
+
+  testWidgets('a refused key check shows its advice and leaves Check enabled',
+      (tester) async {
+    nativeStatus = {'state': 'ready'};
+    var checks = 0;
+    await showPanel(tester, onCheck: () async {
+      if (++checks == 1) {
+        throw NerdVpnAccessRequired('rateLimited',
+            retryAt: DateTime.utc(2031, 2, 19));
+      }
+    });
+    final button = find.text('Check again');
+    await tester.tap(button);
+    await tester.pumpAndSettle();
+    final locals = AppLocalizations.of(tester.element(button))!;
+    expect(find.text(locals.instanceRateLimitedHelp), findsOneWidget);
+    expect(find.text(locals.nerdVpnAccessReady), findsOneWidget);
+    await tester.tap(button);
+    await tester.pumpAndSettle();
+    expect(checks, 2);
+    expect(find.text(locals.instanceRateLimitedHelp), findsNothing);
   });
 
   testWidgets('onion access without SOCKS explains how to enable Tor routing',

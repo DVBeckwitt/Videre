@@ -3,7 +3,12 @@ package com.github.dvbeckwitt.videre.proxy
 import android.content.Context
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import android.util.Base64
 import java.io.IOException
+import java.security.KeyStore
+import javax.crypto.Cipher
+import javax.crypto.SecretKey
+import org.json.JSONObject
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import org.junit.After
 import org.junit.Assert.*
@@ -64,6 +69,36 @@ class NerdVpnStorageDeviceTest {
         assertNull(reopened.read(first)?.key)
         assertNull(reopened.read(first)?.token)
         assertEquals("second-fixture-token", reopened.read(second)?.token)
+    }
+
+    @Test fun legacyMixedCooldownReleasesTheKeyAndKeepsWaitingAccountsPending() {
+        val store = EncryptedNerdVpnStore(target)
+        store.write(first, fixture)
+        val keys = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+        val secret = keys.getKey("videre_nerdvpn_access_v1", null) as SecretKey
+        for (oldState in listOf("unavailable", "waiting")) {
+            val json = JSONObject().put("state", oldState).put("revision", fixture.revision)
+                .put("token", fixture.token).put("retryAt", Long.MAX_VALUE)
+                .put("key", fixture.key.takeIf { oldState == "unavailable" })
+                .put("availableAt", fixture.retryAt.takeIf { oldState == "waiting" })
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply {
+                init(Cipher.ENCRYPT_MODE, secret)
+                updateAAD("${first.key}|${first.origin}".toByteArray(Charsets.UTF_8))
+            }
+            val bytes = byteArrayOf(1) + cipher.iv + cipher.doFinal(json.toString().toByteArray(Charsets.UTF_8))
+            assertTrue(preferences.edit().putString("account_${first.key}", Base64.encodeToString(bytes, Base64.NO_WRAP)).commit())
+            val reopened = store.read(first)!!
+            assertNull(reopened.retryAt)
+            assertEquals(fixture.token, reopened.token)
+            assertEquals(fixture.revision, reopened.revision)
+            if (oldState == "waiting") {
+                assertEquals("waiting", reopened.state)
+                assertEquals(fixture.retryAt, reopened.availableAt)
+            } else {
+                assertEquals("ready", reopened.state)
+                assertEquals(fixture.key, reopened.key)
+            }
+        }
     }
 
     @Test fun accountOriginBindingRejectsMovedOrModifiedCiphertext() {

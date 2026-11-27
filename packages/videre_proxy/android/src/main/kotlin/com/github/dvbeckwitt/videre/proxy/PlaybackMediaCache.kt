@@ -104,7 +104,7 @@ object PlaybackMediaCache {
         val rendition = downloaded?.let { DownloadedRendition(context.applicationContext, checkNotNull(identity), it) }
         val admittedRequest = admittedRequest(request, values?.get("adaptiveVod"))
         val gateway = companions?.gateway ?: identity?.gateway
-        val admission = ReaderAdmission(identity?.profileKey, gateway)
+        val admission = ReaderAdmission(identity?.profileKey, gateway, networkSource = downloaded == null)
         val metadata = values?.get("musicSong")
         val proof = if (identity != null && downloaded == null && companions == null &&
             admittedRequest == PlaybackCacheRequest.PROGRESSIVE && metadata != null) {
@@ -246,9 +246,10 @@ object PlaybackMediaCache {
         if (request == PlaybackCacheRequest.ADAPTIVE_MEDIA && adaptiveVod != true)
             PlaybackCacheRequest.ADAPTIVE_UNTYPED else request
 
-    private fun requireLocalAuthorization(context: GatewayContext?) {
+    private fun requireLocalAuthorization(context: GatewayContext?, deferKeyLookup: Boolean = false) {
         if (context != null && isNerdVpnOrigin(context.origin)) {
             val state = NerdVpnAccess.status(context)["state"] as? String
+            if (deferKeyLookup && state == "rateLimited") return
             if (state != "ready") throw NerdVpnAccessRequired(state ?: "missing")
         }
     }
@@ -328,13 +329,13 @@ object PlaybackMediaCache {
             "usedBytes" to cacheLocked().cacheSpace)
     }
 
-    private class ReaderAdmission(val profileKey: String?, val gateway: GatewayContext?) {
+    private class ReaderAdmission(val profileKey: String?, val gateway: GatewayContext?, networkSource: Boolean = false) {
         val accountKey = gateway?.key
         private val gatewayRevision = gateway?.let(GatewaySessions::cacheAdmissionRevision)
         private val epochs: Triple<Long, Long, Long>
 
         init {
-            requireLocalAuthorization(gateway)
+            requireLocalAuthorization(gateway, deferKeyLookup = networkSource)
             epochs = synchronized(lock) {
                 if (transitioning) throw IOException("Playback cache is changing.")
                 currentEpochs()
@@ -425,7 +426,12 @@ object PlaybackMediaCache {
 
         @Synchronized override fun open(dataSpec: DataSpec): Long {
             admit()
-            requireLocalAuthorization(admission.gateway)
+            val gateway = admission.gateway
+            if (upstream != null && downloaded == null && gateway != null && isNerdVpnOrigin(gateway.origin)) {
+                // Opening a network-capable source can refresh a pending key,
+                // even when every requested byte subsequently comes from cache.
+                NerdVpnAccess.resolve(gateway, gateway.origin).error?.let { throw NerdVpnAccessRequired(it) }
+            } else requireLocalAuthorization(gateway)
             val uri = dataSpec.uri.toString()
             if (downloaded != null && uri != sourceUri) throw LocalDownloadUnavailable()
             if (cachedMusic != null && (uri != sourceUri || dataSpec.httpMethod != DataSpec.HTTP_METHOD_GET ||

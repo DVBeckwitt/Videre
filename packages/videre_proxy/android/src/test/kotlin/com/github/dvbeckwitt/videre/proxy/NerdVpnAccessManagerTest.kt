@@ -170,7 +170,7 @@ class NerdVpnAccessManagerTest {
     }
 
     @Test fun `a failed eligibility refresh retains pending approval and its saved date`() {
-        for (failureCode in listOf(0, 429, 503, 200)) {
+        for (failureCode in listOf(0, 503, 200)) {
             val store = MemoryStore()
             var time = initialTime
             val availableAt = initialTime + 86_400_000
@@ -200,7 +200,7 @@ class NerdVpnAccessManagerTest {
         }
     }
 
-    @Test fun `reaching eligibility waits for a longer gateway cooldown before requesting a key`() {
+    @Test fun `reaching eligibility waits for a longer service outage before requesting a key`() {
         val store = MemoryStore()
         var time = initialTime
         var fetches = 0
@@ -211,7 +211,7 @@ class NerdVpnAccessManagerTest {
         }) { time }
         manager.authorize(account, token)
         val pending = manager.resolve(account, video)
-        manager.recover(account, "rate_limited", 429, 30, pending.apiKey,
+        manager.recover(account, "unavailable", 503, 30, pending.apiKey,
             pending.revision, failedIntent = pending.intent)
         time = initialTime + 10_000
         assertEquals("waiting", manager.resolve(account, video).error)
@@ -296,23 +296,120 @@ class NerdVpnAccessManagerTest {
         assertEquals(2, fetches)
     }
 
-    @Test fun `cooldown retains credentials across restart and honors Retry-After`() {
-        for ((code, gatewayError) in listOf(429 to "rate_limited", 503 to "unavailable")) {
+    @Test fun `rate limit leaves access and revision unchanged across restart`() {
+        for (delay in listOf(null, 0L, 17L)) {
             val store = MemoryStore()
-            store.write(account, NerdVpnRecord(token = token, key = originalKey, state = "ready", revision = 9))
-            var time = initialTime
-            val manager = NerdVpnAccessManager(store, { _, _ -> error("Cooldown must not retrieve a key") }) { time }
-            val response = manager.recover(account, gatewayError, code, 17, originalKey, 9)
-            assertEquals(nerdVpnTimestamp(time + 17_000), response["retryAt"])
-            assertEquals(originalKey, store.read(account)?.key)
-            assertEquals(token, store.read(account)?.token)
-            val restarted = NerdVpnAccessManager(store, { _, _ -> error("A usable key is already stored") }) { time }
-            time += 16_999
-            assertEquals("unavailable", restarted.resolve(account, video).error)
-            assertEquals("unavailable", restarted.check(account)["state"])
-            time++
-            assertEquals(originalKey, restarted.resolve(account, video).apiKey)
+            val manager = manager(store)
+            manager.setKey(account, originalKey)
+            val before = store.read(account)!!
+            val result = manager.recover(account, "rate_limited", 429, delay, originalKey, before.revision)
+            assertEquals(delay?.let { nerdVpnTimestamp(initialTime + it * 1000) }, result["retryAt"])
+            assertEquals(false, result["retryAllowed"])
+            assertEquals(before, store.read(account))
+            assertEquals(originalKey, manager(store).resolve(account, video).apiKey)
         }
+    }
+
+    @Test fun `throttled manual check cannot supersede an in-flight credential rejection`() {
+        val store = MemoryStore()
+        var fetches = 0
+        val manager = manager(store) { _, _ ->
+            when (++fetches) {
+                1 -> NerdVpnKeyResult(200, key = originalKey)
+                2 -> NerdVpnKeyResult(429, retryAfterSeconds = 15)
+                else -> NerdVpnKeyResult(200, key = replacementKey)
+            }
+        }
+        manager.authorize(account, token)
+        val attempt = manager.resolve(account, video)
+        val before = store.read(account)
+        val checked = manager.check(account)
+        assertEquals("rateLimited", checked["state"])
+        assertEquals(nerdVpnTimestamp(initialTime + 15_000), checked["retryAt"])
+        assertEquals(before, store.read(account))
+        manager.recover(account, "invalid_credentials", 401, null, attempt.apiKey, attempt.revision,
+            failedIntent = attempt.intent)
+        assertEquals(replacementKey, manager.resolve(account, video).apiKey)
+        assertEquals(3, fetches)
+    }
+
+    @Test fun `concurrent outage cannot restore a rejected key when the outage expires`() {
+        val store = MemoryStore()
+        var time = initialTime
+        var fetches = 0
+        val manager = NerdVpnAccessManager(store, { _, _ ->
+            NerdVpnKeyResult(200, key = if (++fetches == 1) originalKey else replacementKey)
+        }) { time }
+        manager.authorize(account, token)
+        val attempt = manager.resolve(account, video)
+        manager.recover(account, "unavailable", 503, 60, attempt.apiKey, attempt.revision, failedIntent = attempt.intent)
+        manager.recover(account, "invalid_credentials", 401, null, attempt.apiKey, attempt.revision, failedIntent = attempt.intent)
+        assertNull(store.read(account)?.key)
+        assertEquals(1, fetches)
+        time += 60_000
+        assertEquals(replacementKey, manager.resolve(account, video).apiKey)
+        assertEquals(2, fetches)
+    }
+
+    @Test fun `rejected key stays discarded across a failed refresh and restart`() {
+        for (code in listOf(429, 503)) {
+            val store = MemoryStore()
+            val initial = manager(store) { _, _ -> NerdVpnKeyResult(200, key = originalKey) }
+            initial.authorize(account, token)
+            val attempt = initial.resolve(account, video)
+            var time = initialTime
+            val failed = NerdVpnAccessManager(store, { _, _ ->
+                assertNull(store.read(account)?.key)
+                NerdVpnKeyResult(code, retryAfterSeconds = 60)
+            }) { time }
+            val result = failed.recover(account, "invalid_credentials", 401, null, attempt.apiKey, attempt.revision)
+            assertEquals(if (code == 429) "rateLimited" else "unavailable", result["state"])
+            assertNull(store.read(account)?.key)
+            val restarted = NerdVpnAccessManager(store, { _, savedToken ->
+                assertEquals(token, savedToken)
+                NerdVpnKeyResult(200, key = replacementKey)
+            }) { time }
+            if (code == 503) {
+                assertEquals("unavailable", restarted.resolve(account, video).error)
+                time += 60_000
+            }
+            assertEquals(replacementKey, restarted.resolve(account, video).apiKey)
+        }
+    }
+
+    @Test fun `rate limited eligibility check retains real approval date and permits explicit recheck`() {
+        val store = MemoryStore()
+        var fetches = 0
+        val manager = manager(store) { _, _ ->
+            when (++fetches) {
+                1 -> NerdVpnKeyResult(403, "not_yet_eligible", availableAt = initialTime + 60_000)
+                2 -> NerdVpnKeyResult(429, retryAfterSeconds = 120)
+                else -> NerdVpnKeyResult(200, key = replacementKey)
+            }
+        }
+        manager.authorize(account, token)
+        assertEquals("rateLimited", manager.check(account)["state"])
+        assertEquals("waiting", manager.resolve(account, video).error)
+        assertNull(manager.status(account)["retryAt"])
+        assertEquals(2, fetches)
+        assertEquals("ready", manager.check(account)["state"])
+        assertEquals(3, fetches)
+    }
+
+    @Test fun `service outage retains credentials across restart and honors Retry-After`() {
+        val store = MemoryStore()
+        store.write(account, NerdVpnRecord(token = token, key = originalKey, state = "ready", revision = 9))
+        var time = initialTime
+        val manager = NerdVpnAccessManager(store, { _, _ -> error("A usable key is already stored") }) { time }
+        val response = manager.recover(account, "unavailable", 503, 17, originalKey, 9)
+        assertEquals(nerdVpnTimestamp(time + 17_000), response["retryAt"])
+        assertEquals(token, store.read(account)?.token)
+        val restarted = NerdVpnAccessManager(store, { _, _ -> error("A usable key is already stored") }) { time }
+        time += 16_999
+        assertEquals("unavailable", restarted.resolve(account, video).error)
+        assertEquals("unavailable", restarted.check(account)["state"])
+        time++
+        assertEquals(originalKey, restarted.resolve(account, video).apiKey)
     }
 
     @Test fun `ambiguous token rejection preserves login and pauses requests for sign-in`() {
@@ -392,7 +489,7 @@ class NerdVpnAccessManagerTest {
             assertNull(blocked["retryAt"])
             if (recover) assertEquals(false, blocked["retryAllowed"])
             assertEquals(token, store.read(onionAccount)?.token)
-            assertEquals(originalKey, store.read(onionAccount)?.key)
+            assertEquals(if (recover) null else originalKey, store.read(onionAccount)?.key)
             assertEquals(3L, store.read(onionAccount)?.credentialIntent)
             proxyEnabled = true
             assertEquals(replacementKey, manager.resolve(onionAccount, onionVideo).apiKey)
@@ -484,7 +581,7 @@ class NerdVpnAccessManagerTest {
         assertEquals(2, fetches)
     }
 
-    @Test fun `late cooldown after key rotation is retained and later waits extend the deadline`() {
+    @Test fun `late rate limit does not pause a rotated key but a service outage does`() {
         val store = MemoryStore()
         store.write(account, NerdVpnRecord(token = token, key = originalKey, state = "ready",
             revision = 9, credentialIntent = 7))
@@ -495,11 +592,11 @@ class NerdVpnAccessManagerTest {
         assertEquals(replacementKey, manager.resolve(account, video).apiKey)
         manager.recover(account, "rate_limited", 429, 20, attempt.apiKey,
             attempt.revision, failedIntent = attempt.intent)
-        assertEquals("unavailable", store.read(account)?.state)
-        assertEquals(initialTime + 20_000, store.read(account)?.retryAt)
+        assertEquals("ready", store.read(account)?.state)
+        assertNull(store.read(account)?.retryAt)
         manager.recover(account, "rate_limited", 429, 5, attempt.apiKey,
             attempt.revision, failedIntent = attempt.intent)
-        assertEquals(initialTime + 20_000, store.read(account)?.retryAt)
+        assertNull(store.read(account)?.retryAt)
         manager.recover(account, "unavailable", 503, 40, attempt.apiKey,
             attempt.revision, failedIntent = attempt.intent)
         assertEquals(initialTime + 40_000, store.read(account)?.retryAt)
@@ -517,7 +614,7 @@ class NerdVpnAccessManagerTest {
             manager.recover(account, "rate_limited", 429, 20, originalKey, 3,
                 failedIntent = 7)
             assertEquals(state, store.read(account)?.state)
-            assertEquals(initialTime + 20_000, store.read(account)?.retryAt)
+            assertNull(store.read(account)?.retryAt)
             assertEquals(token, store.read(account)?.token)
         }
     }
@@ -698,7 +795,7 @@ class NerdVpnAccessManagerTest {
         val revision = store.read(account)!!.revision
         val header = "Thu, 19 Nov 2026 19:32:00 GMT"
         val delay = nerdVpnRetryAfterSeconds(header, clock)
-        manager.recover(account, "rate_limited", 429, delay, originalKey, revision)
+        manager.recover(account, "unavailable", 503, delay, originalKey, revision)
         clock += 119_000
         assertEquals("unavailable", manager.resolve(account, video).error)
         clock += 1000

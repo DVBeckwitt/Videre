@@ -168,18 +168,15 @@ void main() {
   });
 
   for (final protected in [false, true]) {
-    test('draft retry honors NerdVPN cooldown (protected: $protected)',
+    test('draft retry honors NerdVPN service outage (protected: $protected)',
         () async {
       var now = DateTime.utc(2031, 7, 12);
       await cubit.close();
       cubit = AddServerCubit(const AddServerState(), now: () => now)
         ..selectPublicInstance(_origin);
       final retryAt = now.add(const Duration(minutes: 20));
-      final error = NerdVpnSignInFailed(
-          protected
-              ? NerdVpnSignInProblem.serviceUnavailable
-              : NerdVpnSignInProblem.rateLimited,
-          retryAt);
+      final error =
+          NerdVpnSignInFailed(NerdVpnSignInProblem.serviceUnavailable, retryAt);
       api.signInError = error;
       cubit.setProtectedServer(protected);
       await expectLater(cubit.validateServer(), throwsA(same(error)));
@@ -209,7 +206,8 @@ void main() {
     });
   }
 
-  test('a draft cooldown stays with its origin and account draft', () async {
+  test('a rate limit permits a fresh sign-in on the same account draft',
+      () async {
     final failure = NerdVpnSignInFailed(NerdVpnSignInProblem.rateLimited,
         DateTime.now().toUtc().add(const Duration(minutes: 5)));
     api.signInError = failure;
@@ -220,10 +218,7 @@ void main() {
     cubit.setProtectedServer(true);
     expect((await cubit.validateServer())!.gatewayEnabled, isTrue);
     cubit.urlController.text = _origin;
-    await expectLater(
-        cubit.validateServer(),
-        throwsA(isA<NerdVpnSignInFailed>().having(
-            (e) => e.problem, 'reason', NerdVpnSignInProblem.cooldown)));
+    expect((await cubit.validateServer())!.authToken, 'test-account-token');
     await cubit.close();
     cubit = AddServerCubit(const AddServerState())
       ..selectPublicInstance(_origin);

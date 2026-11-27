@@ -34,6 +34,7 @@ class _NerdVpnAccessSettingsState extends State<NerdVpnAccessSettings> {
   late Future<NerdVpnAccessStatus> _status;
   bool _busy = false;
   bool _failed = false;
+  NerdVpnAccessRequired? _checkLimit;
 
   @override
   void initState() {
@@ -44,6 +45,7 @@ class _NerdVpnAccessSettingsState extends State<NerdVpnAccessSettings> {
   @override
   void didUpdateWidget(NerdVpnAccessSettings oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.account != widget.account) _checkLimit = null;
     if (oldWidget.account != widget.account ||
         (oldWidget.authenticating && !widget.authenticating)) {
       _status = NerdVpnAccess.instance.status(widget.account);
@@ -55,9 +57,20 @@ class _NerdVpnAccessSettingsState extends State<NerdVpnAccessSettings> {
     setState(() {
       _busy = true;
       _failed = false;
+      _checkLimit = null;
     });
     try {
       await action();
+    } on NerdVpnAccessRequired catch (error) {
+      if (mounted) {
+        setState(() {
+          if (error.state == 'rateLimited') {
+            _checkLimit = error;
+          } else {
+            _failed = true;
+          }
+        });
+      }
     } catch (_) {
       if (mounted) setState(() => _failed = true);
     } finally {
@@ -145,6 +158,8 @@ class _NerdVpnAccessSettingsState extends State<NerdVpnAccessSettings> {
         return locals.nerdVpnAccessDenied;
       case 'proxyRequired':
         return locals.nerdVpnProxyRequired;
+      case 'rateLimited':
+        return locals.instanceRateLimitedHelp;
       case 'unavailable':
         return locals.nerdVpnAccessUnavailable;
       default:
@@ -184,6 +199,10 @@ class _NerdVpnAccessSettingsState extends State<NerdVpnAccessSettings> {
                 const SizedBox(height: 8),
                 if (snapshot.hasError || _failed)
                   Text(locals.accountActionFailed),
+                if (_checkLimit != null && status?.state != 'rateLimited')
+                  Text(locals.instanceRateLimitedHelp),
+                if (_checkLimit?.retryAt case final deadline?)
+                  Text(locals.nerdVpnAccessRetryAt(_date(deadline))),
                 if (!snapshot.hasError && status != null)
                   Text(_description(status, locals)),
                 if (status?.retryAt != null)

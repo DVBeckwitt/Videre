@@ -188,7 +188,10 @@ class ServerSettingsCubit extends Cubit<ServerSettingsState> {
       }, changeAccount: true);
 
   Future<void> checkApiAccess() => _authenticate(() async {
-        await service.checkNerdVpnAccess(_savedServer());
+        final access = await service.checkNerdVpnAccess(_savedServer());
+        if (access.state == 'rateLimited') {
+          throw NerdVpnAccessRequired(access.state, retryAt: access.retryAt);
+        }
         final saved = _savedServer();
         if (!isClosed) emit(state.copyWith(server: saved));
         if (!app.isClosed && _isActive(saved)) app.setServer(saved);

@@ -1404,7 +1404,7 @@ void main() {
 
   for (final status in [429, 500]) {
     for (final cancelled in [false, true]) {
-      test('NerdVPN saved details retry $status with cancellation=$cancelled',
+      test('NerdVPN saved details handle $status with cancellation=$cancelled',
           () async {
         const account = Server(
           url: 'https://invidious.nerdvpn.de',
@@ -1447,10 +1447,24 @@ void main() {
           return _json(_song(), request);
         };
 
-        await catalog.loadSavedSongDetails([_songId],
+        Future<void> load() => catalog.loadSavedSongDetails([_songId],
             isCurrent: () => current,
             onResult: (_, details) async => results.add(details));
-        expect(waits, 1);
+        if (status == 429) {
+          await expectLater(
+              load(),
+              throwsA(isA<InvidiousServiceError>()
+                  .having((e) => e.statusCode, 'server status', 429)));
+          expect(waits, 0);
+          expect(requests, hasLength(1));
+          expect(results, isEmpty);
+          current = !cancelled;
+          await load();
+          expect(waits, 0);
+        } else {
+          await load();
+          expect(waits, 1);
+        }
         if (cancelled) {
           expect(requests, hasLength(1));
           expect(results, isEmpty);

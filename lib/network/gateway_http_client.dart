@@ -538,7 +538,7 @@ class _GatewayExchange {
         _isNerdVpn &&
         context.allows(uri) &&
         !const {'/api/v1/token', '/api/v1/auth/api_key'}.contains(uri.path) &&
-        const {401, 403, 429, 503}.contains(status) &&
+        const {401, 403, 503}.contains(status) &&
         (response.headers.value(HttpHeaders.contentTypeHeader) ?? '')
             .toLowerCase()
             .contains('json')) {
@@ -559,7 +559,6 @@ class _GatewayExchange {
         'credentials_required',
         'invalid_credentials',
         'access_denied',
-        'rate_limited',
         'unavailable'
       }.contains(error)) {
         final recovered = await client._recover(context.encoded,
@@ -570,6 +569,10 @@ class _GatewayExchange {
             revision: _apiKeyRevision,
             failedIntent: _apiKeyIntent,
             retry: !_recoveredKey);
+        if (recovered.state == 'rateLimited') {
+          throw NerdVpnAccessRequired('rateLimited',
+              retryAt: recovered.retryAt);
+        }
         if (!_recoveredKey &&
             recovered.retryAllowed &&
             const {'credentials_required', 'invalid_credentials'}

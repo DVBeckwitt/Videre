@@ -550,7 +550,8 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
       return false;
     }
     _preparationStopped = true;
-    if (error.retryAfter case final delay? when delay > Duration.zero) {
+    if (error.localRetryAfterFor(_app.state.server?.url) case final delay?
+        when delay > Duration.zero) {
       _retryNotBefore = DateTime.now().add(delay);
     }
     return true;

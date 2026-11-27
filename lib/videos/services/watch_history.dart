@@ -579,7 +579,7 @@ class WatchHistorySync {
           error is InvidiousServiceError &&
               (error.statusCode == 401 ||
                   error.statusCode == 403 ||
-                  error.responseWasHtml);
+                  (error.responseWasHtml && !error.isRateLimited));
       final permanent = error is InvidiousServiceError &&
           !auth &&
           error.statusCode != null &&

@@ -634,7 +634,8 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves>
               (error.retryAfter ?? Duration.zero) > Duration.zero ||
               error.isAuthenticationFailure ||
               error.isGatewayAccessFailure)) {
-        if (error.retryAfter case final delay? when delay > Duration.zero) {
+        if (error.localRetryAfterFor(widget.session.server?.url)
+            case final delay? when delay > Duration.zero) {
           _mixRetryAfter = DateTime.now().add(delay);
         }
         for (final pending in _dailyMixes) {

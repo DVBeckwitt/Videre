@@ -46,12 +46,18 @@ internal class EncryptedNerdVpnStore(context: Context) : NerdVpnStore {
             cipher.init(Cipher.DECRYPT_MODE, secretKey(), GCMParameterSpec(128, bytes.copyOfRange(1, 13)))
             cipher.updateAAD(aad(context))
             val json = JSONObject(String(cipher.doFinal(bytes.copyOfRange(13, bytes.size)), Charsets.UTF_8))
+            // Old retryAt values combined 429 and outages. An existing key can
+            // be checked by the next real request, including a manual key saved
+            // alongside a login token. Only a confirmed rejection invalidates it.
+            val key = json.optString("key").takeIf(::validNerdVpnKey)
+            val oldState = json.getString("state")
+            val legacyHold = json.has("retryAt") && oldState == "unavailable"
             return NerdVpnRecord(
                 token = json.optString("token").takeIf { it.isNotEmpty() },
-                key = json.optString("key").takeIf { validNerdVpnKey(it) },
-                state = json.getString("state"),
+                key = key,
+                state = if (legacyHold && key != null) "ready" else oldState,
                 availableAt = if (json.has("availableAt")) json.getLong("availableAt") else null,
-                retryAt = if (json.has("retryAt")) json.getLong("retryAt") else null,
+                retryAt = if (json.has("outageRetryAt")) json.getLong("outageRetryAt") else null,
                 revision = json.getLong("revision"),
                 intent = json.optLong("intent", 0),
                 credentialIntent = json.optLong("credentialIntent", 0),
@@ -67,7 +73,7 @@ internal class EncryptedNerdVpnStore(context: Context) : NerdVpnStore {
                 .put("intent", record.intent)
                 .put("credentialIntent", record.credentialIntent)
                 .put("token", record.token).put("key", record.key)
-                .put("availableAt", record.availableAt).put("retryAt", record.retryAt)
+                .put("availableAt", record.availableAt).put("outageRetryAt", record.retryAt)
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
             cipher.init(Cipher.ENCRYPT_MODE, secretKey())
             cipher.updateAAD(aad(context))

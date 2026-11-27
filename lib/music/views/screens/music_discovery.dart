@@ -805,7 +805,7 @@ class _DiscoverySongsState extends State<_DiscoverySongs>
 
   void _pause(InvidiousServiceError error) {
     _pauseFailure = error;
-    final delay = error.retryAfter;
+    final delay = error.localRetryAfterFor(_session?.app.server?.url);
     if (delay == null || delay <= Duration.zero) return;
     _cooldown?.cancel();
     _cooldown = Timer(delay, () {
@@ -1458,7 +1458,8 @@ class _MusicExploreState extends State<_MusicExplore>
     bool current() => visit == _visit && _same(session) && _visible;
     void stopBatch(InvidiousServiceError error) {
       if (!current() || !musicDiscoveryMustStop(error)) return;
-      if (error.retryAfter case final delay? when delay > Duration.zero) {
+      if (error.localRetryAfterFor(session.app.server?.url) case final delay?
+          when delay > Duration.zero) {
         _retryAfter = DateTime.now().add(delay);
       }
       for (final remaining in musicExploreGenres) {
@@ -1862,7 +1863,7 @@ class _FreshSelectionState extends State<_FreshSelection>
           _failure = error;
         }
         if (error is InvidiousServiceError && musicDiscoveryMustStop(error)) {
-          final delay = error.retryAfter;
+          final delay = error.localRetryAfterFor(session.app.server?.url);
           if (delay != null && delay > Duration.zero) {
             _cooldown?.cancel();
             _cooldown = Timer(delay, () {

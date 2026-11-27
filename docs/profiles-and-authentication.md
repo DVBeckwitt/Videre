@@ -181,7 +181,9 @@ the app does not restore a verifier from an incoming link.
 
 If the final token exchange fails, the message identifies a connection failure,
 a timeout, a rate limit (HTTP 429), or an unavailable service (HTTP 503).
-When a retry time is shown, wait until then and start a fresh sign-in.
+After a 429, Videre ends that attempt and displays the server's retry guidance
+when available. Pressing Retry starts a fresh request to the same server.
+A 503 service outage can still pause requests until its retry time.
 
 The HTTPS add-server screen also offers manual API-key setup. Copy the
 preferences address and open it yourself in a browser, sign in, enable API
@@ -263,8 +265,9 @@ Settings retain the server's eligibility date and disabled-access state. The
 account remains saved while its requests are paused. Users can check eligibility,
 enable access in NerdVPN preferences, or choose another instance. Concurrent key
 failures share one recovery attempt. Reads can retry once after recovery, while
-writes require an explicit retry. Gateway rate limits and temporary outages keep
-credentials and honor `Retry-After`. Ambiguous token errors prompt reauthorization
+writes require an explicit retry. A 429 leaves valid credentials usable on the next explicit
+request. A 503 outage can temporarily pause access. A rejected key stays
+discarded if its replacement lookup fails. Ambiguous token errors prompt reauthorization
 while preserving the saved login.
 
 Android acceptance against an isolated SOCKS/onion fixture verified PKCE

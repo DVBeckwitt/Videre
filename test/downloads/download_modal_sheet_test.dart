@@ -145,12 +145,13 @@ void main() {
 
   for (final (status, code) in [(429, 'rate_limited'), (503, 'unavailable')]) {
     test(
-        'NerdVPN $code preserves the advertised cooldown for a reopened picker',
+        'reopened NerdVPN picker retries a 429 and respects a 503 outage ($code)',
         () async {
       final preferred = selector.withSelection(
           account.copyWith(
               url: 'https://invidious.nerdvpn.de', backendSelector: selector),
           'a');
+      await db.upsertServer(preferred);
       await db.useServer(preferred);
       final limited = _Metadata(() async {
         throw InvidiousServiceError('Gateway temporarily unavailable',
@@ -164,19 +165,27 @@ void main() {
           const DownloadModalSheetState(), const Video(videoId: 'video'));
       addTearDown(first.close);
       await _loaded(first);
-      expect(limited.accounts, hasLength(1));
+      expect(limited.accounts.single!.url, preferred.url);
       final deadline = first.state.retryAt;
-      expect(deadline, isNotNull);
+      expect(deadline, status == 429 ? isNull : isNotNull);
 
-      final restarted = _Metadata(() async => _playable());
+      final restarted =
+          _Metadata(() async => Video(videoId: 'other', adaptiveFormats: [
+                _format(url: '${preferred.url}/stream'),
+                _format(
+                    type: 'video/webm',
+                    quality: '720p',
+                    resolution: '720p',
+                    url: '${preferred.url}/stream'),
+              ]));
       service = restarted;
       final second = DownloadModalSheetCubit(
           const DownloadModalSheetState(), const Video(videoId: 'other'));
       addTearDown(second.close);
       await _loaded(second);
-      expect(restarted.accounts, isEmpty);
+      expect(restarted.accounts, hasLength(status == 429 ? 1 : 0));
       expect(second.state.retryAt, deadline);
-      expect(second.state.failed, isTrue);
+      expect(second.state.failed, status == 503);
     });
   }
 

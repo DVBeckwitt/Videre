@@ -94,7 +94,7 @@ internal class NerdVpnRecoveryInterceptor : Interceptor {
         var response = chain.proceed(request)
         val error = errorCode(response) ?: return response
         val recovered = recover(context, response, error)
-        if (error in setOf("access_denied", "rate_limited", "unavailable")) {
+        if (error in setOf("access_denied", "unavailable") || recovered["state"] == "rateLimited") {
             response.close()
             throw NerdVpnAccessRequired(recovered["state"] as? String ?: "unavailable")
         }
@@ -127,13 +127,13 @@ internal class NerdVpnRecoveryInterceptor : Interceptor {
 
     private fun errorCode(response: Response): String? {
         val context = response.request.tag(GatewayRequestScope::class.java)?.context ?: return null
-        if (!context.allows(response.request.url) || response.code !in setOf(401, 403, 429, 503)) return null
+        if (!context.allows(response.request.url) || response.code !in setOf(401, 403, 503)) return null
         val type = response.header("Content-Type")?.substringBefore(';')?.trim().orEmpty()
         if (type != "application/json" && !type.endsWith("+json")) return null
         return runCatching {
             val body = response.peekBody(8193)
             if (body.contentLength() > 8192) null else JSONObject(body.string()).optString("error").takeIf {
-                it in setOf("credentials_required", "invalid_credentials", "access_denied", "rate_limited", "unavailable")
+                it in setOf("credentials_required", "invalid_credentials", "access_denied", "unavailable")
             }
         }.getOrNull()
     }

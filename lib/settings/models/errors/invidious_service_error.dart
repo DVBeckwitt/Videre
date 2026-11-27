@@ -1,3 +1,5 @@
+import '../../../network/nerdvpn_origin.dart';
+
 class InvidiousServiceError extends Error {
   final String message;
   final int? statusCode;
@@ -18,6 +20,12 @@ class InvidiousServiceError extends Error {
   });
 
   bool get isRateLimited => statusCode == 429;
+
+  // Keep Retry-After for the message, but do not gate a fresh NerdVPN request.
+  Duration? localRetryAfterFor(String? serverUrl) => isRateLimited &&
+          (isGatewayResponse || (serverUrl != null && isNerdVpnUrl(serverUrl)))
+      ? null
+      : retryAfter;
 
   bool get isGatewayAccessFailure =>
       isGatewayResponse &&

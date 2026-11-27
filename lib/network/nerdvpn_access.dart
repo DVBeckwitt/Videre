@@ -34,6 +34,7 @@ class NerdVpnAccessStatus {
       'denied',
       'signInRequired',
       'unavailable',
+      'rateLimited',
       'missing',
       'proxyRequired',
     }.contains(state)) {
@@ -54,13 +55,15 @@ class NerdVpnAccessStatus {
 
 class NerdVpnAccessRequired implements Exception {
   final String state;
-  const NerdVpnAccessRequired(this.state);
+  final DateTime? retryAt;
+  const NerdVpnAccessRequired(this.state, {this.retryAt});
 
   @override
   String toString() => switch (state) {
         'waiting' =>
           'NerdVPN has not approved API access for this account yet. Playback and other requests to this server are paused. Open this account in server settings to see when access can be requested, then tap Check eligibility. Signing in again will not shorten the waiting period.',
         'disabled' => 'API access is disabled in your NerdVPN preferences.',
+        'rateLimited' => 'NerdVPN returned too many requests (HTTP 429).',
         'denied' => 'NerdVPN has restricted access from this connection.',
         'signInRequired' => 'Sign in to NerdVPN again to enable API access.',
         'missing' =>
