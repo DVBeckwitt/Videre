@@ -356,6 +356,17 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('TV remote opens Liked Songs from Music Home', (tester) async {
+    await mount(tester);
+    await select(tester, modeIcon(HomeContentMode.music));
+    final shortcut = find.descendant(
+      of: find.byKey(const ValueKey('music-home-likedSongs')),
+      matching: find.text('Liked songs'),
+    );
+    await select(tester, shortcut);
+    expect(find.widgetWithText(AppBar, 'Liked songs'), findsOneWidget);
+  });
+
   testWidgets(
       'TV moves focus in saved Music order and keeps the selected page during edits',
       (tester) async {

@@ -4,7 +4,7 @@ import 'package:clipious/music/models/music_layout.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  test('existing profiles without a layout use the original Music order', () {
+  test('profiles without a saved layout use the default Music order', () {
     final layout = MusicLayout.decode(null);
     expect(layout.destinations, [
       MusicDestination.home,
@@ -14,6 +14,7 @@ void main() {
     expect(layout.shortcuts, [
       MusicShortcut.search,
       MusicShortcut.library,
+      MusicShortcut.likedSongs,
       MusicShortcut.charts,
       MusicShortcut.discover,
       MusicShortcut.recommendations,

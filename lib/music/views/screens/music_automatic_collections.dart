@@ -49,6 +49,14 @@ class MusicAutomaticCollectionsPage extends StatelessWidget {
   const MusicAutomaticCollectionsPage(
       {super.key, required this.session, this.showLikes = false});
 
+  static void open(BuildContext context, {bool showLikes = false}) {
+    final session = MusicLibrarySession(context.read<AppCubit>());
+    if (!session.isCurrent) return;
+    unawaited(Navigator.of(context).push<void>(MaterialPageRoute(
+        builder: (_) => MusicAutomaticCollectionsPage(
+            session: session, showLikes: showLikes))));
+  }
+
   @override
   Widget build(BuildContext context) {
     if (showLikes) {

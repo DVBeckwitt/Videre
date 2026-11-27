@@ -79,6 +79,7 @@ void main() {
       await tester.scrollUntilVisible(control, 240, scrollable: editorList);
     }
     await tester.ensureVisible(control);
+    await tester.pump();
     await tester.tap(control);
     await tester.pumpAndSettle();
   }
@@ -109,11 +110,11 @@ void main() {
       MusicDestination.search,
     ]);
 
-    await tap(tester, control('music-shortcut-charts-move'));
+    await tap(tester, control('music-shortcut-likedSongs-move'));
     await tap(tester, find.text('Move earlier'));
     await settleSave(tester);
     final updated = settings.state.musicLayout.shortcuts;
-    expect(updated.indexOf(MusicShortcut.charts),
+    expect(updated.indexOf(MusicShortcut.likedSongs),
         lessThan(updated.indexOf(MusicShortcut.library)));
     await tap(tester, control('music-shortcut-library-toggle'));
     await settleSave(tester);

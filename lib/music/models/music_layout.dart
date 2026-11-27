@@ -23,6 +23,7 @@ enum MusicDestination {
 enum MusicShortcut {
   search,
   library,
+  likedSongs,
   charts,
   discover,
   recommendations;
@@ -30,6 +31,7 @@ enum MusicShortcut {
   String label(AppLocalizations locals) => switch (this) {
         search => locals.search,
         library => locals.musicLibrary,
+        likedSongs => locals.musicLikedSongs,
         charts => locals.musicTopCharts,
         discover => locals.musicDiscover,
         recommendations => locals.localRecommendations,

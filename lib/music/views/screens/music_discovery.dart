@@ -36,6 +36,7 @@ import 'package:clipious/music/views/components/music_recommendation_shelves.dar
 import 'package:clipious/music/views/components/music_saved_song_removal.dart';
 import 'package:clipious/music/views/components/music_starter_artists.dart';
 import 'package:clipious/music/views/components/music_track_results.dart';
+import 'package:clipious/music/views/screens/music_automatic_collections.dart';
 import 'package:clipious/network/network_proxy.dart';
 import 'package:clipious/network/socks_proxy.dart';
 import 'package:clipious/player/states/player.dart' show PlayerCubit;
@@ -344,6 +345,8 @@ class _MusicHomeShortcuts extends StatelessWidget {
     final actions = <MusicShortcut, VoidCallback>{
       if (onSearch case final search?) MusicShortcut.search: search,
       MusicShortcut.library: onLibrary,
+      MusicShortcut.likedSongs: () =>
+          MusicAutomaticCollectionsPage.open(context, showLikes: true),
       MusicShortcut.charts: () => _openCharts(context),
       if (onDiscover case final discover?) MusicShortcut.discover: discover,
       MusicShortcut.recommendations: () => showRecommendationSettings(context),

@@ -3048,6 +3048,40 @@ void main() {
     expect(libraryVisits, 2);
   });
 
+  testWidgets('Liked Songs opens only the active profile’s local collection',
+      (tester) async {
+    await tester.runAsync(() => library.setSongLiked(_saved, liked: true));
+    await show(tester);
+    final shortcut = find.byKey(const ValueKey('music-home-likedSongs'));
+    final song =
+        find.byKey(const ValueKey('music-automatic-track-savedmusic1'));
+    final homeRequests = (catalog.discoveryCalls, catalog.chartRequests.length);
+
+    await tester.tap(shortcut);
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(AppBar, 'Liked songs'), findsOneWidget);
+    expect(song, findsOneWidget);
+    expect(libraryVisits, 0);
+    expect(
+        (catalog.discoveryCalls, catalog.chartRequests.length), homeRequests);
+    expect(catalog.searchCalls, 0);
+
+    final next = (await tester.runAsync(() => db.createProfile('Second')))!;
+    await tester.runAsync(() => db.useProfile(next.id));
+    app.change(app.state.copyWith(profileId: next.id));
+    await tester.pumpAndSettle();
+    expect(song, findsNothing);
+    expect(find.text('This source is no longer available.'), findsOneWidget);
+
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    await tester.tap(shortcut);
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(AppBar, 'Liked songs'), findsOneWidget);
+    expect(song, findsNothing);
+    expect(find.text('No playable songs in this collection.'), findsOneWidget);
+  });
+
   testWidgets(
       'saving the last prepared artist song removes its discovery choice',
       (tester) async {
