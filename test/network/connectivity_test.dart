@@ -42,22 +42,18 @@ void main() {
 
     await Future<void>.delayed(Duration.zero);
     expect(listens, 1);
-    await event({'wifi': true, 'online': true, 'connected': true});
+    await event({'wifi': true, 'connected': true});
     // Mobile, Ethernet and VPN can be available when Wi-Fi is absent.
-    await event({'wifi': false, 'online': true, 'connected': true});
-    await event({'wifi': false, 'online': true, 'connected': true});
-    await event({'wifi': false, 'online': true, 'connected': null});
-    // A default network can exist without Internet capability.
-    await event({'wifi': false, 'online': false, 'connected': true});
-    expect(home, [true]);
-    await event({'wifi': false, 'online': false, 'connected': false});
+    await event({'wifi': false, 'connected': true});
+    await event({'wifi': false, 'connected': true});
+    await event({'wifi': false, 'connected': false});
+    await event({'wifi': false, 'connected': null});
     expect(video, [
       (wifi: true, online: true),
       (wifi: false, online: true),
       (wifi: false, online: true),
+      (wifi: false, online: false),
       (wifi: false, online: true),
-      (wifi: false, online: false),
-      (wifi: false, online: false),
     ]);
     expect(podcast, [true, false]);
     expect(home, [true, false]);
@@ -71,20 +67,23 @@ void main() {
 
     await videoListener.cancel();
     expect(cancels, 0);
-    await event({'wifi': false, 'online': true, 'connected': true});
+    await event({'wifi': false, 'connected': true});
     expect(home, [true, false, true]);
     await homeListener.cancel();
     expect(cancels, 1);
   });
 
   test('reads the current native connectivity snapshot', () async {
+    bool? connected = false;
     messenger.setMockMethodCallHandler(methods, (call) async {
       expect(call.method, 'readConnectivity');
-      return {'wifi': false, 'online': false, 'connected': true};
+      return {'wifi': false, 'connected': connected};
     });
     addTearDown(() => messenger.setMockMethodCallHandler(methods, null));
 
     expect(await readDownloadConnectivity(), (wifi: false, online: false));
+    connected = null;
+    expect(await readDownloadConnectivity(), (wifi: false, online: true));
   });
 
   test('falls back to the legacy Wi-Fi method when available', () async {

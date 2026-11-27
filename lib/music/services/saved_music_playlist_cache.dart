@@ -42,16 +42,34 @@ Future<_PlaylistGatewayIdentity?> _playlistGatewayIdentity(
       server.customHeaders.entries.any((header) =>
           header.key.toLowerCase() == nerdVpnKeyHeader.toLowerCase() &&
           header.value.isNotEmpty);
-  if (state.needsSignIn || nerdVpn && state.accessError != null && !manualKey) {
+  if (state.needsSignIn ||
+      nerdVpn &&
+          state.accessError != null &&
+          state.accessError != 'unavailable' &&
+          !manualKey) {
     throw const MusicPlaylistAccessChanged();
   }
+  if (state.accessError == 'unavailable' && state.apiKeyIntent == null) {
+    throw const NerdVpnAccessRequired('unavailable');
+  }
+  // Recovery can replace a key without changing the credential owner's intent.
   return (
     state.enabled,
     state.revision,
-    state.apiKeyRevision,
-    state.apiKeyIntent
+    state.apiKeyIntent,
+    state.apiKeyIntent == null ? state.apiKeyRevision : null
   );
 }
+
+bool _retiresSavedPlaylist(Object error) => switch (error) {
+      MusicPlaylistAccessChanged() || GatewayAuthenticationRequired() => true,
+      NerdVpnAccessRequired(:final state) => state != 'unavailable',
+      InvidiousServiceError() => error.isAuthenticationFailure ||
+          const {403, 404, 410}.contains(error.statusCode) ||
+          error.isGatewayAccessFailure &&
+              !const {'rate_limited', 'unavailable'}.contains(error.errorCode),
+      _ => false,
+    };
 
 /// Holds only the active connection's playlist metadata. Refresh stages its
 /// result until every page has been validated.
@@ -78,6 +96,10 @@ class _SavedPlaylistScope {
       !_disposed &&
       !entry.invalidated &&
       _library.contains(MusicLibraryKind.playlist, id);
+
+  bool canFinish(String id, _SavedPlaylistEntry entry) =>
+      !_disposed &&
+      (!entry.invalidated || !_library.contains(MusicLibraryKind.playlist, id));
 
   void store(String id, _SavedPlaylistEntry entry, MusicCollection? collection,
       DateTime time) {

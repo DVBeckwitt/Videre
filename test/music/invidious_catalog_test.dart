@@ -12,6 +12,7 @@ import 'package:clipious/music/services/invidious_music_catalog_service.dart';
 import 'package:clipious/music/services/music_catalog_service.dart';
 import 'package:clipious/music/services/music_library_service.dart';
 import 'package:clipious/network/gateway_context.dart';
+import 'package:clipious/network/nerdvpn_access.dart';
 import 'package:clipious/network/network_proxy.dart';
 import 'package:clipious/notifications/models/db/channel_notifications.dart';
 import 'package:clipious/player/models/backend_playback.dart';
@@ -25,6 +26,7 @@ import 'package:clipious/utils/models/image_object.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:clipious/videos/models/video.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -2595,13 +2597,18 @@ void main() {
     setUp(
         () => MusicLibraryService.forProfile(db, db.profileId).save(bookmark));
 
-    test('a cold truncated load leaves no complete snapshot to reopen',
+    test('a terminal empty page keeps a cold saved playlist playable',
         () async {
       respond = (request) async => _json(
           page(request.url.queryParameters['page'] == '1' ? [_song()] : [],
               count: 3),
           request);
-      await expectLater(openSaved(), throwsA(isA<MusicCatalogException>()));
+      final cold = await openSaved();
+      expect(cold.loadingComplete, isTrue);
+      expect(cold.tracks.map((track) => track.videoId), [_songId]);
+      expect((await openSaved()).tracks, hasLength(1));
+      expect(requests.map((request) => request.url.queryParameters['page']),
+          ['1', '2', '1', '2']);
 
       respond = (request) async => _json(
           page([
@@ -2611,7 +2618,25 @@ void main() {
       expect((await openSaved()).tracks.single.title, 'Full result');
       expect((await openSaved()).tracks.single.title, 'Full result');
       expect(requests.map((request) => request.url.queryParameters['page']),
-          ['1', '2', '1']);
+          ['1', '2', '1', '2', '1']);
+    });
+
+    test('a truncated refresh cannot replace the complete saved snapshot',
+        () async {
+      respond = (request) async =>
+          _json(page([_song(), _song(index: 1)], count: 2), request);
+      final cached = await openSaved();
+      expect(cached.tracks, hasLength(2));
+
+      respond = (request) async => _json(
+          page(request.url.queryParameters['page'] == '1' ? [_song()] : [],
+              count: 2),
+          request);
+      await expectLater(
+          openSaved(forceRefresh: true), throwsA(isA<MusicCatalogException>()));
+      expect(await openSaved(), same(cached));
+      expect(requests.map((request) => request.url.queryParameters['page']),
+          ['1', '1', '2']);
     });
 
     test('concurrent reopens share pending pages with independent callers',
@@ -2641,6 +2666,38 @@ void main() {
       expect(result.tracks.map((track) => track.playlistIndex), [0, 1]);
       expect(requests.map((request) => request.url.queryParameters['page']),
           ['1', '2']);
+    });
+
+    test('a refresh finishes for display after a playlist is unbookmarked',
+        () async {
+      final library = MusicLibraryService.forProfile(db, db.profileId);
+      respond = (request) async => _json(page([_song()]), request);
+      await openSaved();
+
+      final started = Completer<http.Request>();
+      final pending = Completer<http.Response>();
+      respond = (request) {
+        started.complete(request);
+        return pending.future;
+      };
+      final refreshing = openSaved(forceRefresh: true);
+      final request = await started.future;
+      await library.remove(bookmark.kind, bookmark.id);
+      pending.complete(_json(
+          page([
+            {..._song(), 'title': 'Refresh finished'}
+          ]),
+          request));
+      expect((await refreshing).tracks.single.title, 'Refresh finished');
+
+      await library.save(bookmark);
+      respond = (request) async => _json(
+          page([
+            {..._song(), 'title': 'New save'}
+          ]),
+          request);
+      expect((await openSaved()).tracks.single.title, 'New save');
+      expect(requests, hasLength(3));
     });
 
     test('removing and saving again invalidates cached and pending tracks',
@@ -2710,6 +2767,95 @@ void main() {
           'Public again');
       expect(progress, isEmpty);
       expect(requests, hasLength(3));
+    });
+
+    group('NerdVPN access', () {
+      const sessions = MethodChannel('videre/gateway_sessions');
+      late int keyRevision;
+      late int keyIntent;
+      String? accessError;
+
+      setUp(() async {
+        const account = Server(
+            url: 'https://invidious.nerdvpn.de', id: 'saved-playlist-account');
+        await db.upsertServer(account);
+        await db.useServer(account);
+        keyRevision = 1;
+        keyIntent = 1;
+        accessError = null;
+        final platform = debugDefaultTargetPlatformOverride;
+        debugDefaultTargetPlatformOverride = TargetPlatform.android;
+        final messenger =
+            TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+        messenger.setMockMethodCallHandler(sessions, (call) async {
+          expect(call.method, 'resolve');
+          return {
+            'enabled': false,
+            'needsSignIn': false,
+            'apiKeyRevision': keyRevision,
+            'apiKeyIntent': keyIntent,
+            'accessError': accessError,
+          };
+        });
+        addTearDown(() {
+          messenger.setMockMethodCallHandler(sessions, null);
+          debugDefaultTargetPlatformOverride = platform;
+        });
+      });
+
+      test('same-intent key rotation keeps the playlist request current',
+          () async {
+        respond = (request) async {
+          keyRevision++;
+          return _json(page([_song()]), request);
+        };
+        final cached = await openSaved();
+        expect(await openSaved(), same(cached));
+        expect(requests, hasLength(1));
+
+        respond = (request) async {
+          keyRevision++;
+          keyIntent++;
+          return _json(page([_song()]), request);
+        };
+        await expectLater(openSaved(forceRefresh: true),
+            throwsA(isA<MusicPlaylistAccessChanged>()));
+      });
+
+      test('temporary access failures preserve the verified snapshot',
+          () async {
+        respond = (request) async => _json(page([_song()]), request);
+        final cached = await openSaved();
+
+        for (final (code, error) in [
+          (429, 'rate_limited'),
+          (503, 'unavailable')
+        ]) {
+          respond = (request) async {
+            keyRevision++;
+            accessError = 'unavailable';
+            return http.Response(jsonEncode({'error': error}), code,
+                request: request,
+                headers: {'content-type': 'application/json'});
+          };
+          await expectLater(openSaved(forceRefresh: true),
+              throwsA(isA<InvidiousServiceError>()));
+          expect(await openSaved(), same(cached));
+        }
+
+        respond = (_) async => throw const NerdVpnAccessRequired('unavailable');
+        await expectLater(openSaved(forceRefresh: true),
+            throwsA(isA<NerdVpnAccessRequired>()));
+        expect(await openSaved(), same(cached));
+
+        accessError = 'signInRequired';
+        await expectLater(
+            openSaved(), throwsA(isA<MusicPlaylistAccessChanged>()));
+        accessError = null;
+        respond = (request) async => _json(page([_song()]), request);
+        expect(await openSaved(), isNot(same(cached)));
+        expect(requests, hasLength(5));
+      });
     });
 
     test('saved playlist with unspecified visibility is read on every reopen',

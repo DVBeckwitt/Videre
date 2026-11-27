@@ -1577,8 +1577,11 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
       final _PlaylistGatewayIdentity? gateway;
       try {
         gateway = await _playlistGatewayIdentity(server);
-      } on GatewayTransportUnavailable {
-        throw const MusicPlaylistAccessChanged();
+      } on MusicPlaylistAccessChanged {
+        await checkSession();
+        _savedPlaylists?.dispose();
+        _savedPlaylists = null;
+        rethrow;
       }
       await checkSession();
       checkCaller();
@@ -1616,13 +1619,11 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
               throw const MusicPlaylistAccessChanged();
             }
           }
-          if (cache.owns(playlistId, entry)) {
+          if (cache.canFinish(playlistId, entry)) {
             return;
           }
         } on MusicCatalogException {
           // A retired connection cannot continue displaying its snapshot.
-        } on GatewayTransportUnavailable {
-          // The previous native session can no longer be verified.
         }
         throw const MusicPlaylistAccessChanged();
       }
@@ -1672,11 +1673,12 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
       _SavedPlaylistScope cache,
       _SavedPlaylistEntry entry,
       _SavedPlaylistRequest request) async {
+    final replacingSnapshot = entry.snapshot != null;
     try {
       final result = await _fetchPlaylist(id, api, server, check,
-          requireComplete: true,
+          requireComplete: replacingSnapshot,
           onProgress: request.publish, onFirstPage: (page) {
-        if (entry.snapshot != null &&
+        if (replacingSnapshot &&
             (page.isListed == false || page.type == invidiousPlaylist)) {
           throw const MusicPlaylistAccessChanged();
         }
@@ -1686,13 +1688,7 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
           id, entry, result.cacheable ? result.collection : null, _now());
       return result.collection;
     } catch (error) {
-      if (error is MusicPlaylistAccessChanged ||
-          error is GatewayAuthenticationRequired ||
-          error is NerdVpnAccessRequired ||
-          error is InvidiousServiceError &&
-              (error.isAuthenticationFailure ||
-                  error.isGatewayAccessFailure ||
-                  const {403, 404, 410}.contains(error.statusCode))) {
+      if (_retiresSavedPlaylist(error)) {
         cache.store(id, entry, null, _now());
         throw const MusicPlaylistAccessChanged();
       }

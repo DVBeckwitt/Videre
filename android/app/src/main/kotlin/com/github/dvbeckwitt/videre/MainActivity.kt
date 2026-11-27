@@ -528,16 +528,14 @@ private class VidereNetworkPlugin : FlutterPlugin {
     private fun readConnectivity(): Map<String, Boolean?> = runCatching {
         val network = connectivity.activeNetwork
         networkState(network?.let { connectivity.getNetworkCapabilities(it) }, network != null)
-    }.getOrElse { mapOf("wifi" to false, "online" to true, "connected" to null) }
+    }.getOrElse { mapOf("wifi" to false, "connected" to null) }
 
     private fun networkState(
         capabilities: NetworkCapabilities?,
         connected: Boolean,
     ): Map<String, Boolean> = mapOf(
         "wifi" to (capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true),
-        // Validation checks public Internet reachability. Videre also supports
-        // private servers and VPN routes that can work without validation.
-        "online" to (capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true),
+        // A private server can be reachable on a network with no Internet capability.
         "connected" to connected,
     )
 

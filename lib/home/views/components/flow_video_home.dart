@@ -5,6 +5,7 @@ import 'package:auto_route/auto_route.dart';
 import 'package:flutter/foundation.dart' show listEquals, mapEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show RenderAbstractViewport;
+import 'package:flutter/services.dart' show MissingPluginException;
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:visibility_detector/visibility_detector.dart';
 
@@ -255,8 +256,13 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
   }
 
   Future<void> _watchConnectivity() async {
-    final initial = await isNetworkConnected();
-    if (!mounted || initial == null) return;
+    final bool? initial;
+    try {
+      initial = await isNetworkConnected(requirePlugin: true);
+    } on MissingPluginException {
+      return;
+    }
+    if (!mounted) return;
     var receivedEvent = false;
     _networkChanges = networkConnectivityChanges.listen((online) {
       receivedEvent = true;
@@ -265,7 +271,8 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
     // Downloads may already be listening to the stream. It does not replay
     // its initial event to a late listener.
     final current = await isNetworkConnected();
-    if (!receivedEvent) _connectivityChanged(current ?? initial);
+    final snapshot = current ?? initial;
+    if (!receivedEvent && snapshot != null) _connectivityChanged(snapshot);
   }
 
   void _connectivityChanged(bool online) {

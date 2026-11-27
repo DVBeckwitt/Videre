@@ -407,6 +407,25 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
+  testWidgets('offline Home recovers from an unknown connectivity snapshot',
+      (tester) async {
+    final platform = _OfflinePlatform(online: null);
+    final download = _download('saved000001', 'Saved video');
+    platform.files.add(download.videoId);
+    await tester.runAsync(() => db.upsertDownload(download));
+    await show(tester);
+
+    final card = _downloadCard(download.videoId);
+    expect(card, findsNothing);
+    expect(platform.probes, isEmpty);
+
+    await platform.changeConnection(false);
+    await tester.pumpAndSettle();
+
+    expect(card, findsOneWidget);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
   testWidgets('offline Home holds its download cards until a manual refresh',
       (tester) async {
     final platform = _OfflinePlatform();

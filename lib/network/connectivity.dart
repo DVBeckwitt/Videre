@@ -25,7 +25,7 @@ final Stream<bool> networkConnectivityChanges = _networkChanges
 DownloadConnectivity _decodeConnectivity(Object? value) => switch (value) {
       Map<Object?, Object?> state => (
           wifi: state['wifi'] == true,
-          online: state['online'] != false
+          online: state['connected'] != false
         ),
       bool wifi => (wifi: wifi, online: true),
       _ => (wifi: false, online: true),
@@ -55,12 +55,14 @@ Future<bool> isWifiConnected() async {
 
 /// Reads the current default network independently of the shared event stream.
 /// Null indicates that the platform could not report connectivity.
-Future<bool?> isNetworkConnected() async {
+/// [requirePlugin] distinguishes an unsupported platform from an unknown state.
+Future<bool?> isNetworkConnected({bool requirePlugin = false}) async {
   try {
     return await _network.invokeMethod<bool>('isNetworkConnected');
   } on PlatformException {
     return null;
   } on MissingPluginException {
+    if (requirePlugin) rethrow;
     return null;
   }
 }
