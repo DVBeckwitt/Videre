@@ -650,6 +650,15 @@
   "@returnYoutubeDislikeDescription": {
     "description": "ReturnYoutubeDislike setting description"
   },
+  "watchEstimatedLikeCount": "{count} (estimated)",
+  "@watchEstimatedLikeCount": {
+    "description": "A like count estimated by Return YouTube Dislike",
+    "placeholders": {
+      "count": {
+        "type": "String"
+      }
+    }
+  },
   "rydCustomInstance": "Custom RYD instance url",
   "@rydCustomInstance": {
     "description": "title for setting to set a custom ryd instance"

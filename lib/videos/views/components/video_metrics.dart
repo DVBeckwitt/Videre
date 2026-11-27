@@ -5,9 +5,18 @@ import 'package:clipious/l10n/generated/app_localizations.dart';
 import '../../../utils.dart';
 import '../../models/video.dart';
 
+String? watchLikeCountLabel(
+    AppLocalizations locals, int? instanceLikes, int? estimatedLikes) {
+  final likes = instanceLikes ?? estimatedLikes;
+  if (likes == null || likes < 0) return null;
+  final count = compactCurrency.format(likes);
+  return instanceLikes == null ? locals.watchEstimatedLikeCount(count) : count;
+}
+
 class VideoMetrics extends StatelessWidget {
   final Video? video;
   final int? dislikes;
+  final int? estimatedLikes;
   final TextStyle? style;
   final double iconSize;
   final bool showDuration;
@@ -19,6 +28,7 @@ class VideoMetrics extends StatelessWidget {
       {super.key,
       this.video,
       this.dislikes,
+      this.estimatedLikes,
       this.style,
       this.showDuration = true,
       this.compact = false,
@@ -71,9 +81,12 @@ class VideoMetrics extends StatelessWidget {
         metrics.add(metric(Icons.visibility, compactCurrency.format(views)));
       }
 
-      var likes = video?.likeCount ?? 0;
-      if (!compact && likes > 0) {
-        metrics.add(metric(Icons.thumb_up, compactCurrency.format(likes)));
+      if (!compact) {
+        final label =
+            watchLikeCountLabel(locals, video?.likeCount, estimatedLikes);
+        if (label != null) {
+          metrics.add(metric(Icons.thumb_up, label));
+        }
       }
 
       if (!compact && dislikes != null && dislikes! >= 0) {

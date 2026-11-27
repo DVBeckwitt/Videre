@@ -40,6 +40,7 @@ class FlowWatchBody extends StatelessWidget {
   final bool inPlayer;
   final bool queueDockVisible;
   final int? dislikes;
+  final int? estimatedLikes;
   final VoidCallback? onDownload;
   final IconData downloadIcon;
   final Widget? extraAction;
@@ -54,6 +55,7 @@ class FlowWatchBody extends StatelessWidget {
     this.inPlayer = false,
     this.queueDockVisible = false,
     this.dislikes,
+    this.estimatedLikes,
     this.onDownload,
     this.downloadIcon = Icons.download_rounded,
     this.extraAction,
@@ -193,11 +195,13 @@ class FlowWatchBody extends StatelessWidget {
           ]),
         );
 
-    Widget reactionButtons(int? count) => AddToPlayListButton(
+    Widget reactionButtons(int? count, int? likeEstimate) =>
+        AddToPlayListButton(
           videoId: video.videoId,
           video: video,
           type: AddToPlayListButtonType.watch,
           inPlayer: inPlayer,
+          estimatedLikes: likeEstimate,
           reactionMetric: count == null
               ? null
               : DecoratedBox(
@@ -335,10 +339,12 @@ class FlowWatchBody extends StatelessWidget {
                 VideoDislikeMetrics(
                   key: ValueKey(video.videoId),
                   video: video,
-                  builder: (context, count) => reactionButtons(count),
+                  builder: (context, votes) =>
+                      reactionButtons(votes?.dislikes, votes?.likes),
                 )
               else
-                reactionButtons(showDislikes ? dislikes : null),
+                reactionButtons(showDislikes ? dislikes : null,
+                    showDislikes ? estimatedLikes : null),
               const SizedBox(width: 8),
               WatchNotesButton(
                 videoId: video.videoId,

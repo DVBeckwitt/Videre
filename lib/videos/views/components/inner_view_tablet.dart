@@ -114,6 +114,7 @@ class VideoTabletInnerView extends StatelessWidget {
                       VideoInfo(
                         video: video,
                         dislikes: videoController.dislikes,
+                        estimatedLikes: videoController.estimatedLikes,
                         descriptionAndTags: false,
                       )
                     ],

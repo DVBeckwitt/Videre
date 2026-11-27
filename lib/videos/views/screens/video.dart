@@ -178,6 +178,7 @@ class VideoScreen extends StatelessWidget {
                           key: ValueKey(video.videoId),
                           video: video,
                           dislikes: videoState.dislikes,
+                          estimatedLikes: videoState.estimatedLikes,
                           onStartAt: onStartAt,
                           onDownload: downloadInLibrary
                               ? () => openDownloadManager(context)

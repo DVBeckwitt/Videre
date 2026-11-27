@@ -71,6 +71,8 @@ class TvVideoScreen extends StatelessWidget {
       child: Scaffold(body: Builder(builder: (context) {
         var tvState = context.watch<TvVideoCubit>().state;
         var videoState = context.watch<VideoCubit>().state;
+        final showDislikes = context.select(
+            (SettingsCubit cubit) => cubit.state.useReturnYoutubeDislike);
         var tvCubit = context.read<TvVideoCubit>();
 
         return DefaultTextStyle(
@@ -237,10 +239,14 @@ class TvVideoScreen extends StatelessWidget {
                                                     ),
                                                     VideoMetrics(
                                                       video: videoState.video!,
-                                                      dislikes: settings.state
-                                                              .useReturnYoutubeDislike
+                                                      dislikes: showDislikes
                                                           ? videoState.dislikes
                                                           : null,
+                                                      estimatedLikes:
+                                                          showDislikes
+                                                              ? videoState
+                                                                  .estimatedLikes
+                                                              : null,
                                                     )
                                                   ],
                                                 ),

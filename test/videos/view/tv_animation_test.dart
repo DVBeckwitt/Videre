@@ -17,8 +17,10 @@ import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/models/image_object.dart';
+import 'package:clipious/utils.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/utils/views/tv/components/tv_horizontal_item_list.dart';
+import 'package:clipious/videos/models/dislike.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:clipious/videos/states/tv_video.dart';
 import 'package:clipious/videos/views/tv/screens/video.dart';
@@ -31,7 +33,16 @@ import 'package:flutter_test/flutter_test.dart';
 class _Service extends Service {
   final List<ImageObject>? banners;
 
+  final votes = Completer<Dislike>();
+  final voteRequests = <String>[];
+
   _Service({this.banners});
+
+  @override
+  Future<Dislike> getDislikes(String videoId) {
+    voteRequests.add(videoId);
+    return votes.future;
+  }
 
   @override
   Future<bool> isLoggedIn() async => false;
@@ -120,13 +131,16 @@ class _Downloads extends Cubit<DownloadManagerState>
 }
 
 class _Settings extends Fake implements SettingsCubit {
+  final bool useDislikes;
+
+  _Settings(this.useDislikes);
   @override
   Stream<SettingsState> get stream => const Stream.empty();
 
   @override
   SettingsState get state => SettingsState.init().copyWith(settings: {
         useReturnYoutubeDislikeSettingName:
-            SettingsValue(useReturnYoutubeDislikeSettingName, 'false')
+            SettingsValue(useReturnYoutubeDislikeSettingName, '$useDislikes')
       });
 }
 
@@ -169,7 +183,8 @@ void main() {
     service = originalService;
   });
 
-  Future<void> mount(WidgetTester tester, Widget screen, Size size) async {
+  Future<void> mount(WidgetTester tester, Widget screen, Size size,
+      {bool useDislikes = false}) async {
     tester.view.physicalSize = size;
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
@@ -177,7 +192,7 @@ void main() {
     await tester.pumpWidget(MultiBlocProvider(
       providers: [
         BlocProvider<DownloadManagerCubit>.value(value: downloads),
-        BlocProvider<SettingsCubit>.value(value: _Settings()),
+        BlocProvider<SettingsCubit>.value(value: _Settings(useDislikes)),
         BlocProvider<PlayerCubit>.value(value: _Player()),
       ],
       child: MaterialApp(
@@ -277,6 +292,25 @@ void main() {
       await tester.pumpWidget(const SizedBox.shrink());
     });
   }
+
+  testWidgets('TV Watch shows a delayed estimate alongside dislikes',
+      (tester) async {
+    final source = _Service();
+    service = source;
+    await mount(
+        tester, const TvVideoScreen(videoId: 'video'), const Size(1280, 900),
+        useDislikes: true);
+    expect(source.voteRequests, ['video']);
+    final estimate = '${compactCurrency.format(123)} (estimated)';
+    expect(find.text(estimate), findsNothing);
+    source.votes.complete(Dislike(71, likes: 123));
+    await tester.pumpAndSettle();
+    expect(find.text(estimate), findsOneWidget);
+    expect(find.text(compactCurrency.format(71).replaceAll('.00', '')),
+        findsOneWidget);
+    expect(source.voteRequests, ['video']);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
 
   testWidgets('TV video blur preserves its content between animation ticks',
       (tester) async {
