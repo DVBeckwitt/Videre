@@ -1,12 +1,22 @@
+import 'dart:async';
 import 'dart:convert';
 
+import 'package:clipious/app/states/app.dart';
+import 'package:clipious/globals.dart';
+import 'package:clipious/home/models/db/home_layout.dart';
+import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/music/models/music_artist.dart';
+import 'package:clipious/music/models/music_catalog_search.dart';
 import 'package:clipious/music/models/music_track.dart';
+import 'package:clipious/music/services/music_catalog_service.dart';
 import 'package:clipious/music/services/music_starter_artists.dart';
+import 'package:clipious/music/views/components/music_starter_artists.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/utils/models/image_object.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sembast/sembast_memory.dart';
 
@@ -20,7 +30,71 @@ MusicStarterArtistPick _pick(String id, String name) =>
     MusicStarterArtistPick.fromCatalog(
         MusicArtist(id: id, name: name), _server)!;
 
+class _App extends Cubit<AppState> implements AppCubit {
+  _App() : super(AppState(0, _server, HomeLayout(), profileId: db.profileId));
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+class _PreviewCatalog extends MusicCatalogService {
+  final completion = Completer<MusicCatalogSearchPage>();
+  void Function(List<MusicCatalogArtistHit>)? preview;
+
+  @override
+  Future<MusicCatalogSearchPage> searchPage(
+    String query,
+    MusicCatalogSearchType type,
+    int page, {
+    bool Function()? isCurrent,
+    void Function(List<MusicCatalogArtistHit>)? onArtistPreview,
+  }) {
+    preview = onArtistPreview;
+    return completion.future;
+  }
+}
+
 void main() {
+  testWidgets('starter artists show early results and keep them on failure',
+      (tester) async {
+    db = (await tester.runAsync(SembastSqfDb.createInMemory))!;
+    addTearDown(db.close);
+    final app = _App();
+    addTearDown(app.close);
+    final catalog = _PreviewCatalog();
+    final previousCatalog = musicCatalogService;
+    musicCatalogService = catalog;
+    addTearDown(() => musicCatalogService = previousCatalog);
+    await tester.pumpWidget(BlocProvider<AppCubit>.value(
+      value: app,
+      child: const MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: Scaffold(body: MusicStarterArtistsSection()),
+      ),
+    ));
+    await tester.tap(find.byKey(const ValueKey('music-starter-artists-edit')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), 'Artist');
+    await tester.pump(const Duration(milliseconds: 350));
+
+    const hit =
+        MusicCatalogArtistHit(MusicArtist(id: _firstId, name: 'Early Artist'));
+    catalog.preview?.call([hit, hit]);
+    await tester.pump();
+    final result =
+        find.byKey(const ValueKey('music-starter-artist-result-$_firstId'));
+    expect(catalog.completion.isCompleted, isFalse);
+    expect(result, findsOneWidget);
+
+    catalog.completion.completeError(const MusicCatalogException('Failed'));
+    await tester.pumpAndSettle();
+    expect(result, findsOneWidget);
+    await tester.tap(result);
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(InputChip, 'Early Artist'), findsOneWidget);
+  });
+
   test('catalog identities and legacy choices persist per profile', () async {
     final factory = newDatabaseFactoryMemory();
     var database = SembastSqfDb(await factory.openDatabase('starter-artists'));

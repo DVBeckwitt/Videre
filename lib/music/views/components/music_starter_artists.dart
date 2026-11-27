@@ -268,23 +268,29 @@ class _StarterArtistDialogState extends State<_StarterArtistDialog> {
     _debounce = Timer(_debounceDelay, () async {
       bool current() => mounted && _current && generation == _generation;
       if (!current()) return;
-      try {
-        final page = await _catalog.searchPage(
-            query, MusicCatalogSearchType.artists, 1,
-            isCurrent: current);
+
+      void publish(Iterable<MusicCatalogArtistHit> artists,
+          {bool complete = false}) {
         if (!current()) return;
         final seen = <String>{};
         final results = <MusicStarterArtistPick>[];
-        for (final hit in page.hits.whereType<MusicCatalogArtistHit>()) {
+        for (final hit in artists) {
           final pick = MusicStarterArtistPick.fromCatalog(hit.artist, server);
           if (pick == null || !seen.add(pick.catalogId!)) continue;
           results.add(pick);
           if (results.length == _resultLimit) break;
         }
         setState(() {
-          _status = _SearchStatus.success;
+          if (complete) _status = _SearchStatus.success;
           _results = results;
         });
+      }
+
+      try {
+        final page = await _catalog.searchPage(
+            query, MusicCatalogSearchType.artists, 1,
+            isCurrent: current, onArtistPreview: publish);
+        publish(page.hits.whereType<MusicCatalogArtistHit>(), complete: true);
       } catch (_) {
         if (current()) setState(() => _status = _SearchStatus.failed);
       }
