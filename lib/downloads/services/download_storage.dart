@@ -34,12 +34,13 @@ class DownloadFolder {
 
 typedef DownloadDestination = ({DownloadFolder? folder, bool usePrivate});
 typedef DownloadCapacity = ({String volume, int availableBytes});
-typedef MusicFileProbe = ({
+typedef DownloadFileProbe = ({
   DownloadedVideo download,
   String uri,
   String identity,
   int byteLength,
 });
+typedef MusicFileProbe = DownloadFileProbe;
 
 const defaultDownloadDestination = (folder: null, usePrivate: false);
 const privateDownloadDestination = (folder: null, usePrivate: true);
@@ -112,15 +113,23 @@ class DownloadStorage {
   static int _nextWrite = 0;
   static final _fileProof = RegExp(r'^[a-f0-9]{64}$');
 
-  static bool _readyMusicFile(DownloadedVideo file, String profileId) =>
+  static bool _readyDownloadFile(DownloadedVideo file, String profileId) =>
       file.profileId == profileId &&
       file.downloadComplete &&
       !file.downloadFailed &&
       !file.storageFailed &&
       !file.authenticationRequired &&
-      file.audioOnly &&
-      file.musicMetadata?.title.trim().isNotEmpty == true &&
       DownloadedVideo.isSafeFileId(file.videoId);
+
+  static bool _readyMusicFile(DownloadedVideo file, String profileId) =>
+      _readyDownloadFile(file, profileId) &&
+      file.audioOnly &&
+      file.musicMetadata?.title.trim().isNotEmpty == true;
+
+  static bool isReadyVideoFile(DownloadedVideo file, String profileId) =>
+      _readyDownloadFile(file, profileId) &&
+      !file.audioOnly &&
+      (file.storageUri == null) == (file.folderUri == null);
 
   static Future<String> _privateMusicFolder(String profileId) async =>
       p.joinAll([
@@ -144,6 +153,17 @@ class DownloadStorage {
   Future<List<MusicFileProbe>> probeMusicFiles(
           String profileId, Iterable<DownloadedVideo> downloads) =>
       _probeMusicFiles(profileId, downloads);
+
+  /// Probes completed video files through the same owned storage descriptors.
+  Future<List<DownloadedVideo>> probeVideoFiles(
+      String profileId, Iterable<DownloadedVideo> downloads) async {
+    final probes = await _probeFiles(
+      profileId,
+      downloads.where((file) => isReadyVideoFile(file, profileId)),
+      privateUri: (file) async => Uri.file(await file.effectivePath).toString(),
+    );
+    return probes.map((probe) => probe.download).toList();
+  }
 
   /// Reads audio properties from the verified file for a single inspector.
   Future<({String uri, int byteLength, MusicFileAudioFormat? audioFormat})?>
@@ -183,7 +203,7 @@ class DownloadStorage {
       );
       final value = available?[file.videoId];
       if (value is! Map<Object?, Object?>) return null;
-      final proof = _musicProbe(file, uri, value);
+      final proof = _fileProbe(file, uri, value);
       if (proof == null ||
           (expectedIdentity != null && proof.identity != expectedIdentity)) {
         return null;
@@ -198,7 +218,7 @@ class DownloadStorage {
     }
   }
 
-  static MusicFileProbe? _musicProbe(
+  static DownloadFileProbe? _fileProbe(
     DownloadedVideo file,
     String uri,
     Object? value,
@@ -218,25 +238,32 @@ class DownloadStorage {
 
   Future<List<MusicFileProbe>> _probeMusicFiles(
       String profileId, Iterable<DownloadedVideo> downloads,
-      {String? expectedSha256}) async {
-    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return [];
-
-    final files = downloads
-        .where((file) => _readyMusicFile(file, profileId))
-        .toList(growable: false);
-    final result = <MusicFileProbe>[];
+      {String? expectedSha256}) {
     String? privateFolder;
+    return _probeFiles(
+      profileId,
+      downloads.where((file) => _readyMusicFile(file, profileId)),
+      expectedSha256: expectedSha256,
+      privateUri: (file) async {
+        privateFolder ??= await _privateMusicFolder(profileId);
+        return _privateMusicUri(privateFolder!, file);
+      },
+    );
+  }
+
+  Future<List<DownloadFileProbe>> _probeFiles(
+      String profileId, Iterable<DownloadedVideo> downloads,
+      {required Future<String> Function(DownloadedVideo) privateUri,
+      String? expectedSha256}) async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return [];
+    final files = downloads.toList(growable: false);
+    final result = <DownloadFileProbe>[];
     for (var start = 0; start < files.length; start += 64) {
       final batch = <String, ({DownloadedVideo file, String uri})>{};
       for (final file in files.skip(start).take(64)) {
         try {
-          var uri = file.storageUri;
-          if (uri == null) {
-            privateFolder ??= await _privateMusicFolder(profileId);
-            uri = _privateMusicUri(privateFolder, file);
-          } else if (file.folderUri == null) {
-            continue;
-          }
+          if ((file.storageUri == null) != (file.folderUri == null)) continue;
+          final uri = file.storageUri ?? await privateUri(file);
           batch[file.videoId] = (file: file, uri: uri);
         } on Exception {
           // A missing private destination does not affect other downloads.
@@ -244,6 +271,8 @@ class DownloadStorage {
       }
       if (batch.isEmpty) continue;
       try {
+        // The existing channel opens owned descriptors for both media types
+        // when no audio properties are requested.
         final available =
             await _channel.invokeMapMethod<String, dynamic>('probeMusicFiles', {
           'profileId': profileId,
@@ -259,7 +288,7 @@ class DownloadStorage {
           ],
         });
         for (final entry in batch.entries) {
-          final proof = _musicProbe(
+          final proof = _fileProbe(
             entry.value.file,
             entry.value.uri,
             available?[entry.key],

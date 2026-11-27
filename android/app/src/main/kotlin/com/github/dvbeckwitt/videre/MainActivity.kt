@@ -509,6 +509,7 @@ private class VidereNetworkPlugin : FlutterPlugin {
                 when (call.method) {
                     "isWifiConnected" -> result.success(readConnectivity()["wifi"])
                     "readConnectivity" -> result.success(readConnectivity())
+                    "isNetworkConnected" -> result.success(readConnectivity()["connected"])
                     else -> result.notImplemented()
                 }
             }
@@ -524,15 +525,20 @@ private class VidereNetworkPlugin : FlutterPlugin {
         }
     }
 
-    private fun readConnectivity(): Map<String, Boolean> = runCatching {
-        connectivity.getNetworkCapabilities(connectivity.activeNetwork).downloadStatus()
-    }.getOrElse { mapOf("wifi" to false, "online" to true) }
+    private fun readConnectivity(): Map<String, Boolean?> = runCatching {
+        val network = connectivity.activeNetwork
+        networkState(network?.let { connectivity.getNetworkCapabilities(it) }, network != null)
+    }.getOrElse { mapOf("wifi" to false, "online" to true, "connected" to null) }
 
-    private fun NetworkCapabilities?.downloadStatus(): Map<String, Boolean> = mapOf(
-        "wifi" to (this?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true),
+    private fun networkState(
+        capabilities: NetworkCapabilities?,
+        connected: Boolean,
+    ): Map<String, Boolean> = mapOf(
+        "wifi" to (capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true),
         // Validation checks public Internet reachability. Videre also supports
         // private servers and VPN routes that can work without validation.
-        "online" to (this?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true)
+        "online" to (capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true),
+        "connected" to connected,
     )
 
     private fun watchNetwork(events: EventChannel.EventSink) {
@@ -577,10 +583,10 @@ private class VidereNetworkPlugin : FlutterPlugin {
             }
 
             private fun publishCurrentNetwork() {
-                publish((if (blocked) null else currentCapabilities).downloadStatus())
-            }
-
-            private fun publish(status: Map<String, Boolean>) {
+                val status = networkState(
+                    if (blocked) null else currentCapabilities,
+                    currentNetwork != null && !blocked,
+                )
                 mainHandler.post { if (networkCallback === this) events.success(status) }
             }
         }

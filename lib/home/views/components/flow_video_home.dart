@@ -10,8 +10,10 @@ import 'package:visibility_detector/visibility_detector.dart';
 
 import '../../../app/states/app.dart';
 import '../../../content_filter/community_filter.dart';
+import '../../../downloads/models/downloaded_video.dart';
 import '../../../globals.dart';
 import '../../../l10n/generated/app_localizations.dart';
+import '../../../network/connectivity.dart';
 import '../../../network/network_proxy.dart';
 import '../../../player/states/player.dart' show PlayerCubit;
 import '../../../recommendations/candidate_sources.dart';
@@ -38,6 +40,7 @@ import '../../../videos/views/components/recommendation_actions.dart';
 import '../../models/db/home_layout.dart';
 import '../../models/home_tabs_layout.dart';
 import '../screens/home_tabs_editor.dart';
+import 'offline_video_home_shelf.dart';
 
 /// Flow's HomeScreen/HomeFeedGrid at 565d1f7 is the presentation reference.
 /// This Flutter implementation retains Videre's local state and Invidious
@@ -197,7 +200,14 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
   bool _rebuildForYouOrder = false;
   late final StreamSubscription<AppState> _appChanges;
   late final StreamSubscription<SettingsState> _settingsChanges;
+  StreamSubscription<bool>? _networkChanges;
+  late final _downloadAdmissionChanges =
+      Listenable.merge([_engine.changes, communityFilters.changes]);
   late AppState _previousAppState;
+  bool? _online;
+  bool _refreshOnReconnect = false;
+  bool _offlineShelfVisible = false;
+  bool _keepOfflineShelf = false;
 
   bool get _current =>
       _sessionCurrent &&
@@ -234,6 +244,7 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
     _previousAppState = _app.state;
     _appChanges = _app.stream.listen(_appChanged);
     _settingsChanges = _settings.stream.listen(_layoutChanged);
+    unawaited(_watchConnectivity());
     _feedsVisited = _selectedTab == HomeTabsLayout.yourFeeds;
     if (_selectedTab == HomeTabsLayout.yourFeeds) {
       unawaited(_resolveTopicCatalog());
@@ -241,6 +252,60 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
       unawaited(_load());
     }
     unawaited(_warmSubscriptions());
+  }
+
+  Future<void> _watchConnectivity() async {
+    final initial = await isNetworkConnected();
+    if (!mounted || initial == null) return;
+    var receivedEvent = false;
+    _networkChanges = networkConnectivityChanges.listen((online) {
+      receivedEvent = true;
+      _connectivityChanged(online);
+    }, onError: (Object _) {});
+    // Downloads may already be listening to the stream. It does not replay
+    // its initial event to a late listener.
+    final current = await isNetworkConnected();
+    if (!receivedEvent) _connectivityChanged(current ?? initial);
+  }
+
+  void _connectivityChanged(bool online) {
+    if (!mounted || _online == online) return;
+    setState(() {
+      _refreshOnReconnect = online && _online == false && _sessionCurrent;
+      if (_refreshOnReconnect && _offlineShelfVisible) _keepOfflineShelf = true;
+      _online = online;
+    });
+  }
+
+  Future<void> _refreshFeed() async {
+    if (!_current || _online == false) return;
+    final reconnect = _refreshOnReconnect;
+    if (reconnect) {
+      setState(() {
+        _refreshOnReconnect = false;
+        _keepOfflineShelf = false;
+        _offlineShelfVisible = false;
+        if (_discovering) {
+          _revision++;
+          _loading = false;
+          _discovering = false;
+        }
+      });
+      unawaited(_warmSubscriptions(forceRefresh: true));
+    }
+    await _load(refresh: true);
+  }
+
+  bool _includeDownload(DownloadedVideo download) {
+    final video = Video(
+      videoId: download.videoId,
+      title: download.title,
+      author: download.author,
+      authorId: channelIdFromAuthorUrl(download.authorUrl),
+      authorUrl: download.authorUrl,
+      lengthSeconds: download.lengthSeconds,
+    );
+    return _engine.eligibleVideos([video]).isNotEmpty;
   }
 
   List<String> get _availableTabIds => [
@@ -353,6 +418,8 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
 
   void _resetSelection() {
     _feedCards.clear();
+    _offlineShelfVisible = false;
+    _keepOfflineShelf = false;
     _subscriptionOrderPending = false;
     _rebuildForYouOrder = false;
     _videos = [];
@@ -771,6 +838,9 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
     _clearImpressions();
     setState(() {
       _revision++;
+      _offlineShelfVisible = false;
+      _keepOfflineShelf = false;
+      _refreshOnReconnect = false;
       _loading = false;
       _discovering = false;
       _available = false;
@@ -1138,6 +1208,7 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
     _subscriptionRevision++;
     unawaited(_appChanges.cancel());
     unawaited(_settingsChanges.cancel());
+    unawaited(_networkChanges?.cancel());
     _engine.changes.removeListener(_recommendationsChanged);
     playbackHistoryRevision.removeListener(_changed);
     communityFilters.changes.removeListener(_changed);
@@ -1365,7 +1436,8 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
     );
   }
 
-  Widget _phoneFeed(List<Video> videos, List<Video> continuing, double width) {
+  Widget _phoneFeed(List<Video> videos, List<Video> continuing, double width,
+      Widget? offlineShelf) {
     final columns = (width / 360).floor().clamp(1, 4);
     final firstRow = videos.take(columns).toList();
     final remainder = videos.skip(columns).toList();
@@ -1380,6 +1452,7 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
           _grid(firstRow, columns: columns, width: width),
       if (continuing.isNotEmpty)
         SliverToBoxAdapter(child: _continueWatching(continuing)),
+      if (offlineShelf case final shelf?) SliverToBoxAdapter(child: shelf),
       if (remainder.isNotEmpty)
         if (columns == 1)
           SliverList.builder(
@@ -1499,26 +1572,59 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
             }
           },
         );
-    final strip = FlowHomeChipStrip(trailing: editAction, chips: [
-      ...widget.leadingChips,
-      ...chips,
-      if (enabledIds.isNotEmpty && !widget.television)
-        IconButton(
-          tooltip: locals.localRecommendations,
-          onPressed: () => showRecommendationSettings(context),
-          icon: const Icon(Icons.tune_rounded, size: 20),
-        ),
-    ]);
+    final strip = FlowHomeChipStrip(
+        trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+          editAction,
+          if (_refreshOnReconnect && _current)
+            IconButton(
+              key: const ValueKey('video-home-refresh-online'),
+              tooltip: locals.flowHomeOnlineRefresh,
+              icon: const Icon(Icons.refresh),
+              onPressed: _refreshFeed,
+            ),
+        ]),
+        chips: [
+          ...widget.leadingChips,
+          ...chips,
+          if (enabledIds.isNotEmpty && !widget.television)
+            IconButton(
+              tooltip: locals.localRecommendations,
+              onPressed: () => showRecommendationSettings(context),
+              icon: const Icon(Icons.tune_rounded, size: 20),
+            ),
+        ]);
     // The anchored prefix can outlive cards displaced by the ranker's cap.
     final feedVideos = _engine.eligibleVideos(_videos, limit: _videos.length);
-    final feedIds = feedVideos.map((video) => video.videoId).toSet();
+    _offlineShelfVisible = _current &&
+        (_keepOfflineShelf ||
+            (_online == false &&
+                feedVideos.isEmpty &&
+                (!_loading || _discovering || _offlineShelfVisible)));
+    final shelfTab = _selectedTab;
+    final offlineShelf = _offlineShelfVisible
+        ? OfflineVideoHomeShelf(
+            key: ValueKey((shelfTab, _profile, _session)),
+            owner: _owner,
+            isCurrent: () =>
+                _current &&
+                _offlineShelfVisible &&
+                _selectedTab == shelfTab &&
+                !NetworkProxy.instance.isChanging,
+            include: _includeDownload,
+            admissionChanges: _downloadAdmissionChanges,
+            online: _online == true,
+            television: widget.television,
+          )
+        : null;
+    final visibleFeed = offlineShelf == null ? feedVideos : const <Video>[];
+    final feedIds = visibleFeed.map((video) => video.videoId).toSet();
     _feedCards.removeWhere(
         (id, context) => !context.mounted || !feedIds.contains(id));
     final feed = CommunityBrowse<Video>(
-      items: feedVideos,
+      items: visibleFeed,
       match: videoCommunityMatches,
       builder: (context, videos, notice) => RefreshIndicator(
-        onRefresh: () => _load(refresh: true),
+        onRefresh: _refreshFeed,
         child: LayoutBuilder(builder: (context, constraints) {
           // Only viewport width affects the card layout. Sliver constraints
           // also change with the scroll offset.
@@ -1558,12 +1664,13 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
                         if (chips.isNotEmpty) strip,
                         if (continuing.isNotEmpty)
                           _continueWatching(continuing),
-                        _status(context, videos, notice),
+                        if (offlineShelf == null)
+                          _status(context, videos, notice),
                       ],
                     ),
                   ),
                 )
-              else
+              else if (offlineShelf == null)
                 SliverToBoxAdapter(
                   child: Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -1571,10 +1678,13 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
                   ),
                 ),
               if (widget.television)
-                _grid(videos,
-                    columns: (width / 360).floor().clamp(1, 4), width: width)
+                if (offlineShelf != null)
+                  SliverToBoxAdapter(child: offlineShelf)
+                else
+                  _grid(videos,
+                      columns: (width / 360).floor().clamp(1, 4), width: width)
               else
-                _phoneFeed(videos, continuing, width),
+                _phoneFeed(videos, continuing, width, offlineShelf),
             ],
           );
         }),

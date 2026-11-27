@@ -3491,5 +3491,10 @@
   "musicLyricsPlainEditInstructions": "Type or paste lyrics without timestamps. Videre saves this draft to your profile.",
   "musicLyricsPlainDraftInvalid": "Enter plain lyrics without timestamps or unsupported control characters.",
   "musicLyricsRemovePlain": "Remove your plain lyrics",
-  "musicLyricsRemovePlainConfirm": "Remove the plain lyrics draft from your profile?"
+  "musicLyricsRemovePlainConfirm": "Remove the plain lyrics draft from your profile?",
+  "flowHomeOffline": "You’re offline",
+  "flowHomeOfflineEmpty": "No downloaded videos are available to play.",
+  "flowHomeBackOnline": "Back online",
+  "flowHomeOnlineRefresh": "Back online. Refresh",
+  "flowHomeDownloadUnavailable": "This download is no longer available."
 }
