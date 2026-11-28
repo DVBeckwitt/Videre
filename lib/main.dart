@@ -20,6 +20,7 @@ import 'package:flutter_displaymode/flutter_displaymode.dart';
 import 'package:clipious/l10n/app_languages.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/app/states/app.dart';
+import 'package:clipious/downloads/services/download_notifications.dart';
 import 'package:clipious/downloads/states/download_manager.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/http_overrides.dart';
@@ -95,7 +96,6 @@ Future<void> main() async {
   // Resolve the interface before constructing its route table.
   isTv = await isDeviceTv();
   appRouter = AppRouter(hasServer: hasServer);
-  initializeNotifications();
 
   // Start the shared controller with the engine. Android can ask the media
   // session to play while there is no Activity to build the provider tree.
@@ -103,10 +103,36 @@ Future<void> main() async {
       AppState(0, selectedServer, db.getHomeLayout(), profileId: db.profileId),
       onResume: () => unawaited(communityFilters.refreshIfStale()));
   final settings = SettingsCubit(SettingsState.init(), app);
+  AppLocalizations notificationLocale() =>
+      lookupAppLocalizations(parseSavedLocale(settings.state.locale) ??
+          basicLocaleListResolution(
+              WidgetsBinding.instance.platformDispatcher.locales,
+              AppLocalizations.supportedLocales));
+  await initializeNotifications(notificationLocale());
   final player = PlayerCubit(PlayerState.init(null), settings,
       ownAudioDecoder:
           !kIsWeb && defaultTargetPlatform == TargetPlatform.android && !isTv);
   final downloads = DownloadManagerCubit(const DownloadManagerState(), player);
+  final downloadNotifications =
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.android
+          ? DownloadNotifications.android(notificationLocale)
+          : null;
+  if (downloadNotifications != null) {
+    void syncDownloadNotifications(DownloadManagerState state) {
+      if (!app.isClosed &&
+          !app.state.globalLoading &&
+          !app.state.sessionRecoveryRequired &&
+          app.state.profileId == db.profileId) {
+        downloadNotifications.observe(state, db.profileId);
+      }
+    }
+
+    syncDownloadNotifications(downloads.state);
+    downloads.stream.listen(syncDownloadNotifications);
+    app.stream.listen((_) => syncDownloadNotifications(downloads.state));
+    NotificationController.onDownloadRetry =
+        downloads.retryDownloadFromNotification;
+  }
 
   WidgetsBinding.instance.addPostFrameCallback((_) {
     unawaited(configureBackgroundService(settings));
@@ -121,7 +147,7 @@ Future<void> main() async {
       BlocProvider.value(value: settings),
       BlocProvider.value(value: player),
       BlocProvider.value(value: downloads),
-    ], child: const MyApp()),
+    ], child: MyApp(downloadNotifications: downloadNotifications)),
   ));
 }
 
@@ -136,7 +162,9 @@ Future<void> _setHighRefreshRate() async {
 late ColorScheme darkColorScheme;
 
 class MyApp extends StatefulWidget {
-  const MyApp({super.key});
+  const MyApp({super.key, this.downloadNotifications});
+
+  final DownloadNotifications? downloadNotifications;
 
   @override
   State<MyApp> createState() => _MyAppState();
@@ -217,9 +245,11 @@ class _MyAppState extends State<MyApp> {
         !app.state.globalLoading &&
         !app.state.sessionRecoveryRequired;
     app.clearSessionNotifications = () async {
+      await widget.downloadNotifications?.clear();
       await AwesomeNotifications().dismissAllNotifications();
     };
     app.beforeAccountSwitch = () async {
+      await widget.downloadNotifications?.clear();
       await PodcastDownloads.forProfile(db, db.profileId).cancelAll();
       await downloads.pauseForProfileSwitch();
       await player.prepareForProfileSwitch();

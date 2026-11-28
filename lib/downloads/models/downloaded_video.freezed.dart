@@ -23,6 +23,7 @@ mixin _$DownloadedVideo {
 // Only the playback session stores this fingerprint.
   @JsonKey(includeFromJson: false, includeToJson: false)
   String? get explicitMusicDownload;
+  String? get notificationTicket;
   String get title;
   String get profileId;
   String? get accountId;
@@ -77,6 +78,8 @@ mixin _$DownloadedVideo {
                 other.queueEntryId == queueEntryId) &&
             (identical(other.explicitMusicDownload, explicitMusicDownload) ||
                 other.explicitMusicDownload == explicitMusicDownload) &&
+            (identical(other.notificationTicket, notificationTicket) ||
+                other.notificationTicket == notificationTicket) &&
             (identical(other.title, title) || other.title == title) &&
             (identical(other.profileId, profileId) ||
                 other.profileId == profileId) &&
@@ -134,6 +137,7 @@ mixin _$DownloadedVideo {
         videoId,
         queueEntryId,
         explicitMusicDownload,
+        notificationTicket,
         title,
         profileId,
         accountId,
@@ -163,7 +167,7 @@ mixin _$DownloadedVideo {
 
   @override
   String toString() {
-    return 'DownloadedVideo(videoId: $videoId, queueEntryId: $queueEntryId, explicitMusicDownload: $explicitMusicDownload, title: $title, profileId: $profileId, accountId: $accountId, author: $author, authorUrl: $authorUrl, musicMetadata: $musicMetadata, sponsorSegments: $sponsorSegments, downloadComplete: $downloadComplete, downloadFailed: $downloadFailed, authenticationRequired: $authenticationRequired, storageFailed: $storageFailed, folderUri: $folderUri, storageUri: $storageUri, playbackProvenance: $playbackProvenance, audioOnly: $audioOnly, musicFormat: $musicFormat, musicPolicy: $musicPolicy, exportedMusic: $exportedMusic, editedMusicExport: $editedMusicExport, pendingEditedMusicExport: $pendingEditedMusicExport, container: $container, audioTrackId: $audioTrackId, captionLabel: $captionLabel, lengthSeconds: $lengthSeconds, quality: $quality)';
+    return 'DownloadedVideo(videoId: $videoId, queueEntryId: $queueEntryId, explicitMusicDownload: $explicitMusicDownload, notificationTicket: $notificationTicket, title: $title, profileId: $profileId, accountId: $accountId, author: $author, authorUrl: $authorUrl, musicMetadata: $musicMetadata, sponsorSegments: $sponsorSegments, downloadComplete: $downloadComplete, downloadFailed: $downloadFailed, authenticationRequired: $authenticationRequired, storageFailed: $storageFailed, folderUri: $folderUri, storageUri: $storageUri, playbackProvenance: $playbackProvenance, audioOnly: $audioOnly, musicFormat: $musicFormat, musicPolicy: $musicPolicy, exportedMusic: $exportedMusic, editedMusicExport: $editedMusicExport, pendingEditedMusicExport: $pendingEditedMusicExport, container: $container, audioTrackId: $audioTrackId, captionLabel: $captionLabel, lengthSeconds: $lengthSeconds, quality: $quality)';
   }
 }
 
@@ -179,6 +183,7 @@ abstract mixin class $DownloadedVideoCopyWith<$Res> {
       String? queueEntryId,
       @JsonKey(includeFromJson: false, includeToJson: false)
       String? explicitMusicDownload,
+      String? notificationTicket,
       String title,
       String profileId,
       String? accountId,
@@ -223,6 +228,7 @@ class _$DownloadedVideoCopyWithImpl<$Res>
     Object? videoId = null,
     Object? queueEntryId = freezed,
     Object? explicitMusicDownload = freezed,
+    Object? notificationTicket = freezed,
     Object? title = null,
     Object? profileId = null,
     Object? accountId = freezed,
@@ -261,6 +267,10 @@ class _$DownloadedVideoCopyWithImpl<$Res>
       explicitMusicDownload: freezed == explicitMusicDownload
           ? _self.explicitMusicDownload
           : explicitMusicDownload // ignore: cast_nullable_to_non_nullable
+              as String?,
+      notificationTicket: freezed == notificationTicket
+          ? _self.notificationTicket
+          : notificationTicket // ignore: cast_nullable_to_non_nullable
               as String?,
       title: null == title
           ? _self.title
@@ -374,6 +384,7 @@ class _DownloadedVideo extends DownloadedVideo implements IdedVideo {
       @JsonKey(includeFromJson: false, includeToJson: false) this.queueEntryId,
       @JsonKey(includeFromJson: false, includeToJson: false)
       this.explicitMusicDownload,
+      this.notificationTicket,
       required this.title,
       this.profileId = 'default',
       this.accountId,
@@ -417,6 +428,8 @@ class _DownloadedVideo extends DownloadedVideo implements IdedVideo {
   @override
   @JsonKey(includeFromJson: false, includeToJson: false)
   final String? explicitMusicDownload;
+  @override
+  final String? notificationTicket;
   @override
   final String title;
   @override
@@ -513,6 +526,8 @@ class _DownloadedVideo extends DownloadedVideo implements IdedVideo {
                 other.queueEntryId == queueEntryId) &&
             (identical(other.explicitMusicDownload, explicitMusicDownload) ||
                 other.explicitMusicDownload == explicitMusicDownload) &&
+            (identical(other.notificationTicket, notificationTicket) ||
+                other.notificationTicket == notificationTicket) &&
             (identical(other.title, title) || other.title == title) &&
             (identical(other.profileId, profileId) ||
                 other.profileId == profileId) &&
@@ -570,6 +585,7 @@ class _DownloadedVideo extends DownloadedVideo implements IdedVideo {
         videoId,
         queueEntryId,
         explicitMusicDownload,
+        notificationTicket,
         title,
         profileId,
         accountId,
@@ -599,7 +615,7 @@ class _DownloadedVideo extends DownloadedVideo implements IdedVideo {
 
   @override
   String toString() {
-    return 'DownloadedVideo(videoId: $videoId, queueEntryId: $queueEntryId, explicitMusicDownload: $explicitMusicDownload, title: $title, profileId: $profileId, accountId: $accountId, author: $author, authorUrl: $authorUrl, musicMetadata: $musicMetadata, sponsorSegments: $sponsorSegments, downloadComplete: $downloadComplete, downloadFailed: $downloadFailed, authenticationRequired: $authenticationRequired, storageFailed: $storageFailed, folderUri: $folderUri, storageUri: $storageUri, playbackProvenance: $playbackProvenance, audioOnly: $audioOnly, musicFormat: $musicFormat, musicPolicy: $musicPolicy, exportedMusic: $exportedMusic, editedMusicExport: $editedMusicExport, pendingEditedMusicExport: $pendingEditedMusicExport, container: $container, audioTrackId: $audioTrackId, captionLabel: $captionLabel, lengthSeconds: $lengthSeconds, quality: $quality)';
+    return 'DownloadedVideo(videoId: $videoId, queueEntryId: $queueEntryId, explicitMusicDownload: $explicitMusicDownload, notificationTicket: $notificationTicket, title: $title, profileId: $profileId, accountId: $accountId, author: $author, authorUrl: $authorUrl, musicMetadata: $musicMetadata, sponsorSegments: $sponsorSegments, downloadComplete: $downloadComplete, downloadFailed: $downloadFailed, authenticationRequired: $authenticationRequired, storageFailed: $storageFailed, folderUri: $folderUri, storageUri: $storageUri, playbackProvenance: $playbackProvenance, audioOnly: $audioOnly, musicFormat: $musicFormat, musicPolicy: $musicPolicy, exportedMusic: $exportedMusic, editedMusicExport: $editedMusicExport, pendingEditedMusicExport: $pendingEditedMusicExport, container: $container, audioTrackId: $audioTrackId, captionLabel: $captionLabel, lengthSeconds: $lengthSeconds, quality: $quality)';
   }
 }
 
@@ -617,6 +633,7 @@ abstract mixin class _$DownloadedVideoCopyWith<$Res>
       String? queueEntryId,
       @JsonKey(includeFromJson: false, includeToJson: false)
       String? explicitMusicDownload,
+      String? notificationTicket,
       String title,
       String profileId,
       String? accountId,
@@ -661,6 +678,7 @@ class __$DownloadedVideoCopyWithImpl<$Res>
     Object? videoId = null,
     Object? queueEntryId = freezed,
     Object? explicitMusicDownload = freezed,
+    Object? notificationTicket = freezed,
     Object? title = null,
     Object? profileId = null,
     Object? accountId = freezed,
@@ -699,6 +717,10 @@ class __$DownloadedVideoCopyWithImpl<$Res>
       explicitMusicDownload: freezed == explicitMusicDownload
           ? _self.explicitMusicDownload
           : explicitMusicDownload // ignore: cast_nullable_to_non_nullable
+              as String?,
+      notificationTicket: freezed == notificationTicket
+          ? _self.notificationTicket
+          : notificationTicket // ignore: cast_nullable_to_non_nullable
               as String?,
       title: null == title
           ? _self.title

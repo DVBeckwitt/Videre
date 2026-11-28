@@ -411,6 +411,117 @@ void main() {
     expect(manager.state.totalProgress, 0);
   });
 
+  test('Music admissions keep Watch downloads and seed Music job labels',
+      () async {
+    final watch = video.copyWith(downloadComplete: true);
+    await db.upsertDownload(watch);
+    final original = File(await watch.downloadPath);
+    await original.writeAsBytes([2, 4, 8]);
+    expect(
+        await manager.addDownload(watch.videoId,
+            audioOnly: true,
+            quality: highestAudioDownloadQuality,
+            video: Video(videoId: watch.videoId, title: 'Music result')),
+        isFalse);
+    expect(db.getDownloadByVideoId(watch.videoId), watch);
+    expect(await original.readAsBytes(), [2, 4, 8]);
+
+    final song = Video(
+        videoId: 'new-music', title: 'Catalog title', author: 'Catalog artist');
+    expect(
+        await manager.addDownload(song.videoId,
+            audioOnly: true, quality: highestAudioDownloadQuality, video: song),
+        isTrue);
+    final queued =
+        manager.state.videos.singleWhere((row) => row.videoId == song.videoId);
+    expect(queued.musicMetadata?.title, 'Catalog title');
+    expect(queued.musicMetadata?.artist, 'Catalog artist');
+    expect(queued.notificationTicket, isNotEmpty);
+    expect(queued.downloadComplete, isFalse);
+    expect(manager.state.waitingForWifiFor(queued), isTrue);
+  });
+
+  test('legacy Music jobs with failed metadata requests recover visible labels',
+      () async {
+    final failed = video.copyWith(
+        videoId: 'old-music',
+        audioOnly: true,
+        title: 'Old Music',
+        author: 'Old artist',
+        quality: highestAudioDownloadQuality,
+        downloadFailed: true);
+    final generic = video.copyWith(videoId: 'watch-audio', audioOnly: true);
+    await db.upsertDownload(failed);
+    await db.upsertDownload(generic);
+    manager.setVideos();
+
+    final visible = manager.state.videos
+        .singleWhere((row) => row.videoId == failed.videoId);
+    expect(visible.musicMetadata?.title, 'Old Music');
+    expect(visible.musicMetadata?.artist, 'Old artist');
+    expect(visible.downloadFailed, isTrue);
+    expect(db.getDownloadByVideoId(failed.videoId)?.musicMetadata, isNotNull);
+    expect(db.getDownloadByVideoId(generic.videoId)?.musicMetadata, isNull);
+  });
+
+  test(
+      'adopting completed audio preserves its file and has no notification ticket',
+      () async {
+    final original = video.copyWith(
+        audioOnly: true,
+        downloadComplete: true,
+        container: DownloadContainer.webm);
+    await db.upsertDownload(original);
+    final file = File(await original.downloadPath);
+    await file.writeAsBytes([1, 2, 3]);
+    final song = Video(
+        videoId: original.videoId,
+        musicMetadata:
+            const MusicMetadata(title: 'Catalog song', artist: 'Artist'));
+    expect(
+        await manager.addDownload(song.videoId,
+            audioOnly: true, quality: highestAudioDownloadQuality, video: song),
+        isTrue);
+    final adopted = db.getDownloadByVideoId(song.videoId)!;
+    expect(adopted.musicMetadata?.title, 'Catalog song');
+    expect(adopted.title, original.title);
+    expect(adopted.quality, original.quality);
+    expect(adopted.container, original.container);
+    expect(adopted.downloadComplete, isTrue);
+    expect(adopted.notificationTicket, isNull);
+    expect(await file.readAsBytes(), [1, 2, 3]);
+    expect(manager.state.videos.single.musicMetadata?.title, 'Catalog song');
+  });
+
+  test(
+      'an in-flight audio worker preserves adopted labels and ticket when finishing',
+      () async {
+    final snapshot = video.copyWith(audioOnly: true, folderUri: folder);
+    await db.upsertDownload(snapshot);
+    final song = Video(
+        videoId: snapshot.videoId,
+        musicMetadata:
+            const MusicMetadata(title: 'Adopted song', artist: 'Artist'));
+    expect(
+        await manager.addDownload(song.videoId,
+            audioOnly: true, quality: highestAudioDownloadQuality, video: song),
+        isTrue);
+    final ticket = db.getDownloadByVideoId(song.videoId)!.notificationTicket;
+    expect(ticket, isNotEmpty);
+
+    // The transfer holds a snapshot from before the Music request.
+    await db.upsertDownload(snapshot.copyWith(
+        accountId: (await db.getCurrentlySelectedServer()).accountId,
+        storageUri: document,
+        container: DownloadContainer.webm,
+        downloadComplete: true));
+    final saved = db.getDownloadByVideoId(song.videoId)!;
+    expect(saved.downloadComplete, isTrue);
+    expect(saved.storageUri, document);
+    expect(saved.musicMetadata?.title, 'Adopted song');
+    expect(saved.notificationTicket, ticket);
+  });
+
   group('Keep cached Music', () {
     const proxyChannel = MethodChannel('videre/proxy');
     const bytes = [0x1a, 0x45, 0xdf, 0xa3, 1, 2, 3, 4];
@@ -806,7 +917,13 @@ void main() {
               quality: highestAudioDownloadQuality,
               video: explicit),
           isTrue);
-      expect(db.getDownloadByVideoId(explicit.videoId)!.toJson(),
+      final promoted = db.getDownloadByVideoId(explicit.videoId)!;
+      expect(explicitRecord.notificationTicket, isNull);
+      expect(
+          promoted.notificationTicket,
+          matches(RegExp(
+              r'^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$')));
+      expect(promoted.copyWith(notificationTicket: null).toJson(),
           explicitRecord.toJson());
       expect(manager.isMusicDownloadPlaylistOnly(explicit.videoId), isFalse);
       expect(manager.isMusicDownloadPlaylistOnly(legacy.videoId), isFalse);
@@ -819,6 +936,8 @@ void main() {
       await legacyFile.writeAsString('legacy');
       await db.upsertDownload(sharedRecord.copyWith(downloadComplete: true));
       await db.upsertDownload(explicitRecord.copyWith(downloadComplete: true));
+      expect(db.getDownloadByVideoId(explicit.videoId)!.notificationTicket,
+          promoted.notificationTicket);
       await manager.deleteVideo(sharedRecord);
       expect(await sharedFile.readAsString(), 'shared');
       expect(await manager.setPlaylistKeptOffline(firstId, false), isTrue);
@@ -5307,6 +5426,31 @@ void main() {
         .any((item) => item.videoId == nextId && item.downloadComplete));
     expect(db.getDownloadByVideoId(video.videoId)!.downloadFailed, true);
     expect(db.getDownloadByVideoId(nextId)!.downloadFailed, false);
+  });
+
+  test('notification retry only affects the matching failed Music job',
+      () async {
+    final failed = video.copyWith(
+        audioOnly: true, downloadFailed: true, notificationTicket: 'ticket');
+    await db.upsertDownload(failed);
+    manager.setVideos();
+
+    await manager.retryDownloadFromNotification(
+        'another-profile', failed.videoId, 'ticket');
+    await manager.retryDownloadFromNotification(
+        failed.profileId, failed.videoId, 'old-ticket');
+    expect(db.getDownloadByVideoId(failed.videoId), failed);
+
+    await manager.retryDownloadFromNotification(
+        failed.profileId, failed.videoId, 'ticket');
+    final queued = failed.copyWith(downloadFailed: false);
+    expect(db.getDownloadByVideoId(failed.videoId), queued);
+    expect(manager.state.videos.single, queued);
+
+    await manager.pauseDownload(queued);
+    await manager.retryDownloadFromNotification(
+        failed.profileId, failed.videoId, 'ticket');
+    expect(manager.state.pausedVideoIds, contains(failed.videoId));
   });
 
   test('video details observe queued jobs through failure and completion',

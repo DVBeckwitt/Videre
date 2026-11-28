@@ -11,6 +11,7 @@ import 'package:clipious/music/models/song_artwork.dart';
 import 'package:clipious/music/services/invidious_music_catalog_service.dart';
 import 'package:clipious/music/services/music_catalog_service.dart';
 import 'package:clipious/music/services/music_library_service.dart';
+import 'package:clipious/music/services/music_song_radio.dart';
 import 'package:clipious/network/gateway_context.dart';
 import 'package:clipious/network/nerdvpn_access.dart';
 import 'package:clipious/network/network_proxy.dart';
@@ -2012,6 +2013,46 @@ void main() {
             .having((error) => error.isRateLimited, 'isRateLimited', isTrue)));
     expect(requests.single.url.path, '/api/v1/videos/${_discoveryId(0)}');
   });
+
+  for (final native in [false, true]) {
+    test('song radio keeps the partial lane after cooldown (native=$native)',
+        () async {
+      respond = (request) async {
+        final id = request.url.pathSegments.last;
+        if (id == _discoveryId(0)) {
+          return _json({
+            ..._discoveryVideo(0),
+            'recommendedVideos': [
+              for (final index in [1, 2, 3]) _discoveryVideo(index),
+            ],
+          }, request);
+        }
+        if (id == _discoveryId(1)) return _json(_discoveryVideo(1), request);
+        expect(id, _discoveryId(2));
+        if (native) throw const NerdVpnAccessRequired('rateLimited');
+        return http.Response('Rate limited', 429,
+            request: request, headers: {'retry-after': '120'});
+      };
+
+      final songs = await loadMusicSongRadio(
+          Video(
+              videoId: _discoveryId(0),
+              authorId: _channelId,
+              musicMetadata:
+                  const MusicMetadata(title: 'Seed', artist: 'Test artist')),
+          catalog: catalog,
+          isCurrent: () => true,
+          eligible: (tracks) => tracks);
+
+      expect(songs.map((song) => song.videoId),
+          [_discoveryId(0), _discoveryId(1)]);
+      expect(requests.map((request) => request.url.path), [
+        for (final index in [0, 1, 2]) '/api/v1/videos/${_discoveryId(index)}',
+      ]);
+      expect(requests.map((request) => request.url.host).toSet(),
+          {'invidious.example'});
+    });
+  }
 
   test('discovery preserves user content filters before fetching details',
       () async {

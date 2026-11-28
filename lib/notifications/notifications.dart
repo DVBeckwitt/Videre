@@ -1,4 +1,6 @@
 import 'package:awesome_notifications/awesome_notifications.dart';
+import 'package:clipious/downloads/services/download_notifications.dart';
+import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:flutter/foundation.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/notifications/models/db/subscription_notifications.dart';
@@ -43,6 +45,13 @@ enum NotificationTypes {
       name: 'Save to Music playlist',
       idSpace: 5000000,
       playSound: false,
+      importance: NotificationImportance.Low),
+  musicDownloads(
+      id: downloadNotificationChannelKey,
+      description: 'Progress and results for your Music downloads',
+      name: 'Downloads',
+      idSpace: downloadNotificationIdSpace,
+      playSound: false,
       importance: NotificationImportance.Low);
 
   final NotificationImportance importance;
@@ -61,18 +70,27 @@ enum NotificationTypes {
       this.importance = NotificationImportance.Default});
 }
 
-initializeNotifications() {
+Future<void> initializeNotifications(AppLocalizations locals) async {
   var defaultIcon = 'resource://drawable/app_icon';
-  AwesomeNotifications().initialize(
+  await AwesomeNotifications().initialize(
       defaultIcon,
       NotificationTypes.values
           .map((e) => NotificationChannel(
               icon: defaultIcon,
               channelKey: e.id,
-              channelName: e.name,
-              channelDescription: e.description,
+              channelName: e == NotificationTypes.musicDownloads
+                  ? locals.downloadNotificationChannel
+                  : e.name,
+              channelDescription: e == NotificationTypes.musicDownloads
+                  ? locals.downloadNotificationChannelDescription
+                  : e.description,
               playSound: e.playSound,
               enableVibration: e.playSound,
+              onlyAlertOnce:
+                  e == NotificationTypes.musicDownloads ? true : null,
+              defaultPrivacy: e == NotificationTypes.musicDownloads
+                  ? NotificationPrivacy.Private
+                  : null,
               importance: e.importance))
           .toList(),
       debug: kDebugMode);
@@ -108,6 +126,8 @@ class MusicPlaylistSaveNotification {
 
 class NotificationController {
   static bool Function() canHandleActions = () => true;
+  static Future<void> Function(String profileId, String videoId, String ticket)?
+      onDownloadRetry;
 
   static Future<Server?> _selectedAccount(
       {bool subscriptions = false, bool hasScopedPayload = true}) async {
@@ -167,6 +187,18 @@ class NotificationController {
   @pragma("vm:entry-point")
   static Future<void> onActionReceivedMethod(
       ReceivedAction receivedAction) async {
+    if (receivedAction.channelKey == downloadNotificationChannelKey) {
+      final target = downloadNotificationRetryTarget(receivedAction);
+      if (target != null && canHandleActions()) {
+        try {
+          await onDownloadRetry?.call(
+              target.profileId, target.videoId, target.ticket);
+        } catch (error) {
+          log.fine('Download notification retry failed (${error.runtimeType})');
+        }
+      }
+      return;
+    }
     if (receivedAction.channelKey == NotificationTypes.musicPlaylistSave.id) {
       final ticket =
           receivedAction.payload?[MusicPlaylistSaveNotification._ticketKey];

@@ -385,6 +385,10 @@ class _MusicPlayerState extends State<MusicPlayer>
             queueId == state.currentQueueId
         ? queueId
         : null;
+    final showSongShortcuts = advisoryQueueId != null;
+    final showPassageShortcut = showSongShortcuts &&
+        player.canSeekCurrentMedia &&
+        player.captureMusicPassage() != null;
     final metadataOccurrence = (
       session.profileId,
       session.sessionRevision,
@@ -409,6 +413,11 @@ class _MusicPlayerState extends State<MusicPlayer>
       visualDensity: VisualDensity.compact,
       minimumSize: const Size.square(40),
       padding: const EdgeInsets.all(9),
+    );
+    final shortcutStyle = IconButton.styleFrom(
+      foregroundColor: colors.onPrimaryContainer,
+      backgroundColor: colors.primaryContainer,
+      minimumSize: const Size.square(48),
     );
     final view = LayoutBuilder(builder: (context, constraints) {
       final wide = constraints.maxWidth >= 640 && constraints.maxHeight >= 480;
@@ -518,28 +527,29 @@ class _MusicPlayerState extends State<MusicPlayer>
                                   ? localMusicArtistCredits(mountedDeviceTrack)
                                       .firstOrNull
                                   : null;
-                          final metadataReserve =
-                              portraitPhone && mountedMusic != null
-                                  ? _portraitMetadataReserve(
-                                      context,
-                                      mountedMusic,
-                                      labels.savedTitle(mountedEntry) ??
-                                          mountedMusic.title,
-                                      titleStyle,
-                                      width: panel.maxWidth,
-                                      hasBookmark: mountedVideo != null,
-                                      displayArtist: labels.artistByline(
-                                          mountedEntry, mountedMusic.artist),
-                                      deviceArtist: deviceCredit == null
-                                          ? null
-                                          : labels.artistName(
-                                              mountedEntry,
-                                              MusicArtistIdentity.device(
-                                                  deviceCredit.key),
-                                              deviceCredit.name),
-                                      onDevice: isLocalMusicPlaybackId(
-                                          mountedEntry?.videoId))
-                                  : 0.0;
+                          final metadataReserve = portraitPhone &&
+                                  mountedMusic != null
+                              ? _portraitMetadataReserve(
+                                  context,
+                                  mountedMusic,
+                                  labels.savedTitle(mountedEntry) ??
+                                      mountedMusic.title,
+                                  titleStyle,
+                                  width: panel.maxWidth,
+                                  hasBookmark: mountedVideo != null,
+                                  additionalActions:
+                                      (showSongShortcuts ? 1 : 0) +
+                                          (showPassageShortcut ? 1 : 0),
+                                  displayArtist: labels.artistByline(
+                                      mountedEntry, mountedMusic.artist),
+                                  deviceArtist: deviceCredit == null
+                                      ? null
+                                      : labels.artistName(
+                                          mountedEntry,
+                                          MusicArtistIdentity.device(deviceCredit.key),
+                                          deviceCredit.name),
+                                  onDevice: isLocalMusicPlaybackId(mountedEntry?.videoId))
+                              : 0.0;
                           final controlBudget = 318 +
                               metadataHeight * 2 +
                               metadataReserve +
@@ -585,6 +595,22 @@ class _MusicPlayerState extends State<MusicPlayer>
                                       onSeekStep:
                                           widget.television ? null : seekStep))
                               : null;
+                          final songShortcuts = [
+                            if (showSongShortcuts && entry != null)
+                              MusicPlaybackLikeButton(
+                                  entry: entry, style: shortcutStyle),
+                            if (showPassageShortcut && entry != null)
+                              IconButton(
+                                key: const ValueKey(
+                                    'music-player-passage-shortcut'),
+                                tooltip: locals.musicPassageBookmarks,
+                                style: shortcutStyle,
+                                icon: const Icon(Icons.bookmark_add_outlined),
+                                onPressed: () => MusicLibraryActions
+                                    .showPlayingPassageBookmarks(
+                                        context, entry),
+                              ),
+                          ];
                           final controls = Column(
                               crossAxisAlignment: CrossAxisAlignment.stretch,
                               children: [
@@ -632,6 +658,8 @@ class _MusicPlayerState extends State<MusicPlayer>
                                                   WrapCrossAlignment.center,
                                               spacing: 4,
                                               children: [
+                                                if (!shortLandscape)
+                                                  ...songShortcuts,
                                                 if (!portraitPhone &&
                                                     !onDevice &&
                                                     pending == null)
@@ -781,7 +809,10 @@ class _MusicPlayerState extends State<MusicPlayer>
                                     onDevice: onDevice,
                                     hideQueueButton: !widget.television &&
                                         (wide || !shortLandscape),
-                                    portraitPhone: portraitPhone),
+                                    portraitPhone: portraitPhone,
+                                    songShortcuts: shortLandscape
+                                        ? songShortcuts
+                                        : const []),
                               ]);
                           if (!portraitPhone) {
                             return Column(
@@ -1139,6 +1170,7 @@ class _MusicPlayerState extends State<MusicPlayer>
       String displayTitle, TextStyle? titleStyle,
       {required double width,
       required bool hasBookmark,
+      required int additionalActions,
       required String displayArtist,
       required String? deviceArtist,
       required bool onDevice}) {
@@ -1158,6 +1190,7 @@ class _MusicPlayerState extends State<MusicPlayer>
       deviceArtist != null,
       linked,
       hasBookmark,
+      additionalActions,
       onDevice,
       titleStyle,
       artistStyle,
@@ -1189,13 +1222,15 @@ class _MusicPlayerState extends State<MusicPlayer>
         (actionLabelWidth <= width * 0.45 ? actionLabelWidth : 48.0) +
             (hasBookmark && !onDevice ? 52.0 : 0.0);
     final inlineWidth = math.max(1.0, width - actionWidth - 8);
+    final availableTextWidth =
+        math.max(1.0, inlineWidth - 52.0 * additionalActions);
     final title = measure(displayTitle, titleStyle, width);
     final byline = measure(artist, artistStyle, width);
     final textHeight =
         title.height + 2 + math.max(byline.height, linked ? 48.0 : 0.0);
     final wrapsActions =
         math.max(title.width, byline.width + (deviceArtist == null ? 0 : 26)) >
-            inlineWidth;
+            availableTextWidth;
     final fit = wrapsActions ? textHeight + 52 : math.max(48.0, textHeight);
 
     // Reserve only the height beyond the original two-line inline layout.
@@ -1632,7 +1667,8 @@ class _MusicPlayerState extends State<MusicPlayer>
       {required bool showQueue,
       required bool onDevice,
       required bool hideQueueButton,
-      required bool portraitPhone}) {
+      required bool portraitPhone,
+      required List<Widget> songShortcuts}) {
     final opening = player.openingMusicEntry != null;
     final locals = AppLocalizations.of(context)!;
     final theme = Theme.of(context);
@@ -1677,6 +1713,7 @@ class _MusicPlayerState extends State<MusicPlayer>
             action('queue', locals.musicQueue, Icons.queue_music,
                 () => _setQueueVisible(!showQueue),
                 active: showQueue, focusNode: _queueButtonFocus),
+          ...songShortcuts,
           if (!portraitPhone)
             SizedBox(
               width: mainActionWidth,

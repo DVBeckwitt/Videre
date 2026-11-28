@@ -152,6 +152,7 @@ sealed class DownloadedVideo with _$DownloadedVideo implements IdedVideo {
       // Only the playback session stores this fingerprint.
       @JsonKey(includeFromJson: false, includeToJson: false)
       String? explicitMusicDownload,
+      String? notificationTicket,
       required String title,
       @Default('default') String profileId,
       String? accountId,

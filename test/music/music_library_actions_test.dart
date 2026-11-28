@@ -1359,18 +1359,18 @@ void main() {
     expect(current.calls.single.startAt, Duration.zero);
   });
 
-  testWidgets('Play full song from Now Playing keeps the active queue',
+  testWidgets('Play full song from a song menu keeps the matching active queue',
       (tester) async {
     useSongOperationCatalog();
     final current = await showSongActions(tester,
         initial: playingPlaylist().copyWith(isMini: false),
         body: (_) => Builder(
             builder: (context) => TextButton(
-                onPressed: () => MusicLibraryActions.showPlayingSongMenu(
+                onPressed: () => MusicLibraryActions.showSongMenu(
                     context, first,
-                    television: false),
-                child: const Text('Now Playing actions'))));
-    await tester.tap(find.text('Now Playing actions'));
+                    inPlayer: true),
+                child: const Text('Song row actions'))));
+    await tester.tap(find.text('Song row actions'));
     await tester.pumpAndSettle();
     await openPreview(tester, menuOpen: true);
 
@@ -2218,6 +2218,36 @@ void main() {
       expect(library.contains(entry.kind, entry.id), !initiallySaved);
     });
   }
+
+  testWidgets('Music explains a Watch download conflict and preserves its row',
+      (tester) async {
+    final watch = DownloadedVideo(
+        videoId: first.videoId,
+        title: 'Watch video',
+        profileId: db.profileId,
+        downloadComplete: true,
+        lengthSeconds: 20,
+        quality: '720p');
+    await tester.runAsync(() => db.upsertDownload(watch));
+    final downloads = _Downloads();
+    await show(tester,
+        body: BlocProvider<DownloadManagerCubit>.value(
+          value: downloads,
+          child: const MusicLibraryActions(videos: [first]),
+        ));
+    await tester.tap(find.byTooltip('Music actions'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Download audio'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Download'));
+    await tester.pumpAndSettle();
+
+    final locals = AppLocalizations.of(tester.element(find.byType(Scaffold)))!;
+    expect(find.text(locals.musicDownloadVideoConflicts(1)), findsOneWidget);
+    expect(downloads.destinationRequests, 0);
+    expect(downloads.calls, isEmpty);
+    expect(db.getDownloadByVideoId(first.videoId), watch);
+  });
 
   for (final action in ['Save song', 'Save to playlist', 'Download audio']) {
     testWidgets('open $action menu keeps the track it was opened for',

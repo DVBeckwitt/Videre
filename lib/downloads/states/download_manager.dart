@@ -49,6 +49,7 @@ import '../services/download_rename.dart';
 import '../services/download_recovery.dart';
 import '../services/download_storage.dart';
 import '../services/download_space.dart';
+import '../services/download_transfer_rate.dart';
 import '../services/download_mux.dart';
 import '../services/explicit_music_download.dart';
 import '../services/music_download_storage.dart';
@@ -114,9 +115,10 @@ enum KeepCachedMusicResult {
 class DownloadProgress {
   final CancelToken cancelToken;
   final DateTime? retryAt;
+  final int? bytesPerSecond;
   int count = 0, total = 1;
 
-  DownloadProgress(this.cancelToken, {this.retryAt});
+  DownloadProgress(this.cancelToken, {this.retryAt, this.bytesPerSecond});
 }
 
 /// The jobs present when a Music removal confirmation was opened.
@@ -1141,6 +1143,18 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
           captionLabel: captionLabel,
           video: video));
 
+  MusicMetadata _musicDownloadLabels(String id, Video? video,
+          [DownloadedVideo? existing]) =>
+      video?.musicMetadata ??
+      MusicMetadata(
+        title: video?.title?.trim().isNotEmpty == true
+            ? video!.title!
+            : existing?.title ?? id,
+        artist: video?.author?.trim().isNotEmpty == true
+            ? video!.author!
+            : existing?.author ?? '',
+      );
+
   Future<bool> _addDownload(String videoId,
       {required String quality,
       required bool audioOnly,
@@ -1160,13 +1174,30 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
         !_enqueuing.add(videoId)) {
       return false;
     }
+    final library = _library;
+    final generation = _generation;
+    final isMusic = audioOnly && quality == highestAudioDownloadQuality;
+    bool current() =>
+        _canUpdateOfflineMusic &&
+        identical(library, _library) &&
+        generation == _generation &&
+        !_deleting.contains(videoId);
     try {
-      final existing = _library.getDownloadByVideoId(videoId);
+      final existing = library.getDownloadByVideoId(videoId);
       if (existing != null) {
         if (managedOffline || !audioOnly || !existing.audioOnly) return false;
+        final wasPlaylistOnly = library.isPlaylistOwnedMusicDownload(videoId);
         final wasDiscoveryManaged = _isDiscoveryManaged(videoId);
-        final promoted = await _library.makeMusicDownloadExplicit(videoId);
-        if (promoted) {
+        final changed = isMusic
+            ? await library.adoptMusicDownload(
+                existing, _musicDownloadLabels(videoId, video, existing),
+                notificationTicket: existing.downloadComplete ||
+                        state.pausedVideoIds.contains(videoId)
+                    ? null
+                    : const Uuid().v4())
+            : await library.makeMusicDownloadExplicit(videoId);
+        if (!changed || !current()) return false;
+        if (wasPlaylistOnly) {
           _playlistOfflineChanges.value++;
           if (wasDiscoveryManaged && !existing.downloadComplete) {
             // Restart the constrained transfer as explicit, retaining its
@@ -1175,35 +1206,41 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
             await retryDownload(existing);
           }
         }
-        return promoted;
+        if (!current()) return false;
+        setVideos();
+        unawaited(_drain());
+        return true;
       }
       final destination = privateStorage
           ? privateDownloadDestination
           : (audioOnly ? _folders.audio : _folders.video);
       var folder = destination.folder?.uri;
-      final isMusic = audioOnly && quality == highestAudioDownloadQuality;
-      final format = isMusic ? MusicDownloadFormat.forDatabase(_library) : null;
+      final format = isMusic ? MusicDownloadFormat.forDatabase(library) : null;
       final shareMusic =
           isMusic && storage.supportsSharedMusic && !destination.usePrivate;
       if (shareMusic && folder == null) {
         folder = await _deviceMusicFolder(allowPicker: !managedOffline);
-        if (folder == null || !_current || _switchingProfile) return false;
+        if (folder == null || !current()) return false;
       }
-      final account = await _library.getCurrentlySelectedServer();
-      if (!_current || _switchingProfile) return false;
+      final account = await library.getCurrentlySelectedServer();
+      if (!current()) return false;
       if (managedOffline &&
           !_discoveryWants(videoId) &&
           _playlistSongsInUse()?.containsKey(videoId) != true) {
         return false;
       }
       _musicDeletionIncarnations.remove(videoId);
+      final music =
+          isMusic ? _musicDownloadLabels(videoId, video) : video?.musicMetadata;
       final download = DownloadedVideo(
           videoId: videoId,
-          title: video?.musicMetadata?.title ?? video?.title ?? videoId,
-          author: video?.musicMetadata?.artist ?? video?.author,
+          title: music?.title ?? video?.title ?? videoId,
+          author: music?.artist ?? video?.author,
           authorUrl: video?.authorUrl,
-          musicMetadata: video?.musicMetadata,
-          profileId: _library.profileId,
+          musicMetadata: music,
+          notificationTicket:
+              isMusic && !managedOffline ? const Uuid().v4() : null,
+          profileId: library.profileId,
           accountId: account.accountId,
           lengthSeconds: video?.lengthSeconds ?? 0,
           quality: quality,
@@ -1215,15 +1252,16 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
           captionLabel: audioOnly ? null : captionLabel,
           audioOnly: audioOnly);
       if (managedOffline) {
-        if (!await _library.insertPlaylistOwnedMusicDownload(download)) {
+        if (!await library.insertPlaylistOwnedMusicDownload(download)) {
           return false;
         }
       } else {
-        await _library.upsertDownload(download);
+        await library.upsertDownload(download);
       }
     } finally {
       _enqueuing.remove(videoId);
     }
+    if (!current()) return false;
     setVideos();
     unawaited(_drain());
     return true;
@@ -1318,19 +1356,24 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
         receiveTimeout: const Duration(seconds: 30)));
     Future<List<SponsorSegment>>? sponsorSegments;
     Future<String?>? deArrowTitle;
-    var lastUpdate = DateTime(0);
-    void update(int count, int total, int step, int steps) {
-      final now = DateTime.now();
+    final elapsed = Stopwatch()..start();
+    Duration? lastUpdate;
+    void update(int count, int total, int step, int steps,
+        {int? bytesPerSecond}) {
+      final now = elapsed.elapsed;
+      final previous = lastUpdate;
       if (token.isCancelled ||
           !_current ||
-          (count != total && now.difference(lastUpdate).inMilliseconds < 250)) {
+          (count != total &&
+              previous != null &&
+              now - previous < const Duration(milliseconds: 250))) {
         return;
       }
       lastUpdate = now;
       // Reserve the final step for muxing; a downloaded audio track isn't a video.
       final fraction =
           (step + (total > 0 ? (count / total).clamp(0, 1) : 0)) / steps;
-      final next = DownloadProgress(token)
+      final next = DownloadProgress(token, bytesPerSecond: bytesPerSecond)
         ..count = (fraction * 1000).round()
         ..total = 1000;
       emit(state.copyWith(downloadProgresses: {video.videoId: next}));
@@ -1536,6 +1579,7 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
 
           Future<void> transfer(int step) {
             final part = parts[step];
+            final rate = DownloadTransferRate();
             return downloadResumable(dio, part.url, part.path,
                 cancelToken: token,
                 identity: part.identity,
@@ -1552,8 +1596,8 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
                 maximumBytes: maximumBytes,
                 acceptsContentType: container.acceptsResponseType,
                 headers: server.headersForUrl(part.url),
-                onProgress: (count, total) =>
-                    update(count, total, step, steps));
+                onProgress: (count, total) => update(count, total, step, steps,
+                    bytesPerSecond: rate.observe(count, elapsed.elapsed)));
           }
 
           String? privateThumbnail(List<ImageObject>? images) =>
@@ -1959,35 +2003,65 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
             SettingsValue(_pausedSetting, jsonEncode(paused.toList())));
       });
 
-  Future<void> retryDownload(DownloadedVideo video) => _mutate(() async {
-        await _ready;
-        if (!_current ||
-            _switchingProfile ||
-            video.profileId != _library.profileId ||
-            _deleting.contains(video.videoId)) {
-          return;
-        }
-        final paused = {...state.pausedVideoIds}..remove(video.videoId);
-        emit(state.copyWith(pausedVideoIds: paused));
-        await _library.saveSetting(
-            SettingsValue(_pausedSetting, jsonEncode(paused.toList())));
-        if (_closing || _deleting.contains(video.videoId)) return;
-        // A sheet can remain open while the job completes or is removed. Only
-        // retry the current saved job; a captured UI snapshot must not restore it.
-        final current = _library.getDownloadByVideoId(video.videoId);
-        if (current == null || current.downloadComplete) return;
-        if (current.downloadFailed || current.authenticationRequired) {
-          await _library.upsertDownload(current.copyWith(
-              downloadFailed: false,
-              authenticationRequired: false,
-              storageFailed: false));
-        }
-        final blocked = {...state.spaceBlockedVideoIds}..remove(video.videoId);
-        emit(state.copyWith(spaceBlockedVideoIds: blocked));
-        setVideos();
-        if (!_connectivity.online) await _refreshConnectivity();
-        unawaited(_drain());
-      });
+  Future<void> retryDownload(DownloadedVideo video) =>
+      _mutate(() => _retryDownload(video.profileId, video.videoId));
+
+  Future<void> retryDownloadFromNotification(
+          String profileId, String videoId, String ticket) =>
+      _mutate(
+          () => _retryDownload(profileId, videoId, notificationTicket: ticket));
+
+  Future<void> _retryDownload(String profileId, String videoId,
+      {String? notificationTicket}) async {
+    await _ready;
+    final library = _library;
+    bool canRetry() =>
+        _current &&
+        !_switchingProfile &&
+        identical(library, _library) &&
+        profileId == library.profileId &&
+        !_deleting.contains(videoId);
+    bool ownsNotification(DownloadedVideo? video) =>
+        notificationTicket == null ||
+        (video != null &&
+            video.notificationTicket == notificationTicket &&
+            !video.downloadComplete &&
+            (video.downloadFailed ||
+                video.authenticationRequired ||
+                video.storageFailed ||
+                state.spaceBlockedVideoIds.contains(videoId)));
+    if (!canRetry() ||
+        !ownsNotification(library.getDownloadByVideoId(videoId))) {
+      return;
+    }
+
+    final paused = {...state.pausedVideoIds}..remove(videoId);
+    emit(state.copyWith(pausedVideoIds: paused));
+    await library.saveSetting(
+        SettingsValue(_pausedSetting, jsonEncode(paused.toList())));
+    if (!canRetry()) return;
+    // A captured job can finish or be replaced while its control is open.
+    final current = library.getDownloadByVideoId(videoId);
+    if (current == null ||
+        current.downloadComplete ||
+        !ownsNotification(current)) {
+      return;
+    }
+    if (current.downloadFailed ||
+        current.authenticationRequired ||
+        current.storageFailed) {
+      await library.upsertDownload(current.copyWith(
+          downloadFailed: false,
+          authenticationRequired: false,
+          storageFailed: false));
+    }
+    if (!canRetry()) return;
+    final blocked = {...state.spaceBlockedVideoIds}..remove(videoId);
+    emit(state.copyWith(spaceBlockedVideoIds: blocked));
+    setVideos();
+    if (!_connectivity.online) await _refreshConnectivity();
+    unawaited(_drain());
+  }
 
   Future<void> _deleteParts(DownloadedVideo video) async {
     final path = await video.stagingPath;

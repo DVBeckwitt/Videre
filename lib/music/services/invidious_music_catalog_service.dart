@@ -588,7 +588,18 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
 
   @override
   Future<List<MusicTrack>> getRelatedSongs(Iterable<String> seedIds,
-      {bool Function()? isCurrent}) async {
+          {bool Function()? isCurrent}) =>
+      _getRelatedSongs(seedIds, isCurrent: isCurrent);
+
+  @override
+  Future<List<MusicTrack>> getSongRadioRelatedSongs(String seedId,
+          {required bool Function() isCurrent,
+          required void Function() onInstanceFailure}) =>
+      _getRelatedSongs([seedId],
+          isCurrent: isCurrent, onAccessRejection: onInstanceFailure);
+
+  Future<List<MusicTrack>> _getRelatedSongs(Iterable<String> seedIds,
+      {bool Function()? isCurrent, void Function()? onAccessRejection}) async {
     final seeds = <String>{};
     for (final id in seedIds) {
       if (_videoId.hasMatch(id)) seeds.add(id);
@@ -607,7 +618,8 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
           lanes.add(_relatedLane(video, excluding: seeds));
         } catch (error) {
           await check();
-          if (musicDiscoveryMustStop(error)) {
+          if (musicDiscoveryMustStop(error) ||
+              onAccessRejection != null && _protectedAccessFailure(error)) {
             rethrow;
           }
           seedFailures++;
@@ -617,7 +629,7 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
 
       return _inspectDiscoverySongs(
           api, server, _interleaveDiscoveryLanes(lanes), check, isCurrent,
-          seedFailures: seedFailures);
+          seedFailures: seedFailures, onAccessRejection: onAccessRejection);
     });
   }
 
@@ -658,7 +670,9 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
           }
         } catch (error) {
           await check();
-          if (musicDiscoveryMustStop(error)) rethrow;
+          if (musicDiscoveryMustStop(error) || _protectedAccessFailure(error)) {
+            rethrow;
+          }
         }
       }
 
@@ -669,7 +683,7 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
           api, server, directIds, check, isCurrent,
           accept: (video) =>
               expectedAuthors[video.videoId]?.contains(video.authorId) == true,
-          onInstanceFailure: (_) => instanceRejected = true,
+          onAccessRejection: () => instanceRejected = true,
           onVerified: (video) {
             if (video.authorId case final id?) {
               anchors.putIfAbsent(id, () => video);
@@ -691,7 +705,7 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
             accept: (video) =>
                 !seeds.contains(video.authorId) ||
                 anchors.containsKey(video.authorId),
-            onInstanceFailure: (_) {});
+            onAccessRejection: () {});
         return [...direct, ...related];
       } catch (_) {
         await check();
@@ -741,6 +755,11 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
       (error.isRateLimited ||
           error.retryAfterIsInvalid ||
           (error.retryAfter ?? Duration.zero) > Duration.zero);
+
+  static bool _protectedAccessFailure(Object error) =>
+      error is NerdVpnAccessRequired ||
+      error is GatewayAuthenticationRequired ||
+      error is GatewayTransportUnavailable;
 
   static Future<Video> _discoveryVideo(
       Service api, Server server, String id, bool Function()? isCurrent) async {
@@ -796,6 +815,7 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
       bool Function()? isCurrent,
       {int seedFailures = 0,
       void Function(InvidiousServiceError)? onInstanceFailure,
+      void Function()? onAccessRejection,
       bool Function(Video)? accept,
       void Function(Video)? onVerified}) async {
     final covers = _savedCovers(server);
@@ -804,13 +824,13 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
           (MusicTrack, Video)? verified,
           bool failed,
           bool connectionFailed,
-          InvidiousServiceError? rejection,
+          Object? rejection,
         })> inspect(String id) async {
       await check();
       (MusicTrack, Video)? verified;
       var failed = false;
       var connectionFailed = false;
-      InvidiousServiceError? rejection;
+      Object? rejection;
       try {
         // One noninteractive lookup per candidate. Service retains its own
         // transport policy (short 429 and NerdVPN startup retries), but
@@ -831,9 +851,11 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
         // music. Session cancellation is checked outside this partial result.
         failed = true;
         connectionFailed = isMusicBrowseConnectionFailure(error);
-        if (error is InvidiousServiceError &&
-            (_discoveryCooldown(error) ||
-                (onInstanceFailure != null && musicDiscoveryMustStop(error)))) {
+        if (_discoveryCooldown(error) ||
+            onInstanceFailure != null && musicDiscoveryMustStop(error) ||
+            onAccessRejection != null &&
+                (musicDiscoveryMustStop(error) ||
+                    _protectedAccessFailure(error))) {
           rejection = error;
         }
       }
@@ -850,13 +872,16 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
     final songs = <MusicTrack>[];
     var failures = seedFailures;
     var connectionFailed = false;
+    Duration backoff(Object? rejection) => rejection is InvidiousServiceError
+        ? rejection.retryAfter ?? Duration.zero
+        : Duration.zero;
     for (var offset = 0; offset < candidates.length;) {
       await check();
       final batch = candidates.skip(offset).take(concurrency).toList();
       final inspected = await Future.wait(batch.map(inspect));
       await check();
       offset += batch.length;
-      InvidiousServiceError? rejection;
+      Object? rejection;
       for (final item in inspected) {
         if (item.failed) failures++;
         connectionFailed = connectionFailed || item.connectionFailed;
@@ -866,17 +891,19 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
           onVerified?.call(video);
         }
         if (item.rejection case final error?) {
-          if (rejection == null ||
-              (error.retryAfter ?? Duration.zero) >
-                  (rejection.retryAfter ?? Duration.zero)) {
+          if (rejection == null || backoff(error) > backoff(rejection)) {
             rejection = error;
           }
         }
       }
       if (rejection != null) {
-        if (onInstanceFailure != null) {
-          onInstanceFailure(rejection);
-          if (songs.isEmpty) throw rejection;
+        if (rejection is InvidiousServiceError) {
+          onInstanceFailure?.call(rejection);
+        }
+        onAccessRejection?.call();
+        if (songs.isEmpty &&
+            (onInstanceFailure != null || onAccessRejection != null)) {
+          throw rejection;
         }
         break;
       }

@@ -166,6 +166,13 @@ abstract class MusicCatalogService {
           {bool Function()? isCurrent}) async =>
       throw const MusicCatalogUnsupported();
 
+  /// Song radio can keep a partial related batch when an instance rejects a
+  /// request. Report that rejection so it cannot start a supplemental batch.
+  Future<List<MusicTrack>> getSongRadioRelatedSongs(String seedId,
+          {required bool Function() isCurrent,
+          required void Function() onInstanceFailure}) =>
+      getRelatedSongs([seedId], isCurrent: isCurrent);
+
   /// Inspects a small followed-channel upload pool. Feed metadata alone does
   /// not establish that an upload is music or that its creator matches.
   Future<List<MusicTrack>> getSubscriptionSongs(Iterable<Video> uploads,

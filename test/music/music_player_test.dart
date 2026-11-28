@@ -1061,6 +1061,9 @@ void main() {
       videoCount: 0);
   final songActionsButton =
       find.byKey(const ValueKey('music-player-song-actions'));
+  final likeButton = find.byKey(const ValueKey('music-player-like'));
+  final passageShortcut =
+      find.byKey(const ValueKey('music-player-passage-shortcut'));
   final namedRemoval = find.text('Remove from Action source');
 
   testWidgets('device video pairing reloads and a missing file keeps audio',
@@ -1258,6 +1261,79 @@ void main() {
     expect(find.byTooltip('Song actions'), findsOneWidget);
     final data = tester.getSemantics(songActionsButton).getSemanticsData();
     expect([data.label, data.tooltip], contains('Song actions'));
+    await revealSongAction(tester, likeButton);
+    expect(find.byTooltip('Like song'), findsOneWidget);
+    await revealSongAction(tester, passageShortcut);
+    expect(find.byTooltip('Passage bookmarks'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+      'full-screen Like toggles the current catalog song in its profile',
+      (tester) async {
+    await seedSongActions(tester);
+    final library = MusicLibraryService.forProfile(db, db.profileId);
+    final other = (await tester.runAsync(() => db.createProfile('Other')))!;
+    final otherLibrary = MusicLibraryService.forProfile(db, other.id);
+    final id = songActionsTrack.videoId;
+    await tester
+        .runAsync(() => library.save(MusicLibraryEntry.song(songActionsTrack)));
+    await tester.pumpAndSettle();
+    final occurrence = player.state.currentQueueId;
+    final upcoming = player.state.playQueue.toList();
+
+    await revealSongAction(tester, likeButton);
+    expect(find.byTooltip('Like song'), findsOneWidget);
+    await chooseAndWait(tester, likeButton, () => library.isLiked(id));
+    expect(find.byTooltip('Unlike song'), findsOneWidget);
+    expect(otherLibrary.isLiked(id), isFalse);
+    await chooseAndWait(tester, likeButton, () => !library.isLiked(id));
+    expect(find.byTooltip('Like song'), findsOneWidget);
+    expect(library.savedSong(id), isNotNull);
+    expect(player.state.currentQueueId, occurrence);
+    expect(player.state.playQueue.toList(), upcoming);
+    expect(player.musicRequests, isEmpty);
+
+    await revealSongAction(tester, songActionsButton);
+    await openSongActions(tester);
+    expect(find.text('Add to playlist'), findsOneWidget);
+    for (final label in ['Play', 'Preview song', 'Add to requests']) {
+      expect(find.text(label), findsNothing);
+    }
+  });
+
+  testWidgets('Song actions groups scroll on a compact phone with large text',
+      (tester) async {
+    await seedSongActions(tester);
+    await pump(tester, size: const Size(320, 568), scale: 2.5);
+    await revealSongAction(tester, songActionsButton);
+    await openSongActions(tester);
+
+    final sheet = find.byKey(const ValueKey('music-player-song-options'));
+    expect(sheet, findsOneWidget);
+    Finder optionText(String text) =>
+        find.descendant(of: sheet, matching: find.text(text));
+    expect(
+        find.descendant(
+            of: sheet,
+            matching:
+                find.byKey(const ValueKey('music-player-song-options-title'))),
+        findsOneWidget);
+    expect(optionText('Action song').hitTestable(), findsOneWidget);
+    expect(optionText('Singer').hitTestable(), findsOneWidget);
+
+    final scrollable =
+        find.descendant(of: sheet, matching: find.byType(Scrollable));
+    expect(scrollable, findsOneWidget);
+    final position = tester.state<ScrollableState>(scrollable).position;
+    expect(position.maxScrollExtent, greaterThan(0));
+    for (final heading in ['Queue', 'Library', 'Music actions']) {
+      final group = optionText(heading);
+      await tester.scrollUntilVisible(group, 80, scrollable: scrollable);
+      expect(group.hitTestable(), findsOneWidget);
+    }
+    expect(position.pixels, greaterThan(0));
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets(
@@ -1267,7 +1343,6 @@ void main() {
     final before = player.state;
     await openSongActions(tester);
     for (final label in [
-      'Play',
       'Play next',
       'Add to queue',
       'Save song',
@@ -1275,6 +1350,7 @@ void main() {
     ]) {
       expect(find.text(label), findsOneWidget);
     }
+    expect(find.text('Play'), findsNothing);
     expect(find.text('Open artist'), findsNothing);
     await revealSongAction(tester, namedRemoval);
     expect(find.text('Remove from Other list'), findsNothing);
@@ -1397,9 +1473,7 @@ void main() {
     final target = player.captureMusicPassage()!;
     expect(target.position, position);
     final store = MusicPassageBookmarks(db, db.profileId);
-    final menu = find.byKey(const ValueKey('music-player-passage-bookmarks'));
-    await openSongActions(tester);
-    await tapSongAction(tester, menu);
+    await tapSongAction(tester, passageShortcut);
     await tapSongAction(
         tester, find.byKey(const ValueKey('music-passage-bookmark-add')));
     expect(find.text('00:27.139'), findsOneWidget);
@@ -1427,8 +1501,7 @@ void main() {
       player.pause();
     });
     await tester.pumpAndSettle();
-    await openSongActions(tester);
-    await tapSongAction(tester, menu);
+    await tapSongAction(tester, passageShortcut);
     final bookmarkRoute = ModalRoute.of(tester.element(sheet))!;
     await tester.runAsync(() async {
       await tester.tap(find.text('Verse'));
@@ -1441,6 +1514,25 @@ void main() {
     expect(player.state.position, position);
     expect(player.state.isPlaying, isFalse);
     expect(sheet, findsNothing);
+  });
+
+  testWidgets('TV can focus and open the passage shortcut with Select',
+      (tester) async {
+    await pump(tester,
+        size: const Size(960, 640), child: const MusicPlayer(television: true));
+    await revealSongAction(tester, passageShortcut);
+    final icon =
+        find.descendant(of: passageShortcut, matching: find.byType(Icon));
+    final focus = Focus.of(tester.element(icon));
+    focus.requestFocus();
+    await tester.pump();
+    expect(focus.hasPrimaryFocus, isTrue);
+    await tester.sendKeyEvent(LogicalKeyboardKey.select);
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('music-passage-bookmarks-sheet')),
+        findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 
   for (final change in [
@@ -1989,13 +2081,27 @@ void main() {
 
   testWidgets('device Song actions keep local queue and rename controls',
       (tester) async {
-    await seedDeviceQueue(tester, allowRename: true);
+    final tracks = await seedDeviceQueue(tester, allowRename: true);
     await pump(tester, size: const Size(360, 680));
+    final library = MusicLibraryService.forProfile(db, db.profileId);
+    await revealSongAction(tester, likeButton);
+    await chooseAndWait(
+        tester, likeButton, () => library.isLiked(tracks.first.playbackId));
+    expect(find.byTooltip('Unlike song'), findsOneWidget);
+    expect(library.likedSongs.single.id, tracks.first.playbackId);
+    expect(
+        player.state.offlineCurrentlyPlaying?.videoId, tracks.first.playbackId);
+    await revealSongAction(tester, passageShortcut);
+    expect(find.byTooltip('Passage bookmarks'), findsOneWidget);
+    await revealSongAction(tester, songActionsButton);
     await openSongActions(tester);
-    for (final label in ['Play', 'Play next', 'Add to queue', 'Rename file']) {
+    for (final label in ['Play next', 'Add to queue', 'Rename file']) {
       expect(find.text(label), findsOneWidget);
     }
     for (final label in [
+      'Play',
+      'Preview song',
+      'Add to requests',
       'Add to playlist',
       'Download audio',
       'Open artist',

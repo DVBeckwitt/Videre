@@ -35,6 +35,7 @@ const _$MusicDownloadFormatEnumMap = {
 _DownloadedVideo _$DownloadedVideoFromJson(Map<String, dynamic> json) =>
     _DownloadedVideo(
       videoId: json['videoId'] as String,
+      notificationTicket: json['notificationTicket'] as String?,
       title: json['title'] as String,
       profileId: json['profileId'] as String? ?? 'default',
       accountId: json['accountId'] as String?,
@@ -77,6 +78,7 @@ _DownloadedVideo _$DownloadedVideoFromJson(Map<String, dynamic> json) =>
 Map<String, dynamic> _$DownloadedVideoToJson(_DownloadedVideo instance) =>
     <String, dynamic>{
       'videoId': instance.videoId,
+      'notificationTicket': instance.notificationTicket,
       'title': instance.title,
       'profileId': instance.profileId,
       'accountId': instance.accountId,

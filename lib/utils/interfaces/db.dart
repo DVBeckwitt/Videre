@@ -16,6 +16,7 @@ import '../../subscription_management/models/subscription_group.dart';
 import '../../videos/models/db/dearrow_cache.dart';
 import '../../videos/models/db/history_video_cache.dart';
 import '../../videos/models/db/progress.dart';
+import '../../videos/models/music_metadata.dart';
 import '../backup.dart';
 
 abstract class IDbClient {
@@ -267,6 +268,45 @@ abstract class IDbClient {
 
   /// Promote an existing playlist-only job to an explicit download.
   Future<bool> makeMusicDownloadExplicit(String videoId) async => false;
+
+  /// A transfer can bind an old row's account and record its output container
+  /// after the UI captures it. Its requested audio and destination stay fixed.
+  static bool isSameAudioDownloadJob(
+          DownloadedVideo expected, DownloadedVideo current) =>
+      expected.audioOnly &&
+      current.audioOnly &&
+      expected.videoId == current.videoId &&
+      expected.profileId == current.profileId &&
+      (expected.accountId == null || expected.accountId == current.accountId) &&
+      expected.quality == current.quality &&
+      expected.musicFormat == current.musicFormat &&
+      expected.audioTrackId == current.audioTrackId &&
+      expected.folderUri == current.folderUri;
+
+  /// Adds Music labels and explicit ownership without replacing saved audio.
+  Future<bool> adoptMusicDownload(DownloadedVideo expected, MusicMetadata music,
+      {String? notificationTicket}) async {
+    final current = getDownloadByVideoId(expected.videoId);
+    if (current == null || !isSameAudioDownloadJob(expected, current)) {
+      return false;
+    }
+    final needsLabels = current.musicMetadata == null;
+    final needsTicket = !current.downloadComplete &&
+        !current.downloadFailed &&
+        !current.authenticationRequired &&
+        current.notificationTicket == null &&
+        notificationTicket != null;
+    if (needsLabels || needsTicket) {
+      await upsertDownload(current.copyWith(
+        musicMetadata: current.musicMetadata ?? music,
+        notificationTicket:
+            needsTicket ? notificationTicket : current.notificationTicket,
+      ));
+    }
+    return await makeMusicDownloadExplicit(expected.videoId) ||
+        needsLabels ||
+        needsTicket;
+  }
 
   Future<void> saveDownloadExport(String videoId, ExportedMusicCopy copy,
       {DownloadedVideo? expectedSource}) async {

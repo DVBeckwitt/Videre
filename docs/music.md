@@ -284,8 +284,15 @@ or skip a song.
 
 On Android 13 and later, the expanded media controls can also like or unlike
 the current song. While an eligible online song is playing, choose **Start
-related radio** to play related songs after it. If the card runs out of action
-slots, pause playback to see **Save to playlist**.
+related radio** to play related songs after it. When only a few eligible songs
+come back, Videre can look for more tracks from a verified artist through the
+selected instance. If the card runs out of action slots, pause playback to see
+**Save to playlist**.
+
+In **Now Playing**, tap the heart to like or unlike the song. **Passage
+bookmarks** opens the timestamp list for a track that supports seeking. Tap
+**Add bookmark** to save the current position, or tap an existing bookmark to
+jump to it. **Song actions** groups queue, library, and other track options.
 
 For rewinding within a song on Android, the audio player keeps up to 90 seconds
 of recently played audio in memory. The available window can be shorter for
@@ -432,7 +439,13 @@ in Videre, include its folder in **On this device**.
 **Music → Library → On this device** combines playable Music downloads from
 the active profile with audio indexed from your device. Private downloads can
 play here before you grant device-audio access. **Downloads** remains the
-place to pause, retry, export, or remove downloads.
+place to check progress, pause, retry, export, or remove downloads.
+
+On Android, allow notifications to see progress, transfer speed, and the result
+of a Music download you start. Tap **Retry** on a failure notification to put the
+same job back in the queue. If the song already has a video download, manage it
+in Watch Downloads. An existing audio download can appear in Music Downloads
+with the song information from Music.
 
 **Choose a folder** grants access to that folder and its subfolders. **Use
 Android music library** asks for audio permission and shows files indexed by

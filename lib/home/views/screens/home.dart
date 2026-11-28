@@ -274,7 +274,7 @@ class _MainScreenState extends State<MainContentScreen> {
         AwesomeNotifications()
             .getInitialNotificationAction()
             .then((initialNotification) {
-          log.fine('Initial notification ${initialNotification?.payload}');
+          log.fine('Initial notification ${initialNotification?.channelKey}');
 
           if (initialNotification != null) {
             NotificationController.onActionReceivedMethod(initialNotification);

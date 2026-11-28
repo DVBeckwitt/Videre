@@ -7,6 +7,7 @@ import 'package:clipious/content_filter/community_models.dart'
 import 'package:clipious/downloads/states/download_manager.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/downloads/models/music_offline_policy.dart';
+import 'package:clipious/downloads/services/download_notifications.dart';
 import 'package:clipious/downloads/services/download_playback_source.dart';
 import 'package:clipious/downloads/services/download_storage.dart';
 import 'package:clipious/downloads/services/explicit_music_download.dart';
@@ -38,7 +39,8 @@ import 'package:clipious/playlists/models/playlist_reference.dart';
 import 'package:clipious/recommendations/recommendation_service.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/utils/interfaces/db.dart';
-import 'package:clipious/utils.dart' show showSharingSheet;
+import 'package:clipious/utils.dart'
+    show showSafeModalBottomSheet, showSharingSheet;
 import 'package:clipious/videos/models/ided_video.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:clipious/downloads/models/download_formats.dart';
@@ -75,6 +77,15 @@ bool _matchesCompletedDownload(DownloadedVideo record, String id) =>
     !record.downloadFailed &&
     !record.storageFailed &&
     !record.authenticationRequired;
+
+typedef _MusicDownloadAdmission = ({
+  int admitted,
+  int queued,
+  int adopted,
+  int existing,
+  int videoConflicts,
+  bool requestNotifications,
+});
 
 /// A dialog or collection operation may outlive its original profile.
 class MusicLibrarySession {
@@ -288,32 +299,74 @@ class MusicLibrarySession {
   }
 
   Future<int> download(DownloadManagerCubit manager, List<Video> videos,
+          {DownloadContainer? container,
+          MusicOfflinePolicy policy = const MusicOfflinePolicy(),
+          bool Function()? canStart}) async =>
+      (await _admitDownloads(manager, videos,
+              container: container, policy: policy, canStart: canStart))
+          .admitted;
+
+  Future<_MusicDownloadAdmission> _admitDownloads(
+      DownloadManagerCubit manager, List<Video> videos,
       {DownloadContainer? container,
-      MusicOfflinePolicy policy = const MusicOfflinePolicy(),
+      required MusicOfflinePolicy policy,
       bool Function()? canStart}) async {
     _requireCurrent();
-    if (isTv) return 0;
+    var admitted = 0, queued = 0, adopted = 0, existing = 0, conflicts = 0;
+    var requestNotifications = false;
+    _MusicDownloadAdmission result() => (
+          admitted: admitted,
+          queued: queued,
+          adopted: adopted,
+          existing: existing,
+          videoConflicts: conflicts,
+          requestNotifications: requestNotifications,
+        );
+    if (isTv) return result();
     final songs = _unique(videos);
     if ((songs.length > 1 || canStart != null) &&
-        songs.any((song) => db.getDownloadByVideoId(song.videoId) == null) &&
+        songs.any((song) =>
+            _playlistOwner.getDownloadByVideoId(song.videoId) == null) &&
         !await manager.prepareMusicDownloads()) {
-      return 0;
+      return result();
     }
-    if (canStart?.call() == false) return 0;
-    var added = 0;
     for (final video in songs) {
       _requireCurrent();
-      if (await manager.addDownload(video.videoId,
+      if (canStart?.call() == false) break;
+      final before = _playlistOwner.getDownloadByVideoId(video.videoId);
+      if (before != null && !before.audioOnly) {
+        conflicts++;
+        continue;
+      }
+      final added = await manager.addDownload(video.videoId,
           audioOnly: true,
           quality: highestAudioDownloadQuality,
           musicPolicy: policy,
           container: container,
-          video: video)) {
-        added++;
+          video: video);
+      _requireCurrent();
+      final latest = _playlistOwner.getDownloadByVideoId(video.videoId);
+      if (added) admitted++;
+      if (before == null && added) {
+        queued++;
+        requestNotifications = true;
+      } else if (latest != null && !latest.audioOnly) {
+        conflicts++;
+      } else if (latest?.musicMetadata != null) {
+        if (added && before?.musicMetadata == null) {
+          adopted++;
+        } else {
+          existing++;
+        }
+        if (added &&
+            latest?.notificationTicket != null &&
+            latest!.notificationTicket != before?.notificationTicket) {
+          requestNotifications = true;
+        }
       }
     }
     _requireCurrent();
-    return added;
+    return result();
   }
 
   static List<Video> _unique(List<Video> videos) {
@@ -536,16 +589,19 @@ class _MusicPlaylistSelectionActionsState
           if (isTv) return [];
           final playing = player?.state.currentlyPlaying;
           final manager = context.read<DownloadManagerCubit?>();
-          return MusicLibrarySession._unique(catalog)
-              .where((song) =>
-                  !song.downloadPlaybackOnly &&
-                  !(playing?.videoId == song.videoId &&
-                      playing?.downloadPlaybackOnly == true) &&
-                  DownloadedVideo.isSafeFileId(song.videoId) &&
-                  (db.getDownloadByVideoId(song.videoId) == null ||
-                      manager?.isMusicDownloadPlaylistOnly(song.videoId) ==
-                          true))
-              .toList();
+          return MusicLibrarySession._unique(catalog).where((song) {
+            if (song.downloadPlaybackOnly ||
+                (playing?.videoId == song.videoId &&
+                    playing?.downloadPlaybackOnly == true) ||
+                !DownloadedVideo.isSafeFileId(song.videoId)) {
+              return false;
+            }
+            final download = db.getDownloadByVideoId(song.videoId);
+            return download == null ||
+                !download.audioOnly ||
+                download.musicMetadata == null ||
+                manager?.isMusicDownloadPlaylistOnly(song.videoId) == true;
+          }).toList();
         }
 
         Future<void> run(_PlaylistSelectionAction action) async {
@@ -982,10 +1038,11 @@ class MusicLibraryActions extends StatefulWidget {
         nowPlaying ? locals.addToPlaylist : locals.musicSaveToPlaylist;
     return [
       if (song != null) ...[
-        PopupMenuItem(
-            key: const ValueKey('music-song-play'),
-            value: _LibraryAction.play,
-            child: first(Text(locals.musicPlay))),
+        if (!nowPlaying)
+          PopupMenuItem(
+              key: const ValueKey('music-song-play'),
+              value: _LibraryAction.play,
+              child: first(Text(locals.musicPlay))),
         if (canSelectSong)
           PopupMenuItem(
               value: _LibraryAction.selectSong,
@@ -1011,7 +1068,9 @@ class MusicLibraryActions extends StatefulWidget {
             value: _LibraryAction.enqueue,
             enabled: canQueue,
             child: Text(locals.addToQueueList)),
-        if (request != null && player?.canAddMusicRequest(request) == true)
+        if (!nowPlaying &&
+            request != null &&
+            player?.canAddMusicRequest(request) == true)
           PopupMenuItem(
               key: const ValueKey('music-song-add-to-requests'),
               value: _LibraryAction.request,
@@ -1019,9 +1078,10 @@ class MusicLibraryActions extends StatefulWidget {
         if (player != null &&
             downloads == null &&
             canUseOnlineMusicSong(videos.single)) ...[
-          PopupMenuItem(
-              value: _LibraryAction.preview,
-              child: Text(locals.musicPreviewSong)),
+          if (!nowPlaying)
+            PopupMenuItem(
+                value: _LibraryAction.preview,
+                child: Text(locals.musicPreviewSong)),
           PopupMenuItem(
               value: _LibraryAction.radio, child: Text(locals.musicRadioStart)),
         ],
@@ -1031,7 +1091,7 @@ class MusicLibraryActions extends StatefulWidget {
                 ? _LibraryAction.removeBookmark
                 : _LibraryAction.saveBookmark,
             child: Text(saved ? locals.musicRemoveSong : locals.musicSaveSong)),
-        _likeItem(locals, library.isLiked(song.id)),
+        if (!nowPlaying) _likeItem(locals, library.isLiked(song.id)),
         if (saved)
           PopupMenuItem(
               key: const ValueKey('music-edit-saved-song-title'),
@@ -1055,7 +1115,7 @@ class MusicLibraryActions extends StatefulWidget {
               value: _LibraryAction.refreshMetadata,
               child: Text(locals.musicRefreshSongMetadata)),
       ],
-      if (playableDevice)
+      if (!nowPlaying && playableDevice)
         PopupMenuItem(
             key: const ValueKey('music-song-play'),
             value: _LibraryAction.play,
@@ -1399,22 +1459,17 @@ class MusicLibraryActions extends StatefulWidget {
     }
   }
 
-  static Future<void> showPlayingSongMenu(BuildContext context, IdedVideo entry,
-      {required bool television}) async {
-    final app = context.read<AppCubit>();
-    final player = context.read<PlayerCubit>();
-    final session = MusicLibrarySession(app);
+  static bool Function() _playingSongGuard(BuildContext context,
+      IdedVideo entry, MusicLibrarySession session, PlayerCubit player) {
     final source = player.playlistReference;
-    final recommendationSource =
-        player.musicRecommendationSourceForCurrentEntry;
     final playlistGeneration = player.playlistGeneration;
     final occurrenceRevision = player.playbackOccurrenceRevision;
     final selectionRevision = player.musicSelectionRequestRevision;
     final occurrence = playbackQueueId(entry);
-    bool current() =>
+    return () =>
         context.mounted &&
         session.isCurrent &&
-        identical(context.read<AppCubit>(), app) &&
+        identical(context.read<AppCubit>(), session.app) &&
         identical(context.read<PlayerCubit>(), player) &&
         !player.isClosed &&
         player.state.isAudio &&
@@ -1430,6 +1485,64 @@ class MusicLibraryActions extends StatefulWidget {
         (player.state.currentlyPlaying ?? player.state.offlineCurrentlyPlaying)
                 ?.videoId ==
             entry.videoId;
+  }
+
+  static Future<void> showPlayingPassageBookmarks(
+      BuildContext context, IdedVideo entry) async {
+    final player = context.read<PlayerCubit>();
+    final session = MusicLibrarySession(context.read<AppCubit>());
+    final current = _playingSongGuard(context, entry, session, player);
+    bool seekable() => current() && player.canSeekCurrentMedia;
+    if (!seekable()) return;
+    await _showPassageBookmarks(context, player, session, seekable);
+  }
+
+  static Future<void> _showPassageBookmarks(
+      BuildContext context,
+      PlayerCubit player,
+      MusicLibrarySession session,
+      bool Function() current) async {
+    final target = player.captureMusicPassage();
+    if (target == null || !current()) return;
+    await showMusicPassageBookmarksSheet(
+      context,
+      store: MusicPassageBookmarks(db, session._profileId),
+      recordingId: target.recordingId,
+      occurrenceId: target.occurrenceId,
+      isCurrent: current,
+      capturePosition: () {
+        if (!current()) return null;
+        final active = player.captureMusicPassage();
+        return active?.occurrenceId == target.occurrenceId
+            ? active?.position
+            : null;
+      },
+      canJump: (bookmark) =>
+          current() &&
+          player.canJumpToMusicPassage(
+            recordingId: bookmark.recordingId,
+            occurrenceId: bookmark.occurrenceId,
+            position: bookmark.position,
+          ),
+      jump: (bookmark) async =>
+          current() &&
+          await player.jumpToMusicPassage(
+            recordingId: bookmark.recordingId,
+            occurrenceId: bookmark.occurrenceId,
+            position: bookmark.position,
+          ),
+    );
+  }
+
+  static Future<void> showPlayingSongMenu(BuildContext context, IdedVideo entry,
+      {required bool television}) async {
+    final app = context.read<AppCubit>();
+    final player = context.read<PlayerCubit>();
+    final session = MusicLibrarySession(app);
+    final source = player.playlistReference;
+    final recommendationSource =
+        player.musicRecommendationSourceForCurrentEntry;
+    final current = _playingSongGuard(context, entry, session, player);
     if (!current()) return;
 
     final locals = AppLocalizations.of(context)!;
@@ -1457,10 +1570,6 @@ class MusicLibraryActions extends StatefulWidget {
           if (normalizeChannelId(credit.id) case final id?) id: credit.name,
     };
     ModalRoute<dynamic>? route;
-    Widget first(Widget child) => Builder(builder: (context) {
-          route = ModalRoute.of(context);
-          return PlayerModalBackHandler(child: child);
-        });
     void dismissStaleMenu() {
       if (!current() && route?.isActive == true) {
         route!.navigator?.removeRoute(route!);
@@ -1479,7 +1588,7 @@ class MusicLibraryActions extends StatefulWidget {
     final entries = <PopupMenuEntry<Object>>[
       if (song != null)
         ..._items(context, [song], null,
-            first: first,
+            first: (child) => child,
             downloads: downloads,
             nowPlaying: true,
             showDownload: !television &&
@@ -1487,8 +1596,6 @@ class MusicLibraryActions extends StatefulWidget {
                 !video.downloadPlaybackOnly &&
                 video.explicitMusicDownload == null)
       else ...[
-        PopupMenuItem(
-            value: _LibraryAction.play, child: first(Text(locals.musicPlay))),
         if (canCopy) ...[
           PopupMenuItem(
               value: _LibraryAction.playNext, child: Text(locals.playNext)),
@@ -1504,13 +1611,6 @@ class MusicLibraryActions extends StatefulWidget {
               value: _PlayingSongAction.manageDevicePlaylists,
               child: Text(locals.musicManageSongPlaylists)),
         ],
-        if (player.canAddMusicRequest(entry))
-          PopupMenuItem(
-              key: const ValueKey('music-song-add-to-requests'),
-              value: _LibraryAction.request,
-              child: Text(locals.musicAddToRequests)),
-        if (track != null)
-          _likeItem(locals, session.library.isLiked(track.playbackId)),
         if (track?.canRename == true &&
             track?.fileName != null &&
             !localLibrary.busy)
@@ -1562,7 +1662,18 @@ class MusicLibraryActions extends StatefulWidget {
     final profileChanges = app.stream.listen((_) => dismissStaleMenu());
     final playbackChanges = player.stream.listen((_) => dismissStaleMenu());
     try {
-      final action = await _showSongPopup(context, entries);
+      final action = await _showPlayingSongOptions(
+        context,
+        entries,
+        title:
+            session.library.savedSong(entry.videoId)?.savedTitle ?? music.title,
+        artist: music.artist,
+        television: television,
+        onRoute: (value) {
+          route = value;
+          if (!current()) scheduleMicrotask(dismissStaleMenu);
+        },
+      );
       if (!context.mounted || !current() || action == null) return;
       if (action is _OpenPlayingArtist) {
         MusicScreen.openPlayingArtist(context, action.id,
@@ -1591,36 +1702,7 @@ class MusicLibraryActions extends StatefulWidget {
                 current() &&
                 localLibrary.acceptsSessionSelection(localSelection));
       } else if (action == _PlayingSongAction.passageBookmarks) {
-        final target = player.captureMusicPassage();
-        if (target == null) return;
-        await showMusicPassageBookmarksSheet(
-          context,
-          store: MusicPassageBookmarks(db, session._profileId),
-          recordingId: target.recordingId,
-          occurrenceId: target.occurrenceId,
-          isCurrent: current,
-          capturePosition: () {
-            if (!current()) return null;
-            final active = player.captureMusicPassage();
-            return active?.occurrenceId == target.occurrenceId
-                ? active?.position
-                : null;
-          },
-          canJump: (bookmark) =>
-              current() &&
-              player.canJumpToMusicPassage(
-                recordingId: bookmark.recordingId,
-                occurrenceId: bookmark.occurrenceId,
-                position: bookmark.position,
-              ),
-          jump: (bookmark) async =>
-              current() &&
-              await player.jumpToMusicPassage(
-                recordingId: bookmark.recordingId,
-                occurrenceId: bookmark.occurrenceId,
-                position: bookmark.position,
-              ),
-        );
+        await _showPassageBookmarks(context, player, session, current);
       } else if (action == _PlayingSongAction.localVideo && track != null) {
         await showLocalMusicVideoPairing(context,
             (profileId: app.state.profileId, recordingId: track.playbackId),
@@ -1636,21 +1718,11 @@ class MusicLibraryActions extends StatefulWidget {
             isCurrentEntry: () =>
                 current() &&
                 identical(player.currentLocalPlaylistEntry, playlistEntry));
-      } else if (action == _LibraryAction.play) {
-        player.play();
       } else if (action == _LibraryAction.timeline && onDevice) {
         await showMusicListeningTimeline(context,
             trackId: localMusicTrackId(entry.videoId),
             title: music.title,
             inPlayer: true);
-      } else if (action == _LibraryAction.request) {
-        addRequest(context, player, entry,
-            recommendationSource: recommendationSource,
-            inheritCurrentRecommendationSource: true);
-      } else if (track != null &&
-          (action == _LibraryAction.like || action == _LibraryAction.unlike)) {
-        await session.setSongLiked(MusicLibraryEntry.deviceSong(track),
-            liked: action == _LibraryAction.like);
       } else if (song != null && action is _LibraryAction) {
         await _apply(context, session, action, [song], null, null, downloads,
             inPlayer: true,
@@ -1670,8 +1742,189 @@ class MusicLibraryActions extends StatefulWidget {
     }
   }
 
+  static int _playingSongGroup(PopupMenuEntry<Object> entry) =>
+      switch (entry is PopupMenuItem<Object> ? entry.value : null) {
+        _LibraryAction.startMix ||
+        _LibraryAction.radio ||
+        _LibraryAction.playNext ||
+        _LibraryAction.enqueue =>
+          0,
+        _LibraryAction.saveBookmark ||
+        _LibraryAction.removeBookmark ||
+        _LibraryAction.editSavedTitle ||
+        _LibraryAction.save ||
+        _LibraryAction.managePlaylists ||
+        _LibraryAction.download ||
+        _LibraryAction.removeFromPlaylist ||
+        _PlayingSongAction.saveDevice ||
+        _PlayingSongAction.manageDevicePlaylists =>
+          1,
+        _ => 2,
+      };
+
+  static PopupMenuEntry<Object> _playingSongRow(PopupMenuEntry<Object> entry) {
+    if (entry is! PopupMenuItem<Object>) return entry;
+    final icon = switch (entry.value) {
+      _LibraryAction.startMix => Icons.shuffle_rounded,
+      _LibraryAction.radio => Icons.radio_outlined,
+      _LibraryAction.playNext => Icons.playlist_play,
+      _LibraryAction.enqueue => Icons.queue_music,
+      _LibraryAction.saveBookmark => Icons.bookmark_add_outlined,
+      _LibraryAction.removeBookmark => Icons.bookmark_remove_outlined,
+      _LibraryAction.save ||
+      _PlayingSongAction.saveDevice =>
+        Icons.playlist_add,
+      _LibraryAction.managePlaylists ||
+      _PlayingSongAction.manageDevicePlaylists =>
+        Icons.library_music_outlined,
+      _LibraryAction.removeFromPlaylist => Icons.playlist_remove,
+      _LibraryAction.download => Icons.download_outlined,
+      _PlayingSongAction.passageBookmarks => Icons.bookmarks_outlined,
+      _PlayingSongAction.localVideo => Icons.video_library_outlined,
+      _LibraryAction.shareLink => Icons.link,
+      _LibraryAction.shareFile ||
+      _PlayingSongAction.shareFile =>
+        Icons.share_outlined,
+      _LibraryAction.timeline => Icons.history,
+      _LibraryAction.refreshMetadata => Icons.refresh,
+      _LibraryAction.editSavedTitle || _PlayingSongAction.rename => Icons.edit,
+      _OpenPlayingArtist() => Icons.person_outline,
+      _ => Icons.info_outline,
+    };
+    return PopupMenuItem<Object>(
+      key: entry.key,
+      value: entry.value,
+      enabled: entry.enabled,
+      child: Row(children: [
+        Icon(icon, size: 22),
+        const SizedBox(width: 14),
+        Expanded(child: entry.child ?? const SizedBox.shrink()),
+      ]),
+    );
+  }
+
+  static Future<Object?> _showPlayingSongOptions(
+    BuildContext context,
+    List<PopupMenuEntry<Object>> entries, {
+    required String title,
+    required String artist,
+    required bool television,
+    required void Function(ModalRoute<dynamic>?) onRoute,
+  }) {
+    final locals = AppLocalizations.of(context)!;
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+    final headings = [
+      locals.musicQueue,
+      locals.musicLibrary,
+      locals.musicLibraryActions,
+    ];
+    final rows = <PopupMenuEntry<Object>>[];
+    for (var i = 0; i < headings.length; i++) {
+      final section = entries.where((entry) =>
+          entry is! PopupMenuDivider && _playingSongGroup(entry) == i);
+      if (section.isEmpty) continue;
+      if (rows.isNotEmpty) rows.add(const PopupMenuDivider());
+      rows.add(PopupMenuItem<Object>(
+        enabled: false,
+        height: 32,
+        child: Semantics(
+          header: true,
+          child: Text(headings[i],
+              style:
+                  theme.textTheme.labelLarge?.copyWith(color: colors.primary)),
+        ),
+      ));
+      rows.addAll(section.map(_playingSongRow));
+    }
+    final header = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Semantics(
+          header: true,
+          child: Text(title,
+              key: const ValueKey('music-player-song-options-title'),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.titleLarge
+                  ?.copyWith(color: colors.onSurface)),
+        ),
+        if (artist.trim().isNotEmpty) ...[
+          const SizedBox(height: 4),
+          Text(artist,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.bodyMedium
+                  ?.copyWith(color: colors.onSurfaceVariant)),
+        ],
+      ],
+    );
+    if (television) {
+      return _showSongPopup<Object>(
+          context,
+          [
+            PopupMenuItem<Object>(
+              enabled: false,
+              child: Builder(builder: (context) {
+                onRoute(ModalRoute.of(context));
+                return PlayerModalBackHandler(
+                  child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      child: header),
+                );
+              }),
+            ),
+            const PopupMenuDivider(),
+            ...rows,
+          ],
+          constraints: const BoxConstraints(minWidth: 280, maxWidth: 400));
+    }
+    return showSafeModalBottomSheet<Object>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (context) {
+        onRoute(ModalRoute.of(context));
+        return PlayerModalBackHandler(
+          priority: 5,
+          child: LayoutBuilder(builder: (context, constraints) {
+            return Align(
+              alignment: Alignment.topCenter,
+              heightFactor: 1,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                    maxWidth: 520, maxHeight: constraints.maxHeight * 0.86),
+                child: Semantics(
+                  role: SemanticsRole.menu,
+                  explicitChildNodes: true,
+                  label: locals.musicSongActions,
+                  child: SingleChildScrollView(
+                    key: const ValueKey('music-player-song-options'),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Padding(
+                            padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+                            child: header),
+                        const Divider(height: 1),
+                        ...rows,
+                        const SizedBox(height: 12),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            );
+          }),
+        );
+      },
+    );
+  }
+
   static Future<T?> _showSongPopup<T>(
-      BuildContext context, List<PopupMenuEntry<T>> items) async {
+      BuildContext context, List<PopupMenuEntry<T>> items,
+      {BoxConstraints? constraints}) async {
     final overlay = Navigator.of(context).overlay?.context.findRenderObject();
     if (overlay is! RenderBox || !overlay.hasSize) return null;
     final anchor = context.findRenderObject();
@@ -1682,6 +1935,7 @@ class MusicLibraryActions extends StatefulWidget {
         : overlay.size.center(Offset.zero);
     return showMenu<T>(
         context: context,
+        constraints: constraints,
         position: RelativeRect.fromRect(
             Rect.fromCenter(center: center, width: 0, height: 0),
             Offset.zero & overlay.size),
@@ -2021,7 +2275,7 @@ class MusicLibraryActions extends StatefulWidget {
           canDownload?.call() == false) {
         return 0;
       }
-      final count = await session.download(
+      final result = await session._admitDownloads(
           context.read<DownloadManagerCubit>(), videos,
           container: options.container,
           policy: options.musicPolicy,
@@ -2029,13 +2283,26 @@ class MusicLibraryActions extends StatefulWidget {
       if (context.mounted &&
           session.isCurrent &&
           canDownload?.call() != false) {
-        final message = count == 0
-            ? locals.musicDownloadNothingQueued
-            : locals.musicDownloadSongsQueued(count);
+        if (result.requestNotifications) {
+          unawaited(
+              DownloadNotifications.requestPermissionForExplicitDownload());
+        }
+        final messages = [
+          if (result.queued > 0) locals.musicDownloadSongsQueued(result.queued),
+          if (result.adopted > 0)
+            locals.musicDownloadAudioAddedToLibrary(result.adopted),
+          if (result.videoConflicts > 0)
+            locals.musicDownloadVideoConflicts(result.videoConflicts),
+        ];
+        if (messages.isEmpty) {
+          messages.add(result.existing > 0
+              ? locals.musicDownloadAudioAlreadyInDownloads(result.existing)
+              : locals.musicDownloadNothingQueued);
+        }
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(message)));
+            .showSnackBar(SnackBar(content: Text(messages.join(' '))));
       }
-      return count;
+      return result.admitted;
     } catch (_) {
       if (context.mounted && session.isCurrent) {
         ScaffoldMessenger.of(context)
@@ -2319,6 +2586,112 @@ class _SaveMusicDialog extends StatefulWidget {
 
   @override
   State<_SaveMusicDialog> createState() => _SaveMusicDialogState();
+}
+
+class MusicPlaybackLikeButton extends StatefulWidget {
+  final IdedVideo entry;
+  final ButtonStyle? style;
+  final bool miniPlayer;
+
+  const MusicPlaybackLikeButton({
+    super.key,
+    required this.entry,
+    this.style,
+    this.miniPlayer = false,
+  });
+
+  @override
+  State<MusicPlaybackLikeButton> createState() =>
+      _MusicPlaybackLikeButtonState();
+}
+
+class _MusicPlaybackLikeButtonState extends State<MusicPlaybackLikeButton> {
+  bool _saving = false;
+
+  MusicLibraryEntry? _songForProfile(IdedVideo entry, String profileId) {
+    final owner = switch (entry) {
+      Video() => (entry.playbackConnection ?? entry.backendPlayback)
+          ?.preferredServer
+          .profileId,
+      DownloadedVideo() => entry.profileId,
+      _ => null,
+    };
+    if (owner != null && owner != profileId) return null;
+    final deviceTrack = localMusicTrackForPlayback(entry.videoId);
+    if (deviceTrack != null) return MusicLibraryEntry.deviceSong(deviceTrack);
+    final catalogSong = catalogMusicVideoForPlayback(entry);
+    return catalogSong == null ? null : MusicLibraryEntry.song(catalogSong);
+  }
+
+  Future<void> _setLiked(
+      MusicLibrarySession session, MusicLibraryEntry song, bool liked) async {
+    setState(() => _saving = true);
+    try {
+      await session.library
+          .setSongLiked(song, liked: liked, isCurrent: () => session.isCurrent);
+    } catch (_) {
+      if (mounted && session.isCurrent) _showActionError(context);
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final app = context.watch<AppCubit>();
+    final session = MusicLibrarySession(app);
+    final library = session.library;
+    final entry = widget.entry;
+    final song = session.isCurrent && library.profileId == app.state.profileId
+        ? _songForProfile(entry, library.profileId)
+        : null;
+    final player = context.read<PlayerCubit>();
+    final generation = player.playlistGeneration;
+    final occurrence = playbackQueueId(entry);
+    final fullScreenCurrent = widget.miniPlayer
+        ? null
+        : MusicLibraryActions._playingSongGuard(
+            context, entry, session, player);
+
+    bool current() {
+      if (fullScreenCurrent != null) return fullScreenCurrent();
+      final selected = player.openingMusicEntry ??
+          player.state.currentlyPlaying ??
+          player.state.offlineCurrentlyPlaying;
+      return session.isCurrent &&
+          !player.isClosed &&
+          player.playlistGeneration == generation &&
+          player.state.isMini &&
+          !player.state.isHidden &&
+          !player.state.isClosing &&
+          selected != null &&
+          selected.videoId == entry.videoId &&
+          playbackQueueId(selected) == occurrence;
+    }
+
+    if (!widget.miniPlayer && song == null) return const SizedBox.shrink();
+    final locals = AppLocalizations.of(context)!;
+    return ListenableBuilder(
+      listenable: library.changes,
+      builder: (context, _) {
+        final liked = song != null && library.isLiked(song.id);
+        return IconButton(
+          key: ValueKey(
+              widget.miniPlayer ? 'music-mini-like' : 'music-player-like'),
+          tooltip: liked ? locals.musicUnlikeSong : locals.musicLikeSong,
+          onPressed: _saving || song == null
+              ? null
+              : () {
+                  if (!mounted || _saving || !current()) return;
+                  unawaited(_setLiked(session, song, !liked));
+                },
+          style: widget.style,
+          isSelected: liked,
+          icon: Icon(liked ? Icons.favorite : Icons.favorite_border),
+        );
+      },
+    );
+  }
 }
 
 /// A bookmark saves only this public catalog identity and display metadata.

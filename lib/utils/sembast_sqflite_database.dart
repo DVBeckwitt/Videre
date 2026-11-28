@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 
+import 'package:clipious/downloads/models/download_formats.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/music/models/music_listening_event.dart';
@@ -17,6 +18,7 @@ import 'package:clipious/utils/interfaces/db.dart';
 import 'package:clipious/videos/models/db/dearrow_cache.dart';
 import 'package:clipious/videos/models/db/history_video_cache.dart';
 import 'package:clipious/videos/models/db/progress.dart';
+import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:logging/logging.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -482,12 +484,24 @@ class SembastSqfDb extends IDbClient {
 
   @override
   List<DownloadedVideo> getAllDownloads() {
-    var records = downloadedVideosStore.findSync(db);
-    return records.map((e) {
-      var d = DownloadedVideo.fromJson(e.value);
-      d = d.copyWith(videoId: e.key);
-      return d;
-    }).toList();
+    return downloadedVideosStore
+        .findSync(db)
+        .map((row) => _readDownload(row.key, row.value))
+        .toList();
+  }
+
+  DownloadedVideo _readDownload(String id, Map<String, Object?> value) {
+    final download = DownloadedVideo.fromJson(value).copyWith(videoId: id);
+    // Some older Music rows never reached the metadata request. Only the
+    // Music-specific quality marker identifies those unlabelled rows.
+    if (download.audioOnly &&
+        download.quality == highestAudioDownloadQuality &&
+        download.musicMetadata == null) {
+      return download.copyWith(
+          musicMetadata: MusicMetadata(
+              title: download.title, artist: download.author ?? ''));
+    }
+    return download;
   }
 
   /// The provider renamed a shared document. Update existing references in one
@@ -644,8 +658,8 @@ class SembastSqfDb extends IDbClient {
 
   @override
   DownloadedVideo? getDownloadByVideoId(String videoId) {
-    var v = downloadedVideosStore.record(videoId).getSync(db);
-    return v != null ? DownloadedVideo.fromJson(v) : null;
+    final value = downloadedVideosStore.record(videoId).getSync(db);
+    return value == null ? null : _readDownload(videoId, value);
   }
 
   @override
@@ -1451,9 +1465,19 @@ class SembastSqfDb extends IDbClient {
     await _writeProfile((owner, txn) async {
       final record = owner.downloadedVideosStore.record(vid.videoId);
       final previous = await record.get(txn);
+      final adoptedSnapshot = previous != null &&
+          previous['notificationTicket'] is String &&
+          vid.notificationTicket == null &&
+          IDbClient.isSameAudioDownloadJob(
+              DownloadedVideo.fromJson(previous), vid);
       // Transfers save job snapshots that may predate an ownership change.
       await record.put(txn, {
         ...vid.toJson(),
+        if (adoptedSnapshot) ...{
+          'notificationTicket': previous['notificationTicket'],
+          if (previous['musicMetadata'] != null)
+            'musicMetadata': previous['musicMetadata'],
+        },
         if (previous?[_playlistOnlyField] == true) _playlistOnlyField: true,
       });
     });
@@ -1492,6 +1516,34 @@ class SembastSqfDb extends IDbClient {
           return false;
         }
         await record.put(txn, {...previous, _playlistOnlyField: false});
+        return true;
+      });
+
+  @override
+  Future<bool> adoptMusicDownload(DownloadedVideo expected, MusicMetadata music,
+          {String? notificationTicket}) =>
+      _writeProfile((owner, txn) async {
+        final record = owner.downloadedVideosStore.record(expected.videoId);
+        final previous = await record.get(txn);
+        if (previous == null || owner.profileId != expected.profileId) {
+          return false;
+        }
+        final current = DownloadedVideo.fromJson(previous);
+        if (!IDbClient.isSameAudioDownloadJob(expected, current)) return false;
+        final needsLabels = current.musicMetadata == null;
+        final promote = previous[_playlistOnlyField] == true;
+        final needsTicket = !current.downloadComplete &&
+            !current.downloadFailed &&
+            !current.authenticationRequired &&
+            current.notificationTicket == null &&
+            notificationTicket != null;
+        if (!needsLabels && !promote && !needsTicket) return false;
+        await record.put(txn, {
+          ...previous,
+          if (needsLabels) 'musicMetadata': music.toJson(),
+          if (promote) _playlistOnlyField: false,
+          if (needsTicket) 'notificationTicket': notificationTicket,
+        });
         return true;
       });
 
