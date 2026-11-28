@@ -24,6 +24,7 @@ import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/music_metadata.dart';
+import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -48,6 +49,9 @@ class _Player extends Cubit<PlayerState> implements PlayerCubit {
   String? source;
   bool otherSession = false;
   final enqueued = <(String, bool)>[];
+  final onDeviceEnqueueAttempts = <(String, bool)>[];
+  bool onDeviceQueueAvailable = true;
+  bool onDeviceEnqueueSucceeds = true;
 
   @override
   final musicSelectionFailureRevision = ValueNotifier(0);
@@ -57,6 +61,29 @@ class _Player extends Cubit<PlayerState> implements PlayerCubit {
 
   @override
   bool get isLocalMusicSession => false;
+
+  @override
+  bool get isMusicAudio =>
+      state.isAudio && state.currentlyPlaying?.musicMetadata != null;
+
+  void showCatalogTrack(Video track) => emit(state.copyWith(
+      currentlyPlaying: track,
+      videos: [track],
+      isAudio: true,
+      isHidden: false,
+      position: const Duration(seconds: 17)));
+
+  @override
+  bool canEnqueueOnDeviceMusic(List<OnDeviceMusicEntry> tracks) =>
+      onDeviceQueueAvailable && isMusicAudio && tracks.isNotEmpty;
+
+  @override
+  Future<bool> enqueueOnDeviceMusic(List<OnDeviceMusicEntry> tracks,
+      {required bool next, bool Function()? isCurrent}) async {
+    expect(isCurrent?.call(), isTrue);
+    onDeviceEnqueueAttempts.addAll(tracks.map((entry) => (entry.title, next)));
+    return onDeviceEnqueueSucceeds;
+  }
 
   @override
   bool canAddDeviceMusicRequest(OnDeviceMusicEntry entry) => false;
@@ -2367,6 +2394,48 @@ void main() {
     await tester.pumpAndSettle();
     expect(player.queue.map((track) => track.title), ['Second']);
     expect(player.enqueued, [('First', true)]);
+  });
+
+  testWidgets('On Device song actions queue into active online Music',
+      (tester) async {
+    consent = picked;
+    await show(tester, settings: false);
+    const online = Video(
+        videoId: 'catalog0001',
+        musicMetadata: MusicMetadata(title: 'Online song', artist: 'Artist'));
+    player.showCatalogTrack(online);
+    // An online session is also an "other" session to the legacy local player.
+    player.otherSession = true;
+    await tester.pumpAndSettle();
+
+    Future<void> choose(String song, String action) async {
+      await tester.tap(find.byTooltip('Actions for $song'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(action));
+      await tester.pumpAndSettle();
+      expect(find.byType(AlertDialog), findsNothing);
+    }
+
+    await choose('First', 'Play next');
+    await choose('Second', 'Add to queue');
+    expect(
+        player.onDeviceEnqueueAttempts, [('First', true), ('Second', false)]);
+    expect(player.queue, isEmpty);
+    expect(player.enqueued, isEmpty);
+    expect(player.state.currentlyPlaying, same(online));
+    expect(player.state.position, const Duration(seconds: 17));
+
+    player.onDeviceEnqueueSucceeds = false;
+    await choose('First', 'Add to queue');
+    expect(player.onDeviceEnqueueAttempts.last, ('First', false));
+    expect(find.text(AppLocalizationsEn().musicLibraryActionError),
+        findsOneWidget);
+
+    player.onDeviceQueueAvailable = false;
+    await choose('Second', 'Play next');
+    expect(player.onDeviceEnqueueAttempts, hasLength(3));
+    expect(player.queue, isEmpty);
+    expect(player.state.currentlyPlaying, same(online));
   });
 
   testWidgets('remote Select activates a focused local song menu action',

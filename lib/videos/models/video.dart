@@ -156,6 +156,9 @@ sealed class Video with _$Video implements ShareLinks, IdedVideo {
 
   const Video._();
 
+  bool get hasRestrictedDownloadVisibility =>
+      isListed == false || paid == true || premium == true;
+
   factory Video.fromJson(Map<String, Object?> json) =>
       _restoreMusicArtwork(_$VideoFromJson(json));
 

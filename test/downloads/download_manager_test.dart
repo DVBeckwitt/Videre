@@ -8,6 +8,7 @@ import 'package:clipious/downloads/models/download_playback_provenance.dart';
 import 'package:clipious/downloads/models/music_download_format.dart';
 import 'package:clipious/downloads/models/music_offline_policy.dart';
 import 'package:clipious/downloads/services/download_mux.dart';
+import 'package:clipious/downloads/services/download_space.dart';
 import 'package:clipious/downloads/states/download_manager.dart';
 import 'package:clipious/downloads/services/download_rename.dart';
 import 'package:clipious/downloads/services/download_storage.dart';
@@ -266,10 +267,15 @@ void main() {
   }
 
   Future<void> openAndroidStorageManager(
-      {List<MusicDownloadFormat>? encodings}) async {
+      {List<MusicDownloadFormat>? encodings,
+      AudioExportProbe audioExportProbe = probeAudioExport,
+      Future<void> Function(List<String>, CancelToken) audioExportMux =
+          runDownloadMux}) async {
     await manager.close();
     manager = DownloadManagerCubit(const DownloadManagerState(), _Player(),
-        storage: _AndroidDownloadStorage(), encodeMusic: (
+        storage: _AndroidDownloadStorage(),
+        audioExportProbe: audioExportProbe,
+        audioExportMux: audioExportMux, encodeMusic: (
             {required input,
             required output,
             required video,
@@ -1605,6 +1611,365 @@ void main() {
     expect(db.getDownloadByVideoId(original.videoId)!.storageUri, document);
     expect(encodings, [MusicDownloadFormat.m4a]);
     expect(await File(localInput!).exists(), isFalse);
+  });
+
+  test(
+      'edited export verifies audio and keeps a receipt separate from the original',
+      () async {
+    const shared = 'content://media/external_primary/audio/media';
+    final names = <String>[];
+    final destinations = <String>[];
+    final written = <List<int>>[];
+    final removed = <String>[];
+    var muxes = 0;
+    var outputDuration = const Duration(seconds: 10);
+    var stagingCapacity = 1;
+    var destinationCapacity = 1000;
+    messenger.setMockMethodCallHandler(storageChannel, (call) async {
+      switch (call.method) {
+        case 'sharedMusicFolder':
+          return shared;
+        case 'downloadCapacity':
+          return {
+            'volume': 'volume',
+            'availableBytes': call.arguments['pathOrUri'] == shared
+                ? destinationCapacity
+                : stagingCapacity,
+          };
+        case 'inspectDocument':
+          final index = destinations.indexOf(call.arguments['uri'] as String);
+          if (index < 0) return null;
+          return {
+            'byteLength': written[index].length,
+            'sha256': sha256.convert(written[index]).toString(),
+          };
+        case 'prepareDocument':
+          expect(call.arguments['existing'], isNull);
+          names.add(call.arguments['name'] as String);
+          return '$shared/${names.length}';
+        case 'writeDocument':
+          destinations.add(call.arguments['uri'] as String);
+          written.add(
+              await File(call.arguments['source'] as String).readAsBytes());
+          return null;
+        case 'exportExists':
+          return true;
+        case 'deleteDocument':
+          removed.add(call.arguments['uri'] as String);
+          return null;
+        default:
+          fail('Unexpected ${call.method}');
+      }
+    });
+    await openAndroidStorageManager(
+        audioExportProbe: (input, audio, token) async {
+      expect(await File(input).exists(), isTrue);
+      return (
+        duration: input.endsWith('.part')
+            ? const Duration(seconds: 10)
+            : outputDuration,
+        codec: 'mp3',
+        streamCount: 1,
+      );
+    }, audioExportMux: (args, token) async {
+      muxes++;
+      expect(
+          args, containsAllInOrder(['-map', '[edited]', '-c:a', 'libmp3lame']));
+      await File(args.last).writeAsBytes([1, 2]);
+    });
+    final original = video.copyWith(
+        audioOnly: true,
+        downloadComplete: true,
+        musicFormat: MusicDownloadFormat.mp3,
+        musicMetadata: const MusicMetadata(title: 'Song', artist: 'Artist'),
+        sponsorSegments: [
+          SponsorSegment('skip', [2, 5], SponsorSegmentType.sponsor),
+        ]);
+    await db.upsertDownload(original);
+    final file = File(await original.effectivePath);
+    await file.writeAsBytes([9, 8]);
+
+    await expectLater(manager.exportMusicWithoutSponsorSegments(original),
+        throwsA(isA<DownloadInsufficientSpace>()));
+    expect(muxes, 0);
+    expect(names, isEmpty);
+    stagingCapacity = 1000;
+
+    // Leaving the full duration on output must fail before allocating any copy.
+    await expectLater(manager.exportMusicWithoutSponsorSegments(original),
+        throwsFormatException);
+    expect(names, isEmpty);
+    expect(
+        db.getDownloadByVideoId(original.videoId)!.editedMusicExport, isNull);
+
+    outputDuration = const Duration(seconds: 7);
+    destinationCapacity = 1;
+    await expectLater(manager.exportMusicWithoutSponsorSegments(original),
+        throwsA(isA<DownloadInsufficientSpace>()));
+    expect(names, isEmpty);
+    destinationCapacity = 1000;
+    expect(await manager.exportMusicWithoutSponsorSegments(original), isTrue);
+    final firstEdit =
+        db.getDownloadByVideoId(original.videoId)!.editedMusicExport!;
+    expect(firstEdit.complete, isTrue);
+    expect(firstEdit.editSignature, isNotEmpty);
+    expect(db.getDownloadByVideoId(original.videoId)!.exportedMusic, isNull);
+    expect(await manager.exportMusic(original), isTrue);
+    expect(await manager.exportMusicWithoutSponsorSegments(original), isTrue);
+    final originalReceipt =
+        db.getDownloadByVideoId(original.videoId)!.exportedMusic!;
+    expect(originalReceipt.complete, isTrue);
+    expect(originalReceipt.editSignature, isNull);
+    expect(names, [contains('_sponsorblock-'), original.fileName]);
+    expect(written, [
+      [1, 2],
+      [9, 8]
+    ]);
+    expect(muxes, 3);
+    expect(await file.readAsBytes(), [9, 8]);
+
+    // A legacy download's bytes can change without a row metadata update.
+    // An old receipt cannot suppress creation of an edit of the new input.
+    await file.writeAsBytes([9, 7]);
+    expect(await manager.exportMusicWithoutSponsorSegments(original), isTrue);
+    final latest = db.getDownloadByVideoId(original.videoId)!;
+    expect(latest.exportedMusic, originalReceipt);
+    expect(latest.editedMusicExport!.editSignature,
+        isNot(firstEdit.editSignature));
+    expect(names.last, isNot(names.first));
+    expect(destinations, ['$shared/1', '$shared/2', '$shared/3']);
+    expect(
+        await File('${await original.stagingPath}.export-input.part').exists(),
+        isFalse);
+    expect(await File('${await original.stagingPath}.export.mp3').exists(),
+        isFalse);
+    expect(await file.readAsBytes(), [9, 7]);
+    await manager.deleteVideo(original);
+    expect(removed, isEmpty);
+  });
+
+  for (final differentRecipe in [false, true]) {
+    test(
+        'shared audio repairs a published edit (different recipe: $differentRecipe)',
+        () async {
+      const shared = 'content://media/external_primary/audio/media';
+      const source = '$shared/1';
+      const partial = '$shared/2';
+      const shortWrite = '$shared/3';
+      const nextEdit = '$shared/4';
+      final previousDestinations = <String?>[];
+      final removed = <String>[];
+      final written = <String>[];
+      var failWrite = true;
+      final documents = <String, List<int>>{};
+      String? stageInput;
+      messenger.setMockMethodCallHandler(storageChannel, (call) async {
+        switch (call.method) {
+          case 'sharedMusicFolder':
+            return shared;
+          case 'documentSize':
+            expect(call.arguments['uri'], source);
+            return 2;
+          case 'downloadCapacity':
+            return null;
+          case 'readDocument':
+            expect(call.arguments['uri'], source);
+            expect(call.arguments['folderUri'], shared);
+            stageInput = call.arguments['destination'] as String;
+            await File(stageInput!).writeAsBytes([8, 9]);
+            return null;
+          case 'prepareDocument':
+            expect(call.arguments['name'], contains('_sponsorblock-'));
+            previousDestinations.add(call.arguments['existing'] as String?);
+            return switch (previousDestinations.length) {
+              1 => partial,
+              2 => shortWrite,
+              _ => nextEdit,
+            };
+          case 'writeDocument':
+            final uri = call.arguments['uri'] as String;
+            written.add(uri);
+            if (failWrite) throw PlatformException(code: 'DOWNLOAD_STORAGE');
+            expect(await File(call.arguments['source'] as String).readAsBytes(),
+                [1, 2]);
+            documents[uri] = uri == shortWrite ? [1] : [1, 2];
+            return null;
+          case 'inspectDocument':
+            final bytes = documents[call.arguments['uri'] as String];
+            if (bytes == null) return null;
+            return {
+              'byteLength': bytes.length,
+              'sha256': sha256.convert(bytes).toString()
+            };
+          case 'deleteDocument':
+            final uri = call.arguments['uri'] as String;
+            removed.add(uri);
+            documents.remove(uri);
+            return null;
+          default:
+            fail('Unexpected ${call.method}');
+        }
+      });
+      await openAndroidStorageManager(
+          audioExportProbe: (input, audio, token) async {
+        final isSource = input.endsWith('.part');
+        expect(await File(input).readAsBytes(), isSource ? [8, 9] : [1, 2]);
+        return (
+          duration: Duration(seconds: isSource ? 10 : 7),
+          codec: 'mp3',
+          streamCount: 1,
+        );
+      }, audioExportMux: (args, token) async {
+        await File(args.last).writeAsBytes([1, 2]);
+      });
+      final original = video.copyWith(
+        audioOnly: true,
+        downloadComplete: true,
+        musicFormat: MusicDownloadFormat.mp3,
+        folderUri: shared,
+        storageUri: source,
+        musicMetadata: const MusicMetadata(title: 'Song', artist: 'Artist'),
+        sponsorSegments: [
+          SponsorSegment('skip', [2, 5], SponsorSegmentType.sponsor)
+        ],
+      );
+      await db.upsertDownload(original);
+      expect(await manager.exportMusic(original), isFalse);
+      await expectLater(manager.exportMusicWithoutSponsorSegments(original),
+          throwsA(isA<PlatformException>()));
+      final pending =
+          db.getDownloadByVideoId(original.videoId)!.incompleteMusicEdit!;
+      expect(pending.uri, partial);
+      expect(pending.complete, isFalse);
+      expect(removed, [partial]);
+
+      failWrite = false;
+      await expectLater(manager.exportMusicWithoutSponsorSegments(original),
+          throwsFormatException);
+      expect(removed, [partial, partial, shortWrite]);
+      final afterShortWrite = db.getDownloadByVideoId(original.videoId)!;
+      expect(afterShortWrite.incompleteMusicEdit?.uri, shortWrite);
+      expect(afterShortWrite.editedMusicExport, isNull);
+
+      // Restore the filesystem state at the boundary after a complete provider
+      // write but before its pending receipt was marked complete.
+      documents[shortWrite] = [1, 2];
+      if (differentRecipe) {
+        await db.upsertDownload(afterShortWrite.copyWith(sponsorSegments: [
+          SponsorSegment('skip', [3, 6], SponsorSegmentType.sponsor),
+        ]));
+      }
+      expect(await manager.exportMusicWithoutSponsorSegments(original), isTrue);
+      final latest = db.getDownloadByVideoId(original.videoId)!;
+      expect(latest.editedMusicExport?.uri,
+          differentRecipe ? nextEdit : shortWrite);
+      expect(latest.editedMusicExport?.complete, isTrue);
+      expect(
+          latest.editedMusicExport?.editSignature,
+          differentRecipe
+              ? isNot(pending.editSignature)
+              : pending.editSignature);
+      expect(documents[shortWrite], [1, 2]);
+      expect(latest.exportedMusic, isNull);
+      expect(latest.storageUri, source);
+      expect(latest.incompleteMusicEdit, isNull);
+      expect(previousDestinations, [null, null, if (differentRecipe) null]);
+      expect(written, [partial, shortWrite, if (differentRecipe) nextEdit]);
+      expect(removed, [partial, partial, shortWrite]);
+      expect(await File(stageInput!).exists(), isFalse);
+    });
+  }
+
+  test('deleting a source preserves an already published provisional edit',
+      () async {
+    const shared = 'content://media/external_primary/audio/media';
+    const source = '$shared/12';
+    const edited = '$shared/13';
+    final removed = <String>[];
+    final digest = sha256.convert([1, 2]).toString();
+    messenger.setMockMethodCallHandler(storageChannel, (call) async {
+      switch (call.method) {
+        case 'inspectDocument':
+          expect(call.arguments['uri'], edited);
+          expect(call.arguments['folderUri'], shared);
+          return {'byteLength': 2, 'sha256': digest};
+        case 'deleteDocument':
+          removed.add(call.arguments['uri'] as String);
+          return null;
+        default:
+          fail('Unexpected ${call.method}');
+      }
+    });
+    await openAndroidStorageManager();
+    final original = video.copyWith(
+        folderUri: shared,
+        storageUri: source,
+        audioOnly: true,
+        downloadComplete: true,
+        musicFormat: MusicDownloadFormat.mp3,
+        musicMetadata: const MusicMetadata(title: 'Song', artist: 'Artist'),
+        pendingEditedMusicExport: ExportedMusicCopy(
+            shared, edited, MusicDownloadFormat.mp3,
+            editSignature: 'saved-recipe', outputSha256: digest));
+    await db.upsertDownload(original);
+
+    expect(await manager.deleteVideo(original), isTrue);
+    expect(removed, [source]);
+    expect(db.getDownloadByVideoId(original.videoId), isNull);
+  });
+
+  test(
+      'edited receipt commits only for the same saved audio and pending recipe',
+      () async {
+    const folder = 'content://media/external_primary/audio/media';
+    final original = video.copyWith(
+        audioOnly: true,
+        downloadComplete: true,
+        musicMetadata: const MusicMetadata(title: 'Song', artist: 'Artist'));
+    final changed = original.copyWith(audioTrackId: 'different');
+    const pending = ExportedMusicCopy(
+        folder, '$folder/1', MusicDownloadFormat.mp3,
+        editSignature: 'first');
+    const stale = ExportedMusicCopy(
+        folder, '$folder/1', MusicDownloadFormat.mp3,
+        editSignature: 'stale', complete: true);
+    const finished = ExportedMusicCopy(
+        folder, '$folder/1', MusicDownloadFormat.mp3,
+        editSignature: 'first', complete: true);
+    await db.upsertDownload(original);
+    await db.saveDownloadExport(original.videoId, pending,
+        expectedSource: original);
+    await expectLater(
+        db.saveDownloadExport(original.videoId, stale,
+            expectedSource: original),
+        throwsStateError);
+    expect(db.getDownloadByVideoId(original.videoId)!.incompleteMusicEdit,
+        pending);
+    await db.upsertDownload(changed);
+    await expectLater(
+        db.saveDownloadExport(original.videoId, finished,
+            expectedSource: original),
+        throwsStateError);
+    expect(
+        db.getDownloadByVideoId(original.videoId)!.editedMusicExport, isNull);
+
+    await db.saveDownloadExport(original.videoId, pending,
+        expectedSource: changed);
+    await db.saveDownloadExport(original.videoId, finished,
+        expectedSource: changed);
+    expect(
+        db.getDownloadByVideoId(original.videoId)!.editedMusicExport, finished);
+    expect(
+        db.getDownloadByVideoId(original.videoId)!.incompleteMusicEdit, isNull);
+    const second = ExportedMusicCopy(
+        folder, '$folder/2', MusicDownloadFormat.mp3,
+        editSignature: 'second', outputSha256: 'verified');
+    await db.saveDownloadExport(original.videoId, second,
+        expectedSource: changed);
+    final row = db.getDownloadByVideoId(original.videoId)!;
+    expect(row.incompleteMusicEdit, second);
+    expect(row.editedMusicExport, finished);
+    expect(row.exportedMusic, isNull);
   });
 
   test('audio-only MP4 saves selected language as M4A across a restart',

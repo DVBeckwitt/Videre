@@ -98,10 +98,12 @@ class _Downloads implements DownloadManagerCubit {
   _Downloads(
       {this.state = const DownloadManagerState(),
       this.destinationPicker,
-      this.destinationReady = true});
+      this.destinationReady = true,
+      this.acceptsDownload = true});
 
   final Future<bool>? destinationPicker;
   final bool destinationReady;
+  final bool acceptsDownload;
   int destinationRequests = 0;
 
   @override
@@ -143,7 +145,7 @@ class _Downloads implements DownloadManagerCubit {
       container: container,
       video: video
     ));
-    return true;
+    return acceptsDownload;
   }
 
   @override
@@ -1785,6 +1787,60 @@ void main() {
     }
   }
 
+  testWidgets('online song menu queues next into active Downloads',
+      (tester) async {
+    const position = Duration(seconds: 37);
+    final saved = DownloadedVideo(
+        videoId: second.videoId,
+        title: second.title!,
+        profileId: db.profileId,
+        lengthSeconds: 60,
+        quality: 'best',
+        downloadComplete: true,
+        audioOnly: true,
+        musicMetadata: second.musicMetadata,
+        storageUri: 'content://music/playing');
+    final tail = saved.copyWith(
+        videoId: 'later-file', storageUri: 'content://music/later');
+    await tester.runAsync(() async {
+      await db.upsertDownload(saved);
+      await db.upsertDownload(tail);
+    });
+    final current = await showSongActions(tester,
+        initial: PlayerState.init(null).copyWith(
+          isAudio: true,
+          isHidden: false,
+          isPlaying: true,
+          offlineCurrentlyPlaying: saved,
+          offlineVideos: [saved, tail],
+          playQueue: ListQueue.of([tail.videoId]),
+          position: position,
+        ));
+    current.enqueueZone = await tester.runAsync(() async => Zone.current);
+
+    await openSongMenu(tester);
+    final playNext = find.byKey(const ValueKey('music-song-play-next'));
+    expect(tester.widget<PopupMenuItem<Object?>>(playNext).enabled, isTrue);
+    await tester.tap(playNext);
+    await tester.pumpAndSettle();
+
+    final state = current.state;
+    expect(state.offlineCurrentlyPlaying, same(saved));
+    expect(state.position, position);
+    expect(state.isPlaying, isTrue);
+    expect(state.playQueue, [first.videoId, tail.videoId]);
+    expect(
+        state.videos.map(playbackQueueId), [saved.videoId, ...state.playQueue]);
+    expect(state.videos.first.explicitMusicDownload,
+        musicDownloadFingerprint(saved));
+    expect(state.videos.last.explicitMusicDownload,
+        musicDownloadFingerprint(tail));
+    expect(current.calls, isEmpty);
+    expect(current.offlineCalls, isEmpty);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
   for (final next in [true, false]) {
     testWidgets(
         'held ${next ? 'Play next' : 'Add to queue'} starts audio when playback is idle',
@@ -2964,6 +3020,36 @@ void main() {
         hasLength(saving ? 1 : 0),
       );
       expect(downloads.calls, isEmpty);
+    });
+  }
+
+  for (final (acceptsDownload, message) in [
+    (false, 'No songs were added to the download queue.'),
+    (true, '1 song added to the download queue.'),
+  ]) {
+    testWidgets(
+        'reports the outcome of queuing an audio download ($acceptsDownload)',
+        (tester) async {
+      final downloads = _Downloads(acceptsDownload: acceptsDownload);
+      await show(tester,
+          body: BlocProvider<DownloadManagerCubit>.value(
+            value: downloads,
+            child: const MusicLibraryActions(videos: [first]),
+          ));
+      await tester.tap(find.byTooltip('Music actions'));
+      await tester.pumpAndSettle();
+      await tester.runAsync(() async {
+        await tester.tap(find.text('Download audio'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Download'));
+        await Future.doWhile(() async {
+          await Future<void>.delayed(const Duration(milliseconds: 1));
+          await tester.pump();
+          return find.text(message).evaluate().isEmpty;
+        }).timeout(const Duration(seconds: 5));
+      });
+      expect(downloads.calls.single.id, first.videoId);
+      expect(find.text(message), findsOneWidget);
     });
   }
 

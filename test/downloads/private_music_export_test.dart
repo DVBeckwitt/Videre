@@ -5,6 +5,7 @@ import 'package:clipious/app/states/app.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/downloads/models/music_download_format.dart';
 import 'package:clipious/downloads/states/download_manager.dart';
+import 'package:clipious/downloads/services/download_mux.dart';
 import 'package:clipious/downloads/views/components/download_folder.dart';
 import 'package:clipious/downloads/views/components/downloaded_video.dart';
 import 'package:clipious/downloads/views/screens/download_manager.dart';
@@ -15,6 +16,8 @@ import 'package:clipious/player/states/player.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/ided_video.dart';
 import 'package:clipious/videos/models/music_metadata.dart';
+import 'package:clipious/videos/models/sponsor_segment.dart';
+import 'package:clipious/videos/models/sponsor_segment_types.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -78,6 +81,8 @@ class _Downloads extends Cubit<DownloadManagerState>
   _Downloads() : super(const DownloadManagerState());
 
   final requests = <DownloadedVideo>[];
+  final editedRequests = <DownloadedVideo>[];
+  late final editedResult = Completer<bool>();
   late final result = Completer<bool>();
   final destinations = <String>[];
   DateTime? retryAt;
@@ -143,6 +148,12 @@ class _Downloads extends Cubit<DownloadManagerState>
   Future<void> chooseFolder({bool audioOnly = false}) async {
     // A dismissed Android picker leaves the current selection in place.
     destinations.add(audioOnly ? 'audio-picker' : 'video-picker');
+  }
+
+  @override
+  Future<bool> exportMusicWithoutSponsorSegments(DownloadedVideo video) {
+    editedRequests.add(video);
+    return editedResult.future;
   }
 
   @override
@@ -498,6 +509,154 @@ void main() {
       expect(downloads.requests, isEmpty);
     });
   }
+
+  testWidgets(
+      'Original is selected by default and an edit failure offers the original',
+      (tester) async {
+    final video = _song.copyWith(sponsorSegments: [
+      SponsorSegment('skip', [2, 5], SponsorSegmentType.sponsor),
+    ]);
+    final locals = await openSheet(tester, video);
+    await tester.tap(export);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    final group = find.byType(RadioGroup<bool>);
+    final edit = find.widgetWithText(
+        RadioListTile<bool>, locals.musicDownloadExportEdited);
+    final confirm =
+        find.widgetWithText(FilledButton, locals.musicDownloadExportConfirm);
+    expect(tester.widget<RadioGroup<bool>>(group).groupValue, isFalse);
+    expect(find.text(locals.musicDownloadExportOriginal), findsOneWidget);
+    expect(downloads.requests, isEmpty);
+    expect(downloads.editedRequests, isEmpty);
+    final originalConfirmLocation = tester.getCenter(confirm);
+
+    await tester.tap(edit);
+    await tester.pump();
+    expect(tester.widget<RadioGroup<bool>>(group).groupValue, isTrue);
+    expect(tester.getCenter(confirm), originalConfirmLocation);
+    expect(downloads.editedRequests, isEmpty);
+    await tester.tap(confirm);
+    await tester.pump();
+    expect(downloads.editedRequests, [video]);
+    expect(downloads.requests, isEmpty);
+
+    downloads.editedResult.completeError(const NoSponsorAudioSegments());
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(
+        find.text(locals.musicDownloadExportNoSponsorSegments), findsOneWidget);
+    expect(downloads.requests, isEmpty);
+    await tester.tap(find.text(locals.musicDownloadExportOriginal));
+    await tester.pump();
+    expect(downloads.requests, [video]);
+    downloads.result.complete(true);
+    await tester.pumpAndSettle();
+    expect(find.text(locals.musicDownloadExported), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('published Music offers an edit without a duplicate original',
+      (tester) async {
+    final video = _song.copyWith(
+      storageUri: 'content://media/external_primary/audio/media/81',
+      folderUri: 'content://media/external_primary/audio/media',
+      musicFormat: MusicDownloadFormat.mp3,
+      sponsorSegments: [
+        SponsorSegment('skip', [2, 5], SponsorSegmentType.sponsor)
+      ],
+    );
+    final locals = await openSheet(tester, video);
+    await tester.tap(export);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    final dialog = find.byType(AlertDialog);
+    final confirm = find.descendant(
+        of: dialog, matching: find.text(locals.musicDownloadExportEdited));
+    expect(find.text(locals.musicDownloadExportOriginal), findsNothing);
+    expect(downloads.editedRequests, isEmpty);
+    await tester.tap(confirm);
+    await tester.pump();
+    expect(downloads.editedRequests, [video]);
+    expect(downloads.requests, isEmpty);
+    downloads.editedResult.completeError(const FormatException());
+    await tester.pumpAndSettle();
+    expect(
+        find.text(locals.musicDownloadExportSponsorEditFailed), findsOneWidget);
+    expect(find.text(locals.musicDownloadExportOriginal), findsNothing);
+    expect(downloads.requests, isEmpty);
+  });
+
+  testWidgets('edited export choice survives a dialog route rebuild',
+      (tester) async {
+    final video = _song.copyWith(sponsorSegments: [
+      SponsorSegment('skip', [2, 5], SponsorSegmentType.sponsor),
+    ]);
+    final action = MusicDownloadExportAction(video: video, compact: true);
+    final locals = await mount(tester, action);
+    await tester.tap(export);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    final edit = find.widgetWithText(
+        RadioListTile<bool>, locals.musicDownloadExportEdited);
+    final group = find.byType(RadioGroup<bool>);
+    await tester.tap(edit);
+    await tester.pump();
+    expect(tester.widget<RadioGroup<bool>>(group).groupValue, isTrue);
+
+    // Updating the root Navigator makes it rebuild the existing dialog page.
+    await mount(tester, action);
+    await tester.pump();
+    expect(tester.widget<RadioGroup<bool>>(group).groupValue, isTrue);
+    await tester.tap(
+        find.widgetWithText(FilledButton, locals.musicDownloadExportConfirm));
+    await tester.pump();
+    expect(downloads.editedRequests, [video]);
+    expect(downloads.requests, isEmpty);
+    downloads.editedResult.complete(true);
+    await tester.pumpAndSettle();
+    expect(find.text(locals.musicDownloadExportEditedSuccess), findsOneWidget);
+  });
+
+  testWidgets('export selection and confirmation fit a small large-text screen',
+      (tester) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(320, 420);
+    tester.platformDispatcher.textScaleFactorTestValue = 2;
+    addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+    final video = _song.copyWith(sponsorSegments: [
+      SponsorSegment('skip', [2, 5], SponsorSegmentType.sponsor),
+    ]);
+    final locals = await mount(
+        tester, MusicDownloadExportAction(video: video, compact: true));
+    await tester.tap(export);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+
+    final edit = find.widgetWithText(
+        RadioListTile<bool>, locals.musicDownloadExportEdited);
+    final radio = find.descendant(of: edit, matching: find.byType(Radio<bool>));
+    await tester.ensureVisible(radio);
+    await tester.tap(radio);
+    await tester.pump();
+    expect(
+        tester
+            .widget<RadioGroup<bool>>(find.byType(RadioGroup<bool>))
+            .groupValue,
+        isTrue);
+    final confirm =
+        find.widgetWithText(FilledButton, locals.musicDownloadExportConfirm);
+    expect(confirm.hitTestable(), findsOneWidget);
+    await tester.tap(confirm);
+    await tester.pump();
+    expect(downloads.editedRequests, [video]);
+    expect(downloads.requests, isEmpty);
+    downloads.editedResult.complete(true);
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+  });
 
   for (final (source, video, outcome) in [
     (

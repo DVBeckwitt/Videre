@@ -1,4 +1,6 @@
 import 'package:clipious/videos/models/video.dart';
+import 'package:clipious/downloads/services/ytdlnis_download.dart';
+import 'package:clipious/downloads/views/components/ytdlnis_download_action.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
@@ -23,21 +25,19 @@ class VideoModalSheet extends StatelessWidget {
         context: context,
         showDragHandle: true,
         builder: (BuildContext context) {
-          final actions = VideoModalSheet(video: video);
-          final sheet = recommendationActions == null
-              ? SafeArea(child: actions)
-              : SingleChildScrollView(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-                        child: recommendationActions(context),
-                      ),
-                      actions,
-                    ],
+          final sheet = SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (recommendationActions != null)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+                    child: recommendationActions(context),
                   ),
-                );
+                VideoModalSheet(video: video),
+              ],
+            ),
+          );
           return inPlayer ? PlayerModalBackHandler(child: sheet) : sheet;
         });
   }
@@ -85,57 +85,74 @@ class VideoModalSheet extends StatelessWidget {
       widthFactor: 1,
       child: Padding(
         padding: const EdgeInsets.all(8.0),
-        child: Wrap(
-          spacing: 16,
-          runSpacing: 8,
-          alignment: WrapAlignment.center,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            WatchStatusButton(
-                video: video, afterChange: () => Navigator.pop(context)),
-            AddToPlayListButton(
-              videoId: video.videoId,
-              video: video,
-              type: AddToPlayListButtonType.modalSheet,
-              afterAdd: () => Navigator.pop(context),
-            ),
-            Column(
-              mainAxisSize: MainAxisSize.min,
+            Wrap(
+              spacing: 16,
+              runSpacing: 8,
+              alignment: WrapAlignment.center,
               children: [
-                IconButton.filledTonal(
-                    onPressed: AddToQueueButton.canAddToQueue(context, [video])
-                        ? () => addToQueue(context)
-                        : null,
-                    icon: const Icon(Icons.playlist_play)),
-                Text(locals.addToQueueList)
+                WatchStatusButton(
+                    video: video, afterChange: () => Navigator.pop(context)),
+                AddToPlayListButton(
+                  videoId: video.videoId,
+                  video: video,
+                  type: AddToPlayListButtonType.modalSheet,
+                  afterAdd: () => Navigator.pop(context),
+                ),
+                Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton.filledTonal(
+                        onPressed:
+                            AddToQueueButton.canAddToQueue(context, [video])
+                                ? () => addToQueue(context)
+                                : null,
+                        icon: const Icon(Icons.playlist_play)),
+                    Text(locals.addToQueueList)
+                  ],
+                ),
+                Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton.filledTonal(
+                        onPressed: () => playNext(context),
+                        icon: const Icon(Icons.play_arrow)),
+                    Text(locals.playNext)
+                  ],
+                ),
+                Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton.filledTonal(
+                        onPressed: () => downloadVideo(context),
+                        icon: const Icon(Icons.download)),
+                    Text(locals.download)
+                  ],
+                ),
+                Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton.filledTonal(
+                        onPressed: () => _showSharingSheet(context),
+                        icon: const Icon(Icons.share)),
+                    Text(locals.share)
+                  ],
+                ),
               ],
             ),
-            Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                IconButton.filledTonal(
-                    onPressed: () => playNext(context),
-                    icon: const Icon(Icons.play_arrow)),
-                Text(locals.playNext)
-              ],
-            ),
-            Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                IconButton.filledTonal(
-                    onPressed: () => downloadVideo(context),
-                    icon: const Icon(Icons.download)),
-                Text(locals.download)
-              ],
-            ),
-            Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                IconButton.filledTonal(
-                    onPressed: () => _showSharingSheet(context),
-                    icon: const Icon(Icons.share)),
-                Text(locals.share)
-              ],
-            ),
+            if (YtdlnisDownload.canOpen(video))
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Divider(height: 1),
+                    YtdlnisDownloadAction(video: video, audioOnly: false),
+                  ],
+                ),
+              ),
           ],
         ),
       ),

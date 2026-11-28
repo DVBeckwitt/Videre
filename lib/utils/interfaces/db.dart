@@ -268,13 +268,23 @@ abstract class IDbClient {
   /// Promote an existing playlist-only job to an explicit download.
   Future<bool> makeMusicDownloadExplicit(String videoId) async => false;
 
-  Future<void> saveDownloadExport(
-      String videoId, ExportedMusicCopy copy) async {
+  Future<void> saveDownloadExport(String videoId, ExportedMusicCopy copy,
+      {DownloadedVideo? expectedSource}) async {
     final download = getDownloadByVideoId(videoId);
-    if (download == null || !download.downloadComplete) {
+    if (download == null) {
       throw StateError('The original download is unavailable');
     }
-    await upsertDownload(download.copyWith(exportedMusic: copy));
+    download.validateExportReceipt(copy, expectedSource: expectedSource);
+    await upsertDownload(switch ((copy.editSignature, copy.complete)) {
+      (null, _) => download.copyWith(exportedMusic: copy),
+      (_, true) => download.copyWith(
+          editedMusicExport: copy, pendingEditedMusicExport: null),
+      (_, false) => download.copyWith(
+          editedMusicExport: download.editedMusicExport?.complete == true
+              ? download.editedMusicExport
+              : null,
+          pendingEditedMusicExport: copy),
+    });
   }
 
   Future<void> deleteDownload(DownloadedVideo vid);

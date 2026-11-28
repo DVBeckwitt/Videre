@@ -424,6 +424,11 @@ choose a shared folder when prompted. Under **Settings → Download folders**,
 of **Video downloads**. Changes apply to new downloads. To share an existing
 private song, open **Downloads** and choose **Export a copy of this song**.
 
+On Android, a single YouTube song or video can also use **Download with
+YTDLnis**. Videre sends the YouTube video link to the installed YTDLnis app,
+which uses its own network and download settings. To play the exported file
+in Videre, include its folder in **On this device**.
+
 **Music → Library → On this device** combines playable Music downloads from
 the active profile with audio indexed from your device. Private downloads can
 play here before you grant device-audio access. **Downloads** remains the
@@ -515,10 +520,13 @@ rows. Music already queued can continue playing.
 Tap a song to play the displayed list from that song. **Play next** inserts
 the song after the current track and **Add to queue** appends it. Either action
 starts a local queue if you're listening to nothing. Videre asks before
-replacing an active queue from another source. In **Queue**, you can drag tracks
-above or below the playing song, or choose **Move up** or **Move down**. You can add the
-same file more than once. For audio stored on this device, the queue, speed
-and pitch controls work offline.
+replacing an active Watch or podcast session. A Music queue can include songs
+from the selected instance, Videre downloads, and device files. In **Queue**,
+you can drag tracks above or below the playing song, or choose **Move up** or
+**Move down**. You can add the same file more than once. If Videre detects that
+a queued download is missing, its row shows **File unavailable**. You can still
+remove that row. For audio stored on this device, the queue, speed and pitch
+controls work offline.
 
 ## Import Spotify listening history
 
@@ -668,6 +676,11 @@ download time. Offline playback applies your current choices to that saved data,
 without a network request. Previously downloaded songs need to be downloaded
 again to acquire segment data, including any category enabled after downloading.
 
+In **Downloads → Export a copy of this song**, choose **Export edited copy**
+and tap **Export**. Videre saves a separate audio file using saved SponsorBlock
+segments for your enabled categories. **Export original** is selected by
+default. If the edit cannot be made, you can choose to export the original.
+
 ## Network boundary
 
 Music searches, channel details, public playlists, and song metadata
@@ -683,7 +696,7 @@ Community cover lookups have their own consent and use a local cache for Music
 screens. Music notifications use stock or already saved download artwork.
 Optional SponsorBlock playback support retains its separate setting.
 
-Video, audio, and downloads always use the selected Invidious media proxy.
+Videre video, audio, and built-in downloads use the selected Invidious media proxy.
 The direct-playback switch has been removed. Previous `use-proxy=false` settings
 and imported backups cannot restore direct Google playback. App transport rejects
 official YouTube destinations, including redirects and adaptive stream children,

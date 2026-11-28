@@ -5,6 +5,8 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/downloads/states/download_manager.dart';
+import 'package:clipious/downloads/services/download_mux.dart';
+import 'package:clipious/downloads/services/download_space.dart';
 import 'package:clipious/music/views/components/music_library_actions.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/videos/models/music_metadata.dart';
@@ -13,11 +15,14 @@ import 'package:clipious/videos/models/video.dart';
 import '../../../videos/views/components/compact_video.dart';
 import 'download_retry_time.dart';
 
+bool _canExportOriginal(DownloadedVideo video) =>
+    video.storageUri == null || !video.storeAsMusic;
+
 bool _canExportMusic(DownloadedVideo video) =>
     video.downloadComplete &&
     video.audioOnly &&
     video.musicMetadata != null &&
-    (video.storageUri == null || !video.storeAsMusic);
+    (_canExportOriginal(video) || video.sponsorSegments.isNotEmpty);
 
 class DownloadedVideoView extends StatelessWidget {
   final DownloadedVideo video;
@@ -308,16 +313,125 @@ class MusicDownloadExportAction extends StatefulWidget {
 class _MusicDownloadExportActionState extends State<MusicDownloadExportAction> {
   bool _busy = false;
 
+  Future<bool?> _chooseExport(AppLocalizations locals, bool originalAvailable) {
+    // Focus and navigator updates can rebuild the dialog page.
+    var edited = !originalAvailable;
+    return showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(builder: (context, setChoice) {
+          return AlertDialog(
+            scrollable: true,
+            title: Text(locals.exportMusicDownload),
+            content: originalAvailable
+                ? RadioGroup<bool>(
+                    groupValue: edited,
+                    onChanged: (value) {
+                      if (value != null) setChoice(() => edited = value);
+                    },
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        RadioListTile<bool>(
+                          value: false,
+                          selected: !edited,
+                          contentPadding: EdgeInsets.zero,
+                          title: Text(locals.musicDownloadExportOriginal),
+                        ),
+                        RadioListTile<bool>(
+                          value: true,
+                          selected: edited,
+                          contentPadding: EdgeInsets.zero,
+                          title: Text(locals.musicDownloadExportEdited),
+                          subtitle: Text(locals
+                              .musicDownloadExportRemoveSponsorSegmentsHint),
+                        ),
+                      ],
+                    ),
+                  )
+                : Text(locals.musicDownloadExportRemoveSponsorSegmentsHint),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: Text(locals.cancel),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(context).pop(edited),
+                child: Text(originalAvailable
+                    ? locals.musicDownloadExportConfirm
+                    : locals.musicDownloadExportEdited),
+              ),
+            ],
+          );
+        });
+      },
+    );
+  }
+
+  Future<bool> _offerOriginal(String message, AppLocalizations locals) async =>
+      await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          scrollable: true,
+          title: Text(locals.musicDownloadExportEdited),
+          content: Text(message),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: Text(locals.cancel),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: Text(locals.musicDownloadExportOriginal),
+            ),
+          ],
+        ),
+      ) ??
+      false;
+
   Future<void> _export() async {
     if (_busy) return;
     final video = widget.video;
     final manager = context.read<DownloadManagerCubit>();
     final locals = AppLocalizations.of(context)!;
     final messenger = ScaffoldMessenger.of(context);
+    bool sameDownload() =>
+        widget.video.videoId == video.videoId &&
+        widget.video.profileId == video.profileId;
     setState(() => _busy = true);
     String? message;
     try {
-      if (await manager.exportMusic(video)) {
+      final originalAvailable = _canExportOriginal(video);
+      final edited = video.sponsorSegments.isEmpty
+          ? false
+          : await _chooseExport(locals, originalAvailable);
+      if (edited == null || !mounted || !sameDownload()) return;
+      if (edited) {
+        String? editError;
+        try {
+          if (!await manager.exportMusicWithoutSponsorSegments(video)) return;
+          message = locals.musicDownloadExportEditedSuccess;
+        } on NoSponsorAudioSegments {
+          editError = locals.musicDownloadExportNoSponsorSegments;
+        } catch (error) {
+          editError = isDownloadOutOfSpace(error)
+              ? locals.downloadFreeSpaceToResume
+              : locals.musicDownloadExportSponsorEditFailed;
+        }
+        if (editError != null) {
+          if (!originalAvailable) {
+            message = editError;
+          } else if (!mounted ||
+              !sameDownload() ||
+              !await _offerOriginal(editError, locals)) {
+            return;
+          }
+        }
+      }
+      if (message == null &&
+          mounted &&
+          sameDownload() &&
+          await manager.exportMusic(video)) {
         message = locals.musicDownloadExported;
       }
     } catch (_) {
@@ -325,11 +439,7 @@ class _MusicDownloadExportActionState extends State<MusicDownloadExportAction> {
     } finally {
       if (mounted) setState(() => _busy = false);
     }
-    if (!mounted ||
-        widget.video.videoId != video.videoId ||
-        widget.video.profileId != video.profileId) {
-      return;
-    }
+    if (!mounted || !sameDownload()) return;
     if (!widget.compact && ModalRoute.of(context)?.isCurrent == true) {
       Navigator.of(context).pop();
     }
@@ -344,7 +454,10 @@ class _MusicDownloadExportActionState extends State<MusicDownloadExportAction> {
     if (!_canExportMusic(video)) {
       return const SizedBox.shrink();
     }
-    final label = AppLocalizations.of(context)!.exportMusicDownload;
+    final locals = AppLocalizations.of(context)!;
+    final label = _canExportOriginal(video)
+        ? locals.exportMusicDownload
+        : locals.musicDownloadExportEdited;
     final key = ValueKey('export-music-${video.videoId}');
     final icon = _busy
         ? const SizedBox.square(

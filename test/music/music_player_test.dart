@@ -15,6 +15,7 @@ import 'package:clipious/downloads/models/download_playback_provenance.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/downloads/services/download_playback_source.dart';
 import 'package:clipious/downloads/services/explicit_music_download.dart';
+import 'package:clipious/downloads/states/download_manager.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
@@ -164,6 +165,14 @@ class _MusicVideoCatalog extends MusicCatalogService {
     requests.add((song: song, isCurrent: isCurrent, result: result));
     return result.future;
   }
+}
+
+class _QueueDownloads extends DownloadManagerCubit {
+  _QueueDownloads(PlayerCubit player)
+      : super(const DownloadManagerState(), player);
+
+  @override
+  Future<void> onReady() async {}
 }
 
 class _Player extends TestPlayerCubit {
@@ -6184,6 +6193,63 @@ void main() {
     expect(find.text('On this device'), findsOneWidget);
     expect(find.text('Downloads'), findsNothing);
     expect(find.text('Total duration 06:00'), findsOneWidget);
+  });
+
+  testWidgets('mixed queue marks only the missing pinned download unavailable',
+      (tester) async {
+    final file = DownloadedVideo(
+        videoId: next.videoId,
+        title: next.title!,
+        lengthSeconds: 120,
+        quality: 'audio',
+        audioOnly: true,
+        downloadComplete: true,
+        storageUri: 'content://files/original',
+        musicMetadata: next.musicMetadata);
+    final pinned = next.copyWith(
+        queueEntryId: '${next.videoId}#1',
+        explicitMusicDownload: musicDownloadFingerprint(file));
+    final pinnedId = playbackQueueId(pinned);
+    await player.seed(player.state.copyWith(
+        videos: [song, pinned, next],
+        playQueue: ListQueue.of([pinnedId, next.videoId])));
+    final downloads = _QueueDownloads(player);
+    addTearDown(downloads.close);
+    await pump(tester,
+        child: BlocProvider<DownloadManagerCubit>.value(
+            value: downloads, child: const MusicQueue()));
+
+    ListTile row(String id) =>
+        tester.widget<ListTile>(find.byKey(ValueKey('music-queue-$id')));
+    final missing = find.text('File unavailable');
+    expect(missing, findsOneWidget);
+    expect(row(pinnedId).onTap, isNull);
+    expect(row(next.videoId).onTap, isNotNull);
+    expect(row(song.videoId).onTap, isNotNull);
+    expect(row(song.videoId).selected, isTrue);
+    await tap(tester, 'music-queue-menu-$pinnedId');
+    await tester.pumpAndSettle();
+    expect(find.text('Play'), findsNothing);
+    expect(find.text('Play next'), findsNothing);
+    expect(find.text('Add to queue'), findsNothing);
+    expect(find.text('Remove from queue'), findsOneWidget);
+    await pressAndroidBack(tester);
+
+    await tester.runAsync(() async {
+      await db
+          .upsertDownload(file.copyWith(storageUri: 'content://files/other'));
+      downloads.setVideos();
+    });
+    await tester.pump();
+    expect(missing, findsOneWidget);
+    await tester.runAsync(() async {
+      await db.upsertDownload(file);
+      downloads.setVideos();
+    });
+    await tester.pump();
+    expect(missing, findsNothing);
+    expect(row(pinnedId).onTap, isNotNull);
+    expect(row(next.videoId).onTap, isNotNull);
   });
 
   testWidgets('wide touch keeps Now Playing and the ordered queue side by side',

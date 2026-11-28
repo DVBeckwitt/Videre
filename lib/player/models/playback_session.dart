@@ -35,14 +35,14 @@ class PlaybackSession {
   bool get hasDeviceEntries =>
       offlineIds.any(isLocalMusicPlaybackId) ||
       videos.any((video) => isLocalMusicPlaybackId(video.videoId));
-  String? get currentDeviceId => isLocalMusicPlaybackId(currentId)
-      ? currentId
-      : videos
+  String? get currentDeviceId =>
+      videos
           .where((video) =>
               playbackQueueId(video) == currentId &&
               isLocalMusicPlaybackId(video.videoId))
           .firstOrNull
-          ?.videoId;
+          ?.videoId ??
+      (isLocalMusicPlaybackId(currentId) ? currentId : null);
   Iterable<String> get deviceTrackIds => [
         ...offlineIds.where(isLocalMusicPlaybackId).map(localMusicTrackId),
         for (final video in videos)
@@ -346,7 +346,8 @@ class PlaybackSession {
               devicePlaylistFileProof(v.videoId) == null ||
               v.explicitMusicDownload != null) ||
           (hasDeviceVideos && offlineIds.isNotEmpty) ||
-          (devicePlaylist.isNotEmpty &&
+          (playlistEntries
+                  .any((video) => isLocalMusicPlaybackId(video.videoId)) &&
               playlistReference != null &&
               playlistReference.kind != PlaylistSourceKind.local) ||
           ((hasDevice || fingerprints.isNotEmpty) &&

@@ -94,8 +94,10 @@ class ExportedMusicCopy {
   final String uri;
   final MusicDownloadFormat format;
   final bool complete;
+  final String? editSignature;
+  final String? outputSha256;
   const ExportedMusicCopy(this.folder, this.uri, this.format,
-      {this.complete = false});
+      {this.complete = false, this.editSignature, this.outputSha256});
   factory ExportedMusicCopy.fromJson(Map<String, dynamic> json) =>
       _$ExportedMusicCopyFromJson(json);
   Map<String, dynamic> toJson() => _$ExportedMusicCopyToJson(this);
@@ -106,10 +108,13 @@ class ExportedMusicCopy {
       folder == other.folder &&
       uri == other.uri &&
       format == other.format &&
-      complete == other.complete;
+      complete == other.complete &&
+      editSignature == other.editSignature &&
+      outputSha256 == other.outputSha256;
 
   @override
-  int get hashCode => Object.hash(folder, uri, format, complete);
+  int get hashCode =>
+      Object.hash(folder, uri, format, complete, editSignature, outputSha256);
 }
 
 class _MusicCopyConverter
@@ -168,6 +173,8 @@ sealed class DownloadedVideo with _$DownloadedVideo implements IdedVideo {
       MusicDownloadFormat? musicFormat,
       @_MusicOfflinePolicyConverter() MusicOfflinePolicy? musicPolicy,
       @_MusicCopyConverter() ExportedMusicCopy? exportedMusic,
+      @_MusicCopyConverter() ExportedMusicCopy? editedMusicExport,
+      @_MusicCopyConverter() ExportedMusicCopy? pendingEditedMusicExport,
       DownloadContainer? container,
       String? audioTrackId,
       String? captionLabel,
@@ -178,6 +185,51 @@ sealed class DownloadedVideo with _$DownloadedVideo implements IdedVideo {
 
   factory DownloadedVideo.fromJson(Map<String, Object?> json) =>
       _$DownloadedVideoFromJson(json);
+
+  /// Holds across metadata updates and ordinary export receipt writes.
+  bool hasSameMusicSource(DownloadedVideo other) =>
+      videoId == other.videoId &&
+      profileId == other.profileId &&
+      accountId == other.accountId &&
+      audioOnly &&
+      other.audioOnly &&
+      musicMetadata != null &&
+      other.musicMetadata != null &&
+      downloadComplete == other.downloadComplete &&
+      folderUri == other.folderUri &&
+      storageUri == other.storageUri &&
+      musicFormat == other.musicFormat &&
+      container == other.container &&
+      quality == other.quality &&
+      audioTrackId == other.audioTrackId &&
+      captionLabel == other.captionLabel &&
+      playbackProvenance == other.playbackProvenance;
+
+  /// Older releases kept the pending edit in the completed slot.
+  ExportedMusicCopy? get incompleteMusicEdit =>
+      pendingEditedMusicExport ??
+      (editedMusicExport?.complete == false ? editedMusicExport : null);
+
+  void validateExportReceipt(ExportedMusicCopy copy,
+      {DownloadedVideo? expectedSource}) {
+    if (!downloadComplete ||
+        (expectedSource != null &&
+            (!hasSameMusicSource(expectedSource) || downloadFailed))) {
+      throw StateError('The original download is unavailable');
+    }
+    if (copy.editSignature != null && copy.complete) {
+      final pending = incompleteMusicEdit;
+      if (pending == null ||
+          pending.complete ||
+          pending.uri != copy.uri ||
+          pending.folder != copy.folder ||
+          pending.format != copy.format ||
+          pending.editSignature != copy.editSignature ||
+          pending.outputSha256 != copy.outputSha256) {
+        throw StateError('The edited export destination changed');
+      }
+    }
+  }
 
   static final _fileIdPattern = RegExp(r'^[A-Za-z0-9_-]{1,128}$');
 

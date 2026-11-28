@@ -5,6 +5,9 @@ part of 'audio_player.dart';
 class _SongTransitionPlayback {
   _SongTransitionPlayback(this.owner);
 
+  static const _sampleInterval = Duration(milliseconds: 120);
+  static const _sampleLimit = Duration(milliseconds: 350);
+
   final AudioPlayerCubit owner;
   _StandbyAudio? incoming;
   Timer? _timer;
@@ -18,6 +21,28 @@ class _SongTransitionPlayback {
   double _primaryGain = 1;
   double _secondaryGain = 0;
   double? _overlapSpanMs;
+  final _progressClock = Stopwatch();
+  bool _samplingProgress = false;
+  Duration? _lastSampleRequest;
+  NativePlaybackProgress? _incomingProgress;
+  Duration? _incomingAdvancedAt;
+
+  bool get _checkNativeProgress =>
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+
+  bool _canContinueOverlap(_StandbyAudio slot) =>
+      _overlapSpanMs != null &&
+      owner._wantsToPlay &&
+      owner.player.shouldStartPlayback &&
+      slot.decoder.playing &&
+      slot.decoder.processingState == ProcessingState.ready &&
+      (!_checkNativeProgress || _hasRecentIncomingProgress);
+
+  bool get _hasRecentIncomingProgress {
+    final advancedAt = _incomingAdvancedAt;
+    return advancedAt != null &&
+        _progressClock.elapsed - advancedAt < _sampleLimit;
+  }
 
   double get startVolume => _volumeAt(_primaryGain, music: primaryIsMusic);
   SongTransitionMode get _mode => owner.settings.state.songTransitionMode;
@@ -98,6 +123,13 @@ class _SongTransitionPlayback {
     _started = false;
     _intro = false;
     _overlapSpanMs = null;
+    _progressClock
+      ..stop()
+      ..reset();
+    _samplingProgress = false;
+    _lastSampleRequest = null;
+    _incomingProgress = null;
+    _incomingAdvancedAt = null;
     _primaryGain = 1;
     _secondaryGain = 0;
     _unwatch();
@@ -155,10 +187,9 @@ class _SongTransitionPlayback {
         : SongTransitionMode.seamless;
     final continuing = mode == SongTransitionMode.crossfade &&
         _afterEof == id &&
-        _started &&
         identical(standby, incoming) &&
         standby != null &&
-        standby.decoder.playing;
+        _canContinueOverlap(standby);
     if (continuing) {
       incoming = null;
       _started = false;
@@ -173,7 +204,7 @@ class _SongTransitionPlayback {
     final target = owner.player.automaticMusicSuccessor;
     final slot = incoming;
     if (slot != null &&
-        _started &&
+        _canContinueOverlap(slot) &&
         target != null &&
         playbackQueueId(slot.entry) == playbackQueueId(target) &&
         owner.player.musicTransitionModeTo(target) ==
@@ -193,11 +224,14 @@ class _SongTransitionPlayback {
     if (end != null) {
       final slot = incoming;
       if (slot == null ||
+          !_canContinueOverlap(slot) ||
           !owner.player.isAutomaticMusicHandoffTo(end) ||
           owner.player.musicTransitionModeTo(slot.entry) !=
               SongTransitionMode.crossfade ||
           owner.player.playbackInterrupted) {
         stop();
+      } else {
+        _sampleIncomingIfDue(slot);
       }
       return;
     }
@@ -211,7 +245,7 @@ class _SongTransitionPlayback {
     // just_audio's position and player-state streams dispatch independently.
     // A final position tick can already see native EOF before its state
     // notification. Let completed() decide the audible successor exactly once.
-    if (_started &&
+    if (_overlapSpanMs != null &&
         owner._ownsParentPlayback &&
         owner._sourceAdmitted &&
         owner._loadingGeneration == null &&
@@ -227,7 +261,7 @@ class _SongTransitionPlayback {
         !owner._wantsToPlay ||
         _ducked ||
         owner._focusInterrupted ||
-        owner.player.playbackInterrupted ||
+        !owner.player.shouldStartPlayback ||
         !decoder.playing ||
         decoder.processingState != ProcessingState.ready) {
       suspend();
@@ -295,11 +329,86 @@ class _SongTransitionPlayback {
       stop();
       return;
     }
-    final fraction = (1.0 - remainingMs / _overlapSpanMs!).clamp(0.0, 1.0);
+    final overlap = _overlapSpanMs;
+    if (overlap != null && !_canContinueOverlap(slot)) {
+      stop();
+      return;
+    }
+    _sampleIncomingIfDue(slot);
+    if (overlap == null) return;
+    final fraction = (1.0 - remainingMs / overlap).clamp(0.0, 1.0);
     _primaryGain = 1.0 - fraction;
     _secondaryGain = fraction;
     applyStartVolume();
     _gain(slot.decoder, _secondaryGain);
+  }
+
+  void _sampleIncomingIfDue(_StandbyAudio slot) {
+    final token = _request;
+    if (!_checkNativeProgress || _samplingProgress || token == null) return;
+    final now = _progressClock.elapsed;
+    final lastRequest = _lastSampleRequest;
+    if (lastRequest != null && now - lastRequest < _sampleInterval) return;
+    _progressClock.start();
+    _lastSampleRequest = now;
+    _samplingProgress = true;
+    unawaited(_observeIncoming(slot, token, now));
+  }
+
+  Future<void> _observeIncoming(
+      _StandbyAudio slot, Object token, Duration requestedAt) async {
+    final sample = await slot.decoder
+        .getNativePlaybackProgress()
+        .timeout(_sampleLimit, onTimeout: () => null)
+        .catchError((Object _) => null);
+    if (!identical(_request, token) || !identical(incoming, slot)) return;
+    _samplingProgress = false;
+    if (!owner._wantsToPlay ||
+        !owner.player.shouldStartPlayback ||
+        !slot.decoder.playing ||
+        slot.decoder.processingState != ProcessingState.ready) {
+      stop();
+      return;
+    }
+    final previous = _incomingProgress;
+    if (sample == null ||
+        _progressClock.elapsed - requestedAt >= _sampleLimit ||
+        !sample.isPlaying ||
+        !sample.playWhenReady ||
+        sample.processingState != ProcessingState.ready ||
+        sample.suppressionReason != 0 ||
+        sample.seekPending ||
+        sample.hasError ||
+        (previous != null &&
+            (sample.sourceRevision != previous.sourceRevision ||
+                sample.position < previous.position))) {
+      if (_overlapSpanMs != null) {
+        stop();
+      } else {
+        _incomingProgress = null;
+        _incomingAdvancedAt = null;
+      }
+      return;
+    }
+    if (previous != null &&
+        sample.sampledAtMillis <= previous.sampledAtMillis) {
+      return;
+    }
+    _incomingProgress = sample;
+    if (previous != null && sample.position > previous.position) {
+      _incomingAdvancedAt = requestedAt;
+      final outgoing = owner.audioPlayer;
+      if (_overlapSpanMs == null &&
+          outgoing != null &&
+          outgoing.playing &&
+          outgoing.processingState == ProcessingState.ready) {
+        final tail =
+            (outgoing.duration ?? owner.state.audioLength) - outgoing.position;
+        if (tail > Duration.zero) {
+          _overlapSpanMs = tail.inMicroseconds / (1000 * outgoing.speed);
+        }
+      }
+    }
   }
 
   Future<void> _start(_StandbyAudio slot, Object token) async {
@@ -318,7 +427,7 @@ class _SongTransitionPlayback {
           owner._wantsToPlay &&
           !owner._focusInterrupted &&
           !_ducked &&
-          !owner.player.playbackInterrupted &&
+          owner.player.shouldStartPlayback &&
           !owner._silenceSkippingOrUpdating &&
           outgoing.playing &&
           outgoing.processingState == ProcessingState.ready &&
@@ -378,7 +487,9 @@ class _SongTransitionPlayback {
         if (current()) stop();
         return;
       }
-      _overlapSpanMs = remainingMs;
+      // just_audio publishes the user's Play intent before the native decoder
+      // starts. Keep the outgoing gain until Android observes real progress.
+      if (!_checkNativeProgress) _overlapSpanMs = remainingMs;
       _started = true;
       unawaited(decoder.play().catchError((Object _) {
         if (identical(_request, token)) stop();

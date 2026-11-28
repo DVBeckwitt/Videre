@@ -96,9 +96,20 @@ class DownloadStoragePlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activ
                 if (shared) setPending(uri, false) else scanAudioDocument(uri)
             }
             "readDocument" -> transfer(call, result) { cancelled ->
-                val uri = document(call.argument<String>("uri")!!, writable = false)
-                val tree = Uri.parse(call.argument<String>("folderUri")!!)
-                require(tree == DocumentsContract.buildTreeDocumentUri(uri.authority, DocumentsContract.getTreeDocumentId(uri)))
+                val value = call.argument<String>("uri")!!
+                val folder = call.argument<String>("folderUri")!!
+                val uri = if (folder == SharedMusicDownload.COLLECTION) {
+                    require(SharedMusicDownload.isItem(value))
+                    Uri.parse(value).also {
+                        if (SharedMusicDownload.pending(context, it) != false) throw IOException()
+                    }
+                } else {
+                    document(value, writable = false).also {
+                        require(Uri.parse(folder) == DocumentsContract.buildTreeDocumentUri(
+                            it.authority, DocumentsContract.getTreeDocumentId(it)
+                        ))
+                    }
+                }
                 val root = File(File(context.applicationInfo.dataDir).canonicalFile, "app_flutter/downloads")
                 val destination = exportInputFile(root, File(call.argument<String>("destination")!!)) ?: throw IOException()
                 val input = context.contentResolver.openInputStream(uri) ?: throw IOException()

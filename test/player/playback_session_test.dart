@@ -645,6 +645,35 @@ void main() {
         isNull);
   });
 
+  test('remote playlist checkpoints keep manually queued device songs', () {
+    const reference = PlaylistReference(
+        kind: PlaylistSourceKind.public,
+        playlistId: 'PLremote',
+        profileId: 'default');
+    const catalog = Video(videoId: 'catalog');
+    final device = Video(
+        videoId: 'device:playlist:${'a' * 64}',
+        queueEntryId: 'device:${'b' * 64}#2',
+        musicMetadata: const MusicMetadata(title: 'File', artist: 'Artist'));
+    PlaybackSession checkpoint(List<Video> source) => PlaybackSession(
+        videos: [catalog, device],
+        playlistEntries: source,
+        playlistReference: reference,
+        currentId: playbackQueueId(device),
+        seconds: 12,
+        next: [catalog.videoId],
+        audio: true);
+
+    final restored = PlaybackSession.decode(checkpoint([catalog]).encode())!;
+    expect(restored.playlistReference, reference);
+    expect(restored.playlistEntries.map(playbackQueueId), [catalog.videoId]);
+    expect(restored.currentId, playbackQueueId(device));
+    expect(restored.currentDeviceId, device.videoId);
+    expect(restored.next, [catalog.videoId]);
+    expect(
+        PlaybackSession.decode(checkpoint([catalog, device]).encode()), isNull);
+  });
+
   group('restoration', () {
     late _SessionPlayer player;
     late TestSettingsCubit settings;
@@ -1211,6 +1240,241 @@ void main() {
 
       await player.playVideo([song], audio: true, fromMusic: true);
       expect(player.musicQueueTitle, isNull);
+    });
+
+    test(
+        'adding a stream to On Device preserves playback and resumes either source',
+        () async {
+      final tracks = await openDeviceFolder();
+      final device = tracks.first;
+      final other = tracks.last;
+      const catalog = Video(
+          videoId: 'online-only',
+          lengthSeconds: 120,
+          musicMetadata: MusicMetadata(title: 'Online', artist: 'Artist'));
+      player.audioSession = await AudioSession.instance;
+      app_main.mediaHandler = MediaHandler(player);
+      await player.playOnDeviceMusic(
+          tracks.map(OnDeviceMusicEntry.device).toList(),
+          queueTitle: 'On device');
+      await player.onProgress(const Duration(seconds: 7));
+      player.pause();
+      final before = player.state;
+      final generation = player.backendPlaybackGeneration;
+      final queue = [device.playbackId, catalog.videoId, other.playbackId];
+
+      expect(player.canEnqueueMusicSongs([catalog]), isTrue);
+      expect(await player.enqueueMusicSongs([catalog], next: true), isTrue);
+      expect(player.state.offlineCurrentlyPlaying,
+          same(before.offlineCurrentlyPlaying));
+      expect(player.state.offlineVideos, isEmpty);
+      expect(player.state.currentQueueId, before.currentQueueId);
+      expect(player.state.position, before.position);
+      expect(player.state.mediaCommand, same(before.mediaCommand));
+      expect(player.requestedPlaying, isFalse);
+      expect(player.backendPlaybackGeneration, generation);
+      expect(player.state.videos.map(playbackQueueId), queue);
+      expect(player.state.playQueue, queue.skip(1));
+      expect(player.musicQueueTitle, 'On device');
+      expect(
+          player.canCopyOfflineMusicEntries([before.offlineCurrentlyPlaying!]),
+          isTrue);
+
+      await player.onProgress(const Duration(seconds: 19));
+      await waitForSavedPosition(19, videoId: device.playbackId);
+      await player.close();
+      final saved = PlaybackSession.decode(
+          db.getSettings(playbackSessionSetting)!.value)!;
+      expect(saved.currentDeviceId, devicePlaylistVideo(device)!.videoId);
+      expect(saved.videos.map(playbackQueueId), queue);
+
+      Future<void> reopen() async {
+        player = _SessionPlayer(PlayerState.init(null), settings);
+        player.audioSession = await AudioSession.instance;
+        app_main.mediaHandler = MediaHandler(player);
+        await player.resumeSession();
+      }
+
+      await reopen();
+      expect(player.state.currentQueueId, device.playbackId);
+      expect(player.state.startAt, const Duration(seconds: 19));
+      expect(player.state.currentlyPlaying?.videoId, saved.currentDeviceId);
+      await player.selectQueueOccurrence(catalog.videoId);
+      expect(player.state.currentQueueId, catalog.videoId);
+      await player.onProgress(const Duration(seconds: 11));
+      await waitForSavedPosition(11, videoId: catalog.videoId);
+      await player.close();
+
+      await reopen();
+      expect(player.state.currentQueueId, catalog.videoId);
+      expect(player.state.startAt, const Duration(seconds: 11));
+      final next = player.stream
+          .firstWhere((state) => state.currentQueueId == other.playbackId);
+      player.playNext();
+      await next.timeout(const Duration(seconds: 2));
+      expect(player.state.currentlyPlaying?.videoId,
+          devicePlaylistVideo(other)!.videoId);
+      expect((service as _GuestService).requestedVideoIds,
+          everyElement(catalog.videoId));
+    });
+
+    test('online Music can queue a device file and a pinned download together',
+        () async {
+      final tracks = await openDeviceFolder();
+      final device = tracks.first;
+      const music = MusicMetadata(title: 'Recording', artist: 'Band');
+      const online = Video(videoId: 'recording', musicMetadata: music);
+      const file = DownloadedVideo(
+          videoId: 'recording',
+          title: 'Recording',
+          lengthSeconds: 120,
+          quality: 'audio',
+          audioOnly: true,
+          downloadComplete: true,
+          storageUri: 'content://files/recording',
+          musicMetadata: music);
+      final proof = 'c' * 64;
+      await db.upsertDownload(file);
+      player.audioSession = await AudioSession.instance;
+      app_main.mediaHandler = MediaHandler(player);
+      await player.playVideo([online], audio: true, fromMusic: true);
+      final before = player.state;
+      final generation = player.backendPlaybackGeneration;
+      final selection = [
+        OnDeviceMusicEntry.device(device),
+        OnDeviceMusicEntry.download(file, proof),
+      ];
+
+      expect(player.canEnqueueOnDeviceMusic(selection), isTrue);
+      expect(await player.enqueueOnDeviceMusic(selection, next: true), isTrue);
+      expect(player.state.currentlyPlaying, same(before.currentlyPlaying));
+      expect(player.state.mediaCommand, same(before.mediaCommand));
+      expect(player.backendPlaybackGeneration, generation);
+      final entries = player.state.videos;
+      expect(entries.map(playbackQueueId), [
+        online.videoId,
+        devicePlaylistVideo(device)!.videoId,
+        'recording#1'
+      ]);
+      expect(entries.last.explicitMusicDownload,
+          musicDownloadFileFingerprint(file, proof));
+      expect(player.state.playQueue, entries.skip(1).map(playbackQueueId));
+      expect(player.savedSession?.videos.last.explicitMusicDownload,
+          entries.last.explicitMusicDownload);
+      expect(db.getSettings(playbackSessionSetting)?.value,
+          isNot(contains(file.storageUri!)));
+    });
+
+    test(
+        'mixed queues keep the next online song when the current grant is revoked',
+        () async {
+      final tracks = await openDeviceFolder();
+      final library = LocalMusicLibrary.instance;
+      const music = MusicMetadata(title: 'Song', artist: 'Artist');
+      const first = Video(videoId: 'online-first', musicMetadata: music);
+      const last = Video(videoId: 'online-last', musicMetadata: music);
+      player.audioSession = await AudioSession.instance;
+      app_main.mediaHandler = MediaHandler(player);
+      await player.playLocalMusic(tracks);
+      await player.onProgress(const Duration(seconds: 29));
+      await waitForSavedPosition(29, videoId: tracks.first.playbackId);
+      expect(
+          await player.enqueueMusicSongs([first, last], next: false), isTrue);
+
+      await library.disable();
+      expect(player.state.currentQueueId, isNull);
+      expect(player.state.videos.map(playbackQueueId),
+          [first.videoId, last.videoId]);
+      await waitForSavedPosition(0, videoId: first.videoId);
+      expect(player.savedSession?.next, [last.videoId]);
+      expect((service as _GuestService).requestedVideoIds, isEmpty);
+      await player.close();
+
+      player = _SessionPlayer(PlayerState.init(null), settings);
+      player.audioSession = await AudioSession.instance;
+      app_main.mediaHandler = MediaHandler(player);
+      await player.resumeSession();
+      expect(player.state.currentQueueId, first.videoId);
+      expect(player.state.startAt, Duration.zero);
+      expect(player.state.playQueue, [last.videoId]);
+    });
+
+    test('promotion keeps an unrelated withdrawn download pinned', () async {
+      const music = MusicMetadata(title: 'Song', artist: 'Artist');
+      const file = DownloadedVideo(
+          videoId: 'withdrawn',
+          title: 'Song',
+          lengthSeconds: 120,
+          quality: 'audio',
+          audioOnly: true,
+          downloadComplete: true,
+          storageUri: 'content://files/withdrawn',
+          musicMetadata: music);
+      final first =
+          file.copyWith(videoId: 'first', storageUri: 'content://files/first');
+      const online = Video(videoId: 'online', musicMetadata: music);
+      await db.upsertDownload(first);
+      await db.upsertDownload(file);
+      player.audioSession = await AudioSession.instance;
+      app_main.mediaHandler = MediaHandler(player);
+      expect(
+          await player
+              .addMusicDownloadsToQueue([first, file], isCurrent: () => true),
+          isTrue);
+      await db.deleteDownload(file);
+      final current = player.state.offlineCurrentlyPlaying;
+
+      expect(player.canEnqueueMusicSongs([online]), isTrue);
+      expect(await player.enqueueMusicSongs([online], next: false), isTrue);
+      expect(player.state.offlineCurrentlyPlaying, same(current));
+      final queued = player.state.videos;
+      expect(queued.map(playbackQueueId),
+          [first.videoId, file.videoId, online.videoId]);
+      expect(queued[1].explicitMusicDownload, musicDownloadFingerprint(file));
+      expect(
+          player.adjacentMusicEntry(previous: false)?.videoId, online.videoId);
+    });
+
+    test('mixed queue Next skips an invalidated exact download', () async {
+      const music = MusicMetadata(title: 'Song', artist: 'Artist');
+      const current = Video(videoId: 'online', musicMetadata: music);
+      const successor = Video(videoId: 'successor', musicMetadata: music);
+      const file = DownloadedVideo(
+          videoId: 'saved-song',
+          title: 'Saved song',
+          lengthSeconds: 120,
+          quality: 'audio',
+          audioOnly: true,
+          downloadComplete: true,
+          storageUri: 'content://files/saved',
+          musicMetadata: music);
+      await db.upsertDownload(file);
+      player.audioSession = await AudioSession.instance;
+      app_main.mediaHandler = MediaHandler(player);
+      await player
+          .playVideo([current, successor], audio: true, fromMusic: true);
+      expect(
+          await player.enqueueMusicSongs(
+              const [Video(videoId: 'saved-song', musicMetadata: music)],
+              next: true,
+              downloads: [file]),
+          isTrue);
+      final pinned = player.state.playQueue.first;
+      expect(
+          playbackQueueId(player.adjacentMusicEntry(previous: false)!), pinned);
+      await db.upsertDownload(file.copyWith(storageUri: 'content://files/new'));
+      expect(player.adjacentMusicEntry(previous: false)?.videoId,
+          successor.videoId);
+      await player.selectQueueOccurrence(pinned);
+      expect(player.state.currentQueueId, current.videoId);
+
+      final next = player.stream
+          .firstWhere((state) => state.currentQueueId == successor.videoId);
+      player.playNext();
+      await next.timeout(const Duration(seconds: 2));
+      expect(player.state.videos.map(playbackQueueId), contains(pinned));
+      expect((service as _GuestService).requestedVideoIds,
+          isNot(contains(file.videoId)));
     });
 
     test('device songs use the scanned source, local queue and media metadata',

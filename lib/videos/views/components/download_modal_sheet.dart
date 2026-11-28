@@ -4,6 +4,7 @@ import 'package:clipious/downloads/models/music_download_format.dart';
 import 'package:clipious/downloads/models/music_offline_policy.dart';
 import 'package:clipious/downloads/states/download_manager.dart';
 import 'package:clipious/downloads/views/components/download_retry_time.dart';
+import 'package:clipious/downloads/views/components/ytdlnis_download_action.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart';
 import 'package:clipious/globals.dart';
@@ -61,6 +62,8 @@ class DownloadModalSheet extends StatelessWidget {
       BuildContext context,
       {bool musicAudioOnly = false,
       bool inPlayer = false,
+      Video? externalVideo,
+      bool Function()? canDownload,
       MusicOfflinePolicy initialMusicPolicy =
           const MusicOfflinePolicy()}) async {
     final source = db;
@@ -74,6 +77,8 @@ class DownloadModalSheet extends StatelessWidget {
           final sheet = _PlaylistDownloadSheet(
               musicAudioOnly: musicAudioOnly,
               inPlayer: inPlayer,
+              externalVideo: externalVideo,
+              canDownload: canDownload,
               initialMusicPolicy: initialMusicPolicy);
           return inPlayer
               ? PlayerModalBackHandler(priority: 5, child: sheet)
@@ -135,37 +140,54 @@ class DownloadModalSheet extends StatelessWidget {
           Navigator.of(context).pop();
         }
 
+        Widget sheet(List<Widget> children) => _SheetBody(children: [
+              ...children,
+              if (cubit.canHandOffDownload)
+                YtdlnisDownloadAction(
+                    key: const ValueKey('video-ytdlnis-download'),
+                    video: video,
+                    audioOnly: state.audioOnly,
+                    canDownload: () => cubit.canHandOffDownload),
+            ]);
+
         if (state.loading) {
           if (state.retryAt != null) {
-            return _SheetBody(children: [
+            return sheet([
               Text(locals.downloadRetryWaiting),
               TextButton(onPressed: cancel, child: Text(locals.cancel)),
             ]);
           }
-          return const Padding(
-              padding: EdgeInsets.all(24),
-              child: Center(
-                  heightFactor: 1,
-                  child: MotionLoadingIndicator(
-                      child: CircularProgressIndicator())));
+          return sheet([
+            const Padding(
+                padding: EdgeInsets.all(24),
+                child: Center(
+                    heightFactor: 1,
+                    child: MotionLoadingIndicator(
+                        child: CircularProgressIndicator())))
+          ]);
         }
         if (state.failed) {
-          return DownloadRetryAvailability(
-              retryAt: state.retryAt,
-              builder: (context, waitUntil) => _SheetBody(children: [
-                    Text(waitUntil == null
-                        ? locals.itemlistErrorGeneric
-                        : locals.downloadRetryAfter(waitUntil)),
-                    FilledButton.icon(
-                        autofocus: true,
-                        onPressed: waitUntil == null ? cubit.init : null,
-                        icon: const Icon(Icons.refresh),
-                        label: Text(locals.retry)),
-                    if (state.retryAt != null)
-                      TextButton(onPressed: cancel, child: Text(locals.cancel)),
-                  ]));
+          return sheet([
+            DownloadRetryAvailability(
+                retryAt: state.retryAt,
+                builder: (context, waitUntil) => Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Text(waitUntil == null
+                              ? locals.itemlistErrorGeneric
+                              : locals.downloadRetryAfter(waitUntil)),
+                          FilledButton.icon(
+                              autofocus: true,
+                              onPressed: waitUntil == null ? cubit.init : null,
+                              icon: const Icon(Icons.refresh),
+                              label: Text(locals.retry)),
+                          if (state.retryAt != null)
+                            TextButton(
+                                onPressed: cancel, child: Text(locals.cancel)),
+                        ]))
+          ]);
         }
-        return _SheetBody(children: [
+        return sheet([
           if (state.audioTrackDiscoveryFailed)
             Text(locals.downloadAudioLanguagesUnavailable),
           SwitchListTile(
@@ -394,11 +416,15 @@ class _ContainerChoice extends StatelessWidget {
 class _PlaylistDownloadSheet extends StatefulWidget {
   final bool musicAudioOnly;
   final bool inPlayer;
+  final Video? externalVideo;
+  final bool Function()? canDownload;
   final MusicOfflinePolicy initialMusicPolicy;
 
   const _PlaylistDownloadSheet(
       {required this.musicAudioOnly,
       required this.inPlayer,
+      this.externalVideo,
+      this.canDownload,
       required this.initialMusicPolicy});
 
   @override
@@ -470,6 +496,9 @@ class _PlaylistDownloadSheetState extends State<_PlaylistDownloadSheet> {
               musicPolicy: _musicPolicy)),
           icon: const Icon(Icons.download),
           label: Text(locals.download)),
+      if (widget.externalVideo case final video?)
+        YtdlnisDownloadAction(
+            video: video, audioOnly: true, canDownload: widget.canDownload),
     ]);
   }
 }

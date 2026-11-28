@@ -26,6 +26,7 @@ class DownloadModalSheetCubit extends Cubit<DownloadModalSheetState> {
   final _token = CancelToken();
   DownloadRecovery? _loadedRecovery;
   bool _pending = false;
+  bool _restrictedHandoff = false;
   Video? _metadata;
 
   DownloadModalSheetCubit(super.initialState, this.video) {
@@ -44,6 +45,8 @@ class DownloadModalSheetCubit extends Cubit<DownloadModalSheetState> {
 
   bool _isCurrentAccount(Server account) =>
       _current && _owner.getAccount(account.accountId)?.inUse == true;
+
+  bool get canHandOffDownload => _current && !_restrictedHandoff;
 
   Future<bool> canStartDownload() async {
     try {
@@ -81,6 +84,10 @@ class DownloadModalSheetCubit extends Cubit<DownloadModalSheetState> {
         var vid = await _client.getDownloadVideo(video.videoId,
             route: route, checkCurrent: checkSelected);
         checkSelected();
+        if (vid.videoId == video.videoId &&
+            vid.hasRestrictedDownloadVisibility) {
+          _restrictedHandoff = true;
+        }
         vid = vid.copyWith(
             adaptiveFormats: vid.adaptiveFormats
                 ?.where(

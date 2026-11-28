@@ -14,7 +14,9 @@ import 'package:clipious/videos/models/video.dart';
 import 'package:clipious/videos/views/components/compact_video.dart';
 import 'package:clipious/videos/views/components/video_in_list.dart';
 import 'package:clipious/videos/views/components/video_metrics.dart';
+import 'package:clipious/videos/views/components/video_modal_sheet.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -210,6 +212,42 @@ void main() {
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
   });
+
+  testWidgets('the short video menu can scroll to YTDLnis and its status',
+      (tester) async {
+    await tester.binding.setSurfaceSize(const Size(320, 300));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    const channel = MethodChannel('videre/ytdlnis_download');
+    final messenger = tester.binding.defaultBinaryMessenger;
+    final calls = <MethodCall>[];
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      calls.add(call);
+      return 'unavailable';
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+    await show(
+        tester,
+        Builder(
+            builder: (context) => TextButton(
+                onPressed: () => VideoModalSheet.showVideoModalSheet(
+                    context, const Video(videoId: 'tV5UilNUYRY')),
+                child: const Text('Open video menu'))),
+        scale: 2);
+    await tester.tap(find.text('Open video menu'));
+    await tester.pumpAndSettle();
+    final action = find.text('Download with YTDLnis');
+    await tester.ensureVisible(action);
+    await tester.tap(action);
+    await tester.pumpAndSettle();
+    expect(
+        calls.single.arguments, {'videoId': 'tV5UilNUYRY', 'audioOnly': false});
+    final message =
+        find.text('Install or update YTDLnis to open this download.');
+    await tester.ensureVisible(message);
+    expect(message.hitTestable(), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  }, variant: TargetPlatformVariant.only(TargetPlatform.android));
 
   testWidgets('feed details fit the existing compact phone grid at large text',
       (tester) async {

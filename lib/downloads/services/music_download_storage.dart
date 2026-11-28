@@ -52,8 +52,8 @@ Future<MusicDownloadStorageUsage> measureMusicDownloadStorage(
     }
     extensions.putIfAbsent(row.videoId, () => <String>{}).add(row.extension);
     if (row.storageUri case final uri?) document(uri, row.folderUri);
-    if (row.exportedMusic case final copy? when !copy.complete) {
-      document(copy.uri, copy.folder);
+    for (final copy in [row.exportedMusic, row.incompleteMusicEdit]) {
+      if (copy != null && !copy.complete) document(copy.uri, copy.folder);
     }
   }
   if (extensions.isEmpty) return (bytes: 0, incomplete: false);

@@ -141,6 +141,8 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
       required CancelToken token,
       String? sourceCodec,
       MusicDownloadFormat? inputFormat}) encodeMusic;
+  final AudioExportProbe _probeAudioExport;
+  final Future<void> Function(List<String>, CancelToken) _muxAudioExport;
   late final Future<void> _ready;
   Future<void>? _closeFuture;
   late IDbClient _library;
@@ -152,7 +154,8 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
   final Set<String> _deleting = {};
   final Set<String> _enqueuing = {};
   final Map<String, Object> _musicDeletionIncarnations = {};
-  final Map<String, ({CancelToken token, Future<bool> result})> _exports = {};
+  final Map<String, ({CancelToken token, Future<bool> result, bool edited})>
+      _exports = {};
   DownloadFolderPreferences _folders = const DownloadFolderPreferences();
   Future<void> _folderWrite = Future.value();
   Future<void> _offlineMusicWork = Future.value();
@@ -184,12 +187,17 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
   DownloadManagerCubit(super.initialState, this.player,
       {DownloadStorage? storage,
       this.encodeMusic = runMusicDownloadMux,
+      AudioExportProbe audioExportProbe = probeAudioExport,
+      Future<void> Function(List<String>, CancelToken) audioExportMux =
+          runDownloadMux,
       Future<bool> Function()? wifiConnected,
       Stream<bool>? wifiChanges,
       Future<DownloadConnectivity> Function()? readConnectivity,
       Stream<DownloadConnectivity>? connectivityChanges,
       Future<int> Function()? discoveryBudgetBytes})
       : storage = storage ?? DownloadStorage(),
+        _probeAudioExport = audioExportProbe,
+        _muxAudioExport = audioExportMux,
         _discoveryBudgetBytes =
             discoveryBudgetBytes ?? _configuredDiscoveryBudget,
         _readConnectivity = readConnectivity ??
@@ -2006,22 +2014,7 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
   // Titles, progress and retry state can change while the confirmation is open.
   // The persisted owner, job options and output identify the confirmed target.
   bool _sameMusicDownload(DownloadedVideo requested, DownloadedVideo saved) =>
-      requested.videoId == saved.videoId &&
-      requested.profileId == saved.profileId &&
-      requested.accountId == saved.accountId &&
-      requested.audioOnly &&
-      saved.audioOnly &&
-      requested.musicMetadata != null &&
-      saved.musicMetadata != null &&
-      requested.downloadComplete == saved.downloadComplete &&
-      requested.folderUri == saved.folderUri &&
-      requested.storageUri == saved.storageUri &&
-      requested.musicFormat == saved.musicFormat &&
-      requested.container == saved.container &&
-      requested.quality == saved.quality &&
-      requested.audioTrackId == saved.audioTrackId &&
-      requested.captionLabel == saved.captionLabel &&
-      requested.playbackProvenance == saved.playbackProvenance;
+      requested.hasSameMusicSource(saved);
 
   MusicDownloadDeletionApproval captureMusicDeletion(
       List<DownloadedVideo> selection) {
@@ -2152,6 +2145,13 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
           if (video.exportedMusic case final copy? when !copy.complete) {
             await storage.deleteDocument(copy.uri);
           }
+          if (video.incompleteMusicEdit case final copy? when !copy.complete) {
+            // An interruption between provider publication and the database
+            // commit can leave an already finished user copy in this slot.
+            if (!await _isPublishedMusicEdit(copy)) {
+              await storage.deleteDocument(copy.uri);
+            }
+          }
           if (video.storageUri != null) {
             await storage.deleteDocument(video.storageUri!);
           }
@@ -2205,7 +2205,14 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
   }
 
   /// Publishes an existing song without fetching it again or moving the original.
-  Future<bool> exportMusic(DownloadedVideo video) {
+  Future<bool> exportMusic(DownloadedVideo video) =>
+      _startMusicExport(video, edited: false);
+
+  Future<bool> exportMusicWithoutSponsorSegments(DownloadedVideo video) =>
+      _startMusicExport(video, edited: true);
+
+  Future<bool> _startMusicExport(DownloadedVideo video,
+      {required bool edited}) {
     if (!_current ||
         _switchingProfile ||
         video.profileId != _library.profileId ||
@@ -2213,41 +2220,88 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
       return Future.value(false);
     }
     final previous = _exports[video.videoId];
-    if (previous != null) return previous.result;
+    if (previous != null) {
+      return previous.edited == edited ? previous.result : Future.value(false);
+    }
     final token = CancelToken();
-    final result = _mutate(() => _exportMusic(video.videoId, token))
+    final result = _mutate(() => _exportMusic(video, token, edited: edited))
         .whenComplete(() => _exports.remove(video.videoId));
-    _exports[video.videoId] = (token: token, result: result);
+    _exports[video.videoId] = (token: token, result: result, edited: edited);
     return result;
   }
 
-  Future<bool> _exportMusic(String id, CancelToken token) async {
+  Future<bool> _isPublishedMusicEdit(ExportedMusicCopy copy) async {
+    final digest = copy.outputSha256;
+    if (digest == null) return false;
+    try {
+      final stored = await storage.inspectDocument(copy.uri, copy.folder);
+      return stored != null && stored.byteLength > 0 && stored.sha256 == digest;
+    } on PlatformException {
+      // A pending, moved, or missing document cannot prove publication.
+      return false;
+    }
+  }
+
+  Future<bool> _exportMusic(DownloadedVideo requested, CancelToken token,
+      {required bool edited}) async {
     await _ready;
     final library = _library;
-    final saved = library.getDownloadByVideoId(id);
+    final saved = library.getDownloadByVideoId(requested.videoId);
     if (token.isCancelled ||
         !_current ||
         _switchingProfile ||
         saved == null ||
-        !saved.audioOnly ||
-        saved.musicMetadata == null ||
+        !requested.hasSameMusicSource(saved) ||
         !saved.downloadComplete ||
         saved.downloadFailed ||
-        (saved.storageUri != null && saved.storeAsMusic)) {
+        (!edited && saved.storageUri != null && saved.storeAsMusic)) {
       return false;
+    }
+    bool current() {
+      if (token.isCancelled ||
+          !_current ||
+          _switchingProfile ||
+          !identical(library, _library) ||
+          _deleting.contains(saved.videoId)) {
+        return false;
+      }
+      final latest = library.getDownloadByVideoId(saved.videoId);
+      return latest != null &&
+          !latest.downloadFailed &&
+          saved.hasSameMusicSource(latest);
+    }
+
+    final categories = <SponsorSegmentType>{
+      if (edited)
+        for (final type in SponsorSegmentType.values)
+          if (type.isEnabled(library.getSettings(type.settingsName())?.value))
+            type,
+    };
+    if (edited &&
+        !saved.sponsorSegments.any((segment) =>
+            segment.actionType == 'skip' &&
+            categories.contains(segment.category))) {
+      throw const NoSponsorAudioSegments();
     }
     final format = MusicDownloadFormat.forDatabase(library);
     final folder = await _deviceMusicFolder();
-    if (folder == null || token.isCancelled) return false;
-    final previous = saved.exportedMusic;
-    final sameTarget = previous?.folder == folder && previous?.format == format;
-    if (sameTarget && previous!.complete) {
+    if (folder == null || !current()) return false;
+    final previous = edited
+        ? (saved.editedMusicExport?.complete == true
+            ? saved.editedMusicExport
+            : null)
+        : saved.exportedMusic;
+    final pendingEdit = edited ? saved.incompleteMusicEdit : null;
+    bool conflictsWithSavedCopy(String uri) =>
+        uri == saved.storageUri ||
+        uri == saved.exportedMusic?.uri ||
+        uri == previous?.uri;
+    final sameDestination =
+        previous?.folder == folder && previous?.format == format;
+    if (!edited && sameDestination && previous!.complete) {
       // Only confirmed absence warrants another copy. A temporary provider
       // failure leaves the original record intact so a later retry can find it.
-      if (await storage.exportExists(previous.uri, folder)) return true;
-    }
-    if (previous != null && !previous.complete && !sameTarget) {
-      await storage.deleteDocument(previous.uri);
+      if (await storage.exportExists(previous.uri, folder)) return current();
     }
     final outputSong = saved.copyWith(musicFormat: format);
     final staging = await saved.stagingPath;
@@ -2255,15 +2309,112 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
     final stageOutput = File('$staging.export.${outputSong.extension}');
     try {
       var input = await saved.effectivePath;
-      if (saved.storageUri case final uri?) {
-        if (saved.folderUri == null) {
-          throw StateError('Missing download folder');
+      final sourceUri = saved.storageUri;
+      final sourceFolder = saved.folderUri;
+      if (sourceUri != null && sourceFolder == null) {
+        throw StateError('Missing download folder');
+      }
+      if (edited) {
+        final sourceBytes = sourceUri == null
+            ? await File(input).length()
+            : saved.playbackProvenance?.byteLength ??
+                await storage.documentSize(sourceUri, sourceFolder!);
+        if (sourceBytes != null) {
+          await checkDownloadSpace(storage, {
+            stageInput.path: remainingDownloadGrowth(
+                sourceBytes, await downloadFileBytes(stageInput.path))
+          });
         }
+        if (!current()) return false;
+      }
+      if (sourceUri != null) {
         await storage.readDocument(
-            uri, saved.folderUri!, stageInput.path, token);
+            sourceUri, sourceFolder!, stageInput.path, token);
+        input = stageInput.path;
+      } else if (edited) {
+        // Hash and encode the same snapshot. Poll cancellation while copying so
+        // profile changes or deletion do not wait for the entire source file.
+        final target = await stageInput.open(mode: FileMode.write);
+        try {
+          await for (final chunk in File(input).openRead()) {
+            if (token.isCancelled) return false;
+            await target.writeFrom(chunk);
+          }
+        } finally {
+          await target.close();
+        }
         input = stageInput.path;
       }
-      if (saved.musicFormat != format) {
+      if (!current()) return false;
+      String? signature;
+      var publishedPending = false;
+      ({int byteLength, String sha256})? editedOutput;
+      if (edited) {
+        final source = await _probeAudioExport(input, saved, token);
+        final edit = SponsorAudioEdit(
+            sourceDuration: source.duration,
+            segments: saved.sponsorSegments,
+            categories: categories);
+        final integrity = await _privateDownloadIntegrity(input);
+        final provenance = saved.playbackProvenance;
+        if (provenance != null &&
+            !provenance.matchesOutput(
+                byteLength: integrity.byteLength, sha256: integrity.sha256)) {
+          throw const FormatException('The original download changed');
+        }
+        signature = sha256
+            .convert(utf8.encode(jsonEncode([
+              1,
+              integrity.sha256,
+              format.name,
+              outputSong.musicPolicy?.quality.targetBitrate,
+              edit.timingSignature,
+            ])))
+            .toString();
+        if (!current()) return false;
+        if (sameDestination &&
+            previous!.complete &&
+            previous.editSignature == signature &&
+            await storage.exportExists(previous.uri, folder)) {
+          return current();
+        }
+        if (pendingEdit != null && !conflictsWithSavedCopy(pendingEdit.uri)) {
+          publishedPending = await _isPublishedMusicEdit(pendingEdit);
+          if (!current()) return false;
+          if (publishedPending &&
+              pendingEdit.editSignature == signature &&
+              pendingEdit.folder == folder &&
+              pendingEdit.format == format) {
+            await library.saveDownloadExport(
+                saved.videoId,
+                ExportedMusicCopy(folder, pendingEdit.uri, format,
+                    complete: true,
+                    editSignature: signature,
+                    outputSha256: pendingEdit.outputSha256),
+                expectedSource: saved);
+            setVideos();
+            return true;
+          }
+        }
+        await _muxAudioExport(
+            musicMuxArguments(
+                input: input,
+                output: stageOutput.path,
+                video: outputSong,
+                inputFormat: saved.musicFormat,
+                sourceCodec: source.codec,
+                edit: edit),
+            token);
+        final output =
+            await _probeAudioExport(stageOutput.path, outputSong, token);
+        if (!edit.matchesOutput(output, format)) {
+          throw const FormatException('The edited audio did not verify');
+        }
+        editedOutput = await _privateDownloadIntegrity(stageOutput.path);
+        await _deleteStagedMux(stageInput.path);
+        await checkDownloadSpace(storage, {folder: editedOutput.byteLength});
+        input = stageOutput.path;
+      } else if (saved.musicFormat != format) {
         await encodeMusic(
             input: input,
             output: stageOutput.path,
@@ -2272,19 +2423,83 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
             token: token);
         input = stageOutput.path;
       }
-      if (token.isCancelled) return false;
+      if (!current()) return false;
+      final sameTarget =
+          sameDestination && previous?.editSignature == signature;
+      if (pendingEdit != null && !publishedPending) {
+        if (conflictsWithSavedCopy(pendingEdit.uri)) {
+          throw StateError('The edited export needs a separate destination');
+        }
+        // A lingering provisional file failed the verified-completion check.
+        // Start a new document rather than writing over a moved or stale URI.
+        await storage.deleteDocument(pendingEdit.uri);
+        if (!current()) return false;
+      } else if (previous != null && !previous.complete && !sameTarget) {
+        await storage.deleteDocument(previous.uri);
+        if (!current()) return false;
+      }
+      final name = signature == null
+          ? outputSong.fileName
+          : '${p.basenameWithoutExtension(outputSong.fileName)}'
+              '_sponsorblock-${signature.substring(0, 12)}.${outputSong.extension}';
       final uri = await storage.prepareDocument(
           folder,
           sameTarget && !previous!.complete ? previous.uri : null,
-          outputSong.fileName,
+          name,
           outputSong.mimeType);
-      await library.saveDownloadExport(
-          saved.videoId, ExportedMusicCopy(folder, uri, format));
-      await storage.writeDocument(input, uri, token);
-      await library.saveDownloadExport(saved.videoId,
-          ExportedMusicCopy(folder, uri, format, complete: true));
-      setVideos();
-      return true;
+      // A provider must not send an edit back to the original or a completed
+      // copy. Those documents belong to the user.
+      if (edited &&
+          (conflictsWithSavedCopy(uri) ||
+              (publishedPending && uri == pendingEdit?.uri))) {
+        throw StateError('The edited export needs a separate destination');
+      }
+      var hasReceipt = false;
+      var complete = false;
+      try {
+        if (!current()) return false;
+        await library.saveDownloadExport(
+            saved.videoId,
+            ExportedMusicCopy(folder, uri, format,
+                editSignature: signature, outputSha256: editedOutput?.sha256),
+            expectedSource: edited ? saved : null);
+        hasReceipt = true;
+        if (!current()) return false;
+        await storage.writeDocument(input, uri, token);
+        if (!current()) return false;
+        if (editedOutput != null) {
+          final published = await storage.inspectDocument(uri, folder);
+          if (published != editedOutput) {
+            throw const FormatException('The published edit did not verify');
+          }
+          if (!current()) return false;
+        }
+        await library.saveDownloadExport(
+            saved.videoId,
+            ExportedMusicCopy(folder, uri, format,
+                complete: true,
+                editSignature: signature,
+                outputSha256: editedOutput?.sha256),
+            expectedSource: edited ? saved : null);
+        complete = true;
+        setVideos();
+        return true;
+      } finally {
+        // Edited output can be visible through some providers before the
+        // write finishes. Remove it on failure. A pending receipt may point to
+        // a missing document, which a later retry handles without overwriting.
+        if (!complete && (edited || !hasReceipt)) {
+          try {
+            await storage.deleteDocument(uri);
+          } catch (error, trace) {
+            log.warning(
+                'Could not remove an incomplete Music export', error, trace);
+          }
+        }
+      }
+    } catch (_) {
+      if (edited && token.isCancelled) return false;
+      rethrow;
     } finally {
       for (final file in [stageInput, stageOutput]) {
         if (await file.exists()) await file.delete();

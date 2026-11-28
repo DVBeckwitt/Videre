@@ -46,12 +46,16 @@ abstract class MediaPlayerCubit<T extends MediaPlayerState> extends Cubit<T> {
 
   double getAspectRatio();
 
+  @protected
+  Duration? get mountedDuration => null;
+
   @mustCallSuper
   void playVideo(bool offline) {
-    var duration = Duration(
-        seconds: state.offlineVideo?.lengthSeconds ??
-            state.video?.lengthSeconds ??
-            1);
+    final duration = mountedDuration ??
+        Duration(
+            seconds: state.offlineVideo?.lengthSeconds ??
+                state.video?.lengthSeconds ??
+                1);
     player.setEvent(MediaEvent<Duration>(
         state: MediaState.ready,
         type: MediaEventType.durationChanged,

@@ -373,14 +373,30 @@ class _LocalMusicFolderState extends State<LocalMusicFolder>
     final profile = _library.visibilityProfile;
     bool currentSource() =>
         mounted &&
+        !player.isClosed &&
+        identical(context.read<PlayerCubit?>(), player) &&
         _library.visibilityProfile == profile &&
         (entry.deviceTrack == null ||
             _library.acceptsSessionSelection(selection));
-    if ((entry.download != null || player.state.offlineVideos.isNotEmpty) &&
-        player.canEnqueueOnDeviceMusic([entry])) {
-      await player
-          .enqueueOnDeviceMusic([entry], next: next, isCurrent: currentSource);
-      return;
+    if (!currentSource()) return;
+    bool hasActiveMusic() =>
+        !player.state.isHidden &&
+        !player.state.isClosing &&
+        player.isMusicAudio;
+    final activeMusic = hasActiveMusic();
+    if (activeMusic ||
+        entry.download != null ||
+        player.state.offlineVideos.isNotEmpty) {
+      final tracks = [entry];
+      if (player.canEnqueueOnDeviceMusic(tracks)) {
+        final queued = await player.enqueueOnDeviceMusic(tracks,
+            next: next, isCurrent: currentSource);
+        if (queued || !currentSource()) return;
+        throw StateError('The active music queue changed.');
+      }
+      if (activeMusic) {
+        throw StateError('The active music queue is unavailable.');
+      }
     }
 
     if (player.isOtherPlaybackSession) {
@@ -401,11 +417,10 @@ class _LocalMusicFolderState extends State<LocalMusicFolder>
                       child: Text(locals.localMusicStartQueue)),
                 ],
               )));
-      if (!mounted ||
-          confirmed != true ||
-          player.isClosed ||
-          player.state.currentQueueId != current ||
-          !currentSource()) {
+      if (confirmed != true ||
+          !currentSource() ||
+          hasActiveMusic() ||
+          player.state.currentQueueId != current) {
         return;
       }
       await _play([entry], 0);

@@ -12,6 +12,8 @@ ExportedMusicCopy _$ExportedMusicCopyFromJson(Map<String, dynamic> json) =>
       json['uri'] as String,
       $enumDecode(_$MusicDownloadFormatEnumMap, json['format']),
       complete: json['complete'] as bool? ?? false,
+      editSignature: json['editSignature'] as String?,
+      outputSha256: json['outputSha256'] as String?,
     );
 
 Map<String, dynamic> _$ExportedMusicCopyToJson(ExportedMusicCopy instance) =>
@@ -20,6 +22,8 @@ Map<String, dynamic> _$ExportedMusicCopyToJson(ExportedMusicCopy instance) =>
       'uri': instance.uri,
       'format': _$MusicDownloadFormatEnumMap[instance.format]!,
       'complete': instance.complete,
+      'editSignature': instance.editSignature,
+      'outputSha256': instance.outputSha256,
     };
 
 const _$MusicDownloadFormatEnumMap = {
@@ -58,6 +62,10 @@ _DownloadedVideo _$DownloadedVideoFromJson(Map<String, dynamic> json) =>
           const _MusicOfflinePolicyConverter().fromJson(json['musicPolicy']),
       exportedMusic: const _MusicCopyConverter()
           .fromJson(json['exportedMusic'] as Map<String, dynamic>?),
+      editedMusicExport: const _MusicCopyConverter()
+          .fromJson(json['editedMusicExport'] as Map<String, dynamic>?),
+      pendingEditedMusicExport: const _MusicCopyConverter()
+          .fromJson(json['pendingEditedMusicExport'] as Map<String, dynamic>?),
       container:
           $enumDecodeNullable(_$DownloadContainerEnumMap, json['container']),
       audioTrackId: json['audioTrackId'] as String?,
@@ -93,6 +101,10 @@ Map<String, dynamic> _$DownloadedVideoToJson(_DownloadedVideo instance) =>
           const _MusicOfflinePolicyConverter().toJson(instance.musicPolicy),
       'exportedMusic':
           const _MusicCopyConverter().toJson(instance.exportedMusic),
+      'editedMusicExport':
+          const _MusicCopyConverter().toJson(instance.editedMusicExport),
+      'pendingEditedMusicExport':
+          const _MusicCopyConverter().toJson(instance.pendingEditedMusicExport),
       'container': _$DownloadContainerEnumMap[instance.container],
       'audioTrackId': instance.audioTrackId,
       'captionLabel': instance.captionLabel,

@@ -1100,6 +1100,7 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
         // from a replaced source cannot advance the new occurrence.
         if (!_sourceAdmitted ||
             _loadingGeneration != null ||
+            audioPlayer?.processingState != ProcessingState.completed ||
             _completedSourceRevision == _sourceLoadRevision) {
           return;
         }
@@ -1122,24 +1123,53 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
         _awaitingBackendMetadata) {
       return;
     }
+    final musicTimeline =
+        _selectedSourceIsMusic && state.video?.liveNow != true;
+    if (musicTimeline && audioPlayer!.duration != duration) return;
     _abRepeat.syncAvailability();
-    final offline = state.offlineVideo;
-    if (_sourceAdmitted &&
-        offline != null &&
-        isLocalMusicPlaybackId(offline.videoId) &&
-        offline.lengthSeconds == 0 &&
-        duration != null &&
-        duration > Duration.zero) {
-      player.reportLocalMusicDuration(offline.videoId, duration);
-      emit(state.copyWith(loading: false, audioLength: duration));
-    } else {
-      emit(state.copyWith(loading: false));
+    if (musicTimeline) {
+      _reportMusicSourceDuration(duration);
+      return;
     }
+    emit(state.copyWith(loading: false));
     player.setEvent(MediaEvent(
         state: MediaState.playing,
         type: MediaEventType.durationChanged,
         value: duration ?? const Duration(seconds: 1)));
   }
+
+  void _reportMusicSourceDuration(Duration? duration) {
+    final entry = state.offlineVideo ?? state.video;
+    if (!_sourceAdmitted ||
+        _loadingGeneration != null ||
+        !_selectedSourceIsMusic ||
+        entry == null ||
+        playbackQueueId(entry) != player.state.currentQueueId ||
+        (entry is Video && entry.liveNow == true)) {
+      return;
+    }
+    player.reportMusicDecoderDuration(
+        playbackQueueId(entry), player.playbackPositionGeneration, duration);
+    if (duration != null &&
+        duration > Duration.zero &&
+        entry is DownloadedVideo &&
+        isLocalMusicPlaybackId(entry.videoId) &&
+        entry.lengthSeconds == 0) {
+      player.reportLocalMusicDuration(entry.videoId, duration);
+    }
+    final effectiveDuration = player.duration;
+    emit(state.copyWith(loading: false, audioLength: effectiveDuration));
+    player.setEvent(MediaEvent<Duration>(
+        state: MediaState.playing,
+        type: MediaEventType.durationChanged,
+        value: effectiveDuration));
+  }
+
+  @override
+  Duration? get mountedDuration =>
+      _sourceAdmitted && _ownsParentPlayback && _selectedSourceIsMusic
+          ? player.observedMusicDuration
+          : null;
 
   void onPositionChanged(Duration position) {
     if (_terminalErrorSent ||
@@ -1941,6 +1971,7 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
           _reportPitch(_playbackPitchSemitones);
           _loadingGeneration = null;
           _sourceAdmitted = true;
+          _reportMusicSourceDuration(current.duration);
           _abRepeat.syncAvailability();
           if (queueId != null &&
               (video?.musicMetadata ?? offlineVideo?.musicMetadata) != null &&
@@ -2177,17 +2208,6 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
         continueOverlap: continueOverlap);
     if (loaded && !isClosed && generation == _playbackGeneration) {
       super.playVideo(offline);
-      if (isLocalMusicPlaybackId(videoId) && audioLength == Duration.zero) {
-        final duration = current.duration;
-        if (duration != null && duration > Duration.zero) {
-          player.reportLocalMusicDuration(videoId, duration);
-          emit(state.copyWith(audioLength: duration));
-          player.setEvent(MediaEvent<Duration>(
-              state: MediaState.ready,
-              type: MediaEventType.durationChanged,
-              value: duration));
-        }
-      }
     }
   }
 

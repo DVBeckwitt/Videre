@@ -138,6 +138,14 @@ class _Decoder {
   double pitch = 1;
   double musicGain = 1;
   bool playing = false;
+  bool advanceNativePosition = true;
+  int nativeProgressReads = 0;
+  int lastNativePositionMs = 0;
+  int? fixedNativePositionMs;
+  ProcessingStateMessage nativeState = ProcessingStateMessage.idle;
+  Duration nativeDuration = const Duration(minutes: 2);
+  final nativeClock = Stopwatch()..start();
+  final playClock = Stopwatch();
   int pauses = 0;
   bool disposed = false;
   _Decoder(this.id, this.androidLoadControl);
@@ -149,8 +157,9 @@ class _Decoder {
   MethodChannel get data => MethodChannel('com.ryanheise.just_audio.data.$id');
 
   Future<void> report(ProcessingStateMessage state, Duration position) async {
-    const duration = Duration(minutes: 2);
     this.position = position;
+    nativeState = state;
+    playClock.reset();
     await TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .handlePlatformMessage(
             events.name,
@@ -158,8 +167,8 @@ class _Decoder {
               'processingState': state.index,
               'updateTime': DateTime.now().millisecondsSinceEpoch,
               'updatePosition': position.inMicroseconds,
-              'bufferedPosition': duration.inMicroseconds,
-              'duration': duration.inMicroseconds,
+              'bufferedPosition': nativeDuration.inMicroseconds,
+              'duration': nativeDuration.inMicroseconds,
               'currentIndex': 0,
             }),
             (_) {});
@@ -239,7 +248,7 @@ void main() {
             if (id == failingTrack) {
               throw PlatformException(code: '400', message: 'Warm load failed');
             }
-            const duration = Duration(minutes: 2);
+            final duration = decoder.nativeDuration;
             if (!decoder.disposed) {
               await decoder.report(ProcessingStateMessage.ready, start);
             }
@@ -247,6 +256,9 @@ void main() {
           }
           if (method.method == 'play') {
             decoder.playing = true;
+            decoder.playClock
+              ..reset()
+              ..start();
             decoder.playVolumes.add(decoder.volume);
             decoder.playMusicGains.add(decoder.musicGain);
             decoder.playPositions.add(decoder.position);
@@ -254,6 +266,7 @@ void main() {
           }
           if (method.method == 'pause') {
             decoder.playing = false;
+            decoder.playClock.stop();
             decoder.pauses++;
             decoder.pauseVolumes.add(decoder.volume);
           }
@@ -274,6 +287,30 @@ void main() {
                 Duration(microseconds: method.arguments['position'] as int);
             decoder.seeks.add(position);
             await decoder.report(ProcessingStateMessage.ready, position);
+          }
+          if (method.method == 'getPlaybackProgress') {
+            decoder.nativeProgressReads++;
+            final duration = decoder.nativeDuration;
+            final elapsed = decoder.playing && decoder.advanceNativePosition
+                ? decoder.playClock.elapsedMilliseconds
+                : 0;
+            decoder.lastNativePositionMs = decoder.fixedNativePositionMs ??
+                (decoder.position.inMilliseconds + elapsed)
+                    .clamp(0, duration.inMilliseconds)
+                    .toInt();
+            return {
+              'positionMillis': decoder.lastNativePositionMs,
+              'bufferedPositionMillis': duration.inMilliseconds,
+              'durationMillis': duration.inMilliseconds,
+              'sampledAtMillis': decoder.nativeClock.elapsedMilliseconds,
+              'sourceRevision': decoder.loads.length,
+              'playWhenReady': decoder.playing,
+              'isPlaying': decoder.playing,
+              'processingState': decoder.nativeState.index,
+              'suppressionReason': 0,
+              'seekPending': false,
+              'hasError': false,
+            };
           }
           return <String, Object?>{};
         });
@@ -1389,6 +1426,102 @@ void main() {
     expect(incoming.seeks.skip(seeksBefore), isEmpty);
     expect(audio.audioPlayer!.position,
         greaterThanOrEqualTo(const Duration(milliseconds: 520)));
+  });
+
+  test('crossfade keeps the outgoing tail audible until native audio advances',
+      () async {
+    final (outgoing, incoming) =
+        await prepareTransition(SongTransitionMode.crossfade, seconds: 6);
+    incoming.advanceNativePosition = false;
+    await outgoing.report(
+        ProcessingStateMessage.ready, const Duration(seconds: 115));
+    await _until(() => incoming.playing && incoming.nativeProgressReads >= 3,
+        'Play has been requested while the native position stays still');
+    expect(incoming.volume, 0);
+    expect(outgoing.volume, 1);
+    expect(player.state.currentQueueId, current.queueEntryId);
+
+    incoming.advanceNativePosition = true;
+    await _until(() => incoming.volume > 0 && outgoing.volume < 1,
+        'Confirmed native progress allows the crossfade to begin');
+  });
+
+  test('a buffering crossfade standby loses its audible handoff at EOF',
+      () async {
+    final (outgoing, incoming) = await overlap();
+    final previousGainUpdates = incoming.volumes.length;
+    await incoming.report(
+        ProcessingStateMessage.buffering, const Duration(milliseconds: 170));
+    await outgoing.report(
+        ProcessingStateMessage.completed, const Duration(minutes: 2));
+    await _until(
+        () => player.events.any((event) => event.state == MediaState.completed),
+        'The outgoing decoder completes normally');
+    expect(incoming.volume, 0);
+    expect(
+        incoming.volumes.skip(previousGainUpdates).where((gain) => gain == 1),
+        isEmpty);
+  });
+
+  test('a crossfade standby that stalls after EOF loses its deferred handoff',
+      () async {
+    final (outgoing, incoming) = await overlap();
+    await outgoing.report(
+        ProcessingStateMessage.completed, const Duration(minutes: 2));
+    await _until(
+        () => player.events.any((event) => event.state == MediaState.completed),
+        'The outgoing decoder completes before the queue switches');
+    expect(incoming.volume, 1);
+
+    final previousReads = incoming.nativeProgressReads;
+    incoming.fixedNativePositionMs = incoming.lastNativePositionMs;
+    await _until(() => !incoming.playing && incoming.volume == 0,
+        'The unresponsive native standby falls back to an ordinary handoff');
+    expect(incoming.nativeProgressReads, greaterThan(previousReads));
+    expect(player.state.currentQueueId, current.queueEntryId);
+  });
+
+  test('the active Music timeline follows the decoder duration', () async {
+    final outgoing = loaded('current').single;
+    const decoded = Duration(milliseconds: 115400);
+    outgoing.nativeDuration = decoded;
+    await outgoing.report(ProcessingStateMessage.ready, Duration.zero);
+    await _until(() => player.duration == decoded,
+        'The active timeline uses the mounted decoder duration');
+    expect(audio.state.audioLength, decoded);
+    expect(player.state.currentlyPlaying?.lengthSeconds, 120);
+
+    outgoing.nativeDuration = Duration.zero;
+    await outgoing.report(ProcessingStateMessage.ready, Duration.zero);
+    await _until(() => player.observedMusicDuration == null,
+        'An unknown decoder duration clears the last observed value');
+    expect(player.duration, const Duration(minutes: 2));
+
+    player.select(next);
+    player.reportMusicDecoderDuration(
+        current.queueEntryId!, player.playbackPositionGeneration, decoded);
+    expect(player.duration, const Duration(minutes: 2));
+  });
+
+  test(
+      'standby promotion publishes the mounted duration and ignores old events',
+      () async {
+    final (_, incoming) = await prepareTransition(SongTransitionMode.seamless);
+    const native = Duration(milliseconds: 115400);
+    incoming.nativeDuration = native;
+    await incoming.report(ProcessingStateMessage.ready, Duration.zero);
+    selectNext(automatic: false);
+    await _until(() => !audio.state.loading && incoming.playing,
+        'The prepared decoder becomes the active Music source');
+
+    Iterable<MediaEvent> durationEvents() =>
+        player.events.where((e) => e.type == MediaEventType.durationChanged);
+    expect(durationEvents().last.value, native);
+    expect(player.duration, native);
+    final count = durationEvents().length;
+    audio.onDurationChanged(const Duration(minutes: 2));
+    expect(durationEvents(), hasLength(count));
+    expect(player.duration, native);
   });
 
   for (final when in [

@@ -536,16 +536,21 @@ class SembastSqfDb extends IDbClient {
             continue;
           }
           final storageUri = replacement(row['storageUri']);
-          final exported = row['exportedMusic'];
-          final exportedUri = exported is Map && exported['complete'] == true
-              ? replacement(exported['uri'])
-              : null;
-          if (storageUri == null && exportedUri == null) continue;
+          final renamedExports = <String, Object?>{};
+          for (final field in ['exportedMusic', 'editedMusicExport']) {
+            final exported = row[field];
+            if (exported is Map && exported['complete'] == true) {
+              final uri = replacement(exported['uri']);
+              if (uri != null) {
+                renamedExports[field] = {...exported, 'uri': uri};
+              }
+            }
+          }
+          if (storageUri == null && renamedExports.isEmpty) continue;
           await record.ref.put(txn, {
             ...row,
             if (storageUri != null) 'storageUri': storageUri,
-            if (exportedUri != null)
-              'exportedMusic': {...(exported as Map), 'uri': exportedUri},
+            ...renamedExports,
           });
           changedProfiles.add(profile.key);
         }
@@ -1491,15 +1496,33 @@ class SembastSqfDb extends IDbClient {
       });
 
   @override
-  Future<void> saveDownloadExport(String videoId, ExportedMusicCopy copy) =>
+  Future<void> saveDownloadExport(String videoId, ExportedMusicCopy copy,
+          {DownloadedVideo? expectedSource}) =>
       _writeProfile((owner, txn) async {
         final record = owner.downloadedVideosStore.record(videoId);
         final download = await record.get(txn);
-        if (download == null || download['downloadComplete'] != true) {
+        if (download == null) {
           throw StateError('The original download is unavailable');
         }
+        DownloadedVideo.fromJson(download)
+            .validateExportReceipt(copy, expectedSource: expectedSource);
         // A provider rename can update the source reference during an export.
-        await record.put(txn, {...download, 'exportedMusic': copy.toJson()});
+        final field = switch ((copy.editSignature, copy.complete)) {
+          (null, _) => 'exportedMusic',
+          (_, true) => 'editedMusicExport',
+          (_, false) => 'pendingEditedMusicExport',
+        };
+        final updated = {...download, field: copy.toJson()};
+        if (field == 'editedMusicExport') {
+          updated.remove('pendingEditedMusicExport');
+        }
+        if (field == 'pendingEditedMusicExport') {
+          final previous = download['editedMusicExport'];
+          if (previous is Map && previous['complete'] != true) {
+            updated.remove('editedMusicExport');
+          }
+        }
+        await record.put(txn, updated);
       });
 
   @override

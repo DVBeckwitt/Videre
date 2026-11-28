@@ -128,11 +128,13 @@ class MusicMiniPlayer extends StatelessWidget {
                     ? locals.backendPlaybackResumed
                     : null;
     final length = video?.lengthSeconds ?? offline?.lengthSeconds;
-    final duration = video?.liveNow == true || length == null
+    final duration = video?.liveNow == true ||
+            (length == null &&
+                (pending != null || player.observedMusicDuration == null))
         ? 0
         : pending == null
             ? player.duration.inMilliseconds
-            : length * 1000;
+            : (length ?? 0) * 1000;
     final progress = duration <= 0
         ? 0.0
         : (state.position.inMilliseconds / duration).clamp(0.0, 1.0);

@@ -3,6 +3,7 @@ import 'dart:math' as math;
 
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
+import 'package:clipious/downloads/services/explicit_music_download.dart';
 import 'package:clipious/downloads/states/download_manager.dart';
 import 'package:clipious/globals.dart' show db;
 import 'package:clipious/l10n/generated/app_localizations.dart';
@@ -22,6 +23,8 @@ import 'package:clipious/music/services/music_library_service.dart';
 import 'package:clipious/music/services/music_waveform.dart';
 import 'package:clipious/music/views/components/music_playback_toggles.dart';
 import 'package:clipious/music/views/screens/music.dart';
+import 'package:clipious/player/audio_playback_sources.dart'
+    show explicitAudioDownloadFingerprint;
 import 'package:clipious/player/models/local_music_playback.dart';
 import 'package:clipious/player/models/media_event.dart';
 import 'package:clipious/player/models/playback_queue.dart';
@@ -1387,9 +1390,10 @@ class _MusicPlayerState extends State<MusicPlayer>
     final app = context.read<AppCubit>();
     final session = app.state;
     final opening = player.openingMusicEntry != null;
-    final timelineLength = opening || length == null
-        ? (length ?? 0) * 1000
-        : player.duration.inMilliseconds;
+    final timelineLength =
+        opening || (length == null && player.observedMusicDuration == null)
+            ? (length ?? 0) * 1000
+            : player.duration.inMilliseconds;
     final queueId = state.currentQueueId;
     bool seekAllowed() =>
         !isLocalMusicPlaybackId(queueId) || player.canSeekCurrentMedia;
@@ -1540,9 +1544,10 @@ class _MusicPlayerState extends State<MusicPlayer>
     final generation = player.playlistGeneration;
     final seconds =
         context.select((SettingsCubit settings) => settings.state.skipStep);
-    final hasDuration = (state.currentlyPlaying?.lengthSeconds ??
-            state.offlineCurrentlyPlaying?.lengthSeconds) !=
-        null;
+    final hasDuration = player.observedMusicDuration != null ||
+        (state.currentlyPlaying?.lengthSeconds ??
+                state.offlineCurrentlyPlaying?.lengthSeconds) !=
+            null;
     final length = player.duration.inMilliseconds;
     bool seekAllowed() =>
         !isLocalMusicPlaybackId(occurrence) || player.canSeekCurrentMedia;
@@ -2406,8 +2411,14 @@ class _MusicQueueState extends State<MusicQueue> {
     return tracks.length == entries.length ? tracks : null;
   }
 
+  bool _missingPinnedDownload(IdedVideo entry) {
+    final fingerprint = explicitAudioDownloadFingerprint(entry);
+    return fingerprint != null &&
+        readyMusicDownload(db, entry.videoId, fingerprint: fingerprint) == null;
+  }
+
   bool _canEnqueueCopies(PlayerCubit player, List<IdedVideo> entries) {
-    if (entries.isEmpty) return false;
+    if (entries.isEmpty || entries.any(_missingPinnedDownload)) return false;
     if (player.state.videos.isEmpty) {
       return player.canCopyOfflineMusicEntries(entries.cast<DownloadedVideo>());
     }
@@ -2416,6 +2427,9 @@ class _MusicQueueState extends State<MusicQueue> {
 
   Future<void> _enqueueCopies(PlayerCubit player, List<IdedVideo> entries,
       {required bool next}) async {
+    if (entries.any(_missingPinnedDownload)) {
+      throw StateError('The selected songs are unavailable.');
+    }
     final bool added;
     if (player.state.videos.isEmpty) {
       added = await player.enqueueOfflineMusicCopies(
@@ -2983,11 +2997,19 @@ class _MusicQueueState extends State<MusicQueue> {
               ? LocalMusicLibrary.instance
               : const AlwaysStoppedAnimation(false),
           builder: (rowContext, _) {
+            final missingDownload = !isActive &&
+                explicitAudioDownloadFingerprint(item) != null &&
+                rowContext.select((DownloadManagerCubit? _) =>
+                    session.profileId == db.profileId &&
+                    !session.globalLoading &&
+                    !session.sessionRecoveryRequired &&
+                    _missingPinnedDownload(item));
             final missing = (offline != null &&
                     isLocalMusicPlaybackId(offline.videoId) &&
                     offline.storageUri == null) ||
                 (devicePlaylistRow &&
-                    localMusicTrackForPlayback(video.videoId) == null);
+                    localMusicTrackForPlayback(video.videoId) == null) ||
+                missingDownload;
             final tile = ListTile(
               key: ValueKey('music-queue-$id'),
               selected: selection?.containsKey(id) ?? isActive,

@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:clipious/downloads/services/ytdlnis_download.dart';
+import 'package:clipious/downloads/views/components/ytdlnis_download_action.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/downloads/models/download_formats.dart';
 import 'package:clipious/videos/models/caption.dart';
@@ -16,6 +18,7 @@ import 'package:clipious/videos/models/video.dart';
 import 'package:clipious/videos/states/download_modal_sheet.dart';
 import 'package:clipious/videos/views/components/download_modal_sheet.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 class _Metadata extends Service {
@@ -88,6 +91,144 @@ void main() {
 
   final selector = BackendSelector('backend',
       const [BackendOption('a', 'First'), BackendOption('b', 'Second')]);
+
+  for (final (audioOnly, direct) in [
+    (false, false),
+    (false, true),
+    (true, false)
+  ]) {
+    testWidgets(
+        'YTDLnis requires a tap and shares only the ID ($audioOnly, $direct)',
+        (tester) async {
+      final metadata = _Metadata(() async => _playable());
+      service = metadata;
+      final requests = <MethodCall>[];
+      final result = Completer<String>();
+      const channel = MethodChannel('videre/ytdlnis_download');
+      final messenger =
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        requests.add(call);
+        return result.future;
+      });
+      addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+
+      const item = Video(videoId: 'tV5UilNUYRY', isListed: true);
+      await tester.pumpWidget(MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: Scaffold(
+          body: Builder(
+            builder: (context) => TextButton(
+                onPressed: () {
+                  if (audioOnly) {
+                    unawaited(DownloadModalSheet.showPlaylistOptions(context,
+                        musicAudioOnly: true, externalVideo: item));
+                  } else if (direct) {
+                    unawaited(showModalBottomSheet<void>(
+                        context: context,
+                        builder: (_) => const YtdlnisDownloadAction(
+                            video: item, audioOnly: false)));
+                  } else {
+                    DownloadModalSheet.showVideoModalSheet(context, item);
+                  }
+                },
+                child: const Text('Open')),
+          ),
+        ),
+      ));
+      await tester.tap(find.text('Open'));
+      await tester.pumpAndSettle();
+      final externalAction = find.text('Download with YTDLnis');
+      expect(externalAction, findsOneWidget);
+      expect(requests, isEmpty);
+      final builtInRequests = audioOnly || direct ? 0 : 1;
+      expect(metadata.accounts, hasLength(builtInRequests));
+
+      await tester.ensureVisible(externalAction);
+      await tester.tap(externalAction);
+      await tester.pump();
+      expect(find.text('Opening YTDLnis…'), findsOneWidget);
+      final button = find.ancestor(
+          of: externalAction,
+          matching:
+              find.byWidgetPredicate((widget) => widget is OutlinedButton));
+      expect(tester.getSize(button).height, greaterThanOrEqualTo(48));
+      expect(tester.widget<OutlinedButton>(button).onPressed, isNull);
+      await tester.ensureVisible(externalAction);
+      await tester.tap(externalAction);
+      expect(requests, hasLength(1));
+      result.complete(audioOnly || direct ? 'opened' : 'unavailable');
+      await tester.pumpAndSettle();
+      expect(find.text('Opening YTDLnis…'), findsNothing);
+      expect(requests.single.method, 'open');
+      expect(requests.single.arguments,
+          {'videoId': 'tV5UilNUYRY', 'audioOnly': audioOnly});
+      expect(metadata.accounts, hasLength(builtInRequests));
+      if (audioOnly || direct) {
+        expect(externalAction, findsNothing);
+      } else {
+        expect(find.text('Install or update YTDLnis to open this download.'),
+            findsOneWidget);
+        expect(find.byTooltip('Download'), findsOneWidget);
+      }
+    }, variant: TargetPlatformVariant.only(TargetPlatform.android));
+  }
+
+  testWidgets('YTDLnis refuses local, unlisted and malformed video inputs',
+      (tester) async {
+    var requests = 0;
+    const channel = MethodChannel('videre/ytdlnis_download');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(channel, (_) async {
+      requests++;
+      return 'opened';
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+
+    for (final item in [
+      const Video(videoId: 'device:track'),
+      const Video(videoId: 'tV5UilNUYRY', isListed: false),
+      const Video(videoId: 'tV5UilNUYRY', downloadPlaybackOnly: true),
+      const Video(videoId: 'tV5UilNUYRY', explicitMusicDownload: 'download'),
+      const Video(videoId: 'tV5UilNUYRY', premium: true),
+      const Video(videoId: 'https://private.invalid/watch?v=tV5UilNUYRY'),
+      const Video(videoId: 'tV5UilNUYRY&list=playlist'),
+    ]) {
+      expect(await YtdlnisDownload.open(item, audioOnly: true),
+          YtdlnisOpenResult.unavailable);
+    }
+    expect(requests, 0);
+  }, variant: TargetPlatformVariant.only(TargetPlatform.android));
+
+  for (final hasFormats in [true, false]) {
+    testWidgets(
+        'Watch withdraws YTDLnis after metadata identifies an unlisted video '
+        '(formats available: $hasFormats)', (tester) async {
+      const id = 'tV5UilNUYRY';
+      final response = Completer<Video>();
+      final metadata = _Metadata(() => response.future);
+      service = metadata;
+      await tester.pumpWidget(MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home:
+            const Scaffold(body: DownloadModalSheet(video: Video(videoId: id))),
+      ));
+      await tester.pump();
+      expect(find.text('Download with YTDLnis'), findsOneWidget);
+
+      response.complete(Video(
+          videoId: id,
+          isListed: false,
+          adaptiveFormats: hasFormats ? _playable().adaptiveFormats : []));
+      await tester.pumpAndSettle();
+      expect(find.text('Download with YTDLnis'), findsNothing);
+      expect(hasFormats ? find.byTooltip('Download') : find.text('Retry'),
+          findsOneWidget);
+    }, variant: TargetPlatformVariant.only(TargetPlatform.android));
+  }
 
   for (final failure in ['unavailable', 'missing audio', 'foreign media']) {
     test('picker recovers on another backend after $failure', () async {

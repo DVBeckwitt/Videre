@@ -2003,6 +2003,7 @@ class MusicLibraryActions extends StatefulWidget {
 
   static Future<int> download(BuildContext context, List<Video> videos,
       {bool inPlayer = false, bool Function()? canDownload}) async {
+    final externalVideo = videos.singleOrNull;
     videos = videos.where((v) => !isLocalMusicPlaybackId(v.videoId)).toList();
     if (isTv || videos.isEmpty) return 0;
     final session = MusicLibrarySession(context.read<AppCubit>());
@@ -2010,7 +2011,10 @@ class MusicLibraryActions extends StatefulWidget {
     final locals = AppLocalizations.of(context)!;
     try {
       final options = await DownloadModalSheet.showPlaylistOptions(context,
-          musicAudioOnly: true, inPlayer: inPlayer);
+          musicAudioOnly: true,
+          inPlayer: inPlayer,
+          externalVideo: externalVideo,
+          canDownload: () => session.isCurrent && canDownload?.call() != false);
       if (options == null ||
           !context.mounted ||
           !session.isCurrent ||
@@ -2025,9 +2029,11 @@ class MusicLibraryActions extends StatefulWidget {
       if (context.mounted &&
           session.isCurrent &&
           canDownload?.call() != false) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content:
-                Text('${locals.downloadQueued}: ${locals.nVideos(count)}')));
+        final message = count == 0
+            ? locals.musicDownloadNothingQueued
+            : locals.musicDownloadSongsQueued(count);
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(message)));
       }
       return count;
     } catch (_) {
