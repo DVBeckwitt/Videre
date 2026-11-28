@@ -6909,6 +6909,49 @@ void main() {
     expect(player.state.currentQueueId, playbackQueueId(song));
   });
 
+  testWidgets('Music Now Playing minimizes on a short header or artwork flick',
+      (tester) async {
+    await tester.runAsync(() async {
+      await db.upsertServer(
+          const Server(url: 'https://instance.example', inUse: true));
+      await app.initState();
+    });
+    final surface = LayoutBuilder(
+        builder: (_, constraints) => Stack(children: [
+              Player(constraints.maxHeight),
+            ]));
+    await tester.runAsync(() => pump(tester, child: surface));
+    await tester.pumpAndSettle();
+    final artwork = find.byKey(const ValueKey('music-player-artwork'));
+
+    Future<void> flick(Finder region) async {
+      expect(region.hitTestable(), findsOneWidget);
+      await tester.fling(region, const Offset(0, 56), 1200);
+      await tester.pumpAndSettle();
+      expect(player.state.isMini, isTrue);
+      await player.seed(player.state.copyWith(isMini: false, top: 0));
+      await tester.pumpAndSettle();
+    }
+
+    await flick(find.byType(AppBar));
+    await flick(artwork);
+    tester.view.physicalSize = const Size(740, 420);
+    await player
+        .seed(player.state.copyWith(orientation: Orientation.landscape));
+    await tester.pumpAndSettle();
+    await flick(artwork);
+    expect(tester.takeException(), isNull);
+    await tester.runAsync(() async {
+      final decoder = tester
+          .element(find.byType(BlocBuilder<AudioPlayerCubit, AudioPlayerState>,
+              skipOffstage: false))
+          .read<AudioPlayerCubit>();
+      final closed = decoder.stream.drain<void>();
+      await tester.pumpWidget(const SizedBox.shrink());
+      await closed.timeout(const Duration(seconds: 2));
+    });
+  });
+
   testWidgets('minimizing and expanding music keeps the mounted audio decoder',
       (tester) async {
     final queued = song.copyWith(

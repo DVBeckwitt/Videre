@@ -456,7 +456,7 @@ void main() {
     await gesture.moveBy(const Offset(0, 45));
     await tester.pump();
     final first = tester.getRect(positioned);
-    await gesture.moveBy(const Offset(0, 75));
+    await gesture.moveBy(const Offset(0, 30));
     await tester.pump();
     final pulled = tester.getRect(positioned);
 

@@ -6,6 +6,7 @@ import 'package:clipious/router.dart';
 import 'package:logging/logging.dart';
 import '../settings/models/db/server.dart';
 import '../settings/models/errors/no_server_selected.dart';
+import '../subscription_management/services/subscription_account.dart';
 
 final log = Logger('notifications');
 
@@ -108,12 +109,30 @@ class MusicPlaylistSaveNotification {
 class NotificationController {
   static bool Function() canHandleActions = () => true;
 
-  static Future<Server?> _selectedAccount() async {
+  static Future<Server?> _selectedAccount(
+      {bool subscriptions = false, bool hasScopedPayload = true}) async {
     if (!canHandleActions()) return null;
+    final source = db;
+    final profileId = source.profileId;
     try {
-      final server = await db.getCurrentlySelectedServer();
-      return canHandleActions() ? server : null;
+      final owner = source.forProfile(profileId);
+      if (subscriptions &&
+          !hasScopedPayload &&
+          await SubscriptionAccount.preference(owner) != null) {
+        return null;
+      }
+      final server = subscriptions
+          ? await SubscriptionAccount.resolve(owner)
+          : await owner.getCurrentlySelectedServer();
+      return canHandleActions() &&
+              identical(db, source) &&
+              source.profileId == profileId
+          ? server
+          : null;
     } on NoServerSelected {
+      return null;
+    } on StateError {
+      // A profile can be removed while the action is resolving.
       return null;
     }
   }
@@ -156,7 +175,10 @@ class NotificationController {
     }
     if (receivedAction.payload != null && receivedAction.payload!.isNotEmpty) {
       var payload = receivedAction.payload!;
-      final account = await _selectedAccount();
+      final account = await _selectedAccount(
+          subscriptions:
+              receivedAction.channelKey == NotificationTypes.subscription.id,
+          hasScopedPayload: payload['profileId'] != null);
       if (account == null) return;
       // Old notifications must never open another person's private content.
       if (payload['profileId'] != null &&

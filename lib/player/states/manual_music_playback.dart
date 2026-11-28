@@ -16,7 +16,7 @@ class _ManualMusicDecoder {
   final cancelled = Completer<bool>();
   AudioPlaybackSources? admittedPlan;
   bool? providerCanSeek;
-  PlayerException? exhaustedSourceError;
+  ManualMusicSourceFailure? exhaustedSourceFailure;
   int sourceIndex = 0;
   bool changedDecoder = false;
 
@@ -60,6 +60,12 @@ class _ManualMusicDecoder {
       if (!active()) return false;
       final plan = await resolve();
       if (plan == null || !active()) return false;
+      final route = plan.playbackRoute;
+      bool admitted() =>
+          active() &&
+          (route == null ||
+              !route.isInstanceFallback ||
+              audioPlaybackRouteIsCurrent(route));
       final provider = providerMusicTrackForPlayback(entry.videoId);
       if (provider != null) {
         providerCanSeek =
@@ -73,46 +79,61 @@ class _ManualMusicDecoder {
             !audioPlaybackRouteIsCurrent(blockedRoute)) {
           return false;
         }
+        var openingSource = false;
         try {
           await owner._setMusicGain(decoder, plan.sources[index]);
-          if (!active()) return false;
+          if (!admitted()) return false;
           if (index != 0 ||
               !decoderReady ||
               !samePreparedAudioSource(adjacent, plan)) {
             // Android completes this call after ExoPlayer reports STATE_READY.
             changedDecoder = true;
+            openingSource = true;
             await decoder.setAudioSource(plan.sources[index],
                 initialPosition: position);
+            openingSource = false;
           }
-          if (!active()) return false;
+          if (!admitted()) return false;
           if (position != null && decoder.position != position) {
             changedDecoder = true;
             await decoder.seek(position);
           }
         } on PlayerException catch (error) {
-          if (!active() ||
+          if (!admitted() ||
               (!error.backendRetryable && !error.mediaOriginBlocked)) {
             return false;
           }
           // Only a transient failure can rotate the selected song's backend.
           if (index == plan.sources.length - 1 && error.backendRetryable) {
-            exhaustedSourceError = error;
+            final canTryInstanceFallback = openingSource &&
+                _remoteAudioSource(plan.sources[index]) &&
+                _transientAudioOpenFailure(error);
+            exhaustedSourceFailure = ManualMusicSourceFailure(error,
+                canTryInstanceFallback: canTryInstanceFallback);
+            if (canTryInstanceFallback) {
+              plan.playbackRoute
+                  ?.recordDecoderOutcome(_database, success: false);
+            }
           }
           if (error.mediaOriginBlocked) blockedRoute = plan.playbackRoute;
           continue;
         }
-        if (!active() || !decoderReady) return false;
+        if (!admitted() || !decoderReady) return false;
         // A grant, saved download, or selected instance may have changed
         // while the native decoder was fetching the first playable samples.
         final confirmed = await resolve(verifyCompletion: false);
         if (confirmed == null ||
-            !active() ||
+            !admitted() ||
             !decoderReady ||
             !samePreparedAudioSource(plan, confirmed, index: index)) {
           return false;
         }
         sourceIndex = index;
         admittedPlan = confirmed;
+        if (_remoteAudioSource(confirmed.sources[index])) {
+          confirmed.playbackRoute
+              ?.recordDecoderOutcome(_database, success: true);
+        }
         return true;
       }
     } catch (_) {

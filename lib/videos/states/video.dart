@@ -9,7 +9,9 @@ import '../../downloads/services/download_playback_source.dart';
 import '../../downloads/states/download_manager.dart';
 import '../../globals.dart';
 import '../../network/nerdvpn_access.dart';
+import '../../network/network_proxy.dart';
 import '../../player/models/backend_playback.dart';
+import '../../player/models/playback_instance_fallback.dart';
 import '../../player/states/player.dart';
 import '../../service.dart';
 import '../../settings/models/errors/invidious_service_error.dart';
@@ -60,12 +62,27 @@ class VideoCubit extends Cubit<VideoState> {
     final generation = ++_loadGeneration;
     final database = db;
     final profileId = database.profileId;
+    final api = service;
+    final backupEnabled = PlaybackInstanceFallback.preference(database) != null;
+    final serviceRevision = backupEnabled ? api.sessionRevision : null;
+    final sessionRevision =
+        backupEnabled ? settings.appCubit.state.sessionRevision : null;
+    final proxy = NetworkProxy.instance.config;
     final videoId = state.videoId;
     bool isCurrent() =>
         !isClosed &&
         generation == _loadGeneration &&
         identical(db, database) &&
         database.profileId == profileId;
+    bool connectionCurrent() =>
+        backupEnabled &&
+        isCurrent() &&
+        identical(service, api) &&
+        api.sessionRevision == serviceRevision &&
+        settings.appCubit.state.sessionRevision == sessionRevision &&
+        !NetworkProxy.instance.isChanging &&
+        identical(NetworkProxy.instance.config, proxy) &&
+        PlaybackInstanceFallback.preference(database) != null;
     emit(state.copyWith(
         loadingVideo: true,
         retryingVideo: false,
@@ -113,26 +130,72 @@ class VideoCubit extends Cubit<VideoState> {
       }
       // Enrich the details after publishing the playable saved candidate. This
       // request must neither delay playback nor replace it with a load error.
-      Video video = await service.getVideo(videoId,
-          onBackendRequest: (request) {
-        if (isCurrent() && local == null) {
-          emit(state.copyWith(requestedBackend: request, retryingVideo: false));
+      BackendPlayback? primary;
+      Object? primaryFailure;
+      Video video;
+      try {
+        video = await api.getVideo(videoId, onBackendRequest: (request) {
+          if (isCurrent() && local == null) {
+            primary = request;
+            emit(state.copyWith(
+                requestedBackend: request, retryingVideo: false));
+          }
+        },
+            loadObserver: VideoLoadObserver(
+                isCurrent: () =>
+                    isCurrent() &&
+                    (local == null ||
+                        local.playbackConnection!.matches(
+                            local.playbackConnection!.preferredServer)),
+                onRetry: () {
+                  if (isCurrent() && state.loadingVideo) {
+                    emit(state.copyWith(retryingVideo: true));
+                  }
+                }));
+      } catch (error, stack) {
+        final request = primary;
+        if (!connectionCurrent() ||
+            local != null ||
+            request == null ||
+            request.manualSelection ||
+            !isBackendRetryable(error)) {
+          rethrow;
         }
-      },
-          loadObserver: VideoLoadObserver(
-              isCurrent: () =>
-                  isCurrent() &&
-                  (local == null ||
-                      local.playbackConnection!
-                          .matches(local.playbackConnection!.preferredServer)),
-              onRetry: () {
-                if (isCurrent() && state.loadingVideo) {
-                  emit(state.copyWith(retryingVideo: true));
-                }
-              }));
+        emit(state.copyWith(retryingVideo: true));
+        final Video? backup;
+        try {
+          backup = await api.fetchPlaybackInstanceFallback(
+              Video(videoId: videoId, playbackConnection: request),
+              isCurrent: connectionCurrent);
+        } catch (_) {
+          Error.throwWithStackTrace(error, stack);
+        }
+        if (!isCurrent()) return;
+        if (!connectionCurrent() ||
+            backup == null ||
+            backup.videoId != videoId) {
+          rethrow;
+        }
+        primaryFailure = error;
+        video = backup;
+      }
       if (!isCurrent()) return;
-      final isLoggedIn = await service.isLoggedIn();
+      final isLoggedIn = await api.isLoggedIn();
       if (!isCurrent()) return;
+      if (primaryFailure != null) {
+        final route = video.playbackConnection;
+        final selected = route != null
+            ? database.getAccount(route.preferredServer.accountId)
+            : null;
+        if (!connectionCurrent() ||
+            route == null ||
+            !route.isInstanceFallback ||
+            selected == null ||
+            !route.matchesPlaybackConnection(database, selected)) {
+          throw primaryFailure;
+        }
+        route.allowInitialPlaybackHandoff();
+      }
       if (local != null) {
         final selected = await database.getCurrentlySelectedServer();
         if (!isCurrent() || !local.playbackConnection!.matches(selected)) {

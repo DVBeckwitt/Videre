@@ -1,12 +1,17 @@
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
+import 'package:clipious/player/models/playback_instance_fallback.dart';
+import 'package:clipious/player/models/playback_reliability.dart';
 import 'package:clipious/settings/models/db/person_profile.dart';
 import 'package:clipious/settings/models/db/server.dart';
+import 'package:clipious/subscription_management/services/subscription_account.dart';
 import 'package:clipious/utils/motion.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+
+import 'saved_account_setting.dart';
 
 Future<void> showProfilePicker(BuildContext context) {
   final app = context.read<AppCubit>();
@@ -242,6 +247,106 @@ class _ProfilePickerState extends State<ProfilePicker> {
     await _run(() => app.deleteProfile(profile.id));
   }
 
+  String _backupLabel(Server account, AppLocalizations locals) {
+    final label = savedAccountLabel(account, locals);
+    if (account.profileId == db.profileId) return label;
+    final profile =
+        _profiles.where((item) => item.id == account.profileId).firstOrNull;
+    return locals.playbackBackupSharedChoice(
+        profile?.name ?? locals.profiles, label);
+  }
+
+  Widget _reliabilityRow(String title, String outcome,
+          {bool backend = false}) =>
+      ListTile(
+        contentPadding: EdgeInsetsDirectional.only(start: backend ? 16 : 0),
+        dense: backend,
+        title: Text(title),
+        subtitle: Text(outcome),
+      );
+
+  Future<void> _showPlaybackReliability() async {
+    final locals = AppLocalizations.of(context)!;
+    final database = db;
+    final owner = database.forProfile(database.profileId);
+    List<Server> shared;
+    try {
+      shared = await PlaybackInstanceFallback.backupChoices(owner);
+    } catch (_) {
+      shared = const [];
+    }
+    if (!mounted ||
+        !identical(database, db) ||
+        db.profileId != owner.profileId) {
+      return;
+    }
+    final accounts = [
+      ..._accounts.where((account) => account.profileId == owner.profileId),
+      ...shared.where((account) => account.profileId != owner.profileId),
+    ];
+    String label(PlaybackReliabilityCount counts) => counts.attempts == 0
+        ? locals.playbackReliabilityEmpty
+        : locals.playbackReliabilityCounts(counts.successes, counts.failures);
+    ScrollPosition? scrollPosition;
+    void scroll(int direction) {
+      final position = scrollPosition;
+      if (position == null || !position.hasContentDimensions) return;
+      final offset =
+          position.pixels + direction * position.viewportDimension / 2;
+      position.jumpTo(offset
+          .clamp(position.minScrollExtent, position.maxScrollExtent)
+          .toDouble());
+    }
+
+    await showDialog<void>(
+      context: context,
+      animationStyle: AppMotion.dialogStyle(context),
+      builder: (context) => CallbackShortcuts(
+        bindings: {
+          const SingleActivator(LogicalKeyboardKey.arrowUp): () => scroll(-1),
+          const SingleActivator(LogicalKeyboardKey.arrowDown): () => scroll(1),
+        },
+        child: AlertDialog(
+          title: Text(locals.playbackReliability),
+          scrollable: true,
+          content: SizedBox(
+            width: 440,
+            child: ValueListenableBuilder<int>(
+              valueListenable: PlaybackReliability.revision,
+              builder: (context, _, __) {
+                scrollPosition = Scrollable.maybeOf(context)?.position;
+                return Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    for (final account in accounts) ...[
+                      _reliabilityRow(_backupLabel(account, locals),
+                          label(PlaybackReliability.account(owner, account))),
+                      for (final (index, backend)
+                          in (account.backendSelector?.options ?? []).indexed)
+                        _reliabilityRow(
+                            backend.label,
+                            label(PlaybackReliability.backend(
+                                owner, account, index)),
+                            backend: true),
+                    ],
+                  ],
+                );
+              },
+            ),
+          ),
+          actions: [
+            TextButton(
+              autofocus: true,
+              onPressed: () => Navigator.of(context).pop(),
+              child: Text(MaterialLocalizations.of(context).closeButtonLabel),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final locals = AppLocalizations.of(context)!;
@@ -323,6 +428,94 @@ class _ProfilePickerState extends State<ProfilePicker> {
                   child: Text(locals.lastProfileRequired),
                 ),
               if (_accounts.isNotEmpty) ...[
+                const Divider(),
+                SavedAccountSetting(
+                  key: const ValueKey('playback-backup-instance-setting'),
+                  title: locals.playbackBackupInstance,
+                  defaultLabel: locals.playbackBackupInstanceOff,
+                  unavailableLabel: locals.playbackBackupInstanceUnavailable,
+                  help: locals.playbackBackupInstanceHelp,
+                  automaticChoice: (
+                    id: PlaybackInstanceFallback.bestSaved,
+                    label: locals.playbackBackupInstanceBest,
+                  ),
+                  icon: Icons.swap_horiz,
+                  revision: PlaybackInstanceFallback.revision,
+                  preference: PlaybackInstanceFallback.preference,
+                  choices: PlaybackInstanceFallback.backupChoices,
+                  choiceId: PlaybackInstanceFallback.choiceId,
+                  choiceLabel: _backupLabel,
+                  save: PlaybackInstanceFallback.save,
+                  enabled: !_busy,
+                ),
+                ValueListenableBuilder<int>(
+                  valueListenable: PlaybackInstanceFallback.revision,
+                  builder: (context, _, __) {
+                    final owner = db.forProfile(db.profileId);
+                    return SwitchListTile(
+                      key: const ValueKey('playback-backup-sharing-setting'),
+                      secondary: const Icon(Icons.people_outline),
+                      title: Text(locals.playbackBackupSharing),
+                      subtitle: Text(locals.playbackBackupSharingHelp),
+                      value: PlaybackInstanceFallback.sharingEnabled(owner),
+                      onChanged: _busy
+                          ? null
+                          : (enabled) => _run(() =>
+                              PlaybackInstanceFallback.saveSharing(
+                                  owner, enabled)),
+                    );
+                  },
+                ),
+                ValueListenableBuilder<int>(
+                  valueListenable: PlaybackInstanceFallback.revision,
+                  builder: (context, _, __) {
+                    final owner = db.forProfile(db.profileId);
+                    return ListTile(
+                      leading: const Icon(Icons.replay),
+                      title: Text(locals.playbackBackendRetries),
+                      subtitle: Text(locals.playbackBackendRetriesHelp),
+                      trailing: DropdownButton<int>(
+                        key: const ValueKey('playback-backend-retries-setting'),
+                        value: PlaybackInstanceFallback.backendRetries(owner),
+                        items: [
+                          for (var count = 0;
+                              count <=
+                                  PlaybackInstanceFallback.maxBackendRetries;
+                              count++)
+                            DropdownMenuItem(
+                                value: count, child: Text('$count')),
+                        ],
+                        onChanged: _busy
+                            ? null
+                            : (count) {
+                                if (count != null) {
+                                  _run(() => PlaybackInstanceFallback
+                                      .saveBackendRetries(owner, count));
+                                }
+                              },
+                      ),
+                    );
+                  },
+                ),
+                ListTile(
+                  key: const ValueKey('playback-reliability-setting'),
+                  leading: const Icon(Icons.bar_chart),
+                  title: Text(locals.playbackReliability),
+                  onTap: _busy ? null : _showPlaybackReliability,
+                ),
+                SavedAccountSetting(
+                  key: const ValueKey('subscription-account-setting'),
+                  title: locals.subscriptionAccount,
+                  defaultLabel: locals.subscriptionAccountDefault,
+                  unavailableLabel: locals.subscriptionAccountUnavailable,
+                  help: locals.subscriptionAccountHelp,
+                  icon: Icons.subscriptions_outlined,
+                  revision: SubscriptionAccount.revision,
+                  preference: SubscriptionAccount.preference,
+                  choices: SubscriptionAccount.choices,
+                  save: SubscriptionAccount.save,
+                  enabled: !_busy,
+                ),
                 const Divider(),
                 Align(
                     alignment: Alignment.centerLeft,

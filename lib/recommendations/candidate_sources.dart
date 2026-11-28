@@ -13,12 +13,12 @@ import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/models/errors/no_server_selected.dart';
+import 'package:clipious/subscription_management/services/subscription_account.dart';
 import 'package:clipious/utils/interfaces/db.dart';
 import 'package:clipious/utils/models/image_object.dart';
 import 'package:clipious/utils/video_post_processing.dart';
 import 'package:clipious/videos/models/db/history_video_cache.dart';
 import 'package:clipious/videos/models/video.dart';
-import 'package:clipious/videos/services/watch_history.dart';
 
 /// Discovery was replaced by a profile, connection, or shelf change.
 class RecommendationCandidatesCancelled implements Exception {
@@ -59,9 +59,12 @@ class RecommendationCandidates {
     List<Video> videos
   })>{};
   final _onlineSubscriptionCreators = <String>{};
+  int? _subscriptionRevision;
 
   Set<String> get onlineSubscriptionCreators =>
-      Set.unmodifiable(_onlineSubscriptionCreators);
+      _subscriptionRevision == SubscriptionAccount.revision.value
+          ? Set.unmodifiable(_onlineSubscriptionCreators)
+          : const {};
 
   void clearVideoDiscovery() {
     _videoSearches.clear();
@@ -71,9 +74,9 @@ class RecommendationCandidates {
   Future<bool> hasVideoDiscoverySubscriptions() async {
     if (!_current) return false;
     try {
-      final server = await _database.getCurrentlySelectedServer();
+      final account = await SubscriptionAccount.resolve(_database);
       if (!_current) return false;
-      if (hasHistoryAccount(server)) return true;
+      if (account != null) return true;
       final offline = await _database.getOfflineSubscriptions();
       return _current &&
           offline.any((channel) => _channelId.hasMatch(channel.channelId));
@@ -299,12 +302,26 @@ class RecommendationCandidates {
       }
       if (reserveSubscription) {
         try {
-          if (hasHistoryAccount(server)) {
-            await check();
+          final revision = SubscriptionAccount.revision.value;
+          final account = await SubscriptionAccount.resolve(_database);
+          if (account != null) {
+            final route = BackendPlayback(account);
+            Future<void> checkAccount() async {
+              await check();
+              final current = await SubscriptionAccount.resolve(_database);
+              if (revision != SubscriptionAccount.revision.value ||
+                  current == null ||
+                  !route.matchesConnection(current)) {
+                throw const RecommendationCandidatesCancelled();
+              }
+            }
+
+            await checkAccount();
             final feed = await api.getVideoRecommendationCandidates(
-                server: server, beforeRequest: check);
-            await check();
+                server: account, beforeRequest: checkAccount);
+            await checkAccount();
             final videos = _videos(feed, limit: 20);
+            _subscriptionRevision = revision;
             _onlineSubscriptionCreators
               ..clear()
               ..addAll(

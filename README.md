@@ -38,7 +38,7 @@ Captured from Videre 1.22.46 on Android. The player shows *Spring* © Blender Fo
 
 Add or switch instances in **Settings → Manage servers**. Saved logins stay with their original instance. Open **Profiles** from Home or Settings to manage people. Profiles organize a shared device without a PIN.
 
-When your instance offers multiple backends and automatic fallback is enabled, Videre tries your selected backend first. For an eligible playback or download failure, it can try up to two alternatives on the same account. It favors backends that worked recently and temporarily skips ones that reported they were blocked or still starting. It learns from ordinary requests and respects the server’s retry deadline. **Connection help** checks the video API and offers retry, instance switching, or a link to the instance’s video page.
+When automatic backend fallback is enabled for an instance, Videre tries the selected backend first and can try eligible alternatives on the same account. In **Profiles**, choose how many alternate backends playback may try and whether to use a saved backup instance. **Playback reliability** shows the starts and failures Videre uses to rank eligible retries. **Connection help** checks the video API and offers retry, instance switching, or a link to the instance’s video page. [Profile settings](./docs/profiles-and-authentication.md#playback-and-subscription-accounts)
 
 Videre suggests NerdVPN and ChocolateMoo from the official Invidious directory, plus the project-verified DVBeckwitt instance. Test your choice before saving, since availability can change. [Official Invidious directory](https://docs.invidious.io/instances/)
 

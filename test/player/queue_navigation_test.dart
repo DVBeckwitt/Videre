@@ -27,6 +27,7 @@ import 'package:clipious/player/models/media_event.dart';
 import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/player/models/music_queue_shuffle.dart';
 import 'package:clipious/player/models/playback_queue.dart';
+import 'package:clipious/player/models/playback_instance_fallback.dart';
 import 'package:clipious/player/models/sleep_timer.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/playlists/models/playlist_reference.dart';
@@ -132,7 +133,8 @@ class _AdjacentService extends Service {
       VideoLoadObserver? loadObserver}) async {
     requests.add(videoId);
     final connection = BackendPlayback(
-        serverOverride ?? await db.getCurrentlySelectedServer());
+        serverOverride ?? await db.getCurrentlySelectedServer(),
+        backendRetries: PlaybackInstanceFallback.backendRetries(db));
     await blocked[videoId]?.future;
     final source = sources[videoId] = Object();
     return Video(
@@ -2886,6 +2888,30 @@ void main() {
         expect(player.state.playQueue, ['c']);
       });
     }
+
+    test('a preloaded next song uses the retry limit saved before activation',
+        () async {
+      final selector = BackendSelector('ROUTE',
+          const [BackendOption('0', 'First'), BackendOption('1', 'Second')]);
+      final selected =
+          selector.withSelection(await db.getCurrentlySelectedServer(), '0');
+      await db.upsertServer(selected);
+      await open(['a', 'b']);
+      await until(() => readyIds().contains('b'));
+      final warmed = ready.single as Video;
+      expect(warmed.playbackConnection?.backendRetryLimit, 2);
+      expect(warmed.playbackConnection?.canRetry, isTrue);
+
+      await PlaybackInstanceFallback.saveBackendRetries(db, 0);
+      final next = player.stream.firstWhere((s) => s.currentQueueId == 'b');
+      player.playNext();
+      final playing =
+          (await next.timeout(const Duration(seconds: 3))).currentlyPlaying!;
+      expect(catalog.requests.where((id) => id == 'b'), hasLength(2));
+      expect(playing.playbackSourceId, isNot(same(warmed.playbackSourceId)));
+      expect(playing.playbackConnection?.backendRetryLimit, 0);
+      expect(playing.playbackConnection?.canRetry, isFalse);
+    });
 
     test('resolves both neighbors by occurrence without warming distant songs',
         () async {

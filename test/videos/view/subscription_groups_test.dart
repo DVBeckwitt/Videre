@@ -43,7 +43,8 @@ class _SubscriptionService extends Service {
       {int? maxResults,
       int? page,
       bool saveLastSeen = true,
-      Server? serverOverride}) async {
+      Server? serverOverride,
+      Future<void> Function(Server)? beforeRequest}) async {
     final requested = page ?? 1;
     pages.add(requested);
     return UserFeed([], [
@@ -89,6 +90,8 @@ void main() {
     service = fake;
     database = await createPlayerTestDatabase();
     db = database;
+    await database.upsertServer(const Server(
+        url: 'https://subscriptions.example', authToken: 'test-token'));
     await db.addOfflineSubscription(const OfflineSubscription(
         channelId: _sharedId, channelName: 'Local channel name'));
   });

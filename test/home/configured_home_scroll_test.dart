@@ -63,14 +63,12 @@ class _SubscriptionFeed extends Service {
   }
 
   @override
-  Future<bool> isLoggedIn() async => true;
-
-  @override
   Future<UserFeed> getUserFeed({
     int? maxResults,
     int? page,
     bool saveLastSeen = true,
     Server? serverOverride,
+    Future<void> Function(Server)? beforeRequest,
   }) async {
     final number = page ?? 1;
     pages.add(number);
@@ -101,6 +99,8 @@ void main() {
     late TestPlayerCubit player;
     await tester.runAsync(() async {
       db = await SembastSqfDb.createInMemory();
+      await db.upsertServer(const Server(
+          url: 'https://subscriptions.example', authToken: 'fixture'));
       service = feeds;
       await db.upsertHomeLayout(layout);
       app = TestAppCubit(AppState(0, null, layout));

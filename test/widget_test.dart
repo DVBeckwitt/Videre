@@ -208,7 +208,8 @@ class _TestService extends Service {
       {int? maxResults,
       int? page,
       bool saveLastSeen = true,
-      Server? serverOverride}) async {
+      Server? serverOverride,
+      Future<void> Function(Server)? beforeRequest}) async {
     feedRequests.add(page ?? 1);
     if (failNextFeed) {
       failNextFeed = false;

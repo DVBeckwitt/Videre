@@ -9,9 +9,12 @@ import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/main.dart' as app_main;
 import 'package:clipious/media_handler.dart';
+import 'package:clipious/network/gateway_context.dart';
 import 'package:clipious/network/nerdvpn_origin.dart';
 import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/player/models/media_event.dart';
+import 'package:clipious/player/models/playback_instance_fallback.dart';
+import 'package:clipious/player/models/playback_reliability.dart';
 import 'package:clipious/player/models/video_quality.dart';
 import 'package:clipious/player/services/watch_local_subtitles.dart';
 import 'package:clipious/player/states/player.dart';
@@ -87,6 +90,7 @@ void main() {
   late List<int?> initialDashHeights;
   late List<int> trackHeights;
   late Set<String> failedSources;
+  late Set<String> transientSources;
   late Set<String> rateLimitedSources;
   late Map<String, Completer<void>> heldSources;
   late Service previousService;
@@ -111,6 +115,7 @@ void main() {
     initialDashHeights = [];
     trackHeights = [];
     failedSources = {};
+    transientSources = {};
     rateLimitedSources = {};
     heldSources = {};
     messenger.setMockMessageHandler(
@@ -133,6 +138,10 @@ void main() {
         if (rateLimitedSources.contains(uri)) {
           throw PlatformException(
               code: 'VideoError', details: {'nerdVpnRateLimited': true});
+        }
+        if (transientSources.contains(uri)) {
+          throw PlatformException(
+              code: 'VideoError', details: {'backendRetryable': true});
         }
         if (failedSources.contains(uri)) {
           throw PlatformException(code: 'VideoError');
@@ -174,6 +183,202 @@ void main() {
           key: GlobalKey()),
       player,
       settings);
+
+  for (final outcome in [
+    'transient',
+    'denied',
+    'rate limited',
+    'denied then transient',
+  ]) {
+    test('Watch backup routing keeps its scope after a $outcome failure',
+        () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+      final selected = (await db.getCurrentlySelectedServer())
+          .copyWith(customHeaders: {'X-Primary-Fixture': 'selected-account'});
+      await db.upsertServer(selected);
+      const backup = Server(
+          url: 'https://backup.example',
+          customHeaders: {'X-Backup-Fixture': 'backup-account'});
+      await db.upsertServer(backup);
+      await PlaybackInstanceFallback.save(db, backup.accountId);
+      final mixedFailures = outcome == 'denied then transient';
+      final original =
+          _video('watch_video', heights: mixedFailures ? [480, 360] : [360])
+              .copyWith(
+                  queueEntryId: 'entry-1',
+                  playbackConnection: BackendPlayback(selected));
+      final alternate =
+          _video(original.videoId, heights: [360], serverUrl: backup.url);
+      final primaryUrls =
+          original.formatStreams!.reversed.map((source) => source.url).toList();
+      final primaryUrl = primaryUrls.first;
+      final backupUrl = alternate.formatStreams!.single.url;
+      final requests = <http.Request>[];
+      service.httpClient.close();
+      service = Service(httpClient: MockClient((request) async {
+        requests.add(request);
+        return http.Response(jsonEncode(alternate.toJson()), 200,
+            headers: {'content-type': 'application/json'});
+      }));
+      await player.close();
+      player = TestPlayerCubit(
+          PlayerState.init([original])
+              .copyWith(currentlyPlaying: original, isHidden: false),
+          settings);
+      final video = create(original);
+      try {
+        if (outcome == 'transient') {
+          final recorded = Completer<void>();
+          void checkRecorded() {
+            if (!recorded.isCompleted &&
+                PlaybackReliability.account(db, selected).failures > 0 &&
+                PlaybackReliability.account(db, backup).successes > 0) {
+              recorded.complete();
+            }
+          }
+
+          PlaybackReliability.revision.addListener(checkRecorded);
+          addTearDown(
+              () => PlaybackReliability.revision.removeListener(checkRecorded));
+          transientSources.add(primaryUrl);
+          final held = heldSources[backupUrl] = Completer<void>();
+          final playback =
+              video.playVideo(false, startAt: const Duration(seconds: 12));
+          await _flush();
+          expect(sources, [primaryUrl, backupUrl]);
+          expect(player.state.currentlyPlaying, same(original));
+          held.complete();
+          await playback;
+          expect(requests.single.url.origin, backup.url);
+          expect(requests.single.headers['X-Backup-Fixture'], 'backup-account');
+          expect(requests.single.headers['X-Primary-Fixture'], isNull);
+          final loaded = nativeSources.last;
+          expect(loaded['headers']['X-Backup-Fixture'], 'backup-account');
+          expect(loaded['headers']['X-Primary-Fixture'], isNull);
+          expect(loaded['playbackCache']['origin'], backup.url);
+          expect(loaded['initialPositionMs'], 12000);
+          expect(
+              player.state.currentlyPlaying?.playbackConnection
+                  ?.isInstanceFallback,
+              isTrue);
+          await recorded.future.timeout(const Duration(seconds: 2));
+          expect(PlaybackReliability.account(db, selected).attempts, 1);
+          expect(PlaybackReliability.account(db, backup).attempts, 1);
+        } else {
+          (outcome == 'rate limited' ? rateLimitedSources : failedSources)
+              .add(primaryUrl);
+          if (mixedFailures) transientSources.add(primaryUrls.last);
+          await video.playVideo(false);
+          expect(sources, primaryUrls);
+          expect(requests, isEmpty);
+          expect(player.state.currentlyPlaying, same(original));
+          await _flush();
+          expect(PlaybackReliability.account(db, selected).attempts, 0);
+          expect(PlaybackReliability.account(db, backup).attempts, 0);
+        }
+        expect(player.state.currentQueueId, 'entry-1');
+        expect((await db.getCurrentlySelectedServer()).accountId,
+            selected.accountId);
+      } finally {
+        await video.close();
+      }
+    });
+  }
+
+  for (final staged in [false, true]) {
+    test('Shared Watch backup detaches on consent revocation (staged: $staged)',
+        () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+      final sourceProfile = db.profileId;
+      final selected = (await db.getCurrentlySelectedServer())
+          .copyWith(customHeaders: {'X-Source-Fixture': 'source-account'});
+      await db.upsertServer(selected);
+      final person = await db.createProfile('Backup viewer');
+      final destination = db.forProfile(person.id);
+      final backup = Server(
+          profileId: person.id,
+          url: 'https://shared-backup.example',
+          customHeaders: const {'X-Backup-Fixture': 'destination-account'});
+      await destination.upsertServer(backup);
+      await PlaybackInstanceFallback.saveSharing(destination, true);
+      await PlaybackInstanceFallback.save(
+          db, PlaybackInstanceFallback.choiceId(db, backup));
+      final original = _video('watch_video', heights: [360]).copyWith(
+          queueEntryId: 'shared-watch-entry',
+          playbackConnection: BackendPlayback(selected));
+      final alternate =
+          _video(original.videoId, heights: [360], serverUrl: backup.url)
+              .copyWith(captions: [Caption('English', 'en', '/captions')]);
+      final shared = alternate.copyWith(
+          queueEntryId: original.queueEntryId,
+          playbackConnection:
+              BackendPlayback.instanceFallback(selected, backup));
+      final backupUrl = shared.formatStreams!.single.url;
+      final primaryUrl = original.formatStreams!.single.url;
+      final startingVideo = staged ? original : shared;
+      final requests = <http.Request>[];
+      service.httpClient.close();
+      service = Service(httpClient: MockClient((request) async {
+        requests.add(request);
+        return http.Response(jsonEncode(alternate.toJson()), 200,
+            headers: {'content-type': 'application/json'});
+      }));
+      await player.close();
+      player = TestPlayerCubit(
+          PlayerState.init([original])
+              .copyWith(currentlyPlaying: startingVideo, isHidden: false),
+          settings);
+      final video = create(startingVideo);
+      final held = staged ? (heldSources[backupUrl] = Completer<void>()) : null;
+      try {
+        if (staged) transientSources.add(primaryUrl);
+        final preparing = video.playVideo(false);
+        if (staged) {
+          await _flush();
+          expect(player.state.currentlyPlaying, same(original));
+        } else {
+          await preparing;
+        }
+        final native = nativeSources.last;
+        expect(native['uri'], backupUrl);
+        expect(native['playbackCache'], isNull);
+        expect(native['headers']['X-Source-Fixture'], isNull);
+        expect(native['headers']['X-Backup-Fixture'], 'destination-account');
+        expect(
+            native['headers'][gatewayContextHeader],
+            GatewayRequestContext.forAccount(
+                    backup.profileId, backup.accountId, backup.url)!
+                .encoded);
+        final loadCaptions = video.videoController!.betterPlayerDataSource!
+            .subtitles!.single.contentLoader!;
+
+        if (staged) {
+          await PlaybackInstanceFallback.saveSharing(destination, false);
+        } else {
+          await PlaybackInstanceFallback.save(db, null);
+        }
+        await _flush();
+        expect(video.videoController, isNull);
+        await expectLater(loadCaptions(), throwsStateError);
+        held?.complete();
+        await preparing;
+        expect(sources, [if (staged) primaryUrl, backupUrl]);
+        expect(requests.map((request) => request.url.path),
+            [if (staged) '/api/v1/videos/watch_video']);
+        expect(player.state.mediaEvent.state, MediaState.error);
+        expect(player.state.currentlyPlaying, same(startingVideo));
+        expect(player.state.currentQueueId, 'shared-watch-entry');
+        expect(db.profileId, sourceProfile);
+        expect((await db.getCurrentlySelectedServer()).accountId,
+            selected.accountId);
+      } finally {
+        if (held != null && !held.isCompleted) held.complete();
+        await video.close();
+      }
+    });
+  }
 
   test('Retry on the same video uses the newly approved companion', () async {
     mockMediaCompanionTransport();

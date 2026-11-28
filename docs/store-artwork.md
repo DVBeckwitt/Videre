@@ -12,9 +12,9 @@ The newly authored mark and compositions follow the repository's
 [AGPL-3.0 license](../LICENSE).
 
 The 512 × 512 store icon, 1024 × 500 feature graphic and 1280 × 720 TV banner
-are PNG renders of those vectors, copied to
-`fastlane/metadata/android/en-US/images/`. No generated raster illustration or
-mock UI is used in these assets.
+are PNG renders of those vectors in `fastlane/metadata/android/en-US/images/`.
+The smaller TV banner used by the app is in `android/app/src/main/res/drawable/`.
+No generated raster illustration or mock UI is used in these assets.
 
 ## README figures
 

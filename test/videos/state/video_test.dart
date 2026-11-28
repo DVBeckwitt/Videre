@@ -24,6 +24,7 @@ import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/network/nerdvpn_access.dart';
 import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/player/models/media_event.dart';
+import 'package:clipious/player/models/playback_instance_fallback.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/player/states/video_player.dart';
 import 'package:clipious/player/views/components/player.dart' as widgets;
@@ -31,6 +32,7 @@ import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/backend_selector.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/db/settings.dart';
+import 'package:clipious/settings/models/errors/invidious_service_error.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/adaptive_format.dart';
@@ -86,6 +88,10 @@ class ControlledMetadataService extends FakeService {
   final responses = <Completer<Video>>[];
   final observers = <void Function(BackendPlayback)?>[];
   final loadObservers = <VideoLoadObserver?>[];
+  final backupStarted = Completer<void>();
+  final backupResponse = Completer<Video?>();
+  final backupRequests = <Video>[];
+  bool Function()? backupCurrent;
 
   @override
   Future<Video> getVideo(String videoId,
@@ -97,6 +103,15 @@ class ControlledMetadataService extends FakeService {
     observers.add(onBackendRequest);
     loadObservers.add(loadObserver);
     return response.future;
+  }
+
+  @override
+  Future<Video?> fetchPlaybackInstanceFallback(Video original,
+      {required bool Function() isCurrent}) {
+    backupRequests.add(original);
+    backupCurrent = isCurrent;
+    if (!backupStarted.isCompleted) backupStarted.complete();
+    return backupResponse.future;
   }
 }
 
@@ -373,10 +388,87 @@ void main() {
             response.complete(Video(videoId: 'metadata-status'));
           }
         }
+        if (!metadata.backupResponse.isCompleted) {
+          metadata.backupResponse.complete(null);
+        }
         await downloads.close();
         if (!player.isClosed) await player.close();
         await settings.close();
         await app.close();
+      });
+
+      Future<BackendPlayback> enableBackup() async {
+        final selected = await db.getCurrentlySelectedServer();
+        const backup =
+            Server(url: 'https://backup.example', id: 'watch-backup');
+        await db.upsertServer(backup);
+        await PlaybackInstanceFallback.save(db, backup.accountId);
+        final previous = metadata.responses.single;
+        metadata.responses.clear();
+        metadata.observers.clear();
+        metadata.loadObservers.clear();
+        unawaited(video.onReady());
+        previous.complete(Video(videoId: 'metadata-status'));
+        metadata.observers.single!(BackendPlayback(selected));
+        return BackendPlayback.instanceFallback(selected, backup);
+      }
+
+      test('a terminal retryable metadata failure opens one selected backup',
+          () async {
+        final backup = await enableBackup();
+        final loaded = video.stream.firstWhere((state) => !state.loadingVideo);
+        metadata.responses.single.completeError(
+            InvidiousServiceError('Unavailable', statusCode: 503));
+        await metadata.backupStarted.future.timeout(const Duration(seconds: 3));
+        expect(video.state.retryingVideo, isTrue);
+        expect(metadata.backupRequests.single.playbackConnection!.server.url,
+            'https://inv.example');
+        metadata.backupResponse.complete(Video(
+            videoId: 'metadata-status',
+            title: 'Backup result',
+            playbackConnection: backup));
+        await loaded;
+        expect(metadata.backupRequests, hasLength(1));
+        expect(video.state.video?.title, 'Backup result');
+        expect(video.state.video?.playbackConnection, same(backup));
+        expect(video.state.retryingVideo, isFalse);
+        expect(
+            (await db.getCurrentlySelectedServer()).url, 'https://inv.example');
+      });
+
+      for (final status in [401, 403, 429, 503]) {
+        test('HTTP $status with access limits never opens the backup',
+            () async {
+          await enableBackup();
+          final failed =
+              video.stream.firstWhere((state) => !state.loadingVideo);
+          metadata.responses.single.completeError(InvidiousServiceError(
+              'Request not allowed',
+              statusCode: status,
+              retryAfter: status == 503 ? const Duration(seconds: 60) : null));
+          await failed;
+          expect(metadata.backupRequests, isEmpty);
+          expect(video.state.error, 'Request not allowed');
+        });
+      }
+
+      test('a fresh metadata request retires a pending backup', () async {
+        final backup = await enableBackup();
+        metadata.responses.single.completeError(
+            InvidiousServiceError('Unavailable', statusCode: 503));
+        await metadata.backupStarted.future.timeout(const Duration(seconds: 3));
+        final retry = video.onReady();
+        expect(metadata.backupCurrent!(), isFalse);
+        metadata.backupResponse.complete(Video(
+            videoId: 'metadata-status',
+            title: 'Stale backup',
+            playbackConnection: backup));
+        metadata.responses.last.complete(
+            Video(videoId: 'metadata-status', title: 'Primary result'));
+        await retry;
+        expect(video.state.video?.title, 'Primary result');
+        expect(video.state.error, isEmpty);
+        expect(metadata.backupRequests, hasLength(1));
       });
 
       test('publishes each metadata request and retains it on success',

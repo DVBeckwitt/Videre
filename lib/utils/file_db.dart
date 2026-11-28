@@ -216,6 +216,21 @@ class FileDB extends IDbClient {
     return (await getGenericSettings()).subscriptionNotifications;
   }
 
+  /// Mirror the opt-in route without adding a second account's credentials.
+  /// Keep the preference commit under the same lock as session mirror updates.
+  Future<void> setSubscriptionNotificationAccountId(String? accountId,
+      {Future<void> Function()? commit}) {
+    if (_fixedProfileId == null) {
+      throw StateError('Bind subscription notification settings to a profile');
+    }
+    // Publish an explicit pin before persisting it. When unpinning, wait
+    // until the default has committed before allowing the worker to use it.
+    return _updateGenericSettings((settings) async {
+      if (accountId == null) await commit?.call();
+      settings.subscriptionNotificationAccountId = accountId;
+    }, afterWrite: accountId == null ? null : commit);
+  }
+
   Future<void> setLocale(String? l) =>
       _updateGenericSettings((settings) => settings.locale = l);
 
@@ -231,7 +246,8 @@ class FileDB extends IDbClient {
       });
 
   Future<void> _updateGenericSettings(
-          FutureOr<void> Function(FileDbGenericSettings) update) =>
+          FutureOr<void> Function(FileDbGenericSettings) update,
+          {Future<void> Function()? afterWrite}) =>
       _updateFile(_genericSettings, (file) async {
         final active = await _readGenericSettings(file);
         final id = _fixedProfileId ?? active.profileId;
@@ -247,6 +263,7 @@ class FileDB extends IDbClient {
           await _writeMapToFile(file, settings.toJson());
           _lastProfileId = id;
         }
+        await afterWrite?.call();
       });
 
   Future<FileDbGenericSettings> getGenericSettings() async {
@@ -658,12 +675,19 @@ class FileDB extends IDbClient {
         _log.fine('No server selected in this profile');
       }
       settings.locale = database.getSettings(localeSettingName)?.value;
+      final subscriptionAccountId =
+          database.getSettings(subscriptionAccountSetting)?.value;
+      settings.subscriptionNotificationAccountId = subscriptionAccountId;
       settings.server = selected;
       // Check again after filesystem work before publishing the new snapshot.
       if (db.profileId != id) return;
       final publishing = selected;
       await _writeMapToFile(file, settings.toJson(), stillCurrent: () {
-        if (db.profileId != id) return false;
+        if (db.profileId != id ||
+            database.getSettings(subscriptionAccountSetting)?.value !=
+                subscriptionAccountId) {
+          return false;
+        }
         if (publishing == null) {
           return database
               .getServers()
@@ -893,14 +917,27 @@ class FileDbGenericSettings {
       fromJson: _notificationServerFromJson, toJson: _notificationServerToJson)
   Server? server;
   bool subscriptionNotifications = false;
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  String? subscriptionNotificationAccountId;
   String? locale;
 
   FileDbGenericSettings();
 
   factory FileDbGenericSettings.fromJson(Map<String, dynamic> json) =>
-      _$FileDbGenericSettingsFromJson(json);
+      _$FileDbGenericSettingsFromJson(json)
+        ..subscriptionNotificationAccountId =
+            switch (json['subscriptionNotificationAccountId']) {
+          final String id => id,
+          null => null,
+          _ => '',
+        };
 
-  Map<String, dynamic> toJson() => _$FileDbGenericSettingsToJson(this);
+  Map<String, dynamic> toJson() => {
+        ..._$FileDbGenericSettingsToJson(this),
+        if (subscriptionNotificationAccountId != null)
+          'subscriptionNotificationAccountId':
+              subscriptionNotificationAccountId,
+      };
 }
 
 Server? _notificationServerFromJson(Map<String, dynamic>? value) =>

@@ -17,6 +17,10 @@ import 'models/backend_playback.dart';
 
 enum _MediaRedirect { trustedCompanion, blockedOrigin }
 
+class _ManifestConsentWithdrawn implements Exception {
+  const _ManifestConsentWithdrawn();
+}
+
 /// Checks instance DASH manifests before the native player can retry a known
 /// failure. Signed URLs are kept only for this playback attempt.
 class DashManifestResolver {
@@ -142,7 +146,9 @@ class DashManifestResolver {
   }
 
   Future<({http.Response response, Uri target})> _get(Uri uri, Server server,
-      {Duration? budget, bool playbackManifest = false}) async {
+      {Duration? budget,
+      bool playbackManifest = false,
+      bool Function()? isCurrent}) async {
     // Do not forward custom instance credentials through an untrusted redirect.
     var expired = false;
     // A cold Tor circuit can outlast the ordinary five-second probe. Allow the
@@ -198,6 +204,7 @@ class DashManifestResolver {
       var target = uri;
       for (var redirects = 0;; redirects++) {
         beforeRequest?.call();
+        if (isCurrent?.call() == false) throw const _ManifestConsentWithdrawn();
         final request = http.Request('GET', target)..followRedirects = false;
         request.headers.addAll(server.headersForUrl(target.toString()) ?? {});
         final stream = playbackManifest
@@ -205,6 +212,7 @@ class DashManifestResolver {
                 server, target, () => client.send(request))
             : await client.send(request);
         final response = await read(stream);
+        if (isCurrent?.call() == false) throw const _ManifestConsentWithdrawn();
         final location = response.headers['location'];
         if (expired ||
             response.statusCode < 300 ||
@@ -230,13 +238,15 @@ class DashManifestResolver {
 
   /// Track discovery reads only the selected frontend. A companion handoff is
   /// left to Android; failure to list tracks does not interrupt the decoder.
-  Future<String?> loadTrackManifest(String url, Server server) async {
+  Future<String?> loadTrackManifest(String url, Server server,
+      {bool Function()? isCurrent}) async {
     final target = Uri.tryParse(url);
     if (target == null || !_sameOrigin(target, Uri.parse(server.url))) {
       return null;
     }
     try {
-      final result = await _get(target, server, playbackManifest: true);
+      final result = await _get(target, server,
+          playbackManifest: true, isCurrent: isCurrent);
       if (result.response.statusCode != 200) return null;
       return utf8.decode(result.response.bodyBytes);
     } catch (_) {
@@ -252,12 +262,15 @@ class DashManifestResolver {
   /// The returned URL is the body’s base, including any validated same-origin
   /// redirect. Neither the body nor its signature is cached.
   /// [requireManifest] fetches even already-signed URLs for download discovery.
+  /// [isCurrent] guards every request for a shared profile route.
   Future<String?> resolve(String url, String videoId, Server server,
       {bool throwRetryable = false,
       bool requireManifest = false,
       void Function()? onMissingCheck,
       void Function()? onMediaOriginBlocked,
-      void Function(String content)? onManifest}) async {
+      void Function(String content)? onManifest,
+      bool Function()? isCurrent}) async {
+    if (isCurrent?.call() == false) return null;
     bool? provideManifest(http.Response response, Uri requested) {
       if (onManifest == null) return null;
       final content = _inlineManifest(response, requested);
@@ -336,9 +349,11 @@ class DashManifestResolver {
 
     // Remember route behavior, never signed URLs or manifest bodies. Android
     // VOD can share one fresh body between native playback and track discovery.
-    _routes.removeWhere((_, entry) => !entry.expires.isAfter(_now()));
+    if (isCurrent == null) {
+      _routes.removeWhere((_, entry) => !entry.expires.isAfter(_now()));
+    }
     final route = _route(manifest, server);
-    final cached = _routes[route];
+    final cached = isCurrent == null ? _routes[route] : null;
     final warmUnsigned = cached?.needsCheck == false;
     var probingWarmUnsigned = warmUnsigned;
     if (!requireManifest &&
@@ -347,6 +362,7 @@ class DashManifestResolver {
       return url;
     }
     void remember(bool needsCheck, {String? nativeManifestPath}) {
+      if (isCurrent != null) return;
       // A confirmed signature can replace an unsigned hint. A warm probe
       // cannot replace newer signed evidence or recreate an invalidated route.
       final current = _routes[route];
@@ -367,7 +383,8 @@ class DashManifestResolver {
       if (cached?.needsCheck != true) {
         final (:response, :target) = await _get(manifest, server,
             budget: probingWarmUnsigned ? _warmFetchBudget : null,
-            playbackManifest: onMediaOriginBlocked != null);
+            playbackManifest: onMediaOriginBlocked != null,
+            isCurrent: isCurrent);
         checkRetryable(response);
         if (response.statusCode == 200) {
           final reused = provideManifest(response, target);
@@ -413,7 +430,7 @@ class DashManifestResolver {
         'quality': 'dash',
         'local': manifest.queryParameters['local'] ?? 'false',
       });
-      final page = (await _get(watch, server)).response;
+      final page = (await _get(watch, server, isCurrent: isCurrent)).response;
       checkRetryable(page);
       if (page.statusCode != 200) return null;
       final document = html.parse(page.body);
@@ -462,7 +479,8 @@ class DashManifestResolver {
         // Keep the frontend route that already works on instances advertising
         // multiple sources. Probe only one signed address.
         final (response: retry, :target) = await _get(frontend, server,
-            playbackManifest: onMediaOriginBlocked != null);
+            playbackManifest: onMediaOriginBlocked != null,
+            isCurrent: isCurrent);
         checkRetryable(retry);
         if (retry.statusCode == 200) {
           final reused = provideManifest(retry, target);
@@ -484,6 +502,9 @@ class DashManifestResolver {
       if (companion != null) return companion;
       if (blockedWatchSource) onMediaOriginBlocked!();
     } catch (error) {
+      if (error is _ManifestConsentWithdrawn || isCurrent?.call() == false) {
+        return null;
+      }
       if (error is NerdVpnAccessRequired ||
           error is InvidiousServiceError ||
           error is HandshakeException ||

@@ -106,6 +106,7 @@ const navigationBarLabelBehaviorSettingName = 'navigation-bar-label-behavior';
 const distractionFreeModeSettingName = 'distraction-free-mode';
 const hideCommentsByDefaultSettingName = 'hide-comments-by-default';
 const hideWatchedSubscriptionsSettingName = 'hide-watched-subscriptions';
+const subscriptionAccountSetting = 'subscription-source-account-v1';
 const backgroundNotificationsSettingName = 'background-notifications';
 const backgroundCheckFrequency = "background-check-frequency";
 const subtitleBackground = 'subtitle-background';

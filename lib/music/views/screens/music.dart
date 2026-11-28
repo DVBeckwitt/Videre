@@ -63,8 +63,10 @@ import 'package:clipious/music/views/components/music_voice_input.dart';
 import 'package:clipious/network/content_link.dart';
 import 'package:clipious/network/network_proxy.dart';
 import 'package:clipious/network/socks_proxy.dart';
+import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/player/models/media_event.dart';
 import 'package:clipious/player/models/local_music_playback.dart';
+import 'package:clipious/player/models/playback_instance_fallback.dart';
 import 'package:clipious/player/models/playback_queue.dart';
 import 'package:clipious/player/states/audio_player.dart';
 import 'package:clipious/player/states/player.dart';
@@ -81,6 +83,7 @@ import 'package:clipious/router.dart';
 import 'package:clipious/search/views/components/pasted_link_dialog.dart';
 import 'package:clipious/search/views/components/search_suggestions_panel.dart';
 import 'package:clipious/service.dart' show VideoLoadObserver;
+import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/db/settings.dart' show browsingCountry;
 import 'package:clipious/settings/models/errors/invidious_service_error.dart';
 import 'package:clipious/settings/states/settings.dart';
@@ -1795,12 +1798,7 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
               selected != null &&
               saved?.playbackConnection?.matches(selected) == true
           ? _savedSong(saved!, current)
-          : await musicCatalogService.getSong(id,
-              loadObserver: VideoLoadObserver(
-                  isCurrent: current,
-                  onRetry: () {
-                    if (current()) setState(() => _retryingSong = true);
-                  }));
+          : await _loadLinkedSong(id, selected, current);
       if (!current()) return;
       setState(() {
         _retryingSong = false;
@@ -1833,6 +1831,83 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
           songTap: fromShelf,
           songLauncher: route);
     }, () => _openSong(id, startAt: startAt));
+  }
+
+  Future<MusicTrack> _loadLinkedSong(
+      String id, Server? selected, bool Function() isCurrent) async {
+    final owner = db;
+    final api = service;
+    final revision = api.sessionRevision;
+    final proxy = NetworkProxy.instance;
+    final proxyRevision = proxy.revision;
+    final primary = selected == null ? null : BackendPlayback(selected);
+    bool current() =>
+        isCurrent() &&
+        identical(db, owner) &&
+        identical(service, api) &&
+        api.sessionRevision == revision &&
+        !proxy.isChanging &&
+        proxy.revision == proxyRevision;
+    void onRetry() {
+      if (current()) setState(() => _retryingSong = true);
+    }
+
+    try {
+      return await musicCatalogService.getSong(id,
+          loadObserver:
+              VideoLoadObserver(isCurrent: current, onRetry: onRetry));
+    } catch (error, stack) {
+      if (!current() ||
+          primary == null ||
+          !isBackendRetryable(error) ||
+          PlaybackInstanceFallback.preference(owner) == null) {
+        rethrow;
+      }
+
+      onRetry();
+      final Video? alternate;
+      try {
+        alternate = await api.fetchPlaybackInstanceFallback(
+            Video(videoId: id, playbackConnection: primary),
+            isCurrent: current);
+      } catch (_) {
+        Error.throwWithStackTrace(error, stack);
+      }
+      if (!current() || alternate == null || alternate.videoId != id) rethrow;
+      final connection = alternate.playbackConnection;
+      final active = owner.getAccount(primary.preferredServer.accountId);
+      if (connection == null ||
+          !connection.isInstanceFallback ||
+          active == null ||
+          !connection.matchesPlaybackConnection(owner, active)) {
+        rethrow;
+      }
+      final index = widget.startIndex;
+      final shelf = index < 0 ? null : widget.queue.elementAtOrNull(index);
+      final known = shelf != null && shelf.videoId == id
+          ? MusicScreen._songEntry(shelf).musicMetadata
+          : null;
+      final title = known?.title ?? alternate.title;
+      if (title == null || title.trim().isEmpty) rethrow;
+      final artist = known?.artist ?? alternate.author;
+      connection.allowInitialPlaybackHandoff();
+      return MusicTrack(
+          videoId: id,
+          title: title,
+          artists: [if (artist != null && artist.isNotEmpty) artist],
+          artistCredits: known?.artistCredits ?? alternate.stockArtTrackCredits,
+          uploaderChannelId: alternate.authorId,
+          uploaderChannelUrl: alternate.authorUrl,
+          uploaderName: alternate.author,
+          albumTitle: known?.album ?? alternate.stockArtTrackAlbum,
+          albumPlaylistId: known?.albumPlaylistId,
+          durationSeconds: alternate.lengthSeconds,
+          thumbnails: known?.thumbnails ?? const [],
+          videoThumbnails: stockSongThumbnails(id, alternate.videoThumbnails,
+              instanceUrl: connection.server.url),
+          isArtTrack: known?.isArtTrack ?? alternate.isStockArtTrack,
+          playbackVideo: alternate);
+    }
   }
 
   MusicTrack _savedSong(Video saved, bool Function() isCurrent) {

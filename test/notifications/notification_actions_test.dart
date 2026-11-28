@@ -11,6 +11,7 @@ import 'package:clipious/playlists/models/playlist.dart';
 import 'package:clipious/router.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/server.dart';
+import 'package:clipious/subscription_management/services/subscription_account.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -21,6 +22,14 @@ class _RecordingRouter extends AppRouter {
   _RecordingRouter() : super(hasServer: true);
 
   final pushed = <PageRouteInfo>[];
+  final replacements = <List<PageRouteInfo>>[];
+
+  @override
+  Future<void> replaceAll(List<PageRouteInfo> routes,
+      {OnNavigationFailure? onFailure,
+      bool updateExistingRoutes = true}) async {
+    replacements.add(routes);
+  }
 
   @override
   Future<T?> push<T extends Object?>(PageRouteInfo route,
@@ -128,6 +137,34 @@ void main() {
 
     expect(requests, isEmpty);
     expect(router.pushed, isEmpty);
+  });
+
+  test('subscription actions require the active subscription account',
+      () async {
+    final playback = (await database.getCurrentlySelectedServer())
+        .copyWith(authToken: 'playback');
+    await database.upsertServer(playback);
+    const subscriptions = Server(
+        url: 'https://follows.example', id: 'follows', authToken: 'follows');
+    await database.upsertServer(subscriptions);
+    await SubscriptionAccount.save(database, subscriptions.accountId);
+
+    await NotificationController.onActionReceivedMethod(
+        _action(NotificationTypes.subscription, playback));
+    expect(router.replacements, isEmpty);
+    expect(await fileDb.forAccount(playback).getLastSubscriptionNotification(),
+        isNull);
+
+    await NotificationController.onActionReceivedMethod(
+        _action(NotificationTypes.subscription, subscriptions));
+    expect(router.replacements.single.single.routeName, MainRoute.name);
+    expect(
+        (await fileDb
+                .forAccount(subscriptions)
+                .getLastSubscriptionNotification())
+            ?.lastSeenVideoId,
+        'last-video');
+    expect(requests, isEmpty);
   });
 
   for (final switchToEmptyProfile in [false, true]) {

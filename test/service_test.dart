@@ -11,6 +11,7 @@ import 'package:clipious/network/nerdvpn_access.dart';
 import 'package:clipious/network/network_proxy.dart';
 import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/service.dart';
+import 'package:clipious/subscription_management/services/subscription_account.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/models/errors/invidious_service_error.dart';
@@ -1558,6 +1559,49 @@ void main() {
       final testService = Service(httpClient: client);
 
       expect(await testService.unSubscribe('UC123'), isTrue);
+    });
+
+    test('redirects subscription operations only to the explicit account',
+        () async {
+      const saved = Server(
+          id: 'subscription-source',
+          url: 'https://subscriptions.example',
+          authToken: 'subscription-token');
+      await db.upsertServer(saved);
+      await SubscriptionAccount.save(db, saved.accountId);
+      final requests = <http.Request>[];
+      final client = MockClient((request) async {
+        requests.add(request);
+        if (request.method != 'GET') return http.Response('', 204);
+        return http.Response('[{"author":"Followed","authorId":"UC123"}]', 200);
+      });
+      addTearDown(client.close);
+      final api = Service(httpClient: client);
+
+      expect(await api.subscribe('UC123'), isTrue);
+      expect(await api.isSubscribedToChannel('UC123'), isTrue);
+      expect(await api.unSubscribe('UC123'), isTrue);
+      expect(
+          requests.map((request) => request.method), ['POST', 'GET', 'DELETE']);
+      expect(requests.map((request) => request.url.host).toSet(),
+          {'subscriptions.example'});
+      expect(
+          requests.map((request) => request.headers['Authorization']).toSet(),
+          {'Bearer subscription-token'});
+      expect(
+          (await db.getCurrentlySelectedServer()).url, 'https://inv.example');
+
+      await db.upsertServer(saved.copyWith(authToken: null));
+      expect(await SubscriptionAccount.preference(db), saved.accountId);
+      expect(await api.hasSubscriptionAccount(), isFalse);
+      expect(await api.getSubscriptions(), isEmpty);
+      expect(await api.subscribe('UC123'), isFalse);
+      expect(requests, hasLength(3));
+
+      await SubscriptionAccount.save(db, null);
+      expect(await api.getSubscriptions(), hasLength(1));
+      expect(requests.last.url.host, 'inv.example');
+      expect(requests.last.headers['Authorization'], 'Bearer invidious-token');
     });
 
     test('validates stored credentials with the subscriptions endpoint',

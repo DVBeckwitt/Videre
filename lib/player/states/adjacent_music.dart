@@ -105,6 +105,11 @@ class _AdjacentMusicPreparation {
     }
   }
 
+  bool _hasCurrentRetryLimit(BackendPlayback route, IDbClient database) =>
+      route.server.backendSelector?.automaticFallback != true ||
+      route.backendRetryLimit ==
+          PlaybackInstanceFallback.backendRetries(database);
+
   Future<IdedVideo?> _prepare(_AdjacentSong song) async {
     final entry = song.entry;
     final id = playbackQueueId(entry);
@@ -166,7 +171,9 @@ class _AdjacentMusicPreparation {
           final video = !cached.downloadPlaybackOnly &&
                   cached.adaptiveFormats != null &&
                   cached.formatStreams != null &&
-                  connection?.matches(selected) == true
+                  connection != null &&
+                  connection.matches(selected) &&
+                  _hasCurrentRetryLimit(connection, database)
               ? cached
               : await service.getMusicVideo(entry.videoId,
                   onBackendRequest: (request) {
@@ -183,7 +190,9 @@ class _AdjacentMusicPreparation {
           final loadedRoute = video.playbackConnection ?? video.backendPlayback;
           if (!current() ||
               !route.matches(activeServer) ||
-              loadedRoute?.matches(activeServer) != true) {
+              loadedRoute == null ||
+              !loadedRoute.matches(activeServer) ||
+              !_hasCurrentRetryLimit(loadedRoute, database)) {
             return null;
           }
           resolved = video.preservingMusicMetadataFrom(entry);
@@ -204,15 +213,14 @@ class _AdjacentMusicPreparation {
     if (entry.explicitMusicDownload != null) {
       return player._explicitDownload(entry) == null ? null : entry;
     }
-    final song = _songs[playbackQueueId(entry)];
+    final id = playbackQueueId(entry);
+    final song = _songs[id];
     if (!_active || song == null || song.entry != entry) return downloaded;
     // A newly finished download wins immediately, even while a speculative
     // online request is still in flight. Keep native identity when it is the
     // same complete and freshly admitted saved rendition.
     final source = downloaded == null ? await song.preparation : song.source;
-    if (source is! Video ||
-        !_active ||
-        !identical(_songs[playbackQueueId(entry)], song)) {
+    if (source is! Video || !_active || !identical(_songs[id], song)) {
       return downloaded;
     }
     if (downloaded != null &&
@@ -223,8 +231,16 @@ class _AdjacentMusicPreparation {
     }
     if (downloaded == null && source.downloadPlaybackOnly) return null;
     final route = source.playbackConnection ?? source.backendPlayback;
-    if (route == null ||
-        !route.matches(await db.getCurrentlySelectedServer())) {
+    if (route == null) return downloaded;
+    final database = db;
+    final selected = await database.getCurrentlySelectedServer();
+    if (!_active ||
+        !identical(_songs[id], song) ||
+        !identical(db, database) ||
+        !route.matches(selected) ||
+        (downloaded == null &&
+            CachedMusicPlayback.of(source) == null &&
+            !_hasCurrentRetryLimit(route, database))) {
       return downloaded;
     }
     return source;

@@ -36,6 +36,7 @@ import '../models/music_ab_repeat.dart';
 import '../models/music_audio_quality.dart';
 import '../models/local_music_playback.dart';
 import '../models/manual_music_preparation.dart';
+import '../models/playback_instance_fallback.dart';
 import '../models/watch_audio_track.dart';
 import 'player.dart' show AndroidMusicResumptionPlayer;
 import 'player.dart' as queue show PlayerState;
@@ -58,6 +59,24 @@ class _NoAdmittedAudioOrigin implements Exception {
 bool _retryableAudioFailure(Object error) =>
     error is _AudioPlaybackStall ||
     (error is PlayerException && error.backendRetryable);
+
+bool _remoteAudioSource(AudioSource? source) =>
+    source is UriAudioSource &&
+    const {'http', 'https'}.contains(source.uri.scheme) &&
+    (source is! ProgressiveAudioSource ||
+        source.playbackCache?['download'] == null &&
+            source.playbackCache?['cachedMusic'] == null);
+
+bool _transientAudioOpenFailure(Object error) =>
+    error is PlayerException &&
+    error.backendRetryable &&
+    !error.mediaOriginBlocked;
+
+BackendPlayback? _crossProfileRoute(BackendPlayback? route) => route != null &&
+        route.isInstanceFallback &&
+        route.server.profileId != route.preferredServer.profileId
+    ? route
+    : null;
 
 class _StandbyAudio {
   final IdedVideo entry;
@@ -140,6 +159,7 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
   bool _terminalErrorSent = false;
   int? _manualRetryGeneration;
   bool _sourceAdmitted = false;
+  ({BackendPlayback route, Duration? startAt})? _crossProfileSource;
   Set<Uri> _remainingFormats = {};
   BackendPlayback? _remainingFormatRoute;
   bool _downloadReuseFailed = false;
@@ -182,6 +202,7 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
   final _playerSubscriptions = <StreamSubscription<dynamic>>[];
 
   AudioPlayerCubit(super.initialState, super.player, this.settings) {
+    PlaybackInstanceFallback.revision.addListener(_fallbackConsentChanged);
     onInit();
   }
 
@@ -228,6 +249,7 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
 
   @override
   Future<void> close() async {
+    PlaybackInstanceFallback.revision.removeListener(_fallbackConsentChanged);
     if (identical(player.manualMusicPreparer, this)) {
       player.manualMusicPreparer = null;
       player.hasOpeningMusicCrossfade = null;
@@ -358,6 +380,49 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
     cancelMusicSelection();
     _abRepeat.detach();
     _transition.stop(release: true);
+    final standbys = _standbys.values.toList();
+    _standbys.clear();
+    for (final slot in standbys) {
+      if (!slot.failed) _retire(slot.decoder.dispose());
+    }
+    return _detachCurrentDecoder();
+  }
+
+  void _fallbackConsentChanged() {
+    if (isClosed) return;
+    if (_manual?.slot.entry case final Video entry) {
+      final route =
+          _crossProfileRoute(entry.playbackConnection ?? entry.backendPlayback);
+      if (route != null && !audioPlaybackRouteIsCurrent(route)) {
+        cancelMusicSelection();
+      }
+    }
+    final source = _crossProfileSource;
+    final current = audioPlayer;
+    if (source == null ||
+        current == null ||
+        audioPlaybackRouteIsCurrent(source.route)) {
+      return;
+    }
+    final position = _pendingSeek ??
+        (_loadingGeneration == null
+            ? current.position
+            : source.startAt ?? state.audioPosition);
+    final showError = !player.isClosed &&
+        _ownsParentPlayback &&
+        player.state.isAudio &&
+        !player.state.isClosing &&
+        !player.state.isHidden;
+    _abRepeat.detach();
+    _transition.stop(release: true);
+    _retire(_detachCurrentDecoder(stopFirst: true));
+    if (showError) {
+      _failPlayback(StateError('Backup playback permission changed'),
+          position: position);
+    }
+  }
+
+  Future<void> _detachCurrentDecoder({bool stopFirst = false}) {
     _playbackGeneration++;
     _clearMusicQuality();
     _clearWatchAudioTracks();
@@ -366,6 +431,7 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
     _pendingSeek = null;
     _wantsToPlay = false;
     _sourceAdmitted = false;
+    _crossProfileSource = null;
     _remainingFormats = {};
     _remainingFormatRoute = null;
     _resumeAfterFocus = false;
@@ -376,13 +442,9 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
     _nativeProgressOwner = null;
     _nativeProgressRequest = null;
     _promoted = null;
-    final standbys = _standbys.values.toList();
-    _standbys.clear();
-    for (final slot in standbys) {
-      if (!slot.failed) _retire(slot.decoder.dispose());
-    }
     final current = audioPlayer;
     audioPlayer = null;
+    if (stopFirst && current != null) _retire(Future<void>.sync(current.stop));
     final clearingSound = current == null
         ? Future<void>.value()
         : player.musicSound.detach(current);
@@ -573,9 +635,9 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
         await Future.any([request.prepare(), request.cancelled.future]);
     if (!identical(_manual, request)) return false;
     if (ready && request.inScope && request.decoderReady) return true;
-    final failure = request.inScope ? request.exhaustedSourceError : null;
+    final failure = request.inScope ? request.exhaustedSourceFailure : null;
     cancelMusicSelection();
-    if (failure != null) throw ManualMusicSourceFailure(failure);
+    if (failure != null) throw failure;
     return false;
   }
 
@@ -591,7 +653,7 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
     final wanted = _adjacentEntries[id];
     final failedDownload = entry is Video &&
         entry.downloadPlaybackOnly &&
-        request.exhaustedSourceError != null;
+        request.exhaustedSourceFailure != null;
     final restore = request.borrowedAdjacent &&
         !failedDownload &&
         wanted != null &&
@@ -736,6 +798,7 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
 
   void _bindDecoder(AudioPlayer current) {
     audioPlayer = current;
+    _crossProfileSource = null;
     _silenceSource = null;
     _skipSilenceUpdate = null;
     unawaited(_listenForAudioInterruptions(current));
@@ -1437,6 +1500,11 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
     final fingerprint = explicitAudioDownloadFingerprint(entry);
     final parentGeneration = player.backendPlaybackGeneration;
     final modeGeneration = player.playbackPositionGeneration;
+    bool measureOutcome() =>
+        selectionRoute == null &&
+        requestedWatchTrack == null &&
+        !player.state.isHidden &&
+        !player.state.isClosing;
     var captureCurrentPosition = selectionRoute != null && startAt == null;
     // A blocked segment can surface after the decoder was ready. Re-admit only
     // the still-untried renditions before reporting that failure.
@@ -1446,6 +1514,7 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
             : null;
     final queueId = player.state.currentQueueId;
     final database = db;
+    Video? instanceFallback;
     BackendPlayback? originFallbackRoute =
         remainingAfterBlock == null ? null : _remainingFormatRoute;
     bool active() =>
@@ -1463,7 +1532,10 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
             ? identical(state.offlineVideo, offlineVideo)
             : identical(state.video, video));
     void checkFallbackRoute() {
-      final route = originFallbackRoute;
+      final connection = (instanceFallback ?? video)?.playbackConnection;
+      final route = connection?.isInstanceFallback == true
+          ? connection
+          : originFallbackRoute;
       if (route != null && !audioPlaybackRouteIsCurrent(route)) {
         throw StateError('Playback context changed');
       }
@@ -1483,6 +1555,7 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
     }
 
     Object? failure = remainingAfterBlock == null ? firstError : null;
+    var failureFromDownload = firstError != null && _usingDownloadedSource;
     var reconnectDisabled = false;
     var retryExhausted = false;
     if (queueId != null && active()) {
@@ -1492,9 +1565,10 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
     try {
       while (active()) {
         if (failure != null) {
+          final source = video;
           if (_playbackOffline ||
               !_retryableAudioFailure(failure) ||
-              video == null) {
+              source == null) {
             throw failure;
           }
           if (allowStreamRefresh &&
@@ -1507,9 +1581,9 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
           Video? next;
           var sameRoute = false;
           try {
-            if (allowStreamRefresh || video.downloadPlaybackOnly) {
+            if (allowStreamRefresh || source.downloadPlaybackOnly) {
               try {
-                next = await player.refreshCurrentPlayback(video,
+                next = await player.refreshCurrentPlayback(source,
                     isCurrent: active);
                 sameRoute = next != null;
               } catch (error) {
@@ -1524,11 +1598,11 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
               }
             }
             if (!active()) return false;
-            if (next == null && video.backendPlayback != null) {
-              next = await service.retryVideoBackend(video, isCurrent: active,
+            if (next == null && source.backendPlayback != null) {
+              next = await service.retryVideoBackend(source, isCurrent: active,
                   onRetry: (request) {
                 if (active() &&
-                    player.setRequestedBackend(video!.videoId, request)) {
+                    player.setRequestedBackend(source.videoId, request)) {
                   player.setEvent(MediaEvent(
                       state: MediaState.loading,
                       type: MediaEventType.backendRetry,
@@ -1536,26 +1610,42 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
                 }
               });
             }
+            final route = source.backendPlayback ?? source.playbackConnection;
+            if (next == null &&
+                active() &&
+                selectionRoute == null &&
+                requestedWatchTrack == null &&
+                !failureFromDownload &&
+                !source.downloadPlaybackOnly &&
+                route?.manualSelection != true &&
+                route?.isInstanceFallback != true &&
+                (failure is _AudioPlaybackStall ||
+                    _transientAudioOpenFailure(failure))) {
+              instanceFallback = await player
+                  .tryPlaybackInstanceFallback(source, isCurrent: active);
+            }
           } finally {
             if (_backendMetadataGeneration == generation) {
               _backendMetadataGeneration = null;
             }
           }
           if (!active()) return false;
-          if (next == null) {
+          if (next != null) {
+            next = next.preservingMusicMetadataFrom(source);
+            video = next;
+            if (!sameRoute) player.reportBackendVideoLoaded(next);
+            emit(state.copyWith(
+                video: next,
+                audioLength: Duration(seconds: next.lengthSeconds ?? 0),
+                loading: true,
+                error: null));
+          } else if (instanceFallback == null) {
             retryExhausted = exhaustedRefresh();
             throw failure;
           }
-          next = next.preservingMusicMetadataFrom(video);
-          video = next;
-          if (!sameRoute) player.reportBackendVideoLoaded(next);
-          emit(state.copyWith(
-              video: next,
-              audioLength: Duration(seconds: next.lengthSeconds ?? 0),
-              loading: true,
-              error: null));
           failure = null;
         }
+        failureFromDownload = false;
         try {
           final staged = standby;
           standby = null;
@@ -1581,7 +1671,7 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
           if (requestedWatchTrack != null && watch == null) return false;
           final plan = manual?.admittedPlan ??
               await resolveAudioPlaybackSources(
-                video: video,
+                video: instanceFallback ?? video,
                 offlineVideo: offline ? offlineVideo : null,
                 openedAudioTrack: player.openedAudioTrack,
                 sessionId:
@@ -1642,6 +1732,7 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
           MusicAudioQuality? effective;
           String? watchTrackId;
           AudioSource? mountedSource;
+          var usedManualPreparation = false;
           if (sources.isEmpty) {
             if (requestedWatchTrack != null) return false;
             if (remaining != null) throw firstError!;
@@ -1652,6 +1743,7 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
             throw StateError('No supported audio source');
           }
           for (var index = firstIndex; index < sources.length; index++) {
+            var openingSource = false;
             try {
               // just_audio can carry its native Play intent into a new source.
               // Restore intent only after setup and the latest parent/focus
@@ -1681,6 +1773,10 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
               _sourceLoadRevision++;
               final start =
                   providerCanSeek == false ? null : _pendingSeek ?? startAt;
+              checkFallbackRoute();
+              final shared = _crossProfileRoute(playbackRoute);
+              _crossProfileSource =
+                  shared == null ? null : (route: shared, startAt: start);
               if (prepared && index == firstIndex) {
                 final target = start ?? Duration.zero;
                 if (providerCanSeek != false &&
@@ -1689,11 +1785,14 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
                   await current.seek(target);
                 }
               } else {
-                checkFallbackRoute();
+                openingSource = true;
                 await current.setAudioSource(sources[index],
                     initialPosition: start);
+                openingSource = false;
               }
               if (!active()) return false;
+              usedManualPreparation =
+                  manual != null && prepared && index == firstIndex;
               mountedSource = prepared && index == firstIndex
                   ? warmPlan.sources[preparedIndex]
                   : sources[index];
@@ -1712,10 +1811,20 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
               break;
             } catch (error) {
               if (!active()) return false;
+              if (measureOutcome() &&
+                  openingSource &&
+                  index == sources.length - 1 &&
+                  _remoteAudioSource(sources[index]) &&
+                  _transientAudioOpenFailure(error)) {
+                playbackRoute?.recordDecoderOutcome(database, success: false);
+              }
               if (sources[index] is ProgressiveAudioSource &&
                   (sources[index] as ProgressiveAudioSource)
                       .playbackCache?['download'] is Map) {
                 _downloadReuseFailed = true;
+                failureFromDownload = true;
+              } else {
+                failureFromDownload = false;
               }
               // An unavailable audio track need not make the whole backend
               // unusable. Try its remaining admitted formats first. Access
@@ -1766,6 +1875,9 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
             final position = _pendingSeek!;
             _pendingSeek = null;
             startAt = position;
+            if (_crossProfileSource case final shared?) {
+              _crossProfileSource = (route: shared.route, startAt: position);
+            }
             if (providerCanSeek != false && current.position != position) {
               await current.seek(position);
             }
@@ -1774,6 +1886,17 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
           // Account or companion consent can change while the replacement is
           // buffering. Verify its owning route again before permitting play.
           checkFallbackRoute();
+          if (instanceFallback case final replacement?) {
+            if (!player.commitPlaybackInstanceFallback(video!, replacement)) {
+              throw StateError('Playback connection changed');
+            }
+            video = replacement;
+            instanceFallback = null;
+            emit(state.copyWith(
+                video: replacement,
+                audioLength:
+                    Duration(seconds: replacement.lengthSeconds ?? 0)));
+          }
           if (entry != null && fingerprint != null) {
             final saved = readyMusicDownload(database, entry.videoId,
                 fingerprint: fingerprint);
@@ -1793,6 +1916,13 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
                     'Saved Music file is unavailable or was replaced');
               }
             }
+          }
+          if (measureOutcome() &&
+              !usedManualPreparation &&
+              active() &&
+              current.processingState == ProcessingState.ready &&
+              _remoteAudioSource(mountedSource)) {
+            playbackRoute?.recordDecoderOutcome(database, success: true);
           }
           // Publish the admitted position before any play/rate event:
           // MediaSession extrapolates progress from those events.
@@ -1880,6 +2010,7 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
         } catch (error) {
           if (!active()) return false;
           if (requestedWatchTrack != null) return false;
+          if (instanceFallback != null) rethrow;
           failure = error;
         }
       }
@@ -1963,6 +2094,13 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
       _transition.primaryIsMusic = _selectedSourceIsMusic;
       final volume = _transition.startVolume;
       _bindDecoder(standby.decoder);
+      if (entry is Video) {
+        final route = _crossProfileRoute(
+            entry.playbackConnection ?? entry.backendPlayback);
+        if (route != null) {
+          _crossProfileSource = (route: route, startAt: startAt);
+        }
+      }
       for (final subscription in subscriptions) {
         _retire(subscription.cancel());
       }
@@ -1984,10 +2122,12 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
     } else {
       // The optional PCM processor belongs only to Music decoders.
       if (audioPlayer case final old?
-          when old.androidMusicGainEnabled != _supportsMusicGain(entry)) {
+          when old.androidMusicGainEnabled != _supportsMusicGain(entry) ||
+              _crossProfileSource != null) {
         final subscriptions = List.of(_playerSubscriptions);
         _playerSubscriptions.clear();
         audioPlayer = null;
+        _crossProfileSource = null;
         for (final subscription in subscriptions) {
           _retire(subscription.cancel());
         }

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:clipious/globals.dart';
+import 'package:clipious/offline_subscriptions/models/offline_subscription.dart';
 import 'package:clipious/playlists/models/playlist.dart';
 import 'package:clipious/recommendations/subscription_revision.dart';
 import 'package:clipious/service.dart';
@@ -10,6 +11,7 @@ import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/models/db/video_filter.dart';
 import 'package:clipious/utils/interfaces/db.dart';
+import 'package:clipious/utils/models/paginated_list.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/db/history_video_cache.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -60,6 +62,10 @@ class _DelayedSelection extends Fake implements IDbClient {
 
   @override
   SettingsValue? getSettings(String name) => delegate.getSettings(name);
+
+  @override
+  Future<List<OfflineSubscription>> getOfflineSubscriptions() =>
+      delegate.getOfflineSubscriptions();
 
   @override
   List<VideoFilter> getAllFilters() => delegate.getAllFilters();
@@ -210,36 +216,18 @@ void main() {
     });
   }
 
-  final remoteOperations =
-      <(String, Future<dynamic> Function(Service), String, String, dynamic)>[
-    (
-      'subscribe',
-      (api) => api.subscribe('original-channel'),
-      'POST',
-      '/api/v1/auth/subscriptions/original-channel',
-      true
-    ),
-    (
-      'unsubscribe',
-      (api) => api.unSubscribe('original-channel'),
-      'DELETE',
-      '/api/v1/auth/subscriptions/original-channel',
-      true
-    ),
+  final subscriptionOperations = <(String, Future<dynamic> Function(Service))>[
+    ('subscribe', (api) => api.subscribe('original-channel')),
+    ('unsubscribe', (api) => api.unSubscribe('original-channel')),
     (
       'subscription status',
-      (api) => api.isSubscribedToChannel('original-channel'),
-      'GET',
-      '/api/v1/auth/subscriptions',
-      true
+      (api) => api.isSubscribedToChannel('original-channel')
     ),
-    (
-      'subscription list',
-      (api) => api.getSubscriptions(),
-      'GET',
-      '/api/v1/auth/subscriptions',
-      null
-    ),
+    ('subscription list', (api) => api.getSubscriptions()),
+  ];
+
+  final remoteOperations =
+      <(String, Future<dynamic> Function(Service), String, String, dynamic)>[
     (
       'read history',
       (api) => api.getUserHistory(1, 20),
@@ -272,6 +260,48 @@ void main() {
 
   for (final person in [false, true]) {
     final transition = person ? 'profile' : 'account';
+    for (final (label, operation) in subscriptionOperations) {
+      test('$label cancels before dispatch across a $transition switch',
+          () async {
+        final pending = expectLater(operation(api), throwsStateError);
+        await gate.started.future;
+        await switchSelection(person);
+        gate.release.complete();
+        await pending;
+        expect(requests, isEmpty);
+      });
+    }
+
+    test('foreground feed cancels before dispatch after a $transition switch',
+        () async {
+      service = api;
+      addTearDown(() => service = Service());
+      final pending =
+          expectLater(SubscriptionVideoList().getItems(), throwsStateError);
+      await gate.started.future;
+      await switchSelection(person);
+      gate.release.complete();
+      await pending;
+      expect(requests, isEmpty);
+    });
+
+    test('foreground feed cancels its retry after a $transition switch',
+        () async {
+      gate.pending = false;
+      final limited = MockClient((request) async {
+        requests.add(request);
+        return http.Response('', 429, headers: {'retry-after': '1'});
+      });
+      addTearDown(limited.close);
+      service = Service(
+          httpClient: limited, wait: (_) async => switchSelection(person));
+      addTearDown(() => service = Service());
+
+      await expectLater(SubscriptionVideoList().getItems(), throwsStateError);
+      expect(requests.single.url.path, '/api/v1/auth/feed');
+      expect(requests.single.headers['Authorization'], 'Bearer first-token');
+    });
+
     for (final (label, operation, method, path, expected) in remoteOperations) {
       test('$label retains its starting account across a $transition switch',
           () async {

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:audio_session/audio_session.dart';
@@ -11,12 +12,16 @@ import 'package:clipious/main.dart' as app_main;
 import 'package:clipious/media_handler.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
-import 'package:clipious/network/network_proxy.dart';
+import 'package:clipious/network/gateway_context.dart';
 import 'package:clipious/network/nerdvpn_access.dart';
+import 'package:clipious/network/network_proxy.dart';
+import 'package:clipious/player/audio_playback_sources.dart';
 import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/player/models/backend_recovery.dart';
 import 'package:clipious/player/models/media_command.dart';
 import 'package:clipious/player/models/media_event.dart';
+import 'package:clipious/player/models/playback_instance_fallback.dart';
+import 'package:clipious/player/models/playback_reliability.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/player/states/video_player.dart';
 import 'package:clipious/service.dart';
@@ -27,6 +32,8 @@ import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/format_stream.dart';
 import 'package:clipious/videos/models/adaptive_format.dart';
+import 'package:clipious/videos/models/caption.dart';
+import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:clipious/videos/models/sponsor_segment.dart';
 import 'package:clipious/videos/models/sponsor_segment_types.dart';
@@ -37,6 +44,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:just_audio/just_audio.dart' show UriAudioSource;
 
 import '../test_app_cubit.dart';
 import '../test_player_cubit.dart';
@@ -865,6 +873,304 @@ void main() {
       }
     });
   }
+
+  test('playback snapshots the profile backend retry limit', () async {
+    final selector = BackendSelector('backend', [
+      for (final id in ['a', 'b', 'c', 'd', 'e', 'f']) BackendOption(id, id)
+    ]);
+    final account = selector.withSelection(
+        preferred.copyWith(backendSelector: selector), 'a');
+    await db.upsertServer(account);
+    await db.useServer(account);
+    expect(PlaybackInstanceFallback.preference(db), isNull);
+
+    Future<List<String>> attemptedBackends(
+        {bool playback = true, bool music = false, int? changeLimitTo}) async {
+      final attempted = <String>{};
+      final client = MockClient((request) async {
+        expect(request.url.origin, account.url);
+        if (attempted.isEmpty && changeLimitTo != null) {
+          await PlaybackInstanceFallback.saveBackendRetries(db, changeLimitTo);
+        }
+        attempted.add(request.headers['Cookie']!);
+        return http.Response('{"error":"Backend unavailable"}', 502,
+            request: request, headers: {'content-type': 'application/json'});
+      });
+      try {
+        final api = Service(httpClient: client, wait: (_) async {});
+        final load = music ? api.getMusicVideo : api.getVideo;
+        await expectLater(
+            load('recording01',
+                loadObserver: playback
+                    ? VideoLoadObserver(isCurrent: () => true, onRetry: () {})
+                    : null),
+            throwsA(isA<InvidiousServiceError>()));
+      } finally {
+        client.close();
+      }
+      return attempted.toList();
+    }
+
+    const usual = ['backend=a', 'backend=b', 'backend=c'];
+    expect(PlaybackInstanceFallback.backendRetries(db), 2);
+    expect(await attemptedBackends(), usual);
+
+    await PlaybackInstanceFallback.saveBackendRetries(db, 4);
+    expect(await attemptedBackends(music: true, changeLimitTo: 0),
+        [...usual, 'backend=d', 'backend=e']);
+    expect(PlaybackInstanceFallback.backendRetries(db), 0);
+    expect(await attemptedBackends(), ['backend=a']);
+    expect(await attemptedBackends(playback: false), usual);
+    final manual = BackendPlayback.manual(
+        await db.getCurrentlySelectedServer(), 'c',
+        backendRetries: PlaybackInstanceFallback.backendRetries(db));
+    expect(manual.label, 'c');
+    expect(manual.next(), isNull);
+  });
+
+  test('reliability ranks retries without changing an admitted backup',
+      () async {
+    const first = Server(id: 'first-backup', url: 'https://one.example');
+    const second = Server(id: 'second-backup', url: 'https://two.example');
+    await db.upsertServer(first);
+    await db.upsertServer(second);
+    final selected = await db.getCurrentlySelectedServer();
+    final accounts = await db.getServers();
+
+    Future<void> observe(Server account,
+        {int? backend, bool success = true}) async {
+      final saved = Completer<void>();
+      final before = PlaybackReliability.account(db, account).attempts;
+      void changed() {
+        if (!saved.isCompleted &&
+            PlaybackReliability.account(db, account).attempts > before) {
+          saved.complete();
+        }
+      }
+
+      PlaybackReliability.revision.addListener(changed);
+      try {
+        PlaybackReliability.record(db, account,
+            backendIndex: backend, success: success);
+        await saved.future.timeout(const Duration(seconds: 2));
+      } finally {
+        PlaybackReliability.revision.removeListener(changed);
+      }
+    }
+
+    await observe(selected, backend: 2);
+    final route = BackendPlayback(selected, reliabilityOwner: db);
+    expect(route.label, 'Backend A');
+    expect(route.next()?.label, 'Backend C');
+
+    await PlaybackInstanceFallback.save(db, PlaybackInstanceFallback.bestSaved);
+    Server? backup() => PlaybackInstanceFallback.target(db, selected, accounts);
+    expect(backup()?.accountId, first.accountId);
+    await observe(second);
+    expect(backup()?.accountId, second.accountId);
+    final staged = BackendPlayback.instanceFallback(selected, backup()!);
+    await observe(second, success: false);
+    await observe(first);
+    expect(backup()?.accountId, first.accountId);
+    expect(staged.matchesPlaybackConnection(db, selected), isTrue);
+  });
+
+  test('a failed backup startup informs the next best-instance attempt',
+      () async {
+    const first = Server(id: 'first-backup', url: 'https://one.example');
+    const second = Server(id: 'second-backup', url: 'https://two.example');
+    await db.upsertServer(first);
+    await db.upsertServer(second);
+    await PlaybackInstanceFallback.save(db, PlaybackInstanceFallback.bestSaved);
+    final selected = await db.getCurrentlySelectedServer();
+    final original = _video('recording01', BackendPlayback(selected));
+    final origins = <String>[];
+    final client = MockClient((request) async {
+      origins.add(request.url.origin);
+      const headers = {'content-type': 'application/json'};
+      return request.url.origin == first.url
+          ? http.Response('{"error":"Temporarily unavailable"}', 503,
+              request: request, headers: headers)
+          : http.Response(
+              jsonEncode(Video(videoId: original.videoId).toJson()), 200,
+              request: request, headers: headers);
+    });
+    addTearDown(client.close);
+    final api = Service(httpClient: client);
+
+    await expectLater(
+        api.fetchPlaybackInstanceFallback(original, isCurrent: () => true),
+        throwsA(isA<InvidiousServiceError>()));
+    expect(origins, [first.url]);
+
+    final next = await api.fetchPlaybackInstanceFallback(original,
+        isCurrent: () => true);
+    expect(next?.playbackConnection?.server.accountId, second.accountId);
+    expect(origins, [first.url, second.url]);
+    expect(await db.getCurrentlySelectedServer(), selected);
+  });
+
+  test('backup metadata, media and refresh use only the opted-in account',
+      () async {
+    const target = Server(
+        id: 'backup',
+        url: 'https://backup.example',
+        customHeaders: {'X-Backup': 'backup-fixture'});
+    await db.upsertServer(target);
+    final selected = await db.getCurrentlySelectedServer();
+    final original = _video('recording01', BackendPlayback(selected)).copyWith(
+        musicMetadata: const MusicMetadata(title: 'Song', artist: 'Artist'),
+        queueEntryId: 'selected-occurrence');
+    final oldRendition = original.formatStreams!.single;
+    const targetMedia = 'https://backup.example/videoplayback?itag=18';
+    final loaded = Video(videoId: original.videoId, formatStreams: [
+      oldRendition,
+      FormatStream(targetMedia, '18', 'video/mp4', 'medium', 'mp4', 'h264',
+          '360p', '360p', '640x360'),
+    ]);
+    final requests = <http.Request>[];
+    var response = loaded;
+    final client = MockClient((request) async {
+      requests.add(request);
+      return http.Response(jsonEncode(response.toJson()), 200,
+          request: request, headers: {'content-type': 'application/json'});
+    });
+    addTearDown(client.close);
+    final api = Service(httpClient: client);
+
+    expect(
+        await api.fetchPlaybackInstanceFallback(original,
+            isCurrent: () => true),
+        isNull);
+    expect(requests, isEmpty);
+    await PlaybackInstanceFallback.save(db, target.accountId);
+
+    final alternate = (await api.fetchPlaybackInstanceFallback(original,
+        isCurrent: () => true))!;
+    expect(alternate.queueEntryId, original.queueEntryId);
+    expect(alternate.musicMetadata, same(original.musicMetadata));
+    expect(alternate.playbackConnection!.matches(selected), isFalse);
+    expect(await db.getCurrentlySelectedServer(), selected);
+    expect(
+        (await api.refreshPlaybackVideo(alternate, isCurrent: () => true))
+            .playbackConnection,
+        same(alternate.playbackConnection));
+    expect(requests, hasLength(2));
+    for (final request in requests) {
+      expect(request.url.origin, target.url);
+      expect(request.headers['X-Backup'], 'backup-fixture');
+      expect(request.headers['Cookie'], isNull);
+    }
+
+    final sources = (await resolveAudioPlaybackSources(
+        video: alternate,
+        offlineVideo: null,
+        sessionId: 'backup-test',
+        isCurrent: () => true))!;
+    final admitted = sources.sources.single as UriAudioSource;
+    expect(admitted.uri.toString(), targetMedia);
+    expect(admitted.headers?['X-Backup'], 'backup-fixture');
+    expect(admitted.headers?['Cookie'], isNull);
+
+    response = loaded.copyWith(videoId: 'othermed001');
+    await expectLater(
+        api.fetchPlaybackInstanceFallback(original, isCurrent: () => true),
+        throwsFormatException);
+    expect(requests, hasLength(3));
+
+    await PlaybackInstanceFallback.save(db, null);
+    await expectLater(
+        api.refreshPlaybackVideo(alternate, isCurrent: () => true),
+        throwsStateError);
+    expect(requests, hasLength(3));
+  });
+
+  test('shared backup metadata and captions retire with profile consent',
+      () async {
+    final selected = (await db.getCurrentlySelectedServer())
+        .copyWith(customHeaders: {'X-Source': 'source-fixture'});
+    await db.upsertServer(selected);
+    final profile = await db.createProfile('Backup owner');
+    final destination = db.forProfile(profile.id);
+    final target = Server(
+        profileId: profile.id,
+        id: selected.accountId,
+        url: 'https://backup.example',
+        customHeaders: {'X-Backup': 'backup-fixture'});
+    await destination.useServer(target);
+    final selectedBackup = await destination.getCurrentlySelectedServer();
+    await PlaybackInstanceFallback.saveSharing(destination, true);
+    await PlaybackInstanceFallback.save(
+        db, PlaybackInstanceFallback.choiceId(db, target));
+    final original = _video('recording01', BackendPlayback(selected))
+        .copyWith(queueEntryId: 'source-queue-entry');
+    final context = GatewayRequestContext.forAccount(
+        target.profileId, target.accountId, target.url)!;
+    final refreshStarted = Completer<void>();
+    final refreshResponse = Completer<void>();
+    final captionsStarted = Completer<void>();
+    final captionsResponse = Completer<void>();
+    final requests = <String>[];
+    final client = MockClient((request) async {
+      expect(request.url.origin, target.url);
+      expect(request.headers['X-Backup'], 'backup-fixture');
+      expect(request.headers['X-Source'], isNull);
+      expect(request.headers['Cookie'], isNull);
+      expect(request.headers[gatewayContextHeader], context.encoded);
+      requests.add(request.url.path);
+      if (request.url.path == '/api/v1/transcripts/${original.videoId}') {
+        captionsStarted.complete();
+        await captionsResponse.future;
+        return http.Response('', 404, request: request);
+      }
+      expect(request.url.path, '/api/v1/videos/${original.videoId}');
+      if (requests.where((path) => path.contains('/videos/')).length == 2) {
+        refreshStarted.complete();
+        await refreshResponse.future;
+      }
+      return http.Response(
+          jsonEncode(Video(videoId: original.videoId).toJson()), 200,
+          request: request, headers: {'content-type': 'application/json'});
+    });
+    addTearDown(client.close);
+    final api = Service(httpClient: client);
+
+    final alternate = (await api.fetchPlaybackInstanceFallback(original,
+        isCurrent: () => true))!;
+    expect(alternate.queueEntryId, original.queueEntryId);
+    final route = alternate.playbackConnection!;
+    expect(route.server.profileId, profile.id);
+    expect(route.preferredServer.profileId, selected.profileId);
+    expect(route.matchesPlaybackConnection(db, selected), isTrue);
+    final caption = Caption('English', 'en', '');
+    await expectLater(
+        api.getTranscript(original.videoId, caption, serverOverride: target),
+        throwsStateError);
+
+    final refresh = api.refreshPlaybackVideo(alternate, isCurrent: () => true);
+    final captions = api.getSharedPlaybackCaptions(original.videoId, caption,
+        server: route.server,
+        isCurrent: () => route.matchesPlaybackConnection(db, selected));
+    final rejected = Future.wait([
+      expectLater(refresh, throwsStateError),
+      expectLater(captions, throwsStateError),
+    ]);
+    await Future.wait([refreshStarted.future, captionsStarted.future])
+        .timeout(const Duration(seconds: 3));
+    await PlaybackInstanceFallback.saveSharing(destination, false);
+    refreshResponse.complete();
+    captionsResponse.complete();
+    await rejected;
+    expect(route.matchesPlaybackConnection(db, selected), isFalse);
+    expect(
+        await api.fetchPlaybackInstanceFallback(original,
+            isCurrent: () => true),
+        isNull);
+    expect(requests, hasLength(3));
+    expect(db.profileId, selected.profileId);
+    expect(await db.getCurrentlySelectedServer(), selected);
+    expect(await destination.getCurrentlySelectedServer(), selectedBackup);
+  });
 
   test('saved-only video needs no remote metadata when its local mux opens',
       () async {

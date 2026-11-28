@@ -104,6 +104,7 @@ import '../models/backend_recovery.dart';
 import '../models/playback_recovery.dart';
 import '../models/playback_learning_clock.dart';
 import '../models/music_audio_quality.dart';
+import '../models/playback_instance_fallback.dart';
 import '../models/music_passage_target.dart';
 import '../models/music_ab_repeat.dart';
 import '../models/local_music_playback.dart';
@@ -833,6 +834,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   Future<void>? _currentVideoRetry;
   int? _currentVideoRetryGeneration;
   PlaybackRecoveryBudget _playbackRecoveryBudget = PlaybackRecoveryBudget();
+  (int, String)? _playbackInstanceFallbackAttempt;
   _PlaybackRefreshRequest? _playbackRefresh;
   Video? _recoveringVideo;
   Duration? _recoveryProgressPosition;
@@ -2524,8 +2526,9 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       {bool Function()? isActive}) async {
     if (isLocalMusicPlaybackId(videoId)) return;
     final generation = _videoSwitchGeneration;
-    final video =
-        await service.getVideo(videoId).timeout(const Duration(seconds: 10));
+    final video = await service
+        .getVideo(videoId, onBackendRequest: (_) {})
+        .timeout(const Duration(seconds: 10));
     if (isClosed ||
         generation != _videoSwitchGeneration ||
         (isActive != null && !isActive())) {
@@ -2615,6 +2618,86 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       state.offlineCurrentlyPlaying == null &&
       state.currentlyPlaying != null &&
       _samePlaybackSource(video, state.currentlyPlaying!);
+
+  bool _reservePlaybackInstanceFallback(Video video) {
+    final attempt = (_videoSwitchGeneration, playbackQueueId(video));
+    if (_playbackInstanceFallbackAttempt == attempt) return false;
+    _playbackInstanceFallbackAttempt = attempt;
+    return true;
+  }
+
+  Future<Video?> _loadPlaybackInstanceFallback(Video video,
+      {required bool Function() isCurrent,
+      required bool Function(Video) reserve}) async {
+    final database = db;
+    final profile = database.profileId;
+    final proxy = NetworkProxy.instance.config;
+    final route = video.playbackConnection ?? video.backendPlayback;
+    bool current() =>
+        !isClosed &&
+        !_isDisposing &&
+        !_switchingProfile &&
+        identical(db, database) &&
+        database.profileId == profile &&
+        !NetworkProxy.instance.isChanging &&
+        identical(NetworkProxy.instance.config, proxy) &&
+        isCurrent();
+    if (!current() ||
+        video.explicitMusicDownload != null ||
+        video.downloadPlaybackOnly ||
+        CachedMusicPlayback.of(video) != null ||
+        isLocalMusicPlaybackId(video.videoId) ||
+        route?.isInstanceFallback == true ||
+        video.backendPlayback?.manualSelection == true ||
+        PlaybackInstanceFallback.preference(database) == null ||
+        !reserve(video)) {
+      return null;
+    }
+    try {
+      final fallback = await service.fetchPlaybackInstanceFallback(video,
+          isCurrent: current);
+      return current() ? fallback : null;
+    } catch (error) {
+      if (current()) {
+        log.fine('Playback instance fallback failed (${error.runtimeType})');
+      }
+      return null;
+    }
+  }
+
+  Future<Video?> tryPlaybackInstanceFallback(Video original,
+      {required bool Function() isCurrent}) {
+    final audio = state.isAudio;
+    return _loadPlaybackInstanceFallback(original,
+        isCurrent: () =>
+            state.isAudio == audio &&
+            _currentPlaybackSource(original) &&
+            isCurrent(),
+        reserve: _reservePlaybackInstanceFallback);
+  }
+
+  bool commitPlaybackInstanceFallback(Video previous, Video fallback) {
+    final route = fallback.playbackConnection;
+    if (!_currentPlaybackSource(previous) ||
+        playbackQueueId(previous) != playbackQueueId(fallback) ||
+        previous.videoId != fallback.videoId ||
+        route == null ||
+        !route.isInstanceFallback) {
+      return false;
+    }
+    final selected = db.getAccount(route.preferredServer.accountId);
+    if (selected?.inUse != true ||
+        !route.matchesPlaybackConnection(db, selected!)) {
+      return false;
+    }
+    _clearBackendProgress();
+    _clearPlaybackRecovery();
+    emit(state.copyWith(
+        currentlyPlaying: fallback,
+        requestedBackend: null,
+        backendRecovery: null));
+    return true;
+  }
 
   bool _currentWatchAudioSource(Video video) =>
       video.musicMetadata == null &&
@@ -2732,7 +2815,8 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     Future<void> check() async {
       if (route == null ||
           !active() ||
-          !route.matches(await database.getCurrentlySelectedServer()) ||
+          !route.matchesPlaybackConnection(
+              database, await database.getCurrentlySelectedServer()) ||
           !active()) {
         throw StateError('The playback connection changed.');
       }
@@ -2801,7 +2885,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     return route != null &&
         route.preferredServer.profileId == db.profileId &&
         saved?.inUse == true &&
-        route.matches(saved!);
+        route.matchesPlaybackConnection(db, saved!);
   }
 
   void reportPlaybackRecoveryReady(Video video, {required bool playing}) {
@@ -5464,6 +5548,13 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     final proxy = NetworkProxy.instance.config;
     final library = LocalMusicLibrary.instance;
     final localSelection = library.selectionId;
+    var triedInstanceFallback = false;
+    bool reserveInstanceFallback(Video _) {
+      if (triedInstanceFallback) return false;
+      triedInstanceFallback = true;
+      return true;
+    }
+
     bool current() =>
         !isClosed &&
         !_isDisposing &&
@@ -5482,7 +5573,10 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       var savedSponsors = const <SponsorSegment>[];
       if (entry is Video) {
         final resolved = await _resolvePlaybackVideo(entry,
-            audio: true, active: current, onPrepared: (source) {
+            audio: true,
+            active: current,
+            reserveInstanceFallback: reserveInstanceFallback,
+            onPrepared: (source) {
           savedSponsors = source.download.sponsorSegments;
         });
         if (!current() || resolved == null) return null;
@@ -5555,7 +5649,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
             position: position,
             savedSponsors: savedSponsors
           );
-        } on ManualMusicSourceFailure {
+        } on ManualMusicSourceFailure catch (failure) {
           final failed = entry;
           if (failed is! Video ||
               isLocalMusicPlaybackId(failed.videoId) ||
@@ -5566,9 +5660,16 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
           }
           // A saved-only candidate needs online metadata if its native open
           // failed. Both retries leave the active song's playback intact.
-          final next = failed.downloadPlaybackOnly
+          var next = failed.downloadPlaybackOnly
               ? await service.refreshPlaybackVideo(failed, isCurrent: current)
               : await service.retryVideoBackend(failed, isCurrent: current);
+          if (next == null &&
+              failure.canTryInstanceFallback &&
+              !failed.downloadPlaybackOnly &&
+              current()) {
+            next = await _loadPlaybackInstanceFallback(failed,
+                isCurrent: current, reserve: reserveInstanceFallback);
+          }
           if (!current() || next == null) break;
           skipDownload = skipDownload || failed.downloadPlaybackOnly;
           entry = next;
@@ -5878,14 +5979,37 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       CachedMusicPlayback.of(video) != null ||
       (video?.explicitMusicDownload ?? offline?.explicitMusicDownload) != null;
 
+  Video _withoutInstanceFallback(Video video) => video.copyWith(
+      formatStreams: null,
+      adaptiveFormats: null,
+      dashUrl: null,
+      hlsUrl: null,
+      captions: const [],
+      storyboards: const [],
+      backendPlayback: null,
+      playbackConnection: null,
+      playbackSourceId: null);
+
   Future<Video?> _resolvePlaybackVideo(Video video,
       {required bool audio,
       required bool Function() active,
       bool retainOnFailure = false,
       BackendPlayback? backendRequest,
+      bool Function(Video)? reserveInstanceFallback,
       void Function(DownloadPlaybackSource)? onPrepared,
       void Function(BackendPlayback)? onBackendRequest,
       VoidCallback? onRetry}) async {
+    final previous = state.currentlyPlaying;
+    final incomingRoute = video.playbackConnection ?? video.backendPlayback;
+    if (incomingRoute != null &&
+        incomingRoute.isInstanceFallback &&
+        (previous == null || !_samePlaybackSource(previous, video)) &&
+        (!active() || !incomingRoute.takeInitialPlaybackHandoff())) {
+      video = _withoutInstanceFallback(video);
+    }
+    if (backendRequest?.isInstanceFallback == true) {
+      backendRequest = null;
+    }
     if (isLocalMusicPlaybackId(video.videoId)) {
       if (!active()) return null;
       final track = audio
@@ -5933,14 +6057,27 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       if (!active()) return null;
       final prepared = await _adjacentMusic.forPlayback(video, downloaded);
       if (!active()) return null;
-      if (prepared != null) return prepared.preservingMusicMetadataFrom(video);
+      if (prepared != null &&
+          (prepared.playbackConnection ?? prepared.backendPlayback)
+                  ?.isInstanceFallback !=
+              true) {
+        return prepared.preservingMusicMetadataFrom(video);
+      }
     }
-    if (backendRequest == null &&
-        video.formatStreams != null &&
-        video.adaptiveFormats != null) {
-      final connection = video.playbackConnection ?? video.backendPlayback;
+    final connection = video.playbackConnection ?? video.backendPlayback;
+    final oldRetryLimit = connection != null &&
+        !connection.isInstanceFallback &&
+        !video.downloadPlaybackOnly &&
+        (previous == null || !_samePlaybackSource(previous, video)) &&
+        connection.backendRetryLimit !=
+            PlaybackInstanceFallback.backendRetries(db);
+    if (!oldRetryLimit &&
+        backendRequest == null &&
+        (connection?.isInstanceFallback == true ||
+            (video.formatStreams != null && video.adaptiveFormats != null))) {
       if (connection == null ||
-          connection.matches(await db.getCurrentlySelectedServer())) {
+          connection.matchesPlaybackConnection(
+              db, await db.getCurrentlySelectedServer())) {
         return active() ? video : null;
       }
       if (!active()) return null;
@@ -5949,18 +6086,35 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     final loadVideo = music ? service.getMusicVideo : service.getVideo;
     final loadBackendVideo =
         music ? service.getMusicVideoForBackend : service.getVideoForBackend;
+    BackendPlayback? primaryAttempt;
     var resolving = true;
     bool stillResolving() => resolving && active();
     try {
       final result = backendRequest == null
           ? await loadVideo(video.videoId, onBackendRequest: (request) {
-              if (stillResolving()) onBackendRequest?.call(request);
+              if (!stillResolving()) return;
+              primaryAttempt = request;
+              onBackendRequest?.call(request);
             },
               loadObserver: VideoLoadObserver(
                   isCurrent: stillResolving, onRetry: onRetry ?? () {}))
           : await loadBackendVideo(video.videoId, backendRequest,
               isCurrent: active);
       return active() ? result.preservingMusicMetadataFrom(video) : null;
+    } catch (error) {
+      final attempt = primaryAttempt;
+      if (backendRequest != null ||
+          attempt == null ||
+          connection?.isInstanceFallback == true ||
+          !isBackendRetryable(error)) {
+        rethrow;
+      }
+      final fallback = await _loadPlaybackInstanceFallback(
+          video.copyWith(playbackConnection: attempt),
+          isCurrent: active,
+          reserve: reserveInstanceFallback ?? _reservePlaybackInstanceFallback);
+      if (fallback != null) return fallback;
+      rethrow;
     } finally {
       resolving = false;
     }
@@ -6304,7 +6458,10 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
           mediaCommand: mediaCommand,
           currentlyPlaying: currentlyPlaying,
           selectedFullScreenIndex: _tabForVideo(snapshot, currentlyPlaying),
-          backendRecovery: preparedMusic == null && !stagedQueue
+          backendRecovery: preparedMusic == null &&
+                  !stagedQueue &&
+                  currentlyPlaying?.playbackConnection?.isInstanceFallback !=
+                      true
               ? snapshot.backendRecovery
               : null,
           requestedBackend: currentlyPlaying?.backendPlayback,
@@ -6464,6 +6621,8 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       throw StateError('The current video or connection changed.');
     }
     final generation = _videoSwitchGeneration;
+    final owner = db.forProfile(db.profileId);
+    final backendRetries = PlaybackInstanceFallback.backendRetries(owner);
     bool active() =>
         !isClosed &&
         !state.isClosing &&
@@ -6494,8 +6653,10 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         saved = updated;
       }
       if (!active()) throw StateError('The current video changed.');
-      final selection =
-          BackendPlayback.manual(saved, value, health: service.backendHealth);
+      final selection = BackendPlayback.manual(saved, value,
+          health: service.backendHealth,
+          backendRetries: backendRetries,
+          reliabilityOwner: owner);
       if (!selection.matches(await db.getCurrentlySelectedServer()) ||
           !active()) {
         throw StateError('The playback connection changed.');
@@ -7618,17 +7779,26 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     }
     final video = state.currentlyPlaying;
     final offline = state.offlineCurrentlyPlaying;
-    final IdedVideo? retry =
-        video?.copyWith(formatStreams: null, adaptiveFormats: null) ?? offline;
+    final IdedVideo? retry = switch (video) {
+      final Video candidate
+          when candidate.playbackConnection?.isInstanceFallback == true =>
+        _withoutInstanceFallback(candidate),
+      final Video candidate =>
+        candidate.copyWith(formatStreams: null, adaptiveFormats: null),
+      null => offline,
+    };
     if (retry == null) return Future.value();
     final previousRoute = video?.backendPlayback;
     final selector = previousRoute?.server.backendSelector;
-    final manualRoute =
-        previousRoute?.manualSelection == true && selector != null
-            ? BackendPlayback.manual(previousRoute!.preferredServer,
-                selector.selectedValue(previousRoute.server),
-                health: service.backendHealth)
-            : null;
+    BackendPlayback? manualRoute;
+    if (previousRoute?.manualSelection == true && selector != null) {
+      final owner = db.forProfile(db.profileId);
+      manualRoute = BackendPlayback.manual(previousRoute!.preferredServer,
+          selector.selectedValue(previousRoute.server),
+          health: service.backendHealth,
+          backendRetries: PlaybackInstanceFallback.backendRetries(owner),
+          reliabilityOwner: owner);
+    }
     final operation = _switchToVideo(retry,
         startAt: state.position,
         playing: true,
@@ -9669,7 +9839,9 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
                 source.backendPlayback ??
                 e.playbackConnection ??
                 e.backendPlayback;
-        final owner = connection?.server;
+        final owner = connection?.isInstanceFallback == true
+            ? connection?.preferredServer
+            : connection?.server;
         final images = music == null
             ? e.videoThumbnails
             : displaySongThumbnails(

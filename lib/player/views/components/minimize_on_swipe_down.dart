@@ -26,6 +26,7 @@ class MinimizeDragScope extends InheritedWidget {
 class MinimizeOnSwipeDown extends StatefulWidget {
   final bool enabled;
   final bool scrollable;
+  final bool allowShortSwipe;
   final EdgeInsetsGeometry? scrollPadding;
   final VoidCallback onSwipeDown;
   final Widget child;
@@ -34,6 +35,7 @@ class MinimizeOnSwipeDown extends StatefulWidget {
     super.key,
     required this.enabled,
     this.scrollable = false,
+    this.allowShortSwipe = false,
     this.scrollPadding,
     required this.onSwipeDown,
     required this.child,
@@ -45,33 +47,49 @@ class MinimizeOnSwipeDown extends StatefulWidget {
 
 class _MinimizeOnSwipeDownState extends State<MinimizeOnSwipeDown> {
   static const _swipeDistance = 200.0;
+  static const _shortSwipeDistance = 100.0;
+  static const _flingDistance = 36.0;
+  static const _flingVelocity = 650.0;
 
   int? _pointer;
   final _activePointers = <int>{};
   Offset? _startPosition;
-  bool _scrollDragStarted = false;
+  VelocityTracker? _velocityTracker;
+  bool _verticalDragStarted = false;
   MinimizeDragScope? _previewScope;
   Object? _gestureIdentity;
   final _scrollController = ScrollController();
 
   @override
-  void dispose() {
-    final preview = _previewScope;
-    if (preview != null) {
-      // A replacement surface can unmount this listener during the frame.
-      WidgetsBinding.instance.addPostFrameCallback((_) => preview.onEnd(false));
+  void didUpdateWidget(MinimizeOnSwipeDown oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.enabled && !widget.enabled) {
+      _deferPreviewCancellation();
+      _resetPointer();
     }
-    _pointer = null;
+  }
+
+  @override
+  void dispose() {
+    _deferPreviewCancellation();
+    _resetPointer();
     _scrollController.dispose();
     super.dispose();
+  }
+
+  void _deferPreviewCancellation() {
+    final preview = _previewScope;
+    if (preview == null) return;
+    _previewScope = null;
+    // The preview lives on an ancestor that may already have built this frame.
+    WidgetsBinding.instance.addPostFrameCallback((_) => preview.onEnd(false));
   }
 
   void _pointerDown(PointerDownEvent event) {
     _activePointers.add(event.pointer);
     if (_activePointers.length > 1) {
       _endPreview(false);
-      _pointer = null;
-      _startPosition = null;
+      _resetPointer();
       return;
     }
     // Reaching the top during a scroll needs a fresh pull to minimize.
@@ -81,7 +99,10 @@ class _MinimizeOnSwipeDownState extends State<MinimizeOnSwipeDown> {
             _scrollController.position.extentBefore == 0)) {
       _pointer = event.pointer;
       _startPosition = event.position;
-      _scrollDragStarted = false;
+      if (widget.allowShortSwipe) {
+        _velocityTracker = VelocityTracker.withKind(event.kind)
+          ..addPosition(event.timeStamp, event.position);
+      }
       _gestureIdentity = MinimizeDragScope.maybeOf(context)?.identity;
     }
   }
@@ -90,32 +111,48 @@ class _MinimizeOnSwipeDownState extends State<MinimizeOnSwipeDown> {
       widget.enabled &&
       _gestureIdentity == MinimizeDragScope.maybeOf(context)?.identity;
 
+  bool get _ownsVerticalDrag =>
+      _verticalDragStarted || (!widget.scrollable && !widget.allowShortSwipe);
+
   void _endPreview(bool minimize) {
     final preview = _previewScope;
     _previewScope = null;
     preview?.onEnd(minimize);
   }
 
+  void _resetPointer() {
+    _pointer = null;
+    _startPosition = null;
+    _velocityTracker = null;
+    _verticalDragStarted = false;
+  }
+
   void _pointerMove(PointerMoveEvent event) {
     if (event.pointer != _pointer || _startPosition == null) return;
     if (!_current) {
       _endPreview(false);
-      _pointer = null;
-      _startPosition = null;
+      _resetPointer();
       return;
     }
     final distance = event.position - _startPosition!;
-    // A horizontal seek/track swipe retains ownership for its whole gesture.
-    if (_previewScope == null &&
-        distance.dx.abs() > kTouchSlop &&
-        distance.dx.abs() > distance.dy.abs()) {
-      _pointer = null;
-      _startPosition = null;
+    // A horizontal seek/track swipe or a Music pull that began by scrolling
+    // upward retains ownership for the rest of the gesture.
+    final horizontal =
+        distance.dx.abs() > kTouchSlop && distance.dx.abs() > distance.dy.abs();
+    final scrollingUp = widget.allowShortSwipe &&
+        -distance.dy > kTouchSlop &&
+        -distance.dy > distance.dx.abs();
+    if (_previewScope == null && (horizontal || scrollingUp)) {
+      _resetPointer();
       return;
     }
-    if ((!widget.scrollable || _scrollDragStarted) &&
-        (_previewScope != null ||
-            (distance.dy > kTouchSlop && distance.dy > distance.dx.abs()))) {
+    _velocityTracker?.addPosition(event.timeStamp, event.position);
+    if (_ownsVerticalDrag) _updatePreview(distance);
+  }
+
+  void _updatePreview(Offset distance) {
+    if (_previewScope != null ||
+        (distance.dy > kTouchSlop && distance.dy > distance.dx.abs())) {
       final motion = MinimizeDragScope.maybeOf(context);
       if (motion != null) {
         _previewScope = motion;
@@ -126,12 +163,31 @@ class _MinimizeOnSwipeDownState extends State<MinimizeOnSwipeDown> {
     }
   }
 
+  void _verticalDragStart(DragStartDetails details) {
+    final start = _startPosition;
+    if (start == null || !_current) return;
+    _verticalDragStarted = true;
+    _updatePreview(details.globalPosition - start);
+  }
+
   bool _scrollStart(ScrollStartNotification notification) {
-    if (notification.depth == 0 && notification.dragDetails != null) {
+    if (_pointer != null &&
+        notification.depth == 0 &&
+        notification.dragDetails != null) {
       // Only the outer scroll view may minimize; text selection owns its drag.
-      _scrollDragStarted = true;
+      _verticalDragStarted = true;
     }
     return false;
+  }
+
+  bool _shouldMinimize(Offset distance) {
+    if (distance.dy <= distance.dx.abs()) return false;
+    if (!widget.allowShortSwipe) return distance.dy > _swipeDistance;
+    if (distance.dy >= _shortSwipeDistance) return true;
+    if (distance.dy < _flingDistance) return false;
+    final velocity =
+        _velocityTracker?.getVelocity().pixelsPerSecond ?? Offset.zero;
+    return velocity.dy >= _flingVelocity && velocity.dy > velocity.dx.abs();
   }
 
   void _pointerUp(PointerUpEvent event) {
@@ -141,13 +197,8 @@ class _MinimizeOnSwipeDownState extends State<MinimizeOnSwipeDown> {
     }
 
     final distance = event.position - _startPosition!;
-    _pointer = null;
-    _startPosition = null;
-
-    final minimize = _current &&
-        (!widget.scrollable || _scrollDragStarted) &&
-        distance.dy > _swipeDistance &&
-        distance.dy > distance.dx.abs();
+    final minimize = _current && _ownsVerticalDrag && _shouldMinimize(distance);
+    _resetPointer();
     if (_previewScope != null) {
       _endPreview(minimize);
     } else if (minimize) {
@@ -159,32 +210,41 @@ class _MinimizeOnSwipeDownState extends State<MinimizeOnSwipeDown> {
     _activePointers.remove(event.pointer);
     if (event.pointer == _pointer) {
       _endPreview(false);
-      _pointer = null;
-      _startPosition = null;
+      _resetPointer();
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    var child = widget.child;
+    if (widget.scrollable) {
+      child = NotificationListener<ScrollStartNotification>(
+        onNotification: _scrollStart,
+        child: SingleChildScrollView(
+          controller: _scrollController,
+          padding: widget.scrollPadding,
+          physics:
+              widget.enabled ? const AlwaysScrollableScrollPhysics() : null,
+          child: child,
+        ),
+      );
+    } else if (widget.allowShortSwipe && widget.enabled) {
+      // The artwork's horizontal recognizer can win a diagonal gesture even
+      // when its vertical displacement is larger. Follow the arena result.
+      child = GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        excludeFromSemantics: true,
+        onVerticalDragStart: _verticalDragStart,
+        child: child,
+      );
+    }
     return Listener(
       behavior: HitTestBehavior.translucent,
       onPointerDown: _pointerDown,
       onPointerMove: _pointerMove,
       onPointerUp: _pointerUp,
       onPointerCancel: _pointerCancel,
-      child: widget.scrollable
-          ? NotificationListener<ScrollStartNotification>(
-              onNotification: _scrollStart,
-              child: SingleChildScrollView(
-                controller: _scrollController,
-                padding: widget.scrollPadding,
-                physics: widget.enabled
-                    ? const AlwaysScrollableScrollPhysics()
-                    : null,
-                child: widget.child,
-              ),
-            )
-          : widget.child,
+      child: child,
     );
   }
 }

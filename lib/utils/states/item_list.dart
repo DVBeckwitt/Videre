@@ -21,6 +21,7 @@ class ItemListCubit<T> extends Cubit<ItemListState<T>> {
   final ScrollController scrollController = ScrollController();
   Timer? _loadMoreTimer;
   bool _loading = false;
+  int _sourceRevision = 0;
   Completer<void>? _loadComplete;
   Future<List<T>> Function()? _failedLoad;
   late List<T> _items;
@@ -28,6 +29,7 @@ class ItemListCubit<T> extends Cubit<ItemListState<T>> {
   ItemListCubit(super.initialState) {
     _items = state.items;
     state.itemList.changes?.addListener(_visibilityChanged);
+    state.itemList.sourceChanges?.addListener(_sourceChanged);
     onReady();
   }
 
@@ -37,9 +39,26 @@ class ItemListCubit<T> extends Cubit<ItemListState<T>> {
     }
   }
 
+  void _sourceChanged() {
+    if (isClosed) return;
+    final revision = ++_sourceRevision;
+    _items = [];
+    _failedLoad = null;
+    emit(state.copyWith(items: [], loading: true, error: ItemListErrors.none));
+    unawaited(_reloadSource(revision));
+  }
+
+  Future<void> _reloadSource(int revision) async {
+    await _loadComplete?.future;
+    if (revision == _sourceRevision) {
+      await loadItems(state.itemList.refresh);
+    }
+  }
+
   @override
   Future<void> close() {
     state.itemList.changes?.removeListener(_visibilityChanged);
+    state.itemList.sourceChanges?.removeListener(_sourceChanged);
     _loadMoreTimer?.cancel();
     _failedLoad = null;
     scrollController.dispose();
@@ -94,10 +113,12 @@ class ItemListCubit<T> extends Cubit<ItemListState<T>> {
     _loading = true;
     _failedLoad = null;
     final completion = _loadComplete = Completer<void>();
+    final revision = _sourceRevision;
+    bool current() => !isClosed && revision == _sourceRevision;
     emit(state.copyWith(error: ItemListErrors.none, loading: true));
     try {
       var items = await refreshFunction();
-      if (!isClosed) {
+      if (current()) {
         _items = items;
         emit(state.copyWith(
             loading: false, items: state.itemList.visibleItems(items)));
@@ -112,7 +133,7 @@ class ItemListCubit<T> extends Cubit<ItemListState<T>> {
       } else {
         error = ItemListErrors.couldNotFetchItems;
       }
-      if (!isClosed) {
+      if (current()) {
         _failedLoad = refreshFunction;
         emit(state.copyWith(error: error, loading: false));
       }

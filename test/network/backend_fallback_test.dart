@@ -6,6 +6,7 @@ import 'package:clipious/globals.dart';
 import 'package:clipious/network/network_proxy.dart';
 import 'package:clipious/player/dash_manifest_resolver.dart';
 import 'package:clipious/player/models/backend_playback.dart';
+import 'package:clipious/player/models/playback_reliability.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/backend_selector.dart';
 import 'package:clipious/settings/models/db/server.dart';
@@ -84,6 +85,83 @@ void main() {
     instance = await db.getCurrentlySelectedServer();
   });
   tearDown(() => db.close());
+
+  test('playback reliability persists scoped counts and stable backend keys',
+      () async {
+    final owner = db.forProfile(db.profileId);
+    final other = await db.createProfile('Another listener');
+    final revision = PlaybackReliability.revision;
+    final target = revision.value + 3;
+    final committed = Completer<void>();
+    void onChanged() {
+      if (revision.value == target) committed.complete();
+    }
+
+    revision.addListener(onChanged);
+    addTearDown(() => revision.removeListener(onChanged));
+    expect(PlaybackReliability.account(owner, instance).score, 0.5);
+    PlaybackReliability.record(db, instance, backendIndex: 0, success: true);
+    PlaybackReliability.record(db, instance, backendIndex: 1, success: false);
+    PlaybackReliability.record(db, instance, backendIndex: 0, success: true);
+    await db.useProfile(other.id);
+    await committed.future;
+
+    final account = PlaybackReliability.account(owner, instance);
+    final first = PlaybackReliability.backend(owner, instance, 0);
+    final second = PlaybackReliability.backend(owner, instance, 1);
+    expect((account.successes, account.failures), (2, 1));
+    expect((first.successes, first.failures), (2, 0));
+    expect((second.successes, second.failures), (0, 1));
+    expect(first.score, greaterThan(account.score));
+    expect(second.score, lessThan(0.5));
+    expect(PlaybackReliability.account(db, instance).attempts, 0);
+
+    final selector = instance.backendSelector!;
+    final reordered = instance.copyWith(
+        backendSelector: BackendSelector(
+            selector.cookieName, selector.options.reversed.toList()));
+    expect(PlaybackReliability.backend(owner, reordered, 3).successes, 2);
+    final stored = owner
+        .getAllSettings()
+        .singleWhere((setting) => setting.name == 'playback-reliability-v1')
+        .value;
+    expect(stored, isNot(contains(instance.url)));
+    expect(stored, isNot(contains('account-session')));
+    expect(stored, isNot(contains(selector.cookieName)));
+  });
+
+  test('shared backup outcomes belong only to the listening profile', () async {
+    final sharedProfile = await db.createProfile('Backup account owner');
+    final owner = db.forProfile(db.profileId);
+    final shared = db.forProfile(sharedProfile.id);
+    final account = instance.copyWith(
+        id: 'shared-account',
+        profileId: sharedProfile.id,
+        url: 'https://backup.example/first');
+    await shared.upsertServer(account);
+    final revision = PlaybackReliability.revision;
+    final recorded = Completer<void>();
+    void onChanged() {
+      if (!recorded.isCompleted &&
+          PlaybackReliability.backend(owner, account, 0).attempts == 1) {
+        recorded.complete();
+      }
+    }
+
+    revision.addListener(onChanged);
+    addTearDown(() => revision.removeListener(onChanged));
+    PlaybackReliability.record(owner, account,
+        backendIndex: 0, success: true, accountOwner: shared);
+    await recorded.future.timeout(const Duration(seconds: 3));
+    expect(PlaybackReliability.account(owner, account).successes, 1);
+    expect(PlaybackReliability.account(shared, account).attempts, 0);
+    expect(PlaybackReliability.account(owner, instance).attempts, 0);
+    expect(
+        PlaybackReliability.account(
+                owner, account.copyWith(url: 'https://backup.example/second'))
+            .attempts,
+        0);
+  });
 
   test('temporary metadata failure retries with isolated alternate headers',
       () async {

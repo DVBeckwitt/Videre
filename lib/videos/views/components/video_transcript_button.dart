@@ -33,7 +33,10 @@ class VideoTranscriptButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final locals = AppLocalizations.of(context)!;
-    final available = enabled && video.captions.isNotEmpty;
+    final route = video.playbackConnection ?? video.backendPlayback;
+    final available = enabled &&
+        video.captions.isNotEmpty &&
+        route?.server.profileId == route?.preferredServer.profileId;
     void open() {
       final player = context.read<PlayerCubit>();
       final opened = player.state;

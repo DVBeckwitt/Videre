@@ -23,6 +23,27 @@ a remaining profile. Saved sign-ins and background notification data are retired
 before local records are removed. Other profiles and device-wide settings are
 preserved. If cleanup fails, the profile remains listed so deletion can be retried.
 
+## Playback and subscription accounts
+
+In **Settings → Profiles**, **Subscription account** sets which saved sign-in
+provides channel follows and the subscription feed. **Use the selected
+instance** follows your playback selection. Background subscription alerts
+are available when the subscription account is also the selected instance
+account.
+
+**Alternate backend attempts** sets a limit of zero to four for the selected
+instance. The default is two. **Playback backup instance** is off by default.
+Choose a saved instance or **Best saved instance** to try the same media on
+one backup after eligible Watch, Music, or Listen recovery attempts.
+To use an instance from another profile, turn on **Share instances for
+playback retries** in that profile. Then open your active profile and
+choose that profile's instance under **Playback backup instance**. The
+active profile keeps the queue, playback history, and subscriptions. Turning
+sharing off withdraws access to that backup.
+**Playback reliability** shows successful starts and retry-eligible playback
+failures for each saved instance and its configured backends. Videre saves
+these counts in the active profile and uses them to rank eligible retries.
+
 ## Storage and migration
 
 The existing library stays in its original stores and becomes the `default`

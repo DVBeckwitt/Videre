@@ -508,6 +508,8 @@ class _PlayerState extends State<Player> {
                                                             MinimizeOnSwipeDown(
                                                                 enabled:
                                                                     isMusic,
+                                                                allowShortSwipe:
+                                                                    isMusic,
                                                                 onSwipeDown: cubit
                                                                     .showMiniPlayer,
                                                                 child: AppBar(

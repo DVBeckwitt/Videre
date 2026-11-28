@@ -4,11 +4,13 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/offline_subscriptions/models/offline_subscription.dart';
 import 'package:clipious/router.dart';
+import 'package:clipious/settings/views/components/saved_account_setting.dart';
 import 'package:clipious/subscription_management/models/subscription.dart';
 import 'package:clipious/utils.dart';
 import 'package:clipious/utils/views/components/simple_list_item.dart';
 import 'package:clipious/utils/views/components/top_loading.dart';
 
+import '../../services/subscription_account.dart';
 import '../../states/manage_subscriptions.dart';
 
 @RoutePage()
@@ -48,6 +50,18 @@ class ManageSubscriptionsScreen extends StatelessWidget {
                     length: state.isLoggedIn ? 2 : 1,
                     child: Column(
                       children: [
+                        SavedAccountSetting(
+                          title: locals.subscriptionAccount,
+                          defaultLabel: locals.subscriptionAccountDefault,
+                          unavailableLabel:
+                              locals.subscriptionAccountUnavailable,
+                          help: locals.subscriptionAccountHelp,
+                          icon: Icons.subscriptions_outlined,
+                          revision: SubscriptionAccount.revision,
+                          preference: SubscriptionAccount.preference,
+                          choices: SubscriptionAccount.choices,
+                          save: SubscriptionAccount.save,
+                        ),
                         TabBar(tabs: [
                           if (state.isLoggedIn)
                             Tab(

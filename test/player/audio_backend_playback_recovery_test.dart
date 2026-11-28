@@ -21,6 +21,7 @@ import 'package:clipious/player/models/local_music_playback.dart';
 import 'package:clipious/music/views/components/music_audio_quality_button.dart';
 import 'package:clipious/player/audio_playback_sources.dart';
 import 'package:clipious/player/models/music_audio_quality.dart';
+import 'package:clipious/player/models/playback_instance_fallback.dart';
 import 'package:clipious/media_handler.dart';
 import 'package:clipious/network/gateway_context.dart';
 import 'package:clipious/network/network_proxy.dart';
@@ -29,6 +30,7 @@ import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/player/models/media_command.dart';
 import 'package:clipious/player/models/media_event.dart';
 import 'package:clipious/player/models/playback_queue.dart';
+import 'package:clipious/player/models/playback_reliability.dart';
 import 'package:clipious/player/states/audio_player.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/service.dart';
@@ -322,6 +324,8 @@ class _RetryService extends Service {
   int retryCalls = 0;
   int metadataCalls = 0;
   int refreshMetadataCalls = 0;
+  int instanceFallbackCalls = 0;
+  Video? instanceFallbackVideo;
   Video? metadataResult;
   Object? metadataError;
   Completer<void>? metadataGate;
@@ -354,6 +358,13 @@ class _RetryService extends Service {
     return video.copyWith(
         playbackConnection: video.playbackConnection ?? video.backendPlayback,
         playbackSourceId: Object());
+  }
+
+  @override
+  Future<Video?> fetchPlaybackInstanceFallback(Video original,
+      {required bool Function() isCurrent}) async {
+    instanceFallbackCalls++;
+    return isCurrent() ? instanceFallbackVideo : null;
   }
 
   @override
@@ -494,6 +505,31 @@ void main() {
         native);
     players.add(audio);
     return audio;
+  }
+
+  Future<Server> enableBackup(Video source, {String? sharingProfile}) async {
+    final owner = sharingProfile == null ? db : db.forProfile(sharingProfile);
+    final target = const Server(
+            id: 'music-backup',
+            url: 'https://backup.example',
+            customHeaders: {'X-Backup': 'backup-only'})
+        .copyWith(profileId: owner.profileId);
+    await owner.upsertServer(target);
+    if (sharingProfile != null) {
+      await PlaybackInstanceFallback.saveSharing(owner, true);
+    }
+    await PlaybackInstanceFallback.save(
+        db, PlaybackInstanceFallback.choiceId(db, target));
+    final selected = await db.getCurrentlySelectedServer();
+    retryService.instanceFallbackVideo = _video(source.videoId, target)
+        .copyWith(
+            backendPlayback: null,
+            playbackConnection:
+                BackendPlayback.instanceFallback(selected, target),
+            playbackSourceId: Object(),
+            queueEntryId: source.queueEntryId,
+            musicMetadata: source.musicMetadata);
+    return target;
   }
 
   Future<Video> savedAudio({AudioTrack? track}) async {
@@ -928,6 +964,198 @@ void main() {
     expect(audio.state.video!.backendPlayback, isNull);
     expect(native.nativePlaying, isTrue);
   });
+
+  test(
+      'Music backup waits for native readiness after same-instance alternatives',
+      () async {
+    final source = _video('song', preferred).copyWith(
+        playbackSourceId: Object(),
+        queueEntryId: 'song-occurrence',
+        musicMetadata: const MusicMetadata(title: 'Song', artist: 'Artist'));
+    final target = await enableBackup(source);
+    final started = Completer<void>();
+    final ready = Completer<void>();
+    final native = _NativeAudio()
+      ..errors.addAll([_retryable(), _retryable(), _retryable()]);
+    native.onLoad = () {
+      if ((native.sources.last as UriAudioSource).uri.origin == target.url) {
+        native.loadGate = ready;
+        started.complete();
+      }
+    };
+    final queue = [source, _video('next', preferred)];
+    player.emit(player.state.copyWith(isHidden: false, videos: queue));
+    final audio = create(native, video: source);
+    final playback =
+        audio.playVideo(false, startAt: const Duration(seconds: 25));
+    addTearDown(() {
+      if (!ready.isCompleted) ready.complete();
+    });
+    await started.future.timeout(const Duration(seconds: 5));
+
+    expect(retryService.retryCalls, 3);
+    expect(retryService.instanceFallbackCalls, 1);
+    expect(
+        native.sources.map((source) => (source as UriAudioSource).uri.origin),
+        [preferred.url, preferred.url, preferred.url, target.url]);
+    expect(
+        player.state.currentlyPlaying?.playbackConnection?.isInstanceFallback,
+        isNot(true));
+    expect(
+        audio.state.video?.playbackConnection?.isInstanceFallback, isNot(true));
+    expect(native.nativePlaying, isFalse);
+    expect(PlaybackReliability.account(db, target).attempts, 0);
+
+    final recorded = Completer<void>();
+    void observeOutcome() {
+      if (!recorded.isCompleted &&
+          PlaybackReliability.account(db, target).attempts != 0) {
+        recorded.complete();
+      }
+    }
+
+    PlaybackReliability.revision.addListener(observeOutcome);
+    addTearDown(
+        () => PlaybackReliability.revision.removeListener(observeOutcome));
+    ready.complete();
+    await playback;
+    await recorded.future.timeout(const Duration(seconds: 5));
+    expect(PlaybackReliability.account(db, target).successes, 1);
+    expect(PlaybackReliability.account(db, preferred).failures, 3);
+    for (final index in [0, 1, 2]) {
+      expect(PlaybackReliability.backend(db, preferred, index).failures, 1);
+    }
+    final mounted = native.sources.last as UriAudioSource;
+    expect(mounted.headers?['X-Backup'], 'backup-only');
+    expect(mounted.headers?['X-Instance'], isNull);
+    expect(mounted.headers?['Cookie'], isNull);
+    expect(native.sourcePositions.last, const Duration(seconds: 25));
+    expect(player.state.currentlyPlaying, same(audio.state.video));
+    expect(player.state.currentlyPlaying?.queueEntryId, source.queueEntryId);
+    expect(player.state.videos, queue);
+    expect(
+        (await db.getCurrentlySelectedServer()).accountId, preferred.accountId);
+    expect(native.nativePlaying, isTrue);
+  });
+
+  for (final pending in [true, false]) {
+    test(
+        'revoking profile sharing retires only the backup audio, pending=$pending',
+        () async {
+      final source = _video('song', preferred).copyWith(
+          backendPlayback: null,
+          playbackConnection: BackendPlayback(preferred),
+          playbackSourceId: Object(),
+          queueEntryId: 'song-occurrence',
+          musicMetadata: const MusicMetadata(title: 'Song', artist: 'Artist'));
+      final primaryProfile = db.profileId;
+      final shared = await db.createProfile('An authorized listener');
+      final backup = await enableBackup(source, sharingProfile: shared.id);
+      final started = Completer<void>();
+      final ready = Completer<void>();
+      addTearDown(() {
+        if (!ready.isCompleted) ready.complete();
+      });
+      final native = _NativeAudio()..errors.add(_retryable());
+      native.onLoad = () {
+        if ((native.sources.last as UriAudioSource).uri.origin == backup.url) {
+          if (pending) native.loadGate = ready;
+          started.complete();
+        }
+      };
+      final queue = [source, _video('next', preferred)];
+      player.emit(player.state.copyWith(isHidden: false, videos: queue));
+      final audio = create(native, video: source);
+      const startAt = Duration(seconds: 23);
+      final playback = audio.playVideo(false, startAt: startAt);
+      await started.future.timeout(const Duration(seconds: 5));
+
+      final admitted = native.sources.last as ProgressiveAudioSource;
+      expect(admitted.headers?['X-Backup'], 'backup-only');
+      expect(admitted.headers?['Cookie'], isNull);
+      expect(
+          admitted.headers?[gatewayContextHeader],
+          GatewayRequestContext.forAccount(
+                  shared.id, backup.accountId, backup.url)
+              ?.encoded);
+      expect(admitted.playbackCache, isNull);
+      const advanced = Duration(seconds: 41);
+      if (!pending) {
+        await playback;
+        expect(native.nativePlaying, isTrue);
+        native.nativePosition = advanced;
+      }
+
+      await PlaybackInstanceFallback.saveSharing(
+          db.forProfile(shared.id), false);
+      ready.complete();
+      await playback;
+      await _flush();
+
+      expect(native.stopCalls, 1);
+      expect(native.disposed, isTrue);
+      expect(native.nativePlaying, isFalse);
+      expect(audio.audioPlayer, isNull);
+      expect(audio.state.audioPosition, pending ? startAt : advanced);
+      expect(player.state.videos, queue);
+      expect(player.state.currentQueueId, source.queueEntryId);
+      expect(retryService.instanceFallbackCalls, 1);
+      expect(db.profileId, primaryProfile);
+      expect((await db.getCurrentlySelectedServer()).accountId,
+          preferred.accountId);
+    });
+  }
+
+  for (final (domain, stalled) in [
+    ('Music', false),
+    ('Watch audio', false),
+    ('Music', true),
+  ]) {
+    test('$domain backup retains the native playhead, stalled=$stalled',
+        () async {
+      final source = _video('song', preferred).copyWith(
+          backendPlayback: null,
+          playbackConnection: BackendPlayback(preferred),
+          playbackSourceId: Object(),
+          queueEntryId: 'song-occurrence',
+          musicMetadata: domain == 'Music'
+              ? const MusicMetadata(title: 'Song', artist: 'Artist')
+              : null);
+      await enableBackup(source);
+      final native = _NativeAudio();
+      final queue = [source, _video('next', preferred)];
+      player.emit(player.state.copyWith(isHidden: false, videos: queue));
+      final audio = create(native, video: source);
+      await audio.playVideo(false, startAt: const Duration(seconds: 12));
+      native.nativePosition = const Duration(seconds: 80);
+      final recovered = audio.stream.firstWhere((state) => !state.loading);
+      if (stalled) {
+        for (final sample in [
+          _progress(0, 10),
+          _progress(2, 37),
+          for (var time = 4; time <= 24; time += 2) _progress(time, 37),
+        ]) {
+          native.progressSamples.add(sample);
+          await audio.checkForStalledPlayback();
+        }
+      } else {
+        native.progressSamples.add(_progress(2, 37));
+        audio.onPlaybackError(_retryable());
+        audio.onPlaybackError(_retryable());
+      }
+      await recovered.timeout(const Duration(seconds: 5));
+
+      expect(player.refreshCalls, 1);
+      expect(retryService.retryCalls, 0);
+      expect(retryService.instanceFallbackCalls, 1);
+      expect(native.sources, hasLength(2));
+      expect(native.sourcePositions.last, const Duration(seconds: 37));
+      expect(player.state.currentlyPlaying, same(audio.state.video));
+      expect(player.state.currentlyPlaying?.queueEntryId, source.queueEntryId);
+      expect(player.state.videos, queue);
+      expect(native.nativePlaying, isTrue);
+    });
+  }
 
   for (final stalled in [false, true]) {
     test('manual Music reconnect retains the native playhead, stalled=$stalled',

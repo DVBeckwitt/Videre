@@ -753,6 +753,7 @@ class _MusicPlayerArtworkState extends State<MusicPlayerArtwork>
             if (widget.swipeToMinimize)
               MinimizeOnSwipeDown(
                 enabled: true,
+                allowShortSwipe: true,
                 onSwipeDown: player.showMiniPlayer,
                 child: artwork,
               )

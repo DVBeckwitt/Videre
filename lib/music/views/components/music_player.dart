@@ -127,7 +127,9 @@ class MusicPlaybackLabels {
         :final playbackConnection,
         :final backendPlayback
       )
-          when ((playbackConnection ?? backendPlayback)?.server.profileId ??
+          when ((playbackConnection ?? backendPlayback)
+                      ?.preferredServer
+                      .profileId ??
                   library.profileId) ==
               library.profileId =>
         musicMetadata,
@@ -461,6 +463,7 @@ class _MusicPlayerState extends State<MusicPlayer>
                 key: const ValueKey('music-now-playing-scroll'),
                 enabled: swipeToMinimize,
                 scrollable: true,
+                allowShortSwipe: true,
                 onSwipeDown: player.showMiniPlayer,
                 scrollPadding: shortLandscape
                     ? const EdgeInsets.symmetric(horizontal: 12, vertical: 8)

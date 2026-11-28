@@ -13,6 +13,7 @@ import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/models/errors/invidious_service_error.dart';
 import 'package:clipious/subscription_management/models/subscription.dart';
+import 'package:clipious/subscription_management/services/subscription_account.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/utils/interfaces/db.dart';
 import 'package:clipious/videos/models/video.dart';
@@ -24,6 +25,7 @@ final second = 'UC${'b' * 22}';
 class _Api extends Service {
   final fetched = <String?>[];
   final subscriptions = <String>[];
+  final uploadAccounts = <String>[];
   Map<String?, List<Video>> uploads = {};
   List<Subscription> follows = [];
   InvidiousServiceError? failure;
@@ -46,6 +48,7 @@ class _Api extends Service {
       String? channelId}) async {
     await beforeRequest();
     fetched.add(channelId);
+    uploadAccounts.add(server.accountId);
     return uploads[channelId] ?? [];
   }
 }
@@ -199,6 +202,33 @@ void main() {
     await db.useProfile(other.id);
     expect(await restart.warm(server: server, isCurrent: () => true).toList(),
         isEmpty);
+  });
+
+  test('uses the pinned account for the feed and playback for local follows',
+      () async {
+    const subscription = Server(
+        id: 'subscription',
+        url: 'https://subscriptions.example',
+        authToken: 'fixture');
+    await db.upsertServer(subscription);
+    await SubscriptionAccount.save(db, subscription.accountId);
+    await db.addOfflineSubscription(
+        OfflineSubscription(channelId: first, channelName: 'First'));
+    api.follows = [Subscription('Second', second)];
+    api.uploads[first] = [
+      Video(videoId: 'recording01', title: 'Local follow', authorId: first),
+    ];
+    api.uploads[null] = [
+      Video(videoId: 'recording02', title: 'Account follow', authorId: second),
+    ];
+    final source = SubscriptionRecommendationSource(db, api: api);
+
+    final batches =
+        await source.warm(server: server, isCurrent: () => true).toList();
+    expect(api.subscriptions, [subscription.accountId]);
+    expect(api.uploadAccounts, [subscription.accountId, server.accountId]);
+    expect(batches.last.videos.map((video) => video.videoId),
+        ['recording02', 'recording01']);
   });
 
   test('Music receives only verified recordings from their followed uploader',

@@ -52,7 +52,7 @@ bool audioPlaybackRouteIsCurrent(BackendPlayback route) {
   return selected != null &&
       selected.inUse &&
       !NetworkProxy.instance.isChanging &&
-      route.matches(selected);
+      route.matchesPlaybackConnection(db, selected);
 }
 
 bool samePreparedAudioSource(
@@ -201,18 +201,24 @@ Future<AudioPlaybackSources?> resolveAudioPlaybackSources({
   } else {
     final selectedServer = await db.getCurrentlySelectedServer();
     if (!isCurrent()) return null;
-    if (qualityRoute != null && !qualityRoute.matches(selectedServer)) {
+    if (qualityRoute != null &&
+        !qualityRoute.matchesPlaybackConnection(db, selectedServer)) {
       return null;
     }
     final playback = video?.backendPlayback ?? video?.playbackConnection;
-    if (playback != null && !playback.matches(selectedServer)) {
+    if (playback != null &&
+        !playback.matchesPlaybackConnection(db, selectedServer)) {
       throw StateError('Playback context changed');
     }
     final server = playback?.server ?? selectedServer;
+    final instanceFallback = playback?.isInstanceFallback == true;
+    final crossProfile =
+        instanceFallback && server.profileId != selectedServer.profileId;
+    final mediaServer = instanceFallback ? server : selectedServer;
     playbackRoute = playback ?? BackendPlayback(selectedServer);
     final companions =
         !kIsWeb && defaultTargetPlatform == TargetPlatform.android
-            ? mediaCompanionContext(selectedServer)
+            ? mediaCompanionContext(mediaServer)
             : null;
     if (video == null) return null;
     final music = watchAudio == null && video.musicMetadata != null;
@@ -221,7 +227,7 @@ Future<AudioPlaybackSources?> resolveAudioPlaybackSources({
       streamingQuality =
           streamingQualityOverride ?? MusicStreamingQuality.forDatabase(db);
     }
-    final local = skipDownload || qualityPreference != null
+    final local = instanceFallback || skipDownload || qualityPreference != null
         ? null
         : await resolveDownloadPlaybackSource(
             database: db,
@@ -233,7 +239,7 @@ Future<AudioPlaybackSources?> resolveAudioPlaybackSources({
     if (!isCurrent()) return null;
     var blockedMediaOrigin = false;
     String? admit(String candidate) =>
-        proxiedPlaybackMediaUrl(candidate, selectedServer,
+        proxiedPlaybackMediaUrl(candidate, mediaServer,
             onBlockedMediaOrigin: () => blockedMediaOrigin = true);
 
     final audioByUrl = <String, AdaptiveFormat>{};
@@ -320,14 +326,17 @@ Future<AudioPlaybackSources?> resolveAudioPlaybackSources({
       final source = AudioSource.uri(Uri.parse(url),
           headers: mediaHeaders(server, url),
           mediaCompanions: companions,
-          playbackCache: playbackCacheIdentity(
-            video: video,
-            server: server,
-            sourceUrl: url,
-            sessionId: sessionId,
-            mediaCompanions: companions != null,
-            progressiveMusicAudio: music ? audioByUrl[url] : null,
-          ));
+          playbackCache: crossProfile
+              ? null
+              : playbackCacheIdentity(
+                  video: video,
+                  server: server,
+                  sourceUrl: url,
+                  sessionId: sessionId,
+                  mediaCompanions: companions != null,
+                  progressiveMusicAudio:
+                      music && !instanceFallback ? audioByUrl[url] : null,
+                ));
       sources.add(source);
       final quality = qualityByUrl[url];
       if (quality != null) sourceQualities[source] = quality;

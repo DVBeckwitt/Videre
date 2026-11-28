@@ -3,6 +3,7 @@ import 'package:clipious/channels/models/channel_sort_by.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/offline_subscriptions/models/offline_subscription.dart';
 import 'package:clipious/service.dart';
+import 'package:clipious/subscription_management/services/subscription_account.dart';
 import 'package:clipious/utils/models/paginated_list.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/video.dart';
@@ -18,22 +19,29 @@ import 'package:clipious/videos/services/watch_history.dart';
 class _OfflineSubscriptionService extends Service {
   final continuations = <String?>[];
   final feedPages = <int>[];
-  bool loggedIn = false;
+  final feedAccounts = <String?>[];
+  final uploadAccounts = <String?>[];
+  bool failNextFeed = false;
+  bool repeatFirstLocalUpload = false;
   bool failNextChannel = false;
   final onlineCounts = <int, int>{1: 1};
-
-  @override
-  Future<bool> isLoggedIn() async => loggedIn;
 
   @override
   Future<UserFeed> getUserFeed(
       {int? maxResults,
       int? page,
       bool saveLastSeen = true,
-      Server? serverOverride}) async {
+      Server? serverOverride,
+      Future<void> Function(Server)? beforeRequest}) async {
     final requestedPage = page ?? 1;
     feedPages.add(requestedPage);
+    feedAccounts.add(serverOverride?.accountId);
+    if (failNextFeed) {
+      failNextFeed = false;
+      throw StateError('Subscription instance unavailable');
+    }
     return UserFeed([], [
+      if (repeatFirstLocalUpload) const Video(videoId: 'video-1'),
       for (var i = 0; i < (onlineCounts[requestedPage] ?? 0); i++)
         Video(videoId: 'online-$requestedPage-$i'),
     ]);
@@ -48,6 +56,7 @@ class _OfflineSubscriptionService extends Service {
     ChannelSortBy sortBy = ChannelSortBy.newest,
   }) async {
     continuations.add(continuation);
+    uploadAccounts.add(serverOverride?.accountId);
     if (failNextChannel) {
       failNextChannel = false;
       throw StateError('offline');
@@ -66,9 +75,15 @@ class _OfflineSubscriptionService extends Service {
 
 void main() {
   late _OfflineSubscriptionService fakeService;
+  const playback = Server(id: 'playback', url: 'https://playback.example');
+
+  Future<void> signIntoPlayback() => db.upsertServer(
+      playback.copyWith(inUse: true, authToken: 'playback-fixture'));
 
   setUp(() async {
     db = await SembastSqfDb.createInMemory();
+    await db.upsertServer(playback);
+    await db.useServer(playback);
     await db.addOfflineSubscription(const OfflineSubscription(
       channelId: 'UC123',
       channelName: 'Channel',
@@ -133,7 +148,7 @@ void main() {
 
   test('a hidden account page retains its cursor and earlier items on opt-out',
       () async {
-    fakeService.loggedIn = true;
+    await signIntoPlayback();
     fakeService.onlineCounts.addAll({1: 50, 2: 1});
     await db.saveSetting(
         SettingsValue(hideWatchedSubscriptionsSettingName, 'true'));
@@ -246,7 +261,7 @@ void main() {
 
   test('offline continuation does not refetch an exhausted online page',
       () async {
-    fakeService.loggedIn = true;
+    await signIntoPlayback();
     final list = SubscriptionVideoList();
     final first = await list.getItems();
     final second = await list.getMoreItems();
@@ -261,7 +276,7 @@ void main() {
 
   test('a partial-source failure retries the same online and offline pages',
       () async {
-    fakeService.loggedIn = true;
+    await signIntoPlayback();
     fakeService.onlineCounts.addAll({1: 50, 2: 1});
     final list = SubscriptionVideoList();
     await list.getItems();
@@ -277,9 +292,61 @@ void main() {
     expect(list.getHasMore(), isFalse);
   });
 
+  test('a separate account failure retains local uploads and the remote page',
+      () async {
+    const subscription = Server(
+        id: 'subscriptions',
+        url: 'https://subscriptions.example',
+        authToken: 'subscription-fixture');
+    await db.upsertServer(subscription);
+    await SubscriptionAccount.save(db, subscription.accountId);
+    fakeService.failNextFeed = true;
+    fakeService.repeatFirstLocalUpload = true;
+
+    final list = SubscriptionVideoList();
+    expect((await list.getItems()).map((video) => video.videoId), ['video-1']);
+    expect(list.getHasMore(), isTrue);
+
+    final next = await list.getMoreItems();
+    expect(next.map((video) => video.videoId),
+        unorderedEquals(['online-1-0', 'video-2']));
+    expect(fakeService.feedPages, [1, 1]);
+    expect(fakeService.feedAccounts,
+        [subscription.accountId, subscription.accountId]);
+    expect(
+        fakeService.uploadAccounts, [playback.accountId, playback.accountId]);
+  });
+
+  test('a displayed feed retires its old pages when the source changes',
+      () async {
+    await signIntoPlayback();
+    const subscription = Server(
+        id: 'subscriptions',
+        url: 'https://subscriptions.example',
+        authToken: 'subscription-fixture');
+    await db.upsertServer(subscription);
+    fakeService.onlineCounts.addAll({1: 50, 2: 1});
+
+    final cubit =
+        ItemListCubit<Video>(ItemListState(itemList: SubscriptionVideoList()));
+    addTearDown(cubit.close);
+    await cubit.stream.firstWhere((state) => !state.loading);
+    await cubit.getMoreItems();
+    expect(cubit.state.items.any((video) => video.videoId == 'online-2-0'),
+        isTrue);
+
+    final refreshed = cubit.stream.firstWhere((state) => !state.loading);
+    await SubscriptionAccount.save(db, subscription.accountId);
+    final items = (await refreshed).items;
+    expect(items.any((video) => video.videoId == 'online-2-0'), isFalse);
+    expect(fakeService.feedPages, [1, 2, 1]);
+    expect(fakeService.feedAccounts,
+        [playback.accountId, playback.accountId, subscription.accountId]);
+  });
+
   test('failed refresh restores the cursors for the next pagination attempt',
       () async {
-    fakeService.loggedIn = true;
+    await signIntoPlayback();
     fakeService.onlineCounts.addAll({1: 50, 2: 1});
     final list = SubscriptionVideoList();
     await list.getItems();

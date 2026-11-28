@@ -10,13 +10,16 @@ import 'package:clipious/globals.dart';
 import 'package:clipious/notifications/models/db/subscription_notifications.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/states/settings.dart';
+import 'package:clipious/subscription_management/services/subscription_account.dart';
 import 'package:clipious/utils/file_db.dart';
 import 'package:clipious/utils/interfaces/db.dart';
 import 'package:logging/logging.dart';
 import 'package:workmanager/workmanager.dart';
 
 import 'notifications/notifications.dart';
+import 'videos/models/user_feed.dart';
 import 'videos/models/video.dart';
+import 'videos/services/watch_history.dart' show hasHistoryAccount;
 import 'network/native_proxy_http_client.dart';
 import 'service.dart';
 
@@ -95,11 +98,38 @@ Future<void> checkForNewVideos() async {
   }
   final check =
       _NotificationCheck(source, client, server, fileDb.forAccount(server));
-  await _handleSubscriptionsNotifications(check);
+  try {
+    final account = await _subscriptionNotificationAccount(source);
+    if (account != null && account.profileId == server.profileId) {
+      await _handleSubscriptionsNotifications(_NotificationCheck(
+          source, client, account, fileDb.forAccount(account),
+          subscriptions: true));
+    }
+  } on Exception catch (error) {
+    log.warning(
+        'Subscription notifications could not be refreshed', error.runtimeType);
+  }
   if (!await check.isCurrent()) return;
   await _handleChannelNotifications(check);
   if (!await check.isCurrent()) return;
   await _handlePlaylistNotifications(check);
+}
+
+Future<Server?> _subscriptionNotificationAccount(IDbClient source) async {
+  if (source is! FileDB) {
+    return SubscriptionAccount.resolve(source.forProfile(source.profileId));
+  }
+  final settings = await source.getGenericSettings();
+  final server = settings.server;
+  final explicit = settings.subscriptionNotificationAccountId;
+  // The background file mirror holds credentials for the playback account.
+  // A different explicit source stops the worker from polling that account.
+  if (server == null ||
+      (explicit != null && explicit != server.accountId) ||
+      !hasHistoryAccount(server)) {
+    return null;
+  }
+  return server;
 }
 
 /// A worker owns the account it started with. Neither a late HTTP response nor
@@ -109,19 +139,22 @@ class _NotificationCheck {
   final Service client;
   final Server server;
   final FileDB files;
+  final bool subscriptions;
 
-  const _NotificationCheck(this.source, this.client, this.server, this.files);
-
-  bool get isLoggedIn =>
-      (server.authToken?.isNotEmpty ?? false) ||
-      (server.sidCookie?.isNotEmpty ?? false);
+  const _NotificationCheck(this.source, this.client, this.server, this.files,
+      {this.subscriptions = false});
 
   Future<bool> isCurrent() async {
     if (!identical(db, source)) return false;
     try {
-      final selected = await source.getCurrentlySelectedServer();
-      return selected.profileId == server.profileId &&
+      final selected = subscriptions
+          ? await _subscriptionNotificationAccount(source)
+          : await source.getCurrentlySelectedServer();
+      return identical(db, source) &&
+          selected != null &&
+          selected.profileId == server.profileId &&
           selected.accountId == server.accountId &&
+          selected.url == server.url &&
           selected.gatewayEnabled == server.gatewayEnabled &&
           selected.authToken == server.authToken &&
           selected.sidCookie == server.sidCookie &&
@@ -236,14 +269,31 @@ Future<void> _handleChannelNotifications(_NotificationCheck check) async {
   }
 }
 
+class _SubscriptionNotificationRouteChanged implements Exception {
+  const _SubscriptionNotificationRouteChanged();
+}
+
 Future<void> _handleSubscriptionsNotifications(_NotificationCheck check) async {
   bool isEnabled = await check.files.getSubscriptionNotifications();
-  if (isEnabled && check.isLoggedIn && await check.isCurrent()) {
-    // we need to get the last notification before we call the feed endpoint as it is going to save the last seen video
+  if (isEnabled && await check.isCurrent()) {
     final lastNotification =
         await check.files.getLastSubscriptionNotification();
-    var feed = await check.client.getUserFeed(
-        maxResults: 100, saveLastSeen: false, serverOverride: check.server);
+    if (!await check.isCurrent()) return;
+    final UserFeed feed;
+    try {
+      feed = await check.client.getUserFeed(
+          maxResults: 100,
+          saveLastSeen: false,
+          serverOverride: check.server,
+          beforeRequest: (_) async {
+            if (!await check.files.getSubscriptionNotifications() ||
+                !await check.isCurrent()) {
+              throw const _SubscriptionNotificationRouteChanged();
+            }
+          });
+    } on _SubscriptionNotificationRouteChanged {
+      return;
+    }
     if (!await check.isCurrent()) return;
 
     List<Video> videos = [];

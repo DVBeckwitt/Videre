@@ -4,7 +4,10 @@ import 'package:clipious/app/states/app.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
+import 'package:clipious/player/models/playback_instance_fallback.dart';
+import 'package:clipious/player/models/playback_reliability.dart';
 import 'package:clipious/service.dart';
+import 'package:clipious/settings/models/backend_selector.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/settings/views/components/profile_picker.dart';
@@ -441,6 +444,196 @@ void main() {
         (await tester.runAsync(() => db.getCurrentlySelectedServer()))!
             .accountId,
         'second');
+  });
+
+  testWidgets('profiles can opt into a different playback instance',
+      (tester) async {
+    const playback =
+        Server(id: 'primary', name: 'Primary', url: 'https://playback.example');
+    const sameOrigin = Server(
+        id: 'same-origin',
+        name: 'Other login',
+        url: 'https://playback.example');
+    const backup =
+        Server(id: 'backup', name: 'Backup', url: 'https://backup.example');
+    await tester.runAsync(() async {
+      await db.upsertServer(playback);
+      await db.upsertServer(sameOrigin);
+      await db.upsertServer(backup);
+      await db.useServer(playback);
+    });
+    await openPicker(tester);
+    final setting =
+        find.byKey(const ValueKey('playback-backup-instance-setting'));
+    final panel = find.byType(SimpleDialog);
+    expect(find.descendant(of: setting, matching: find.text('Off')),
+        findsOneWidget);
+    await tester.ensureVisible(setting);
+    await tester.tap(setting);
+    await settle(tester);
+    expect(
+        find.descendant(
+            of: panel, matching: find.textContaining('Other login')),
+        findsNothing);
+    await tester.tap(find.text('Backup · https://backup.example'));
+    await settle(tester);
+
+    expect(PlaybackInstanceFallback.preference(db), backup.accountId);
+    expect(app.accountSwitches, isEmpty);
+    expect((await tester.runAsync(db.getCurrentlySelectedServer))!.accountId,
+        playback.accountId);
+    expect(
+        find.descendant(
+            of: setting,
+            matching: find.text('Backup · https://backup.example')),
+        findsOneWidget);
+
+    final retries =
+        find.byKey(const ValueKey('playback-backend-retries-setting'));
+    expect(tester.widget<DropdownButton<int>>(retries).value, 2);
+    await tester.ensureVisible(retries);
+    await tester.tap(retries);
+    await settle(tester);
+    await tester.tap(find.text('4').last);
+    await settle(tester);
+    expect(PlaybackInstanceFallback.backendRetries(db), 4);
+    await tester.tap(retries);
+    await settle(tester);
+    await tester.tap(find.text('0').last);
+    await settle(tester);
+    expect(PlaybackInstanceFallback.backendRetries(db), 0);
+    expect(PlaybackInstanceFallback.preference(db), backup.accountId);
+
+    await tester.ensureVisible(setting);
+    await tester.tap(setting);
+    await settle(tester);
+    await tester.tap(find.text('Best saved instance'));
+    await settle(tester);
+    expect(PlaybackInstanceFallback.preference(db),
+        PlaybackInstanceFallback.bestSaved);
+    expect(app.accountSwitches, isEmpty);
+  });
+
+  testWidgets('a shared backup needs the other profile to enable sharing',
+      (tester) async {
+    const primary = Server(id: 'primary', url: 'https://primary.example');
+    late IDbClient destination;
+    late Server account;
+    await tester.runAsync(() async {
+      await db.upsertServer(primary);
+      final shared = await db.createProfile('Shared profile');
+      destination = db.forProfile(shared.id);
+      account = Server(
+          id: 'backup',
+          profileId: shared.id,
+          name: 'Backup',
+          url: 'https://backup.example');
+      await destination.upsertServer(account);
+    });
+    await openPicker(tester);
+    final backup =
+        find.byKey(const ValueKey('playback-backup-instance-setting'));
+    const label = 'Shared profile · Backup · https://backup.example';
+    await tester.ensureVisible(backup);
+    await tester.tap(backup);
+    await settle(tester);
+    expect(find.text(label), findsNothing);
+    await tester.tap(find.text('Off').last);
+    await settle(tester);
+
+    await tester.runAsync(
+        () => PlaybackInstanceFallback.saveSharing(destination, true));
+    await settle(tester);
+    await tester.ensureVisible(backup);
+    await tester.tap(backup);
+    await settle(tester);
+    expect(find.text('Best saved instance'), findsNothing);
+    await tester.tap(find.text(label));
+    await settle(tester);
+    final id = PlaybackInstanceFallback.choiceId(db, account);
+    expect(PlaybackInstanceFallback.preference(db), id);
+    expect(PlaybackInstanceFallback.admittedTarget(db, primary, id)?.profileId,
+        destination.profileId);
+    expect(app.accountSwitches, isEmpty);
+
+    await tester.runAsync(
+        () => PlaybackInstanceFallback.saveSharing(destination, false));
+    await settle(tester);
+    expect(PlaybackInstanceFallback.admittedTarget(db, primary, id), isNull);
+    expect(find.text('Selected backup instance unavailable'), findsOneWidget);
+  });
+
+  testWidgets('Profiles shows instance and backend playback outcomes',
+      (tester) async {
+    final instance = Server(
+      name: 'Playback server',
+      url: 'https://playback.example',
+      backendSelector: BackendSelector('ROUTE', [
+        const BackendOption('a', 'First backend'),
+        const BackendOption('b', 'Second backend'),
+      ]),
+    );
+    await tester.runAsync(() async {
+      await db.upsertServer(instance);
+      final account = await db.getCurrentlySelectedServer();
+      final recorded = Completer<void>();
+      void updated() {
+        if (!recorded.isCompleted &&
+            PlaybackReliability.account(db, account).attempts == 2) {
+          recorded.complete();
+        }
+      }
+
+      PlaybackReliability.revision.addListener(updated);
+      try {
+        PlaybackReliability.record(db, account, backendIndex: 0, success: true);
+        PlaybackReliability.record(db, account,
+            backendIndex: 1, success: false);
+        await recorded.future.timeout(const Duration(seconds: 3));
+      } finally {
+        PlaybackReliability.revision.removeListener(updated);
+      }
+    });
+    await openPicker(tester);
+    final stats = find.byKey(const ValueKey('playback-reliability-setting'));
+    await tester.ensureVisible(stats);
+    await tester.tap(stats);
+    await settle(tester);
+    expect(find.text('Playback server · https://playback.example'),
+        findsOneWidget);
+    expect(find.text('First backend'), findsOneWidget);
+    expect(find.text('Second backend'), findsOneWidget);
+    expect(find.text('1 started · 1 failed'), findsOneWidget);
+    expect(find.text('1 started · 0 failed'), findsOneWidget);
+    expect(find.text('0 started · 1 failed'), findsOneWidget);
+  });
+
+  testWidgets('a remote can reach offscreen playback reliability rows',
+      (tester) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(720, 360);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(tester.view.resetPhysicalSize);
+    final account = Server(
+      name: 'Playback server',
+      url: 'https://playback.example',
+      backendSelector: BackendSelector('ROUTE', [
+        for (var i = 0; i < 12; i++) BackendOption('$i', 'Backend $i'),
+      ]),
+    );
+    await tester.runAsync(() => db.upsertServer(account));
+    await openPicker(tester);
+    final stats = find.byKey(const ValueKey('playback-reliability-setting'));
+    await tester.ensureVisible(stats);
+    await tester.tap(stats);
+    await settle(tester);
+    final last = find.text('Backend 11');
+    expect(last.hitTestable(), findsNothing);
+    for (var i = 0; i < 12; i++) {
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await settle(tester);
+    }
+    expect(last.hitTestable(), findsOneWidget);
   });
 
   testWidgets('renaming a person preserves its identity', (tester) async {

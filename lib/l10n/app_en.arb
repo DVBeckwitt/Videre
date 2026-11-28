@@ -283,6 +283,31 @@
   "@manageServers": {
     "description": "Settings to manage servers"
   },
+  "playbackBackupInstance": "Playback backup instance",
+  "playbackBackupInstanceOff": "Off",
+  "playbackBackupInstanceUnavailable": "Selected backup instance unavailable",
+  "playbackBackupInstanceHelp": "After eligible playback retries, try the same media once on a backup. Best saved instance ranks this profile’s instances. Instances from another profile appear when that profile enables sharing.",
+  "playbackBackupInstanceBest": "Best saved instance",
+  "playbackBackupSharing": "Share instances for playback retries",
+  "playbackBackupSharingHelp": "Other profiles on this device can select this profile’s saved instances as a playback backup.",
+  "playbackBackupSharedChoice": "{profile} · {instance}",
+  "@playbackBackupSharedChoice": {
+    "placeholders": {
+      "profile": {},
+      "instance": {}
+    }
+  },
+  "playbackBackendRetries": "Alternate backend attempts",
+  "playbackBackendRetriesHelp": "How many alternate backends Videre can try on the selected instance before trying the backup instance. Choose zero to skip alternate backends.",
+  "playbackReliability": "Playback reliability",
+  "playbackReliabilityEmpty": "No playback attempts recorded",
+  "playbackReliabilityCounts": "{successes} started · {failures} failed",
+  "@playbackReliabilityCounts": {
+    "placeholders": {
+      "successes": {"type": "int"},
+      "failures": {"type": "int"}
+    }
+  },
   "currentServer": "Currently using {current}",
   "@currentServer": {
     "description": "Which server the user is currently using",
@@ -1013,6 +1038,10 @@
   "@manageSubscriptions": {
     "description": "Title of manage subscriptions page"
   },
+  "subscriptionAccount": "Subscription account",
+  "subscriptionAccountDefault": "Use the selected instance",
+  "subscriptionAccountUnavailable": "Selected subscription account unavailable",
+  "subscriptionAccountHelp": "Choose the saved sign-in for your subscription list and feed. Background subscription alerts are available when that account is also the selected instance account.",
   "youCanSubscribeAgainLater": "You can subscribe to this channel again later",
   "@youCanSubscribeAgainLater": {
     "description": "Text for the unscubscribe confirmation dialog"

@@ -47,6 +47,7 @@ import 'package:clipious/music/views/components/music_collection_sort_menu.dart'
 import 'package:clipious/player/models/named_music_queue.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/player/models/backend_playback.dart';
+import 'package:clipious/player/models/playback_instance_fallback.dart';
 import 'package:clipious/player/models/playback_queue.dart';
 import 'package:clipious/player/models/playback_session.dart';
 import 'package:clipious/playlists/models/playlist.dart';
@@ -105,6 +106,26 @@ class _SavedPlaylistPages extends Service {
     await beforeRequest();
     pages.add(page);
     return reply(playlistId, page);
+  }
+}
+
+class _SongLinkBackup extends Service {
+  final Server target;
+  final requests = <Video>[];
+
+  _SongLinkBackup(this.target);
+
+  @override
+  Future<Video?> fetchPlaybackInstanceFallback(Video original,
+      {required bool Function() isCurrent}) async {
+    requests.add(original);
+    if (!isCurrent()) return null;
+    return Video(
+        videoId: original.videoId,
+        title: 'Backup title',
+        author: 'Backup artist',
+        playbackConnection: BackendPlayback.instanceFallback(
+            original.playbackConnection!.preferredServer, target));
   }
 }
 
@@ -3108,6 +3129,71 @@ void main() {
     expect(player.calls.single.videos.single.musicMetadata?.title, first.title);
     expect(player.calls.single.startAt, const Duration(seconds: 42));
   });
+
+  Future<_SongLinkBackup> configureSongLinkBackup(WidgetTester tester) async {
+    const primary =
+        Server(id: 'primary', url: 'https://primary.example', inUse: true);
+    const backup = Server(id: 'backup', url: 'https://backup.example');
+    await tester.runAsync(() async {
+      await db.upsertServer(primary);
+      await db.upsertServer(backup);
+      await PlaybackInstanceFallback.save(db, backup.accountId);
+    });
+    app.setServer(primary);
+    final api = _SongLinkBackup(backup);
+    service = api;
+    return api;
+  }
+
+  testWidgets('retryable song link gives Music a single-use backup source',
+      (tester) async {
+    final api = await configureSongLinkBackup(tester);
+    final entry = first.toVideo().copyWith(queueEntryId: 'first-occurrence');
+    await show(tester,
+        screen: MusicScreen(
+            videoId: first.videoId,
+            queue: [second.toVideo(), entry],
+            startIndex: 1,
+            queueTitle: 'Music shelf',
+            startAt: const Duration(seconds: 42)));
+    catalog.song
+        .completeError(InvidiousServiceError('Unavailable', statusCode: 503));
+    await tester.pumpAndSettle();
+
+    expect(catalog.songRequests, [first.videoId]);
+    expect(api.requests.single.videoId, first.videoId);
+    expect(api.requests.single.playbackConnection!.server.accountId, 'primary');
+    final call = player.calls.single;
+    expect(call.audio, isTrue);
+    expect(call.startIndex, 1);
+    expect(call.startAt, const Duration(seconds: 42));
+    expect(call.queueTitle, 'Music shelf');
+    expect(call.videos.map((video) => video.videoId),
+        [second.videoId, first.videoId]);
+    final resolved = call.videos.last;
+    expect(resolved.queueEntryId, entry.queueEntryId);
+    expect(resolved.musicMetadata?.title, first.title);
+    expect(resolved.musicMetadata?.artist, 'Artist');
+    expect(resolved.musicMetadata?.album, first.albumTitle);
+    final route = resolved.playbackConnection!;
+    expect(route.isInstanceFallback, isTrue);
+    expect(route.server.accountId, api.target.accountId);
+    expect(route.takeInitialPlaybackHandoff(), isTrue);
+    expect(route.takeInitialPlaybackHandoff(), isFalse);
+  });
+
+  for (final code in [401, 429]) {
+    testWidgets('song link keeps HTTP $code on the selected account',
+        (tester) async {
+      final api = await configureSongLinkBackup(tester);
+      await show(tester, screen: MusicScreen(videoId: first.videoId));
+      catalog.song.completeError(
+          InvidiousServiceError('Request refused', statusCode: code));
+      await tester.pumpAndSettle();
+      expect(api.requests, isEmpty);
+      expect(player.calls, isEmpty);
+    });
+  }
 
   testWidgets(
       'a new timestamp on the same Music link starts at the new position',

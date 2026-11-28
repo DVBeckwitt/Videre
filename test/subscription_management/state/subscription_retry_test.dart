@@ -8,6 +8,7 @@ import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/errors/invidious_service_error.dart';
 import 'package:clipious/subscription_management/models/subscription.dart';
+import 'package:clipious/subscription_management/services/subscription_account.dart';
 import 'package:clipious/subscription_management/states/manage_subscriptions.dart';
 import 'package:clipious/subscription_management/states/subscribe_button.dart';
 import 'package:clipious/subscription_management/view/screens/manage_subscriptions.dart';
@@ -25,6 +26,7 @@ class _RetryDetectingService extends Service {
   Completer<bool>? subscription;
   Completer<Channel>? channel;
   bool failSubscriptions = false;
+  bool unsubscribeAccepted = true;
 
   @override
   Future<List<Subscription>> getSubscriptions() {
@@ -38,6 +40,9 @@ class _RetryDetectingService extends Service {
   Future<bool> isLoggedIn() => login?.future ?? Future.value(loggedIn);
 
   @override
+  Future<bool> hasSubscriptionAccount() => isLoggedIn();
+
+  @override
   Future<bool> subscribe(String channelId) async {
     subscribeCalls++;
     if (subscribeCalls > 1) throw StateError('subscribe retried');
@@ -48,7 +53,7 @@ class _RetryDetectingService extends Service {
   Future<bool> unSubscribe(String channelId) async {
     unsubscribeCalls++;
     if (unsubscribeCalls > 1) throw StateError('unsubscribe retried');
-    return true;
+    return unsubscribeAccepted;
   }
 
   @override
@@ -126,6 +131,20 @@ void main() {
     await cubit.close();
   });
 
+  test('manager reports a rejected unsubscribe without reading another route',
+      () async {
+    fakeService.unsubscribeAccepted = false;
+    fakeService.failStatus = true;
+    final cubit = _ManualSubscriptionManager();
+    addTearDown(cubit.close);
+
+    await expectLater(
+        cubit.unsubscribe('UC123'), throwsA(isA<InvidiousServiceError>()));
+    expect(fakeService.unsubscribeCalls, 1);
+    expect(cubit.state.loading, isFalse);
+    expect(cubit.state.hasError, isTrue);
+  });
+
   test('subscription status can finish after leaving the screen', () async {
     fakeService.login = Completer<bool>();
     final cubit = _ManualSubscribeButton();
@@ -199,6 +218,40 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Could not fetch data'), findsNothing);
     expect(find.text('Local channel'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('choosing a subscription account keeps the playback selection',
+      (tester) async {
+    const playback = Server(url: 'https://playback.example');
+    const subscriptions = Server(
+        url: 'https://subscriptions.example',
+        name: 'Follows',
+        authToken: 'test-token');
+    await tester.runAsync(() async {
+      await db.upsertServer(playback);
+      await db.upsertServer(subscriptions);
+      await db.useServer(playback);
+    });
+    await tester.pumpWidget(const MaterialApp(
+      localizationsDelegates: AppLocalizations.localizationsDelegates,
+      supportedLocales: AppLocalizations.supportedLocales,
+      locale: Locale('en'),
+      home: ManageSubscriptionsScreen(),
+    ));
+    await tester.pumpAndSettle();
+    expect(find.text('Use the selected instance'), findsOneWidget);
+    await tester.tap(find.text('Subscription account'));
+    await tester.pumpAndSettle();
+    expect(find.text('https://playback.example'), findsNothing);
+    await tester.tap(find.text('Follows · https://subscriptions.example'));
+    await tester.pumpAndSettle();
+
+    expect(await SubscriptionAccount.preference(db), subscriptions.accountId);
+    expect(
+        (await db.getCurrentlySelectedServer()).accountId, playback.accountId);
+    expect(
+        find.text('Follows · https://subscriptions.example'), findsOneWidget);
     await tester.pumpWidget(const SizedBox.shrink());
   });
 

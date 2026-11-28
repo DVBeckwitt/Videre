@@ -618,6 +618,166 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
+  testWidgets('short minimize gestures respect outer and nested scrolling',
+      (tester) async {
+    var minimizes = 0;
+    var horizontalMoves = 0;
+    const body = ValueKey('minimize-test-body');
+    const lyrics = ValueKey('minimize-test-lyrics');
+    await tester.pumpWidget(hostControls(SizedBox(
+      width: 360,
+      height: 440,
+      child: MinimizeOnSwipeDown(
+        enabled: true,
+        scrollable: true,
+        allowShortSwipe: true,
+        onSwipeDown: () => minimizes++,
+        child: Column(children: [
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onHorizontalDragUpdate: (_) => horizontalMoves++,
+            child:
+                const SizedBox(key: body, width: double.infinity, height: 200),
+          ),
+          SizedBox(
+            height: 150,
+            child: ListView(
+              key: lyrics,
+              children: const [SizedBox(height: 500)],
+            ),
+          ),
+          const SizedBox(height: 400),
+        ]),
+      ),
+    )));
+    final scrollables = find.descendant(
+        of: find.byType(MinimizeOnSwipeDown),
+        matching: find.byType(Scrollable));
+    final outer = tester.state<ScrollableState>(scrollables.first).position;
+    final nested = tester.state<ScrollableState>(scrollables.last).position;
+    nested.jumpTo(80);
+    await tester.pump();
+    await tester.fling(find.byKey(lyrics), const Offset(0, 56), 1200);
+    await tester.pumpAndSettle();
+    expect(nested.pixels, lessThan(80));
+    expect(minimizes, 0);
+
+    outer.jumpTo(80);
+    await tester.pump();
+    await tester.fling(find.byKey(body), const Offset(0, 56), 1200);
+    await tester.pumpAndSettle();
+    expect(outer.pixels, lessThan(80));
+    expect(minimizes, 0);
+    outer.jumpTo(0);
+    await tester.pump();
+
+    final seek = await tester.startGesture(tester.getCenter(find.byKey(body)));
+    await seek.moveBy(const Offset(40, 0));
+    await seek.moveBy(const Offset(30, 0));
+    await seek.moveBy(const Offset(0, 130));
+    await seek.up();
+    await tester.pumpAndSettle();
+    expect(horizontalMoves, greaterThan(0));
+    expect(minimizes, 0);
+
+    await tester.timedDrag(find.byKey(body), const Offset(0, 56),
+        const Duration(milliseconds: 450));
+    await tester.pumpAndSettle();
+    expect(minimizes, 0);
+    await tester.fling(find.byKey(body), const Offset(0, 56), 1200);
+    await tester.pumpAndSettle();
+    expect(minimizes, 1);
+    await tester.timedDrag(find.byKey(body), const Offset(0, 110),
+        const Duration(milliseconds: 550));
+    await tester.pumpAndSettle();
+    expect(minimizes, 2);
+  });
+
+  testWidgets('artwork minimize respects a diagonally won horizontal drag',
+      (tester) async {
+    var horizontalEnds = 0;
+    final updates = <double>[];
+    final endings = <bool>[];
+    const artwork = ValueKey('minimize-test-artwork');
+    await tester.pumpWidget(hostControls(MinimizeDragScope(
+      identity: artwork,
+      onUpdate: updates.add,
+      onEnd: endings.add,
+      child: MinimizeOnSwipeDown(
+        enabled: true,
+        allowShortSwipe: true,
+        onSwipeDown: () => fail('The artwork also minimized'),
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onHorizontalDragEnd: (_) => horizontalEnds++,
+          child: const SizedBox(key: artwork, width: 300, height: 220),
+        ),
+      ),
+    )));
+
+    final gesture =
+        await tester.startGesture(tester.getCenter(find.byKey(artwork)));
+    await gesture.moveBy(const Offset(24, 28));
+    await gesture.moveBy(const Offset(66, 120));
+    await gesture.up();
+    await tester.pump();
+
+    expect(horizontalEnds, 1);
+    expect(updates, isEmpty);
+    expect(endings, isEmpty);
+  });
+
+  testWidgets('reenabling a minimize surface does not revive a held drag',
+      (tester) async {
+    final enabled = ValueNotifier(true);
+    addTearDown(enabled.dispose);
+    final updates = <double>[];
+    final endings = <bool>[];
+    const body = ValueKey('minimize-test-body');
+    await tester.pumpWidget(hostControls(MinimizeDragScope(
+      identity: enabled,
+      onUpdate: updates.add,
+      onEnd: endings.add,
+      child: SizedBox(
+        width: 300,
+        height: 220,
+        child: ValueListenableBuilder<bool>(
+          valueListenable: enabled,
+          builder: (_, enabled, child) => MinimizeOnSwipeDown(
+            key: body,
+            enabled: enabled,
+            allowShortSwipe: true,
+            scrollable: true,
+            onSwipeDown: () => fail('The held drag minimized'),
+            child: child!,
+          ),
+          child: const SizedBox(height: 400),
+        ),
+      ),
+    )));
+
+    final gesture =
+        await tester.startGesture(tester.getCenter(find.byKey(body)));
+    await gesture.moveBy(const Offset(0, 30));
+    await gesture.moveBy(const Offset(0, 30));
+    await tester.pump();
+    expect(updates.last, 60);
+    enabled.value = false;
+    await tester.pump();
+    expect(endings, [false]);
+    enabled.value = true;
+    await tester.pump();
+    await gesture.moveBy(const Offset(0, 100));
+    await gesture.up();
+    await tester.pumpAndSettle();
+    expect(updates.last, 60);
+    expect(endings, [false]);
+
+    await tester.fling(find.byKey(body), const Offset(0, 56), 1200);
+    await tester.pumpAndSettle();
+    expect(endings, [false, true]);
+  });
+
   testWidgets('removing a held minimize surface cancels its preview',
       (tester) async {
     final visible = ValueNotifier(true);
@@ -635,6 +795,7 @@ void main() {
             ? MinimizeOnSwipeDown(
                 key: surface,
                 enabled: true,
+                allowShortSwipe: true,
                 onSwipeDown: () => fail('The removed surface minimized'),
                 child: const SizedBox(width: 300, height: 220),
               )

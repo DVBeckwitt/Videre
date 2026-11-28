@@ -28,6 +28,7 @@ import 'package:clipious/settings/models/errors/invidious_service_error.dart';
 import 'package:clipious/settings/models/errors/missing_software_key.dart';
 import 'package:clipious/utils/request_cookies.dart';
 import 'package:clipious/player/models/backend_playback.dart';
+import 'package:clipious/player/models/playback_instance_fallback.dart';
 import 'package:clipious/utils/video_post_processing.dart';
 import 'package:clipious/videos/models/db/history_video_cache.dart';
 import 'package:clipious/videos/models/db/progress.dart';
@@ -65,6 +66,7 @@ import 'settings/services/media_companion_probe.dart';
 import 'search/models/search_suggestion.dart';
 import 'settings/models/db/server.dart';
 import 'subscription_management/models/subscription.dart';
+import 'subscription_management/services/subscription_account.dart';
 import 'videos/models/sponsor_segment_types.dart';
 import 'videos/models/music_metadata.dart';
 import 'videos/services/watch_history.dart';
@@ -548,15 +550,32 @@ class Service {
   }
 
   Future<ServerRequest> buildRequest(String baseUrl,
+          {Map<String, String>? pathParams,
+          Map<String, String?>? query,
+          bool authenticated = false,
+          String accept = 'application/json',
+          bool forceJson = false,
+          Server? serverOverride}) =>
+      _buildRequest(baseUrl,
+          pathParams: pathParams,
+          query: query,
+          authenticated: authenticated,
+          accept: accept,
+          forceJson: forceJson,
+          serverOverride: serverOverride);
+
+  Future<ServerRequest> _buildRequest(String baseUrl,
       {Map<String, String>? pathParams,
       Map<String, String?>? query,
       bool authenticated = false,
       String accept = 'application/json',
       bool forceJson = false,
+      bool migrateNerdVpnKey = true,
       Server? serverOverride}) async {
     try {
-      final server = await _migrateNerdVpnKey(
-          serverOverride ?? (await db.getCurrentlySelectedServer()));
+      final selected = serverOverride ?? await db.getCurrentlySelectedServer();
+      final server =
+          migrateNerdVpnKey ? await _migrateNerdVpnKey(selected) : selected;
       String url = '${(server).url}$baseUrl';
 
       pathParams?.forEach((key, value) {
@@ -826,6 +845,13 @@ class Service {
     final observer = serverOverride == null ? loadObserver : null;
     final originalDb = db;
     final profileId = originalDb.profileId;
+    final interactivePlayback = serverOverride == null &&
+        (observer != null || onBackendRequest != null);
+    final reliabilityOwner =
+        interactivePlayback ? originalDb.forProfile(profileId) : null;
+    final backendRetries = reliabilityOwner == null
+        ? PlaybackInstanceFallback.defaultBackendRetries
+        : PlaybackInstanceFallback.backendRetries(reliabilityOwner);
     final sessionRevision = _sessionRevision;
     final proxy = NetworkProxy.instance.config;
     bool connectionCurrent() =>
@@ -862,7 +888,10 @@ class Service {
     // Explicit callers (downloads and connection tests) own their server snapshot
     // and subsequent request headers. Only normal playback may change routes.
     final initialRequest = serverOverride == null
-        ? BackendPlayback(server, health: backendHealth)
+        ? BackendPlayback(server,
+            health: backendHealth,
+            backendRetries: backendRetries,
+            reliabilityOwner: reliabilityOwner)
         : null;
     final connection = initialRequest ?? BackendPlayback(server);
     var playback = server.backendSelector == null ? null : initialRequest;
@@ -1084,8 +1113,15 @@ class Service {
     final profileId = originalDb.profileId;
     final sessionRevision = _sessionRevision;
     final proxy = NetworkProxy.instance.config;
-    final request = await buildRequest(urlGetVideo,
-        pathParams: {':id': videoId}, serverOverride: server);
+    final sharedBackup = backendRequest?.isInstanceFallback == true &&
+        server.profileId != profileId;
+    final request = sharedBackup
+        ? await _buildRequest(urlGetVideo,
+            pathParams: {':id': videoId},
+            migrateNerdVpnKey: false,
+            serverOverride: server)
+        : await buildRequest(urlGetVideo,
+            pathParams: {':id': videoId}, serverOverride: server);
     Server? sharedPlaybackOwner;
     if (backendRequest != null) {
       bool connectionCurrent() =>
@@ -1096,8 +1132,8 @@ class Service {
           identical(NetworkProxy.instance.config, proxy);
       Future<bool> unchanged() async =>
           connectionCurrent() &&
-          backendRequest
-              .matches(await originalDb.getCurrentlySelectedServer()) &&
+          backendRequest.matchesPlaybackConnection(
+              originalDb, await originalDb.getCurrentlySelectedServer()) &&
           connectionCurrent();
       Future<void> checkConnection() async {
         if (!await unchanged()) {
@@ -1395,6 +1431,88 @@ class Service {
     }
   }
 
+  /// Opens a fresh source for this recording on the profile's opted-in backup.
+  /// Only the playback caller can authorize one attempt after primary recovery.
+  Future<Video?> fetchPlaybackInstanceFallback(Video original,
+      {required bool Function() isCurrent}) async {
+    final source = original.playbackConnection ?? original.backendPlayback;
+    if (original.explicitMusicDownload != null ||
+        original.downloadPlaybackOnly ||
+        source?.isInstanceFallback == true ||
+        source?.manualSelection == true ||
+        RegExp(r'^[A-Za-z0-9_-]{11}$').stringMatch(original.videoId) !=
+            original.videoId) {
+      return null;
+    }
+    final owner = db;
+    final profile = owner.profileId;
+    final sessionRevision = _sessionRevision;
+    final proxy = NetworkProxy.instance.config;
+    bool active() =>
+        isCurrent() &&
+        identical(db, owner) &&
+        owner.profileId == profile &&
+        _sessionRevision == sessionRevision &&
+        !NetworkProxy.instance.isChanging &&
+        identical(NetworkProxy.instance.config, proxy);
+
+    if (!active() || PlaybackInstanceFallback.preference(owner) == null) {
+      return null;
+    }
+    final accounts = await owner.getServers();
+    final selected = accounts.where((account) => account.inUse).firstOrNull;
+    if (!active() ||
+        selected == null ||
+        (source != null &&
+            !source.matchesPlaybackConnection(owner, selected))) {
+      return null;
+    }
+    final target = PlaybackInstanceFallback.target(owner, selected, accounts,
+        recentlyFailed: backendHealth.hasRecentInstanceStartupFailure);
+    if (target == null) return null;
+    // Sharing authorizes playback with the destination credentials, not
+    // migration or background mirroring of the other profile's account.
+    final server = target.profileId == profile
+        ? await preparePlaybackServer(serverOverride: target)
+        : target;
+    final route = BackendPlayback.instanceFallback(selected, server);
+    bool admitted() {
+      if (!active()) return false;
+      final current = owner.getAccount(selected.accountId);
+      return current != null && route.matchesPlaybackConnection(owner, current);
+    }
+
+    if (!admitted()) return null;
+    final Video loaded;
+    try {
+      loaded = await _getVideoMetadata(original.videoId, server,
+          backendRequest: route,
+          loadObserver: VideoLoadObserver(isCurrent: admitted, onRetry: () {}),
+          metadataRetry: _MetadataRetry.none);
+    } catch (error) {
+      if (isBackendRetryable(error) && admitted()) {
+        backendHealth.recordInstanceStartupFailure(target);
+        route.recordDecoderOutcome(owner, success: false);
+      }
+      rethrow;
+    }
+    if (!admitted() || loaded.isUpcoming == true) {
+      return null;
+    }
+    final metadata = original.musicMetadata == null
+        ? loaded.copyWith(queueEntryId: original.queueEntryId)
+        : original;
+    return metadata.copyWith(
+        formatStreams: loaded.formatStreams,
+        adaptiveFormats: loaded.adaptiveFormats,
+        dashUrl: loaded.dashUrl,
+        hlsUrl: loaded.hlsUrl,
+        lengthSeconds: loaded.lengthSeconds ?? original.lengthSeconds,
+        backendPlayback: null,
+        playbackConnection: route,
+        playbackSourceId: Object());
+  }
+
   /// Refresh one admitted source without stacking metadata or backend retries.
   Future<Video> refreshPlaybackVideo(Video video,
       {required bool Function() isCurrent}) async {
@@ -1411,7 +1529,8 @@ class Service {
         !NetworkProxy.instance.isChanging;
     Future<void> check() async {
       if (!active() ||
-          !connection.matches(await originalDb.getCurrentlySelectedServer()) ||
+          !connection.matchesPlaybackConnection(
+              originalDb, await originalDb.getCurrentlySelectedServer()) ||
           !active()) {
         throw StateError('The video or playback connection changed.');
       }
@@ -1463,6 +1582,9 @@ class Service {
     Server? serverOverride,
   }) async {
     final server = serverOverride ?? await db.getCurrentlySelectedServer();
+    if (server.profileId != db.profileId) {
+      throw StateError('The transcript belongs to a different profile.');
+    }
     try {
       return await _getTranscript(videoId, caption, serverOverride: server);
     } catch (error) {
@@ -1478,16 +1600,63 @@ class Service {
     String videoId,
     Caption caption, {
     required Server server,
+  }) =>
+      _getPlaybackCaptions(videoId, caption, server: server);
+
+  Future<String> getSharedPlaybackCaptions(
+    String videoId,
+    Caption caption, {
+    required Server server,
+    required bool Function() isCurrent,
+  }) =>
+      _getPlaybackCaptions(videoId, caption,
+          server: server, sharedPlaybackCurrent: isCurrent);
+
+  Future<String> _getPlaybackCaptions(
+    String videoId,
+    Caption caption, {
+    required Server server,
+    bool Function()? sharedPlaybackCurrent,
   }) async {
     try {
       return (await _getTranscript(videoId, caption,
-              serverOverride: server, forPlayback: true))
+              serverOverride: server,
+              forPlayback: true,
+              sharedPlaybackCurrent: sharedPlaybackCurrent))
           .toWebVtt();
     } catch (error) {
       if (_captionAccessFailure(error)) rethrow;
       return (await _getWatchCaptionTranscript(videoId, caption, server,
-              forPlayback: true))
+              forPlayback: true, sharedPlaybackCurrent: sharedPlaybackCurrent))
           .toWebVtt();
+    }
+  }
+
+  Future<ServerRequest> _buildCaptionRequest(String path,
+      {required Server server,
+      bool Function()? sharedPlaybackCurrent,
+      Map<String, String>? pathParams,
+      Map<String, String?>? query,
+      String accept = 'application/json'}) {
+    if (sharedPlaybackCurrent == null) {
+      return buildRequest(path,
+          pathParams: pathParams,
+          query: query,
+          accept: accept,
+          serverOverride: server);
+    }
+    _checkCaptionScope(sharedPlaybackCurrent);
+    return _buildRequest(path,
+        pathParams: pathParams,
+        query: query,
+        accept: accept,
+        migrateNerdVpnKey: false,
+        serverOverride: server);
+  }
+
+  void _checkCaptionScope(bool Function()? isCurrent) {
+    if (isCurrent?.call() == false) {
+      throw StateError('The playback connection changed.');
     }
   }
 
@@ -1512,13 +1681,15 @@ class Service {
     }
   }
 
-  Future<Response> _captionResponse(ServerRequest request) {
+  Future<Response> _captionResponse(ServerRequest request,
+      {bool Function()? sharedPlaybackCurrent}) {
     const timeout = Duration(seconds: 15);
     const maxBodyBytes = 4 * 1024 * 1024;
     var expired = false;
     StreamIterator<List<int>>? activeBody;
 
     Future<Response> read() async {
+      _checkCaptionScope(sharedPlaybackCurrent);
       final get = http.Request('GET', request.uri)..followRedirects = false;
       get.headers.addAll(request.headers);
       final response = await _instanceHttpClient.send(get);
@@ -1529,12 +1700,13 @@ class Service {
           (response.statusCode >= 400 &&
               (retryAfterIsInvalid ||
                   (retryAfter ?? Duration.zero) > Duration.zero));
-      if (expired || refused) {
+      if (expired || refused || sharedPlaybackCurrent?.call() == false) {
         // A refusal or a response whose headers arrived after the deadline
         // never needs its body. Do not wait for stream cleanup to finish.
         unawaited(_cancelCaptionRead(() => response.stream
             .listen(null, onError: (Object _, StackTrace __) {})
             .cancel()));
+        _checkCaptionScope(sharedPlaybackCurrent);
         if (expired) throw TimeoutException('Caption request expired', timeout);
         throw InvidiousServiceError('Caption request refused',
             statusCode: response.statusCode,
@@ -1546,12 +1718,14 @@ class Service {
       final bytes = BytesBuilder(copy: false);
       try {
         while (await body.moveNext()) {
+          _checkCaptionScope(sharedPlaybackCurrent);
           final chunk = body.current;
           if (chunk.length > maxBodyBytes - bytes.length) {
             throw InvidiousServiceError('Caption response is too large');
           }
           bytes.add(chunk);
         }
+        _checkCaptionScope(sharedPlaybackCurrent);
         return Response.bytes(bytes.takeBytes(), response.statusCode,
             request: response.request, headers: response.headers);
       } finally {
@@ -1570,11 +1744,16 @@ class Service {
 
   Future<VideoTranscript> _getWatchCaptionTranscript(
       String videoId, Caption caption, Server server,
-      {bool forPlayback = false}) async {
+      {bool forPlayback = false,
+      bool Function()? sharedPlaybackCurrent}) async {
     try {
-      final watch = await buildRequest('/watch',
-          query: {'v': videoId}, accept: 'text/html', serverOverride: server);
-      final page = await _captionResponse(watch);
+      final watch = await _buildCaptionRequest('/watch',
+          query: {'v': videoId},
+          accept: 'text/html',
+          server: server,
+          sharedPlaybackCurrent: sharedPlaybackCurrent);
+      final page = await _captionResponse(watch,
+          sharedPlaybackCurrent: sharedPlaybackCurrent);
       if (page.statusCode != 200) {
         throw InvidiousServiceError('The instance caption page is unavailable',
             statusCode: page.statusCode, retryAfter: _retryAfter(page));
@@ -1625,8 +1804,10 @@ class Service {
         ..['Accept'] = 'text/vtt';
       // This is the one track advertised by this video's player page. Keep its
       // signed query intact, never log/cache it, and never follow redirects.
-      final response = await _captionResponse(ServerRequest(
-          uri: candidates.single, headers: headers, server: watch.server));
+      final response = await _captionResponse(
+          ServerRequest(
+              uri: candidates.single, headers: headers, server: watch.server),
+          sharedPlaybackCurrent: sharedPlaybackCurrent);
       final transcript = _webVttTranscript(response, caption,
           preserveRepeatedLines: forPlayback);
       if (transcript.lines.isEmpty) {
@@ -1648,6 +1829,7 @@ class Service {
     Caption caption, {
     Server? serverOverride,
     bool forPlayback = false,
+    bool Function()? sharedPlaybackCurrent,
   }) async {
     // Keep the fallback on the original account if the selection changes while
     // a request is pending.
@@ -1663,13 +1845,15 @@ class Service {
     }
 
     try {
-      final request = await buildRequest(
+      final request = await _buildCaptionRequest(
         urlGetTranscript,
         pathParams: {':id': videoId},
         query: query,
-        serverOverride: server,
+        server: server,
+        sharedPlaybackCurrent: sharedPlaybackCurrent,
       );
-      final response = await _captionResponse(request);
+      final response = await _captionResponse(request,
+          sharedPlaybackCurrent: sharedPlaybackCurrent);
       return validate(VideoTranscript.fromJson(handleResponse(response),
           preserveRepeatedLines: forPlayback));
     } catch (error) {
@@ -1681,16 +1865,18 @@ class Service {
     }
 
     try {
-      final canonicalRequest = await buildRequest(
+      final canonicalRequest = await _buildCaptionRequest(
         urlGetCaptions,
         pathParams: {':id': videoId},
         query: query,
         accept: 'text/vtt',
-        serverOverride: server,
+        server: server,
+        sharedPlaybackCurrent: sharedPlaybackCurrent,
       );
       final request = _playbackCaptionRequest(canonicalRequest, caption,
           requireMatchingTrack: !forPlayback);
-      final response = await _captionResponse(request);
+      final response = await _captionResponse(request,
+          sharedPlaybackCurrent: sharedPlaybackCurrent);
       return validate(_webVttTranscript(response, caption,
           preserveRepeatedLines: forPlayback));
     } on InvidiousServiceError {
@@ -2259,8 +2445,11 @@ class Service {
       {int? maxResults,
       int? page,
       bool saveLastSeen = true,
-      Server? serverOverride}) async {
-    // for background service to be able to use
+      Server? serverOverride,
+      Future<void> Function(Server)? beforeRequest}) async {
+    if (beforeRequest != null && serverOverride != null) {
+      await beforeRequest(serverOverride);
+    }
     final req = await buildRequest(urlGetUserFeed,
         query: {
           'max_results': maxResults?.toString(),
@@ -2269,13 +2458,21 @@ class Service {
         authenticated: true,
         serverOverride: serverOverride);
 
-    final response = await _get(req);
+    Future<void> check() async {
+      if (beforeRequest != null) await beforeRequest(req.server!);
+    }
+
+    final response =
+        await _get(req, beforeRequest: beforeRequest == null ? null : check);
+    await check();
     var feed = UserFeed.fromJson(handleResponse(response));
     feed.videos = (await postProcessVideos(feed.videos ?? [])).cast();
+    await check();
     feed.notifications =
         (await postProcessVideos(feed.notifications ?? [])).cast();
+    await check();
 
-    // we only save the last video seen if we're on the first page otherwise it does not make sense
+    // A later page cannot advance the notification cursor.
     if (saveLastSeen && (page ?? 1) == 1) {
       var videos = List.from(feed.notifications ?? [], growable: true);
       videos.addAll(feed.videos ?? []);
@@ -2286,6 +2483,7 @@ class Service {
           await fileDb
               .forAccount(req.server!)
               .setLastSubscriptionNotification(toSave);
+          await check();
         }
       }
     }
@@ -2573,60 +2771,87 @@ class Service {
     }
   }
 
-  Future<bool> subscribe(String channelId) async {
+  Future<bool> hasSubscriptionAccount() async {
     final owner = db.forProfile(db.profileId);
-    final account = await _authenticatedAccount(owner);
-    if (account == null) return false;
+    return await SubscriptionAccount.resolve(owner) != null;
+  }
+
+  /// Captures the owning profile and the source preference for one operation.
+  /// A later switch cannot silently send an earlier action to another account.
+  Future<
+      ({
+        IDbClient owner,
+        Server server,
+        Future<void> Function(Server) check,
+      })?> _subscriptionRoute() async {
+    final database = db;
+    final profileId = database.profileId;
+    final owner = database.forProfile(profileId);
+    final revision = SubscriptionAccount.revision.value;
+    final session = _sessionRevision;
+    final proxyRevision = NetworkProxy.instance.revision;
+    bool current() =>
+        identical(db, database) &&
+        database.profileId == profileId &&
+        session == _sessionRevision &&
+        revision == SubscriptionAccount.revision.value &&
+        !NetworkProxy.instance.isChanging &&
+        proxyRevision == NetworkProxy.instance.revision;
+
+    Future<void> check(Server requested) async {
+      if (!current()) throw StateError('The subscription account changed.');
+      final latest = await SubscriptionAccount.resolve(owner);
+      if (!current() ||
+          latest == null ||
+          !BackendPlayback(requested).matchesConnection(latest)) {
+        throw StateError('The subscription account changed.');
+      }
+    }
+
+    final server = await SubscriptionAccount.resolve(owner);
+    if (!current()) throw StateError('The subscription account changed.');
+    if (server == null) return null;
+    await check(server);
+    return (owner: owner, server: server, check: check);
+  }
+
+  Future<bool> subscribe(String channelId) =>
+      _writeSubscription(channelId, subscribe: true);
+
+  Future<bool> unSubscribe(String channelId) =>
+      _writeSubscription(channelId, subscribe: false);
+
+  Future<bool> _writeSubscription(String channelId,
+      {required bool subscribe}) async {
+    final route = await _subscriptionRoute();
+    if (route == null) return false;
     final req = await buildRequest(urlAddDeleteSubscriptions,
         pathParams: {":ucid": channelId},
         authenticated: true,
-        serverOverride: account);
-
-    final response =
-        await _instanceHttpClient.post(req.uri, headers: req.headers);
+        serverOverride: route.server);
+    await route.check(req.server ?? route.server);
+    final response = subscribe
+        ? await _instanceHttpClient.post(req.uri, headers: req.headers)
+        : await _instanceHttpClient.delete(req.uri, headers: req.headers);
     handleResponse(response);
-    await _subscriptionsCommitted(owner);
+    await invalidateStoredSubscriptionRecommendations(route.owner);
+    await route.check(req.server ?? route.server);
     return true;
   }
 
-  Future<bool> unSubscribe(String channelId) async {
-    final owner = db.forProfile(db.profileId);
-    final account = await _authenticatedAccount(owner);
-    if (account == null) return false;
-
-    final req = await buildRequest(urlAddDeleteSubscriptions,
-        pathParams: {":ucid": channelId},
-        authenticated: true,
-        serverOverride: account);
-
-    final response =
-        await _instanceHttpClient.delete(req.uri, headers: req.headers);
-    handleResponse(response);
-    await _subscriptionsCommitted(owner);
-    return true;
-  }
-
-  Future<void> _subscriptionsCommitted(IDbClient owner) =>
-      invalidateStoredSubscriptionRecommendations(owner);
-
-  Future<bool> isSubscribedToChannel(String channelId) async {
-    return (await getSubscriptions())
-            .indexWhere((element) => element.authorId == channelId) >
-        -1;
-  }
+  Future<bool> isSubscribedToChannel(String channelId) async =>
+      (await getSubscriptions()).any((entry) => entry.authorId == channelId);
 
   Future<List<Subscription>> getSubscriptions() async {
-    final owner = db.forProfile(db.profileId);
-    final account = await _authenticatedAccount(owner);
-    if (account == null) return [];
-
-    var req = await buildRequest(urlGetSubscriptions,
-        authenticated: true, serverOverride: account);
-
-    final response = await _get(req);
-    Iterable i = handleResponse(response);
-
-    return List<Subscription>.from(i.map((e) => Subscription.fromJson(e)));
+    final route = await _subscriptionRoute();
+    if (route == null) return [];
+    final req = await buildRequest(urlGetSubscriptions,
+        authenticated: true, serverOverride: route.server);
+    Future<void> check() => route.check(req.server ?? route.server);
+    final response = await _get(req, beforeRequest: check);
+    await check();
+    final Iterable result = handleResponse(response);
+    return result.map((entry) => Subscription.fromJson(entry)).toList();
   }
 
   /// Reads the follows of one already-admitted Invidious account. The caller

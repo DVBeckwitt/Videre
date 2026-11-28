@@ -413,8 +413,9 @@ class _MiniLikeButtonState extends State<_MiniLikeButton> {
 
   MusicLibraryEntry? _songForProfile(IdedVideo entry, String profileId) {
     final owner = switch (entry) {
-      Video() =>
-        (entry.playbackConnection ?? entry.backendPlayback)?.server.profileId,
+      Video() => (entry.playbackConnection ?? entry.backendPlayback)
+          ?.preferredServer
+          .profileId,
       DownloadedVideo() => entry.profileId,
       _ => null,
     };

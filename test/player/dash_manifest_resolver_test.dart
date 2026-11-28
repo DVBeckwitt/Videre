@@ -77,6 +77,37 @@ void main() {
     expect(companionRequests, 0);
   });
 
+  for (final trackDiscovery in [false, true]) {
+    test('shared manifests stop after revocation (tracks: $trackDiscovery)',
+        () async {
+      final started = Completer<void>();
+      final response = Completer<http.Response>();
+      final requests = <Uri>[];
+      final manifests = <String>[];
+      var sharing = true;
+      final resolver = DashManifestResolver(MockClient((request) async {
+        requests.add(request.url);
+        if (requests.length == 1) {
+          started.complete();
+          return response.future;
+        }
+        return http.Response(staticMpd, 200, request: request);
+      }));
+      final resolving = trackDiscovery
+          ? resolver.loadTrackManifest(original, server,
+              isCurrent: () => sharing)
+          : resolver.resolve(original, videoId, server,
+              isCurrent: () => sharing, onManifest: manifests.add);
+      await started.future;
+      sharing = false;
+      response
+          .complete(http.Response('', 302, headers: {'location': recovered}));
+      expect(await resolving, isNull);
+      expect(requests, [Uri.parse(original)]);
+      expect(manifests, isEmpty);
+    });
+  }
+
   for (final scheme in ['http', 'https']) {
     testWidgets('slow $scheme onion manifests retain adaptive playback',
         (tester) async {

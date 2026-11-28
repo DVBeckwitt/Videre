@@ -23,6 +23,7 @@ import '../../network/tor_browser.dart';
 import '../../settings/models/db/server.dart';
 import '../../settings/models/db/settings.dart';
 import '../../settings/models/errors/invidious_service_error.dart';
+import '../../utils/interfaces/db.dart';
 import '../../utils/pretty_bytes.dart';
 import '../../videos/models/video.dart';
 import '../adaptive_dash_manifest.dart';
@@ -31,6 +32,7 @@ import '../models/backend_playback.dart';
 import '../models/media_command.dart';
 import '../models/playback_pitch.dart';
 import '../models/playback_cache_identity.dart';
+import '../models/playback_instance_fallback.dart';
 import '../models/video_quality.dart';
 import '../models/watch_audio_track.dart';
 import '../services/watch_local_subtitles.dart';
@@ -43,6 +45,11 @@ part 'video_player.freezed.dart';
 
 final log = Logger('VideoPlayer');
 const _maxPlaybackSources = 10;
+
+bool _isCrossProfileFallback(BackendPlayback? route) =>
+    route != null &&
+    route.isInstanceFallback &&
+    route.server.profileId != route.preferredServer.profileId;
 
 typedef WatchSubtitleTimingTarget = ({
   String videoId,
@@ -100,6 +107,7 @@ List<BetterPlayerDataSource> _buildPlaybackDataSources(
   String? preferredAudioTrack,
   String? lastSubtitle,
   void Function()? onBlockedMediaOrigin,
+  bool Function()? crossProfileIsCurrent,
 }) {
   final sources = <BetterPlayerDataSource>[];
   final mediaCompanions =
@@ -112,11 +120,17 @@ List<BetterPlayerDataSource> _buildPlaybackDataSources(
   late final subtitles = video.captions.map((caption) {
     return BetterPlayerSubtitlesSource(
       type: BetterPlayerSubtitlesSourceType.memory,
-      contentLoader: () => service.getPlaybackCaptions(
-        video.videoId,
-        caption,
-        server: server,
-      ),
+      contentLoader: () async {
+        if (crossProfileIsCurrent != null) {
+          if (!crossProfileIsCurrent()) {
+            throw StateError('The playback connection changed.');
+          }
+          return service.getSharedPlaybackCaptions(video.videoId, caption,
+              server: server, isCurrent: crossProfileIsCurrent);
+        }
+        return service.getPlaybackCaptions(video.videoId, caption,
+            server: server);
+      },
       name: caption.label,
       selectedByDefault: caption.label == lastSubtitle,
     );
@@ -139,14 +153,16 @@ List<BetterPlayerDataSource> _buildPlaybackDataSources(
       mediaCompanions: mediaCompanions,
       trackManifestLoader: mediaCompanions == null
           ? null
-          : (url) =>
-              service.dashManifestResolver.loadTrackManifest(url, server),
-      playbackCache: playbackCacheIdentity(
-          video: video,
-          server: server,
-          sourceUrl: url,
-          mediaCompanions: mediaCompanions != null,
-          sessionId: cacheSession),
+          : (url) => service.dashManifestResolver
+              .loadTrackManifest(url, server, isCurrent: crossProfileIsCurrent),
+      playbackCache: crossProfileIsCurrent == null
+          ? playbackCacheIdentity(
+              video: video,
+              server: server,
+              sourceUrl: url,
+              mediaCompanions: mediaCompanions != null,
+              sessionId: cacheSession)
+          : null,
       useAsmsSubtitles: false,
     ));
   }
@@ -298,9 +314,15 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
   final SettingsCubit settings;
   List<BetterPlayerDataSource> _playbackSources = const [];
   bool _downloadReuseFailed = false;
-  ({BackendPlayback route, String? queueId})? _playbackOwner;
+  ({
+    BackendPlayback route,
+    String? queueId,
+    IDbClient database
+  })? _playbackOwner;
   Server? get _playbackServer => _playbackOwner?.route.server;
   bool Function()? _sourceContinuationIsCurrent;
+  bool Function()? _instanceConnectionIsCurrent;
+  ({Video previous, Video alternate})? _pendingInstanceFallback;
   String? _playbackVideoId;
   int _playbackSourceIndex = 0;
   bool _playbackInitialized = false;
@@ -319,6 +341,9 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
   int _seekRevision = 0;
   bool _waitingForInitialSeek = false;
   bool _sourceBackendRetryable = false;
+  bool? _nativeStartupTransportFailure;
+  bool _instanceFallbackDisqualified = false;
+  bool _decoderOutcomeRecorded = false;
   bool _sourceMediaOriginBlocked = false;
   bool _backendRecoveryPending = false;
   bool _recoveringInitializedPlayback = false;
@@ -373,6 +398,7 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
         .map((state) => state.subtitleSize)
         .distinct()
         .listen((size) => videoController?.setSubtitleFontSize(size));
+    PlaybackInstanceFallback.revision.addListener(_revalidateBackupConsent);
     onInit();
   }
 
@@ -383,13 +409,30 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
 
   @override
   Future<void> close() async {
+    PlaybackInstanceFallback.revision.removeListener(_revalidateBackupConsent);
     await _subtitleSizeSubscription.cancel();
     await stopForProxyChange();
     await super.close();
   }
 
+  void _revalidateBackupConsent() {
+    if (isClosed || !_isCrossProfileFallback(_playbackOwner?.route)) return;
+    try {
+      if (_instanceConnectionIsCurrent?.call() == true) return;
+    } catch (_) {
+      // An unavailable destination profile cannot confirm sharing.
+    }
+    _emitTerminalPlaybackError(pauseDecoder: false);
+    unawaited(_stopDecoder(detachImmediately: true).catchError((Object error) {
+      // Teardown always detaches the controller, even if native pause fails.
+      log.fine('Could not pause revoked backup (${error.runtimeType})');
+    }));
+  }
+
   @override
-  Future<void> stopForProxyChange() async {
+  Future<void> stopForProxyChange() => _stopDecoder();
+
+  Future<void> _stopDecoder({bool detachImmediately = false}) async {
     _localSubtitlePlayback = null;
     _localSubtitleSource = null;
     _localSubtitleSelected = false;
@@ -400,6 +443,8 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
     _playbackSources = const [];
     _playbackOwner = null;
     _sourceContinuationIsCurrent = null;
+    _instanceConnectionIsCurrent = null;
+    _pendingInstanceFallback = null;
     _playbackVideoId = null;
     _backendRecoveryPending = false;
     _requestedPlaying = false;
@@ -410,7 +455,9 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
     try {
       // BetterPlayer disposal is synchronous but native pause is asynchronous.
       // Wait for silence before another person's account can become active.
-      await controller?.videoPlayerController?.pause();
+      final pause = controller?.videoPlayerController?.pause();
+      if (detachImmediately && controller != null) disposeControllers();
+      await pause;
     } finally {
       if (identical(videoController, controller)) disposeControllers();
     }
@@ -589,6 +636,9 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
       _sourceBackendRetryable = _playbackInitialized
           ? retryable
           : _sourceBackendRetryable || retryable;
+      if (!_playbackInitialized) {
+        _nativeStartupTransportFailure = retryable;
+      }
       if (_playbackInitialized &&
           !_usingSavedRendition &&
           _savedQualitySource != null &&
@@ -753,14 +803,19 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
           .firstOrNull
           ?.key;
 
-  void _emitTerminalPlaybackError() {
+  void _emitTerminalPlaybackError({bool pauseDecoder = true}) {
     if (isClosed ||
         _terminalErrorSent ||
         _parentPlaybackGeneration != player.backendPlaybackGeneration) {
       return;
     }
     _terminalErrorSent = true;
-    if (videoController?.betterPlayerDataSource != null) {
+    final fallback = _pendingInstanceFallback;
+    _pendingInstanceFallback = null;
+    if (fallback != null && identical(state.video, fallback.alternate)) {
+      emit(state.copyWith(video: fallback.previous));
+    }
+    if (pauseDecoder && videoController?.betterPlayerDataSource != null) {
       videoController!.pause();
     }
     WakelockPlus.disable();
@@ -773,6 +828,7 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
         value: _sourceMediaOriginBlocked
             ? PlaybackFailureReason.separateMediaHost
             : null));
+    if (!pauseDecoder) return;
     final generation = _playbackGeneration;
     void pauseAfterSetup() {
       if (!isClosed &&
@@ -815,7 +871,9 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
         return false;
       }
       final selected = database.getAccount(route.preferredServer.accountId);
-      return selected != null && selected.inUse && route.matches(selected);
+      return selected != null &&
+          selected.inUse &&
+          route.matchesPlaybackConnection(database, selected);
     };
     // Retire callbacks and in-flight seeks from the failed decoder. The
     // existing source list advances once and retains the latest user intent.
@@ -833,7 +891,43 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
       _parentPlaybackGeneration == player.backendPlaybackGeneration &&
       generation == _playbackGeneration &&
       sourceIndex == _playbackSourceIndex &&
+      (_instanceConnectionIsCurrent?.call() ?? true) &&
       (_sourceContinuationIsCurrent?.call() ?? true);
+
+  void _recordDecoderOutcome(int generation, int sourceIndex,
+      {required bool success}) {
+    final owner = _playbackOwner;
+    final source = _playbackSources.elementAtOrNull(sourceIndex);
+    if (_decoderOutcomeRecorded ||
+        _playbackOffline ||
+        _terminalErrorSent ||
+        player.state.isAudio ||
+        player.state.currentlyPlaying?.videoId != state.video?.videoId ||
+        !_isCurrentAttempt(generation, sourceIndex) ||
+        owner == null ||
+        !identical(db, owner.database) ||
+        owner.queueId != player.state.currentQueueId ||
+        source == null ||
+        source.type != BetterPlayerDataSourceType.network ||
+        parseMediaUrl(source.url) == null ||
+        source.playbackCache?.containsKey('download') == true ||
+        source.playbackCache?.containsKey('cachedMusic') == true) {
+      return;
+    }
+    try {
+      final selected =
+          owner.database.getAccount(owner.route.preferredServer.accountId);
+      if (selected == null ||
+          !selected.inUse ||
+          !owner.route.matchesPlaybackConnection(owner.database, selected)) {
+        return;
+      }
+      _decoderOutcomeRecorded = true;
+      owner.route.recordDecoderOutcome(owner.database, success: success);
+    } catch (_) {
+      // Recording an optional outcome must not interrupt playback.
+    }
+  }
 
   void _cancelSetup() {
     if (!_setupCancellation.isCompleted) {
@@ -848,7 +942,18 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
       return;
     }
     _sourceFailurePending = false;
-    if (_playbackSources[sourceIndex].playbackCache?['download'] is Map) {
+    final source = _playbackSources[sourceIndex];
+    final savedSource = source.playbackCache?['download'] is Map;
+    if (_sourceMediaOriginBlocked ||
+        (_nativeStartupTransportFailure == false &&
+            !savedSource &&
+            source.type == BetterPlayerDataSourceType.network &&
+            parseMediaUrl(source.url) != null)) {
+      // Keep trying admitted representations on this instance. A later
+      // transient error cannot override a refusal for cross-instance retry.
+      _instanceFallbackDisqualified = true;
+    }
+    if (savedSource) {
       _downloadReuseFailed = true;
       _savedQualitySource = null;
       if (_qualityRollbackRefusedNetwork) {
@@ -858,10 +963,15 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
     }
     final server = _playbackServer;
     if (server != null) {
-      service.dashManifestResolver
-          .invalidate(_playbackSources[sourceIndex].url, server);
+      service.dashManifestResolver.invalidate(source.url, server);
     }
     if (_playbackSourceIndex + 1 >= _playbackSources.length) {
+      // One observation per route. A transient failure of one representation
+      // says little about account reliability while another can still play.
+      if (_nativeStartupTransportFailure == true &&
+          !_instanceFallbackDisqualified) {
+        _recordDecoderOutcome(generation, sourceIndex, success: false);
+      }
       final recovered = _recoveringInitializedPlayback ||
               state.video?.downloadPlaybackOnly == true
           ? await _recoverPlayback(generation, sourceIndex)
@@ -889,7 +999,10 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
     final controller = videoController;
     if (!_isCurrentAttempt(generation, sourceIndex)) return true;
     if (_backendRecoveryPending) return true;
-    if (_playbackOffline || !_sourceBackendRetryable || video == null) {
+    if (_playbackOffline ||
+        !_sourceBackendRetryable ||
+        video == null ||
+        _pendingInstanceFallback != null) {
       return false;
     }
     bool active() =>
@@ -930,9 +1043,7 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
     final controller = videoController;
     if (!_isCurrentAttempt(generation, sourceIndex)) return true;
     if (_backendRecoveryPending) return true;
-    if (_playbackOffline ||
-        !_sourceBackendRetryable ||
-        video?.backendPlayback == null) {
+    if (_playbackOffline || !_sourceBackendRetryable || video == null) {
       return false;
     }
     bool active() =>
@@ -943,25 +1054,60 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
     final resumeAt = _playbackInitialized ? position() : _playbackStartAt;
     _backendRecoveryPending = true;
     try {
-      final replacement = await service.retryVideoBackend(
-        video!,
-        isCurrent: active,
-        onRetry: (request) {
-          if (active() && player.setRequestedBackend(video.videoId, request)) {
-            player.setEvent(MediaEvent(
-                state: MediaState.loading,
-                type: MediaEventType.backendRetry,
-                value: request.label));
-          }
-        },
-      );
+      if (video.backendPlayback != null) {
+        Video? replacement;
+        try {
+          replacement = await service.retryVideoBackend(
+            video,
+            isCurrent: active,
+            onRetry: (request) {
+              if (active() &&
+                  player.setRequestedBackend(video.videoId, request)) {
+                player.setEvent(MediaEvent(
+                    state: MediaState.loading,
+                    type: MediaEventType.backendRetry,
+                    value: request.label));
+              }
+            },
+          );
+        } catch (error) {
+          if (!isBackendRetryable(error)) return !active();
+        }
+        if (!active()) return true;
+        if (replacement != null) {
+          player.reportBackendVideoLoaded(replacement);
+          emit(state.copyWith(video: replacement));
+          _backendRecoveryPending = false;
+          await playVideo(false,
+              startAt: _pendingSeek ?? resumeAt, preservePlaybackIntent: true);
+          return true;
+        }
+      }
+      final route = video.playbackConnection ?? video.backendPlayback;
+      if (_sourceMediaOriginBlocked ||
+          _instanceFallbackDisqualified ||
+          _usingSavedRendition ||
+          video.downloadPlaybackOnly ||
+          route?.manualSelection == true ||
+          route?.isInstanceFallback == true ||
+          PlaybackInstanceFallback.preference(db) == null) {
+        return false;
+      }
+      final alternate =
+          await player.tryPlaybackInstanceFallback(video, isCurrent: active);
       if (!active()) return true;
-      if (replacement == null) return false;
-      player.reportBackendVideoLoaded(replacement);
-      emit(state.copyWith(video: replacement));
+      if (alternate == null) return false;
       _backendRecoveryPending = false;
-      await playVideo(false,
-          startAt: _pendingSeek ?? resumeAt, preservePlaybackIntent: true);
+      try {
+        await _playVideo(false,
+            startAt: _pendingSeek ?? resumeAt,
+            preservePlaybackIntent: true,
+            instanceFallback: (previous: video, alternate: alternate));
+      } finally {
+        if (identical(_pendingInstanceFallback?.alternate, alternate)) {
+          _emitTerminalPlaybackError();
+        }
+      }
       return true;
     } catch (_) {
       // API and decoder diagnostics can contain signed URLs. The existing
@@ -977,6 +1123,7 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
     _nativePositionSubscription = null;
     if (!_isCurrentAttempt(_playbackGeneration, _playbackSourceIndex)) return;
     _sourceBackendRetryable = false;
+    _nativeStartupTransportFailure = null;
     _sourceMediaOriginBlocked = false;
     final generation = _playbackGeneration;
     final sourceIndex = _playbackSourceIndex;
@@ -1036,8 +1183,12 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
         try {
           resolved = await Future.any([
             service.dashManifestResolver.resolve(source.url, videoId, server,
+                isCurrent: _isCrossProfileFallback(_playbackOwner?.route)
+                    ? () => _isCurrentAttempt(generation, sourceIndex)
+                    : null,
                 throwRetryable: state.video?.backendPlayback != null ||
-                    _recoveringInitializedPlayback,
+                    _recoveringInitializedPlayback ||
+                    PlaybackInstanceFallback.preference(db) != null,
                 onMissingCheck: () => missingCheck = true,
                 onMediaOriginBlocked:
                     androidMedia ? () => blockedRedirect = true : null,
@@ -1091,7 +1242,8 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
                 allowsMediaCompanion(server, Uri.parse(resolved))
             ? const {}
             : source.headers,
-        playbackCache: (_qualityMetadata ?? state.video) == null
+        playbackCache: _isCrossProfileFallback(_playbackOwner?.route) ||
+                (_qualityMetadata ?? state.video) == null
             ? null
             : playbackCacheIdentity(
                 video: (_qualityMetadata ?? state.video)!,
@@ -1191,10 +1343,14 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
                 details['mediaOriginBlocked'] == true) ||
             (videoController?.videoPlayerController?.value.mediaOriginBlocked ??
                 false);
-        _sourceBackendRetryable |= (details is Map &&
+        final retryable = (details is Map &&
                 details['backendRetryable'] == true) ||
             (videoController?.videoPlayerController?.value.backendRetryable ??
                 false);
+        _sourceBackendRetryable |= retryable;
+        if (!_playbackInitialized) {
+          _nativeStartupTransportFailure = retryable;
+        }
       }
     } finally {
       if (identical(_controllerSetup, setup)) {
@@ -1208,6 +1364,15 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
       _sourceFailurePending = true;
       await _handleSourceFailure(generation, sourceIndex);
     } else {
+      final fallback = _pendingInstanceFallback;
+      if (fallback != null) {
+        if (!player.commitPlaybackInstanceFallback(
+            fallback.previous, fallback.alternate)) {
+          _emitTerminalPlaybackError();
+          return;
+        }
+        _pendingInstanceFallback = null;
+      }
       final video = state.video;
       if (!_playbackOffline &&
           parentPositionGeneration == player.playbackPositionGeneration &&
@@ -1222,6 +1387,10 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
                 _qualityMetadata ?? video, server, source.url));
       }
       final native = videoController?.videoPlayerController;
+      if (native?.value.initialized == true &&
+          native?.value.hasError == false) {
+        _recordDecoderOutcome(generation, sourceIndex, success: true);
+      }
       _nativePositionSubscription =
           native?.nativePositionStream.listen((position) {
         if (!_isCurrentAttempt(generation, sourceIndex) ||
@@ -1352,9 +1521,19 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
 
   @override
   Future<void> playVideo(bool offline,
+          {Duration? startAt,
+          bool preservePlaybackIntent = false,
+          bool recoveringPlayback = false}) =>
+      _playVideo(offline,
+          startAt: startAt,
+          preservePlaybackIntent: preservePlaybackIntent,
+          recoveringPlayback: recoveringPlayback);
+
+  Future<void> _playVideo(bool offline,
       {Duration? startAt,
       bool preservePlaybackIntent = false,
-      bool recoveringPlayback = false}) async {
+      bool recoveringPlayback = false,
+      ({Video previous, Video alternate})? instanceFallback}) async {
     if (player.state.isAudio) {
       return;
     }
@@ -1365,6 +1544,7 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
     _pendingSeek = null;
     _playbackOffline = offline;
     if (!preservePlaybackIntent) {
+      _instanceFallbackDisqualified = false;
       _downloadReuseFailed = false;
       _requestedPlaying = player.shouldStartPlayback;
     }
@@ -1381,13 +1561,19 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
     }
     _playbackSourceIndex = 0;
     _playbackInitialized = false;
+    _decoderOutcomeRecorded = false;
     _terminalErrorSent = false;
     _sourceMediaOriginBlocked = false;
     _sourceFailurePending = false;
     _failedSubtitle = null;
-    var newState = state.copyWith(startAt: startAt, subtitleFailed: false);
+    var newState = state.copyWith(
+        video: instanceFallback?.alternate ?? state.video,
+        startAt: startAt,
+        subtitleFailed: false);
     _playbackOwner = null;
     _sourceContinuationIsCurrent = null;
+    _instanceConnectionIsCurrent = null;
+    _pendingInstanceFallback = instanceFallback;
     _playbackVideoId = null;
     if (newState.video != null || newState.offlineVideo != null) {
       final idedVideo = offline ? newState.offlineVideo! : newState.video!;
@@ -1464,13 +1650,15 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
           )
         ];
       } else {
-        final selectedServer = await db.getCurrentlySelectedServer();
+        final database = db;
+        final selectedServer = await database.getCurrentlySelectedServer();
         if (!_isCurrentAttempt(generation, 0) || player.state.isAudio) {
           return;
         }
         final playback = newState.video?.backendPlayback;
         final connection = playback ?? newState.video?.playbackConnection;
-        if (connection != null && !connection.matches(selectedServer)) {
+        if (connection != null &&
+            !connection.matchesPlaybackConnection(database, selectedServer)) {
           // Cached queue entries may outlive credentials or proxy changes.
           // The parent refetches these; direct decoder admission fails closed.
           _playbackSources = const [];
@@ -1478,17 +1666,36 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
           return;
         }
         final server = connection?.server ?? selectedServer;
-        player.setRequestedBackend(newState.video!.videoId, playback);
+        if (instanceFallback == null) {
+          player.setRequestedBackend(newState.video!.videoId, playback);
+        }
         _playbackOwner = (
           route: connection ?? BackendPlayback(selectedServer),
           queueId: player.state.currentQueueId,
+          database: database,
         );
+        final admittedOwner = _playbackOwner;
+        if (connection != null && connection.isInstanceFallback) {
+          final queueId = player.state.currentQueueId;
+          _instanceConnectionIsCurrent = () {
+            if (!identical(db, database) ||
+                player.state.isAudio ||
+                player.state.currentQueueId != queueId) {
+              return false;
+            }
+            final selected = database.getAccount(selectedServer.accountId);
+            return selected != null &&
+                connection.matchesPlaybackConnection(database, selected);
+          };
+        }
         _playbackVideoId = newState.video!.videoId;
         var blockedMediaOrigin = false;
         // The saved setting orders the adaptive and progressive sources.
         // Within the progressive candidates, keep the known audio track.
-        final preferredAudioTrack =
-            player.watchAudioPreferenceFor(newState.video!)?.trackId;
+        final preferredAudioTrack = player
+            .watchAudioPreferenceFor(
+                instanceFallback?.previous ?? newState.video!)
+            ?.trackId;
         final sources = _buildPlaybackDataSources(
           newState.video!,
           server,
@@ -1497,11 +1704,21 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
           preferredQuality: _videoQuality,
           preferredAudioTrack: preferredAudioTrack,
           onBlockedMediaOrigin: () => blockedMediaOrigin = true,
+          crossProfileIsCurrent: _isCrossProfileFallback(connection)
+              ? () =>
+                  !isClosed &&
+                  !_terminalErrorSent &&
+                  _parentPlaybackGeneration ==
+                      player.backendPlaybackGeneration &&
+                  _playbackOwner == admittedOwner &&
+                  _instanceConnectionIsCurrent?.call() == true
+              : null,
           lastSubtitle: settings.state.rememberSubtitles
               ? settings.state.lastSubtitles
               : null,
         );
-        final local = _downloadReuseFailed
+        final local = _downloadReuseFailed ||
+                connection?.isInstanceFallback == true
             ? null
             : await resolveDownloadPlaybackSource(
                 database: db,
@@ -1802,7 +2019,7 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
           database.profileId == route.preferredServer.profileId &&
           !NetworkProxy.instance.isChanging &&
           _isCurrentAttempt(generation, index) &&
-          route.matches(selected);
+          route.matchesPlaybackConnection(database, selected);
     } catch (_) {
       return false;
     }

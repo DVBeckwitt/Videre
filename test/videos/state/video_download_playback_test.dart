@@ -94,6 +94,9 @@ class _Database extends Fake implements IDbClient {
   List<SettingsValue> getAllSettings() => [];
 
   @override
+  SettingsValue? getSettings(String name) => null;
+
+  @override
   DownloadedVideo? getDownloadByVideoId(String videoId) {
     if (throwLookup) throw StateError('Optional library lookup unavailable');
     return download?.videoId == videoId ? download : null;

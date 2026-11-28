@@ -3,7 +3,10 @@ import '../../videos/models/ided_video.dart';
 /// All admitted renditions failed with retryable native transport errors.
 class ManualMusicSourceFailure implements Exception {
   final Object cause;
-  const ManualMusicSourceFailure(this.cause);
+  final bool canTryInstanceFallback;
+
+  const ManualMusicSourceFailure(this.cause,
+      {this.canTryInstanceFallback = false});
 }
 
 /// Prepares a selected Music occurrence while the current decoder keeps playing.

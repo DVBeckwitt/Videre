@@ -13,10 +13,10 @@ import '../settings/models/db/server.dart';
 import '../settings/models/db/video_filter.dart';
 import '../settings/models/errors/invidious_service_error.dart';
 import '../settings/models/errors/no_server_selected.dart';
+import '../subscription_management/services/subscription_account.dart';
 import '../utils/interfaces/db.dart';
 import '../utils/video_post_processing.dart';
 import '../videos/models/video.dart';
-import '../videos/services/watch_history.dart';
 import 'subscription_revision.dart';
 
 const _maximumChannels = 200;
@@ -97,16 +97,34 @@ class SubscriptionRecommendationSource {
       // Some storage adapters have no local subscriptions.
     }
     if (!current()) return;
-    final admitted = server != null &&
+    final playback = server != null &&
             server.profileId == profileId &&
             !_credentialChanges.containsKey(profileId)
         ? server
         : null;
-    final route = admitted == null ? null : BackendPlayback(admitted);
-    Future<void> check() async {
-      if (!current() || route == null) throw const _SubscriptionReadCancelled();
+    final account = _credentialChanges.containsKey(profileId)
+        ? null
+        : await SubscriptionAccount.resolve(_database);
+    final playbackRoute = playback == null ? null : BackendPlayback(playback);
+    final accountRoute = account == null ? null : BackendPlayback(account);
+    Future<void> checkPlayback() async {
+      if (!current() || playbackRoute == null) {
+        throw const _SubscriptionReadCancelled();
+      }
       final selected = await _database.getCurrentlySelectedServer();
-      if (!current() || !route.matchesConnection(selected)) {
+      if (!current() || !playbackRoute.matchesConnection(selected)) {
+        throw const _SubscriptionReadCancelled();
+      }
+    }
+
+    Future<void> checkAccount() async {
+      if (!current() || accountRoute == null) {
+        throw const _SubscriptionReadCancelled();
+      }
+      final selected = await SubscriptionAccount.resolve(_database);
+      if (!current() ||
+          selected == null ||
+          !accountRoute.matchesConnection(selected)) {
         throw const _SubscriptionReadCancelled();
       }
     }
@@ -126,12 +144,11 @@ class SubscriptionRecommendationSource {
             List<MusicTrack> tracks = const []}) =>
         (channels: channels(), videos: videos, music: tracks);
 
-    final online = admitted != null && hasHistoryAccount(admitted);
     Map<String, String>? cached;
-    if (online && !forceRefresh) {
+    if (account != null && !forceRefresh) {
       try {
-        await check();
-        cached = _readCache(admitted);
+        await checkAccount();
+        cached = _readCache(account);
         followed.addAll(cached ?? const {});
       } on _SubscriptionReadCancelled {
         return;
@@ -142,25 +159,46 @@ class SubscriptionRecommendationSource {
     if (!current()) return;
     final initial = channels();
     if (initial.isNotEmpty) yield batch();
-    if (!current() || admitted == null || (!online && local.isEmpty)) return;
+    if (!current() ||
+        (account == null && (playback == null || local.isEmpty))) {
+      return;
+    }
 
     final api = _api ?? globals.service;
     try {
-      await check();
-      if (online && cached == null) {
-        final subscriptions = await api.getRecommendationSubscriptions(
-            server: admitted, beforeRequest: check);
-        await check();
-        final fetched = <String, String>{};
-        for (final subscription in subscriptions) {
-          _add(fetched, subscription.authorId, subscription.author);
-          if (fetched.length >= _maximumChannels) break;
+      final videos = <Video>[];
+      var accountFeedLoaded = false;
+      var accountFailed = false;
+      if (account != null) {
+        try {
+          await checkAccount();
+          if (cached == null) {
+            final subscriptions = await api.getRecommendationSubscriptions(
+                server: account, beforeRequest: checkAccount);
+            await checkAccount();
+            final fetched = <String, String>{};
+            for (final subscription in subscriptions) {
+              _add(fetched, subscription.authorId, subscription.author);
+              if (fetched.length >= _maximumChannels) break;
+            }
+            followed.addAll(fetched);
+            await _writeCache(account, fetched);
+            await checkAccount();
+            if (!_sameChannels(initial, channels())) yield batch();
+          }
+          if (followed.entries
+              .take(_maximumChannels)
+              .any((entry) => _allowed(entry.key, entry.value, music: music))) {
+            videos.addAll(await api.getVideoRecommendationCandidates(
+                server: account, beforeRequest: checkAccount));
+            await checkAccount();
+            accountFeedLoaded = true;
+          }
+        } on _SubscriptionReadCancelled {
+          return;
+        } on Exception {
+          accountFailed = true;
         }
-        followed.addAll(fetched);
-        if (!current()) return;
-        await _writeCache(admitted, fetched);
-        await check();
-        if (!_sameChannels(initial, channels())) yield batch();
       }
 
       // One signed-in feed page and at most two local uploads, with a lower
@@ -170,23 +208,24 @@ class SubscriptionRecommendationSource {
           if (_allowed(entry.key, entry.value, music: music)) entry.key,
       };
       if (eligibleFollows.isEmpty) return;
-      final videos = <Video>[
-        if (online)
-          ...await api.getVideoRecommendationCandidates(
-              server: admitted, beforeRequest: check),
-      ];
-      final represented = videos.map((video) => video.authorId).toSet();
-      for (final channel in local.keys
-          .where(
-              (id) => eligibleFollows.contains(id) && !represented.contains(id))
-          .take(online ? 1 : 2)) {
-        await check();
-        final uploads = await api.getVideoRecommendationCandidates(
-            channelId: channel, server: admitted, beforeRequest: check);
-        videos.addAll(
-            uploads.where((video) => video.authorId == channel).take(8));
+      // Avoid sending more requests to a failing account's instance.
+      if (playback != null &&
+          (!accountFailed || playback.url != account?.url)) {
+        final represented = videos.map((video) => video.authorId).toSet();
+        for (final channel in local.keys
+            .where((id) =>
+                eligibleFollows.contains(id) && !represented.contains(id))
+            .take(accountFeedLoaded ? 1 : 2)) {
+          await checkPlayback();
+          final uploads = await api.getVideoRecommendationCandidates(
+              channelId: channel,
+              server: playback,
+              beforeRequest: checkPlayback);
+          videos.addAll(
+              uploads.where((video) => video.authorId == channel).take(8));
+        }
       }
-      await check();
+      if (!current()) return;
       final filters = _database.getAllFilters();
       final seen = <String>{};
       final candidates = videos
@@ -210,13 +249,15 @@ class SubscriptionRecommendationSource {
 
       // Invidious's lightweight feed does not prove Music category. The
       // existing discovery verifier owns the small metadata read budget.
+      if (playback == null) return;
+      await checkPlayback();
       final knownUploads = {
         for (final video in candidates) video.videoId: video.authorId
       };
       final verified = await (_catalog ?? musicCatalogService)
           .getSubscriptionSongs(candidates,
-              expectedServer: admitted, isCurrent: current);
-      await check();
+              expectedServer: playback, isCurrent: current);
+      await checkPlayback();
       final tracks = verified
           .where((track) =>
               track.uploaderChannelId != null &&

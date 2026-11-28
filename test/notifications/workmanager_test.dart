@@ -8,12 +8,16 @@ import 'package:clipious/notifications/models/db/playlist_notifications.dart';
 import 'package:clipious/playlists/models/playlist.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/server.dart';
+import 'package:clipious/settings/models/db/settings.dart';
+import 'package:clipious/utils/file_db.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/user_feed.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:clipious/workmanager.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 
 class _NotificationService extends Service {
   UserFeed feed = UserFeed([], []);
@@ -27,7 +31,8 @@ class _NotificationService extends Service {
       {int? maxResults,
       int? page,
       bool saveLastSeen = true,
-      Server? serverOverride}) async {
+      Server? serverOverride,
+      Future<void> Function(Server)? beforeRequest}) async {
     expect(saveLastSeen, isFalse);
     requestedServers.add(serverOverride);
     await beforeFeed?.call();
@@ -174,6 +179,101 @@ void main() {
       'profileId': 'default',
       'accountId': 'https://instance.example',
     });
+  });
+
+  test('session mirror refresh waits for the subscription pin to commit',
+      () async {
+    final owner = db.forProfile(db.profileId);
+    final pin = fileDb.forProfile(owner.profileId);
+    final commitStarted = Completer<void>();
+    final allowCommit = Completer<void>();
+    final changing = pin.setSubscriptionNotificationAccountId('other-account',
+        commit: () async {
+      commitStarted.complete();
+      await allowCommit.future;
+      await owner.saveSetting(
+          SettingsValue(subscriptionAccountSetting, 'other-account'));
+    });
+
+    await commitStarted.future;
+    final syncing = fileDb.syncWithDb();
+    try {
+      expect(owner.getSettings(subscriptionAccountSetting), isNull);
+      expect(
+          (await fileDb.getGenericSettings()).subscriptionNotificationAccountId,
+          'other-account');
+    } finally {
+      allowCommit.complete();
+      await Future.wait([changing, syncing]);
+    }
+    expect(
+        (await fileDb.getGenericSettings()).subscriptionNotificationAccountId,
+        'other-account');
+  });
+
+  test(
+      'background skips playback subscription feed while another account is pinned',
+      () async {
+    final applicationDb = db;
+    final playback = await applicationDb.getCurrentlySelectedServer();
+    final settings = fileDb.forProfile(playback.profileId);
+    await settings.setSubscriptionNotifications(true);
+    await settings.setSubscriptionNotificationAccountId('other-account');
+    await fileDb.upsertPlaylistNotification(
+        PlaylistNotification('playlist', 5, 123, 'A playlist'));
+    notificationService.feed =
+        UserFeed([], const [Video(videoId: 'playback-subscription')]);
+
+    db = FileDB();
+    try {
+      await checkForNewVideos();
+      expect(notificationService.requestedServers, [playback]);
+      expect(sent.single['channelKey'], 'playlist-notifications');
+      expect(
+          await settings.forAccount(playback).getLastSubscriptionNotification(),
+          isNull);
+
+      await settings.setSubscriptionNotificationAccountId(null);
+      notificationService.requestedServers.clear();
+      await checkForNewVideos();
+      expect(notificationService.requestedServers, [playback, playback]);
+      expect(
+          (await settings
+                  .forAccount(playback)
+                  .getLastSubscriptionNotification())
+              ?.lastSeenVideoId,
+          'playback-subscription');
+    } finally {
+      db = applicationDb;
+    }
+  });
+
+  test('background subscription retry stops when a different source is pinned',
+      () async {
+    final applicationDb = db;
+    final playback = await applicationDb.getCurrentlySelectedServer();
+    final settings = fileDb.forProfile(playback.profileId);
+    await settings.setSubscriptionNotifications(true);
+    final requests = <http.Request>[];
+    final client = MockClient((request) async {
+      requests.add(request);
+      return http.Response('', 429, headers: {'retry-after': '1'});
+    });
+    addTearDown(client.close);
+    service = Service(
+        httpClient: client,
+        wait: (_) => settings.setSubscriptionNotificationAccountId('other'));
+    db = FileDB();
+    try {
+      await checkForNewVideos();
+      expect(requests.single.url.path, '/api/v1/auth/feed');
+      expect(
+          await settings.forAccount(playback).getLastSubscriptionNotification(),
+          isNull);
+      expect(sent, isEmpty);
+    } finally {
+      db = applicationDb;
+    }
   });
 
   test(

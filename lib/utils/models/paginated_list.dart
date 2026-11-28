@@ -2,10 +2,14 @@ import 'package:clipious/channels/models/channel_videos.dart';
 import 'package:clipious/content_filter/community_models.dart';
 import 'package:clipious/utils/extensions/list_unique.dart';
 import 'package:clipious/utils/models/item_with_continuation.dart';
-import 'package:clipious/videos/models/user_feed.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/foundation.dart';
+import '../../network/network_proxy.dart';
+import '../../player/models/backend_playback.dart';
+import '../../settings/models/db/server.dart';
 import '../../settings/models/db/settings.dart';
+import '../../settings/models/errors/no_server_selected.dart';
+import '../../subscription_management/services/subscription_account.dart';
 import '../../videos/models/db/progress.dart';
 
 import '../../globals.dart';
@@ -15,6 +19,9 @@ const _done = "NO_MORE_VIDEOS";
 abstract class PaginatedList<T> {
   /// Reapply local visibility rules without refetching pages or losing cursors.
   Listenable? get changes => null;
+
+  /// Retire displayed items and fetch from page one after the source changes.
+  Listenable? get sourceChanges => null;
 
   List<T> visibleItems(List<T> items) => items;
 
@@ -139,12 +146,18 @@ class FixedItemList<T> extends PaginatedList<T> {
 
 typedef SubscriptionChannelFilter = ({Set<String> channelIds, bool exclude});
 
+class _SubscriptionFeedChanged extends StateError {
+  _SubscriptionFeedChanged() : super('The subscription source changed.');
+}
+
 /// The account feed and on-device subscriptions share the same page cursors.
 class SubscriptionVideoList extends PaginatedList<Video> {
   final ValueListenable<SubscriptionChannelFilter?>? channelFilter;
   final maxResults = 50;
   int page = 1;
   bool hasMoreOnline = true;
+  bool _retryOnlinePage = false;
+  Set<String> _seenVideoIds = {};
   Map<String, String> continuations = {};
 
   SubscriptionVideoList({this.channelFilter});
@@ -152,6 +165,9 @@ class SubscriptionVideoList extends PaginatedList<Video> {
   @override
   late final Listenable changes =
       Listenable.merge([playbackHistoryRevision, channelFilter]);
+
+  @override
+  Listenable get sourceChanges => SubscriptionAccount.revision;
 
   static String? _channelId(Video video) {
     final authorId = video.authorId;
@@ -180,32 +196,80 @@ class SubscriptionVideoList extends PaginatedList<Video> {
 
   @override
   Future<List<Video>> getItems() async {
-    final isLoggedIn = await service.isLoggedIn();
-    var nextHasMoreOnline = isLoggedIn && hasMoreOnline;
+    final database = db;
+    final profileId = database.profileId;
+    final owner = database.forProfile(profileId);
+    final api = service;
+    final session = api.sessionRevision;
+    final revision = SubscriptionAccount.revision.value;
+    final proxyRevision = NetworkProxy.instance.revision;
+    bool current() =>
+        identical(db, database) &&
+        database.profileId == profileId &&
+        identical(service, api) &&
+        session == api.sessionRevision &&
+        revision == SubscriptionAccount.revision.value &&
+        !NetworkProxy.instance.isChanging &&
+        proxyRevision == NetworkProxy.instance.revision;
+    final account = await SubscriptionAccount.resolve(owner);
+    if (!current()) throw _SubscriptionFeedChanged();
+    var admittedAccount = account;
+    Future<void> check(Server requested) async {
+      if (!current()) throw _SubscriptionFeedChanged();
+      final latest = await SubscriptionAccount.resolve(owner);
+      if (!current() ||
+          latest == null ||
+          !BackendPlayback(requested).matchesConnection(latest)) {
+        throw _SubscriptionFeedChanged();
+      }
+      admittedAccount = requested;
+    }
 
+    if (account != null) await check(account);
+    Server? playback;
+    try {
+      playback = await owner.getCurrentlySelectedServer();
+    } on NoServerSelected {
+      // An empty profile has no instance to fetch channel uploads from.
+    }
+    final offlineSubs = await owner.getOfflineSubscriptions();
+    if (!current()) throw _SubscriptionFeedChanged();
+    var nextHasMoreOnline = account != null && hasMoreOnline;
+    Object? remoteError;
+    StackTrace? remoteStack;
     List<Video> videos = [];
 
     if (nextHasMoreOnline) {
-      UserFeed feed =
-          await service.getUserFeed(page: page, maxResults: maxResults);
-      videos.addAll(feed.notifications ?? []);
-      videos.addAll(feed.videos ?? []);
-      nextHasMoreOnline = videos.length >= maxResults;
+      try {
+        final feed = await api.getUserFeed(
+            page: page,
+            maxResults: maxResults,
+            serverOverride: account,
+            beforeRequest: check);
+        videos.addAll(feed.notifications ?? []);
+        videos.addAll(feed.videos ?? []);
+        nextHasMoreOnline = videos.length >= maxResults;
+      } on _SubscriptionFeedChanged {
+        rethrow;
+      } catch (error, stack) {
+        remoteError = error;
+        remoteStack = stack;
+      }
     }
-
-    final offlineSubs = await db.getOfflineSubscriptions();
     final futures =
         <Future<({String channelId, VideosWithContinuation response})>>[];
 
     for (final offlineSub in offlineSubs) {
+      if (playback == null) break;
       final continuation = continuations[offlineSub.channelId];
       if (continuation == _done) continue;
 
       Future<({String channelId, VideosWithContinuation response})>
           loadVideos() async {
-        final response = await service.getChannelVideos(
+        final response = await api.getChannelVideos(
           offlineSub.channelId,
           continuation,
+          serverOverride: playback,
         );
         return (channelId: offlineSub.channelId, response: response);
       }
@@ -231,17 +295,24 @@ class SubscriptionVideoList extends PaginatedList<Video> {
     );
     videos.sort((a, b) => (b.published ?? 0).compareTo(a.published ?? 0));
 
-    // Commit cursors only once all sources succeed so retry cannot skip a page.
+    if (admittedAccount case final admitted?) await check(admitted);
+    if (!current()) throw _SubscriptionFeedChanged();
+    // Keep the failed account page for a later load when local uploads
+    // supplied the visible results. Without results, preserve normal Retry.
+    if (remoteError != null && videos.isEmpty) {
+      Error.throwWithStackTrace(remoteError, remoteStack!);
+    }
     hasMoreOnline = nextHasMoreOnline;
+    _retryOnlinePage = remoteError != null;
     continuations = nextContinuations;
-    return videos;
+    return videos.where((video) => _seenVideoIds.add(video.videoId)).toList();
   }
 
   @override
   Future<List<Video>> getMoreItems() async {
     if (!getHasMore()) return [];
     final previousPage = page;
-    if (hasMoreOnline) {
+    if (hasMoreOnline && !_retryOnlinePage) {
       page = page + 1;
     }
     try {
@@ -256,15 +327,21 @@ class SubscriptionVideoList extends PaginatedList<Video> {
   Future<List<Video>> refresh() async {
     final previousPage = page;
     final previousHasMoreOnline = hasMoreOnline;
+    final previousRetryOnlinePage = _retryOnlinePage;
+    final previousSeenVideoIds = _seenVideoIds;
     final previousContinuations = continuations;
     page = 1;
     hasMoreOnline = true;
+    _retryOnlinePage = false;
+    _seenVideoIds = {};
     continuations = {};
     try {
       return await getItems();
     } catch (_) {
       page = previousPage;
       hasMoreOnline = previousHasMoreOnline;
+      _retryOnlinePage = previousRetryOnlinePage;
+      _seenVideoIds = previousSeenVideoIds;
       continuations = previousContinuations;
       rethrow;
     }

@@ -1,8 +1,8 @@
 Vendored from lamarios/river_player commit
 55f1f374adbeeab7aefba5684dc2b014cbc87a63 (the previously pinned dependency).
-Upstream licenses are retained. Examples, tests and build outputs are excluded.
-Unused promotional images and orphaned documentation assets are also excluded;
-the upstream documentation's absolute image links remain unchanged.
+Upstream licenses are retained. Examples, upstream tests, build outputs,
+promotional images, and the static documentation mirror are excluded. The
+package metadata and README link to the hosted upstream documentation.
 
 Videre changes: Android DataSourceUtils delegates HTTP data sources to
 videre_proxy. This applies the same SOCKS5 policy to manifests, child streams,
